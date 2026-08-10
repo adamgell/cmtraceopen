@@ -14,6 +14,10 @@ use serde::{Deserialize, Deserializer};
 /// The upstream corpus is not perfectly consistent: four maps spell the target `Username` rather
 /// than `UserName`, so parsing is ASCII case-insensitive.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+// Growable: this build does not know every variant a newer schema will define.
+// Marking it now keeps adding one a minor change; after the first release that
+// exposes the type, adding the attribute is itself breaking.
+#[non_exhaustive]
 pub enum MapProperty {
     /// The acting or target account.
     UserName,

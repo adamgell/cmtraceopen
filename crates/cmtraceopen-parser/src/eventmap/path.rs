@@ -24,6 +24,10 @@ use super::node::EventNode;
 
 /// A failure to parse a map `Value` expression.
 #[derive(Debug, Error, PartialEq, Eq)]
+// Growable: this build does not know every variant a newer schema will define.
+// Marking it now keeps adding one a minor change; after the first release that
+// exposes the type, adding the attribute is itself breaking.
+#[non_exhaustive]
 pub enum PathError {
     /// The expression did not start with `/`.
     #[error("value path must be absolute, starting with '/': {0}")]

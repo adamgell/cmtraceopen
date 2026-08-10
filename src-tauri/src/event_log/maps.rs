@@ -433,6 +433,10 @@ fn property_name(property: &MapProperty) -> String {
         MapProperty::ExecutableInfo => "ExecutableInfo".to_string(),
         MapProperty::PayloadData(slot) => format!("PayloadData{slot}"),
         MapProperty::Other(name) => name.clone(),
+        // MapProperty is non_exhaustive, so a newer schema can add a target this build predates.
+        // Naming it after its own debug form keeps the column visible and labelled rather than
+        // dropping data because the name is unfamiliar.
+        other => format!("{other:?}"),
     }
 }
 

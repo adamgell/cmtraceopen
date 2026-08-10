@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
@@ -198,7 +199,14 @@ pub struct ProviderStore {
     databases: Vec<PathBuf>,
     /// Lowercased provider name to metadata, including negative results so a provider absent from
     /// every database is not looked up again for every event that mentions it.
-    cache: HashMap<String, Option<ProviderMetadata>>,
+    ///
+    /// Behind an `Arc` because a lookup happens once per record. A real provider carries every
+    /// event it defines with its description strings, so returning it by value meant a deep clone
+    /// per event: up to a hundred thousand of them to render one file.
+    /// Behind a `Mutex` so a lookup does not need `&mut self`. Without it the parse path had to
+    /// hold a write guard on the whole store for the length of a file, blocking every other reader
+    /// just to populate a cache.
+    cache: Mutex<HashMap<String, Option<Arc<ProviderMetadata>>>>,
     info: Vec<ProviderDbInfo>,
 }
 
@@ -214,19 +222,27 @@ impl ProviderStore {
 
         let mut databases = Vec::new();
         let mut info = Vec::new();
-        let mut failures = Vec::new();
+        let mut failures: Vec<String> = Vec::new();
 
-        let mut paths: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file()
-                    && path
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
-            })
-            .collect();
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            // An enumeration error after the directory opened is recorded, not skipped, matching
+            // the map loader. Dropping it lets a partial set look complete.
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(error) => failures.push(format!(
+                    "cannot read an entry in {}: {error}",
+                    directory.display()
+                )),
+            }
+        }
+        paths.retain(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+        });
         paths.sort();
 
         for path in paths {
@@ -243,10 +259,20 @@ impl ProviderStore {
 
         self.databases = databases;
         self.info = info.clone();
-        self.cache.clear();
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
 
         if info.is_empty() && !failures.is_empty() {
             return Err(failures.join("; "));
+        }
+        // Reported even when something loaded. Returning Ok and dropping four reasons on the floor
+        // leaves an operator looking at partial provider coverage with no explanation for it.
+        for failure in &failures {
+            log::warn!(
+                "event=provider_db_skipped directory=\"{}\" reason=\"{failure}\"",
+                directory.display()
+            );
         }
         Ok(info)
     }
@@ -256,10 +282,12 @@ impl ProviderStore {
     /// Takes `&mut self` because a lookup populates the cache, including the negative result. That
     /// is what stops a provider absent from every database being searched again for every event
     /// that names it.
-    pub fn provider(&mut self, provider_name: &str) -> Option<ProviderMetadata> {
+    pub fn provider(&self, provider_name: &str) -> Option<Arc<ProviderMetadata>> {
         let key = provider_name.to_ascii_lowercase();
-        if let Some(cached) = self.cache.get(&key) {
-            return cached.clone();
+        if let Ok(cache) = self.cache.lock() {
+            if let Some(cached) = cache.get(&key) {
+                return cached.clone();
+            }
         }
 
         let mut found = None;
@@ -272,7 +300,10 @@ impl ProviderStore {
             }
         }
 
-        self.cache.insert(key, found.clone());
+        let found = found.map(Arc::new);
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(key, found.clone());
+        }
         found
     }
 

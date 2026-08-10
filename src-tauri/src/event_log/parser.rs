@@ -143,8 +143,10 @@ fn parse_single_file(
     let maps = maps
         .read()
         .map_err(|_| "map registry lock was poisoned".to_string())?;
-    let mut providers = providers
-        .write()
+    // A read guard: looking a provider up caches internally, so it needs no exclusive access.
+    // Taking the write lock here blocked every other reader for the length of the file.
+    let providers = providers
+        .read()
         .map_err(|_| "provider store lock was poisoned".to_string())?;
 
     // XML rather than JSON. The JSON projection cannot be re-parsed into an event tree, which is
@@ -223,7 +225,7 @@ fn parse_single_file(
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = describe_event(&mut providers, &provider, event_id, &insertions)
+        let message = describe_event(&providers, &provider, event_id, &insertions)
             .or(payload)
             .unwrap_or_else(|| build_message(&fields));
 
@@ -359,7 +361,7 @@ struct EventFields {
 /// insertions the event did not supply, the metadata and the event disagree, and a sentence with
 /// `%4` embedded in it is less honest than the field summary it would replace.
 fn describe_event(
-    store: &mut ProviderStore,
+    store: &ProviderStore,
     provider: &str,
     event_id: u32,
     insertions: &[String],
@@ -690,24 +692,24 @@ mod description_tests {
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        assert!(describe_event(&mut empty_store(), "Nobody-Has-This-Provider", 1, &data).is_none());
+        assert!(describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, &data).is_none());
     }
 
     #[test]
     fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
         let data = insertions(&[("X", "1")]);
-        assert!(describe_event(&mut empty_store(), "Still-Not-Loaded", 999_999, &data).is_none());
+        assert!(describe_event(&empty_store(), "Still-Not-Loaded", 999_999, &data).is_none());
     }
 
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn a_loaded_database_renders_a_real_provider_description() {
         // The whole chain: SQLite on disk, gzip payload, provider metadata, insertion rendering.
-        let mut store = loaded_store();
+        let store = loaded_store();
 
         let data = insertions(&[("HRESULT", "0x80180005")]);
         let described = describe_event(
-            &mut store,
+            &store,
             "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
             2,
             &data,
@@ -726,11 +728,11 @@ mod description_tests {
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn an_event_the_database_does_not_cover_still_falls_back() {
-        let mut store = loaded_store();
+        let store = loaded_store();
 
         // A provider that genuinely is not in a Windows capture.
         assert!(describe_event(
-            &mut store,
+            &store,
             "Definitely-Not-A-Real-Provider",
             1,
             &insertions(&[("a", "b")])

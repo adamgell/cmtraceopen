@@ -13,7 +13,8 @@
 //!
 //! - **Expression count is capped.** A query with too many `or` terms is rejected outright, so
 //!   large Event ID sets are split across several `<Select>` nodes inside one `<QueryList>`.
-//!   FullEventLogView batches at ten per node; the same bound is used here.
+//!   FullEventLogView batches at ten per node; the bound here is twenty expressions, chosen from a
+//!   measurement of where the service actually starts refusing rather than from that precedent.
 //! - **Values are attacker-influenced.** Provider names reach this from user input and from event
 //!   data, and an apostrophe delimits XPath string literals with no escape available. Rather than
 //!   strip it, which would silently turn `Bob's Agent` into a filter that matches nothing, the
@@ -111,7 +112,10 @@ pub enum TimeWindow {
     ///
     /// Preferred over an absolute range for "last N minutes" style filters because it needs no
     /// agreement between this process's clock and the service's.
-    Last { milliseconds: u64 },
+    Last {
+        /// How far back to look, in milliseconds, counted by the service against its own clock.
+        milliseconds: u64,
+    },
     /// An explicit range. Bounds are ISO 8601 UTC, for example `2026-08-09T00:00:00.000Z`.
     Between {
         /// Inclusive lower bound. `None` leaves the range open at the start.
@@ -386,12 +390,24 @@ pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError>
         .map(EventIdSelector::expression_cost)
         .sum();
 
-    // Only an include list can be split: "not (a or b)" spread across unioned nodes would mean
-    // "not a or not b", and the same inversion applies to the "!=" form, which matches nearly
-    // everything.
-    let needs_split = filter.event_id_mode == SelectorMode::Include
-        && !filter.event_ids.is_empty()
-        && fixed_cost + event_id_cost > MAX_EXPRESSIONS_PER_SELECT;
+    let over_budget =
+        !filter.event_ids.is_empty() && fixed_cost + event_id_cost > MAX_EXPRESSIONS_PER_SELECT;
+
+    // An exclusion list cannot be split across unioned <Query> nodes: "not (a or b)" spread that
+    // way means "not a or not b", which matches nearly everything. It is expressed with <Suppress>
+    // instead, which the service subtracts from the selection rather than unioning, so chunking is
+    // safe. Measured on Windows 11 build 26200: a 30-term "!=" chain is rejected outright with
+    // ERROR_EVT_INVALID_QUERY, chunked <Suppress> is accepted, and on a list small enough for both
+    // forms the two return identical counts.
+    //
+    // This mattered more than a rejection normally would. Production sets
+    // EvtQueryTolerateQueryErrors, which turns that refusal into a channel that reports no events,
+    // so the filter appeared to work and silently returned nothing.
+    if over_budget && filter.event_id_mode == SelectorMode::Exclude {
+        return build_suppressed_query(filter);
+    }
+
+    let needs_split = over_budget && filter.event_id_mode == SelectorMode::Include;
 
     if !needs_split {
         return select_body(filter, &filter.event_ids);
@@ -419,6 +435,34 @@ pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError>
         );
     }
     query.push_str("</QueryList>");
+    Ok(query)
+}
+
+/// Builds an exclusion too large for one node as `<Select>` minus chunked `<Suppress>` nodes.
+///
+/// The selection carries every predicate other than the Event IDs; the suppressions carry the IDs
+/// as ordinary equalities. The service removes each suppression's matches from the selection, and
+/// several suppressions remove the union of their matches, which is exactly what excluding a list
+/// means.
+fn build_suppressed_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError> {
+    let selection = select_body(filter, &[])?;
+
+    let mut query = String::from("<QueryList><Query Id=\"0\"><Select>");
+    query.push_str(&escape_for_xml(&selection));
+    query.push_str("</Select>");
+
+    // Suppressions are written as inclusions of what to remove, so each selector costs what it
+    // would cost in an include list.
+    for chunk in chunk_by_expression_budget(&filter.event_ids, 0) {
+        let predicates: Vec<String> = chunk
+            .iter()
+            .map(|selector| selector.predicate(SelectorMode::Include))
+            .collect();
+        let body = format!("*[System[({})]]", join_or(&predicates));
+        let _ = write!(query, "<Suppress>{}</Suppress>", escape_for_xml(&body));
+    }
+
+    query.push_str("</Query></QueryList>");
     Ok(query)
 }
 
@@ -609,11 +653,11 @@ mod tests {
     }
 
     #[test]
-    fn an_exclusion_list_is_never_split_because_union_would_invert_it() {
-        // "not (a or b)" spread across unioned nodes becomes "not a or not b", which matches
-        // almost everything. Excludes stay in one node even when large.
+    fn a_small_exclusion_list_stays_one_expression() {
+        // Within budget it is written as "!=" joined by "and". The subset has no negation, so that
+        // is the only way to say it in a single node.
         let mut f = filter();
-        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        f.event_ids = (1..=5).map(|id| EventIdSelector::Single { id }).collect();
         f.event_id_mode = SelectorMode::Exclude;
         let query = build_query(&f).expect("builds");
 
@@ -623,6 +667,67 @@ mod tests {
             "the subset has no negation: {query}"
         );
         assert!(query.contains("EventID!=1 and EventID!=2"), "{query}");
+    }
+
+    #[test]
+    fn an_oversized_exclusion_list_becomes_suppressions_rather_than_a_rejected_query() {
+        // Never unioned <Query> nodes: "not (a or b)" spread that way means "not a or not b",
+        // which matches nearly everything. <Suppress> is subtracted from the selection instead, so
+        // chunking it is safe.
+        let mut f = filter();
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        f.event_id_mode = SelectorMode::Exclude;
+        let query = build_query(&f).expect("builds");
+
+        assert!(query.starts_with("<QueryList>"), "{query}");
+        assert_eq!(
+            query.matches("<Select>").count(),
+            1,
+            "one selection: {query}"
+        );
+        assert!(
+            query.matches("<Suppress>").count() >= 2,
+            "the list must be chunked: {query}"
+        );
+        // Suppressions say what to remove, so they are written as equalities, not "!=".
+        assert!(query.contains("EventID=1 or EventID=2"), "{query}");
+        assert!(!query.contains("EventID!="), "{query}");
+        assert!(!query.contains("not("), "{query}");
+    }
+
+    #[test]
+    fn every_suppression_node_stays_within_the_budget() {
+        let mut f = filter();
+        f.event_ids = (1..=200).map(|id| EventIdSelector::Single { id }).collect();
+        f.event_id_mode = SelectorMode::Exclude;
+        let query = build_query(&f).expect("builds");
+
+        for node in query.split("<Suppress>").skip(1) {
+            let body = node.split("</Suppress>").next().unwrap_or_default();
+            assert!(
+                body.matches("EventID").count() <= MAX_EXPRESSIONS_PER_SELECT,
+                "a suppression exceeded the budget: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oversized_exclusion_keeps_the_other_predicates_on_the_selection() {
+        // The suppressions only name Event IDs. Everything else has to stay on the <Select>, or
+        // the query would return far more than the filter asked for.
+        let mut f = filter();
+        f.levels = vec![1, 2];
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        f.event_id_mode = SelectorMode::Exclude;
+        let query = build_query(&f).expect("builds");
+
+        let selection = query
+            .split("<Select>")
+            .nth(1)
+            .and_then(|rest| rest.split("</Select>").next())
+            .expect("a selection");
+        assert!(selection.contains("Level=1 or Level=2"), "{selection}");
+        assert!(!selection.contains("EventID"), "{selection}");
     }
 
     #[test]
@@ -976,11 +1081,12 @@ mod expression_budget_tests {
     }
 
     #[test]
-    fn ten_ranges_split_even_though_ten_singles_would_not() {
-        // Ten selectors either way. Counting selectors would emit one node of 20 expressions for
-        // the ranges, which is the documented ceiling before a structured query is required.
-        let ranges = EventQueryFilter {
-            event_ids: (0..10)
+    fn ranges_are_costed_at_two_expressions_each() {
+        // Ten selectors either way, but a range is two comparisons. The concrete shape is asserted
+        // rather than "split or exactly twenty": the disjunction was satisfied by the second half
+        // and would have passed with the split logic deleted.
+        let ranges = |count: u32| EventQueryFilter {
+            event_ids: (0..count)
                 .map(|i| EventIdSelector::Range {
                     low: i * 100,
                     high: i * 100 + 50,
@@ -988,25 +1094,36 @@ mod expression_budget_tests {
                 .collect(),
             ..Default::default()
         };
-        let singles_filter = EventQueryFilter {
+
+        // Ten singles cost ten and stay in one node.
+        let singles_query = build_query(&EventQueryFilter {
             event_ids: singles(10),
             ..Default::default()
-        };
+        })
+        .expect("builds");
+        assert!(!singles_query.contains("<QueryList>"));
 
-        assert!(!build_query(&singles_filter)
-            .expect("builds")
-            .contains("<QueryList>"));
+        // Ten ranges cost exactly the budget, so they also stay in one node.
+        let at_budget = build_query(&ranges(10)).expect("builds");
         assert!(
-            build_query(&ranges)
-                .expect("builds")
-                .contains("<QueryList>")
-                || build_query(&ranges)
-                    .expect("builds")
-                    .matches("EventID")
-                    .count()
-                    == 20,
-            "ten ranges must not silently exceed the compound-expression ceiling"
+            !at_budget.contains("<QueryList>"),
+            "ten ranges are exactly the budget: {at_budget}"
         );
+        assert_eq!(at_budget.matches("EventID").count(), 20);
+
+        // Eleven cost 22 and must split, which is what proves ranges are costed as two.
+        let over_budget = build_query(&ranges(11)).expect("builds");
+        assert!(
+            over_budget.starts_with("<QueryList>"),
+            "eleven ranges exceed the budget and must split: {over_budget}"
+        );
+        for node in over_budget.split("<Select>").skip(1) {
+            let body = node.split("</Select>").next().unwrap_or_default();
+            assert!(
+                body.matches("EventID").count() <= MAX_EXPRESSIONS_PER_SELECT,
+                "a node exceeded the budget: {body}"
+            );
+        }
     }
 
     #[test]

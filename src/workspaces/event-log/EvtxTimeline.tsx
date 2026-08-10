@@ -262,8 +262,17 @@ export function EvtxTimeline() {
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
                   role="button"
-                  tabIndex={-1}
+                  // Focusable and activated by keyboard. It was reachable only by pointer, so a
+                  // keyboard user could not expand or collapse a group at all.
+                  tabIndex={0}
+                  aria-expanded={!row.collapsed}
                   onClick={() => toggleGroup(row.key)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleGroup(row.key);
+                    }
+                  }}
                   style={{
                     // Normal flow, matching the record rows. The wrapper above is already
                     // translated to the first visible row's offset and its children stack inside

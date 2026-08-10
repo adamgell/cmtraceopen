@@ -233,10 +233,16 @@ pub async fn evtx_load_provider_databases(
     let providers = state.provider_store.clone();
     tokio::task::spawn_blocking(
         move || -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
-            providers
+            // Scanned into a fresh store first, then swapped, so the write lock is held for the
+            // assignment rather than for the whole directory walk. Any parse in flight would
+            // otherwise block on its read guard for as long as opening every database takes. Same
+            // rule the map registry follows above.
+            let mut loaded = super::provider_db::ProviderStore::default();
+            let info = loaded.load_directory(&path)?;
+            *providers
                 .write()
-                .map_err(|_| "provider store lock was poisoned".to_string())?
-                .load_directory(&path)
+                .map_err(|_| "provider store lock was poisoned".to_string())? = loaded;
+            Ok(info)
         },
     )
     .await

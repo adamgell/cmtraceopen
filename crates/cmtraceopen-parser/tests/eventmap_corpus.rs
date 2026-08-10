@@ -5,7 +5,9 @@
 //! shipped rather than as imagined, so a regression here means the engine has drifted from the
 //! community format.
 
-use cmtraceopen_parser::eventmap::{apply_map, EventMap, EventNode, MapProperty, MapRegistry};
+use cmtraceopen_parser::eventmap::{
+    apply_map, EventMap, EventNode, MapProperty, MapRegistry, ValuePath,
+};
 
 const SHELL_CORE_9701: &str = include_str!("fixtures/eventmap/shell-core-9701.json");
 const SECURITY_4624: &str = include_str!("fixtures/eventmap/security-4624.json");
@@ -196,14 +198,28 @@ fn a_registry_resolves_each_fixture_by_its_own_identity() {
 
 #[test]
 fn every_fixture_parses_with_no_malformed_paths() {
+    // Every expression is parsed directly rather than inferred from apply_map. Applying a map
+    // skips any binding whose %Name% is absent from its template, and a skipped binding never
+    // reaches the parser, so a malformed expression on one would leave invalid_paths empty and
+    // this test would pass while proving nothing about that binding.
+    let mut checked = 0usize;
     for raw in [SHELL_CORE_9701, SECURITY_4624, NTFS_146] {
         let map = load(raw);
-        let mapped = apply_map(&map, &EventNode::new("Event"));
-        assert!(
-            mapped.invalid_paths.is_empty(),
-            "upstream map {} has expressions this engine cannot parse: {:?}",
-            map.event_id,
-            mapped.invalid_paths
-        );
+        for entry in &map.maps {
+            for binding in &entry.values {
+                assert!(
+                    ValuePath::parse(&binding.value).is_ok(),
+                    "upstream map {} binding {} has an expression this engine cannot parse: {}",
+                    map.event_id,
+                    binding.name,
+                    binding.value
+                );
+                checked += 1;
+            }
+        }
     }
+    assert!(
+        checked >= 3,
+        "the fixtures should contribute several bindings, saw {checked}"
+    );
 }

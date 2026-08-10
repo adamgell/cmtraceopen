@@ -116,6 +116,10 @@ pub struct UnplacedItem {
 /// Why an item has no position on the timeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+// Growable: this build does not know every variant a newer schema will define.
+// Marking it now keeps adding one a minor change; after the first release that
+// exposes the type, adding the attribute is itself breaking.
+#[non_exhaustive]
 pub enum UnplacedReason {
     /// The source carried no timestamp, or one the parser could not read.
     ///

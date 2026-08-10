@@ -129,7 +129,12 @@ export const EvtxTimelineRow = memo(
               style={
                 isDescription
                   ? {
-                      flex: 1,
+                      // Absorbs the remaining width only while no width has been set for it.
+                      // Ignoring an override meant the Description column could be resized in the
+                      // chooser and never actually change.
+                      ...(width != null
+                        ? { width: `${width}px`, flexShrink: 0 }
+                        : { flex: 1 }),
                       fontSize: `${fontSize}px`,
                       fontWeight: isSelected ? 600 : 400,
                       color: isSelected
