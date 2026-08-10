@@ -709,7 +709,6 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
-            &no_maps(),
             None,
         )
         .expect("1 hour query succeeds");
@@ -722,7 +721,6 @@ mod live_service_tests {
                 }),
                 ..Default::default()
             },
-            &no_maps(),
             &no_maps(),
             None,
         )
