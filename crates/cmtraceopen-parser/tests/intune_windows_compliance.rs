@@ -757,6 +757,36 @@ fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
     );
 }
 
+/// Caller-order invariance does not say *which* order ships, so pin it.
+///
+/// [`permuting_sibling_records_does_not_change_the_analysis`] sweeps
+/// [`contended_bundle`] and proves only that every permutation agrees. Reversing
+/// the decision comparator would keep them agreeing while changing the export.
+///
+/// The bundle already discriminates: `acc-zebra` occurred at 11:50 and
+/// `acc-alpha` at 11:55, so time asks for zebra first while their evidence ids
+/// sort alpha first. Chronology decides the array, so zebra leads.
+#[test]
+fn contended_access_decisions_export_in_chronological_order() {
+    let exported = wire(&analyze_compliance(&contended_bundle()));
+    let ids = exported["accessImpact"]["decisions"]
+        .as_array()
+        .expect("decisions array")
+        .iter()
+        .map(|decision| decision["evidence"][0]["evidenceId"].clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ids,
+        vec![
+            serde_json::json!("acc-zebra"),
+            serde_json::json!("acc-alpha")
+        ],
+        "access decisions must export in the order they occurred, not in the \
+         order their evidence ids sort"
+    );
+}
+
 /// Facts that agree on every *named* ordering key but differ elsewhere must
 /// still not be ordered by the caller's vector.
 ///

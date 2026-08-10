@@ -1515,6 +1515,101 @@ mod tests {
         );
     }
 
+    fn access_decision(evidence_id: &str, occurred_at: IntuneTimestamp) -> ComplianceAccessFact {
+        ComplianceAccessFact {
+            context: context(evidence_id, "access"),
+            decision: ComplianceAccessDecision::Denied,
+            failure_code: None,
+            occurred_at: Some(occurred_at),
+            device_key: Some("device-1".to_owned()),
+            user_key: None,
+            resource: None,
+            named_data: Vec::new(),
+        }
+    }
+
+    /// The exported decision array reads chronologically, and nothing else
+    /// decides it.
+    ///
+    /// The bundle is built so every other candidate ordering disagrees with
+    /// chronology, which is what makes the assertion mean something:
+    ///
+    /// - evidence ids sort `a-later` before `z-earlier`, the reverse of time, so
+    ///   a comparison led by `evidence` cannot produce this order;
+    /// - raw stamp text sorts `07/31/2026 ...` before `2026-07-31T...`, also the
+    ///   reverse of time, so `timestamp_content_key` cannot produce it either;
+    /// - the decision whose zone is unknown carries the raw stamp and the
+    ///   evidence id that both sort first, so only refusing to place it on the
+    ///   timeline puts it last.
+    ///
+    /// Only the normalized instant, with the unplaceable stamp sorted after every
+    /// placeable one, yields the asserted sequence.
+    #[test]
+    fn access_decisions_export_in_chronological_order() {
+        let earlier = access_decision(
+            "z-earlier",
+            IntuneTimestamp {
+                raw_text: "2026-07-31T11:00:00Z".to_owned(),
+                original_offset: None,
+                normalized_utc: Some("2026-07-31T11:00:00Z".to_owned()),
+                kind: IntuneTimestampKind::Utc,
+            },
+        );
+        let later = access_decision(
+            "a-later",
+            IntuneTimestamp {
+                raw_text: "07/31/2026 09:30:00 -02:00".to_owned(),
+                original_offset: Some("-02:00".to_owned()),
+                normalized_utc: Some("2026-07-31T11:30:00Z".to_owned()),
+                kind: IntuneTimestampKind::Offset,
+            },
+        );
+        let unplaceable = access_decision(
+            "a-unplaceable",
+            IntuneTimestamp {
+                raw_text: "07/31/2026 08:00:00".to_owned(),
+                original_offset: None,
+                normalized_utc: Some("2026-07-31T08:00:00Z".to_owned()),
+                kind: IntuneTimestampKind::Unspecified,
+            },
+        );
+
+        let order = |access_decisions: Vec<ComplianceAccessFact>| {
+            analyze_compliance(&ComplianceInput {
+                generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+                access_decisions,
+                ..ComplianceInput::default()
+            })
+            .access_impact
+            .decisions
+            .iter()
+            .map(|decision| decision.evidence[0].evidence_id.clone())
+            .collect::<Vec<_>>()
+        };
+
+        let expected = vec![
+            "z-earlier".to_owned(),
+            "a-later".to_owned(),
+            "a-unplaceable".to_owned(),
+        ];
+        assert_eq!(
+            order(vec![
+                earlier.clone(),
+                later.clone(),
+                unplaceable.clone()
+            ]),
+            expected,
+            "the decision array must read as a sequence of attempts in time, with \
+             a decision whose zone is unknown after every decision that can be \
+             placed on that timeline"
+        );
+        assert_eq!(
+            order(vec![unplaceable, later, earlier]),
+            expected,
+            "and the resolved order must not depend on the caller's vector"
+        );
+    }
+
     /// A report row may carry a present-but-blank identifier, because
     /// `classify_setting_report` copies the key verbatim from JSON while the
     /// event path filters every field through `named_any`. A blank states
