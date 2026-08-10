@@ -593,9 +593,12 @@ fn latest_evaluated_at<'a>(
 ///
 /// Where the evidence cannot support an answer, none is given:
 ///
-/// - a single submission is unambiguous whatever its zone, so it is reported;
-/// - several submissions are ordered only when *every* one of them carries a
-///   timestamp whose zone is known. One zone-less stamp among them means we
+/// - one *distinct* stamp is unambiguous whatever its zone, so it is reported.
+///   Several submissions carrying the same stamp are the same instant however
+///   that stamp is spelled, so they collapse to this case rather than to the
+///   next one;
+/// - two or more distinct stamps are ordered only when *every* one of them
+///   carries a zone that is known. One zone-less stamp among them means we
 ///   cannot say which submission is last, and naming one anyway would let the
 ///   gate declare `Stale` on a guess. `None` is reported instead, which leaves
 ///   the state at `Submitted` — the claim the evidence does support.
@@ -636,8 +639,8 @@ fn latest_submission_at<'a>(
 /// unplaceable one and the dated run stays contiguous instead of being prefixed
 /// by a block whose position would read as "before everything".
 ///
-/// This key is deliberately *not* total. It answers only "when", and a caller
-/// that needs a total order must chain something after it — the raw stamp for
+/// This key is deliberately *not* total. It answers only "when", so a caller
+/// that needs a total order must chain something after it: the raw stamp for
 /// records that share an instant or have none, and eventually [`content_key`].
 fn chronological_key(timestamp: Option<&IntuneTimestamp>) -> (bool, Option<DateTime<Utc>>) {
     let instant = timestamp.and_then(normalized_timestamp);
@@ -1037,7 +1040,9 @@ fn disagrees(service: &ComplianceServiceState, aggregate: ComplianceAggregateSta
 ///
 /// A decision reaches [`ComplianceAccessLinkage::MatchedComplianceState`] only
 /// when a device or user key matches a compliance record *and* both sides carry
-/// a normalized timestamp with the compliance record preceding the decision.
+/// a normalized timestamp with the compliance record no later than the decision
+/// (the two may share an instant; what is refused is a record reported after the
+/// decision it is supposed to explain).
 /// Everything weaker is explicitly uncorrelated; the rules then refuse to make a
 /// causal claim from it.
 fn reduce_access(
@@ -1117,14 +1122,18 @@ fn reduce_access(
     // hides this because every stamp in it is one shape, and same-shape RFC 3339
     // happens to sort chronologically as text.
     //
-    // A decision whose zone is unknown has no instant `normalized_timestamp`
-    // will vouch for, so it cannot be placed on that timeline at all.
-    // `chronological_key` sorts those after every dated decision instead of
-    // interleaving them on a guess, and `timestamp_content_key` follows so they
-    // still separate from each other by their raw stamps rather than collapsing.
-    // That link also settles two dated decisions whose instants are equal but
-    // whose stamps are spelled differently. Evidence, subject and resource then
-    // separate attempts that agree on all of it.
+    // A decision carrying no stamp, or one whose zone is unknown, has no instant
+    // `normalized_timestamp` will vouch for, so it cannot be placed on that
+    // timeline at all. `chronological_key` sorts both kinds after every dated
+    // decision instead of interleaving them on a guess.
+    //
+    // `timestamp_content_key` follows, and does three things: within that trailing
+    // group it puts the stampless decisions first (`None` before `Some`) and then
+    // separates the zone-less ones by their raw stamps rather than letting them
+    // collapse; and among dated decisions it settles two that share an instant but
+    // spell it differently. Evidence, subject and resource then separate attempts
+    // that agree on all of it. Two decisions with no stamp at all state nothing
+    // for either time link and fall straight through to those.
     //
     // `content_key` closes the comparison over `decision`, `linkage`,
     // `failure_code` and `matched_evidence`, none of which are named above, and
