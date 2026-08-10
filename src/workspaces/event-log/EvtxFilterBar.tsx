@@ -110,13 +110,19 @@ export function EvtxFilterBar() {
   const resetColumns = useEvtxStore((s) => s.resetColumns);
 
   const [exportState, setExportState] = useState<string | null>(null);
+  // An in-app field rather than window.prompt. Tauri's macOS webview is WKWebView, which does not
+  // implement prompt, so the save-filter action silently did nothing on macOS.
+  const [pendingName, setPendingName] = useState<string | null>(null);
+  const [reorderTarget, setReorderTarget] = useState<EvtxColumnId | null>(null);
+  const columnLabel = (id: EvtxColumnId) =>
+    choosableColumns.find((column) => column.id === id)?.label ?? id;
 
-  const saveCurrentFilter = () => {
-    const name = window.prompt("Save this filter as");
-    if (!name?.trim()) return;
+  const commitFilterName = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
     const state = useEvtxStore.getState();
-    saveFilter(
-      name,
+    const saved = saveFilter(
+      trimmed,
       sanitizeCriteria({
         levels: [...state.filterLevels],
         eventIds: state.filterEventIds,
@@ -125,7 +131,8 @@ export function EvtxFilterBar() {
         groupBy: state.groupBy,
       })
     );
-    setExportState(`Saved "${name.trim()}"`);
+    setPendingName(null);
+    setExportState(saved ? `Saved "${trimmed}"` : "That name cannot be used");
   };
 
   const applySavedFilter = (id: string) => {
@@ -293,58 +300,71 @@ export function EvtxFilterBar() {
         value={`${columnConfig.order.length} shown`}
         selectedOptions={columnConfig.order}
         style={{ minWidth: "104px" }}
-        title="Choose which columns the list shows. Use the arrows to reorder."
+        title="Choose which columns the list shows."
         onOptionSelect={(_, data) => {
           const id = data.optionValue as EvtxColumnId | "__reset__";
           if (id === "__reset__") resetColumns();
           else if (id) toggleColumnVisible(id);
         }}
       >
-        {choosableColumns.map((column) => {
-          const position = columnConfig.order.indexOf(column.id);
-          return (
-            <Option key={column.id} value={column.id} text={column.label}>
-              <span
-                style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%" }}
-              >
-                <span style={{ flex: 1 }}>{column.label}</span>
-                {position >= 0 && (
-                  <>
-                    <Button
-                      size="small"
-                      appearance="subtle"
-                      disabled={position === 0}
-                      title="Move earlier"
-                      onClick={(event) => {
-                        // The option would otherwise toggle visibility as well as reorder.
-                        event.stopPropagation();
-                        moveColumnBy(column.id, -1);
-                      }}
-                    >
-                      {"\u2191"}
-                    </Button>
-                    <Button
-                      size="small"
-                      appearance="subtle"
-                      disabled={position === columnConfig.order.length - 1}
-                      title="Move later"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        moveColumnBy(column.id, 1);
-                      }}
-                    >
-                      {"\u2193"}
-                    </Button>
-                  </>
-                )}
-              </span>
-            </Option>
-          );
-        })}
+        {choosableColumns.map((column) => (
+          <Option key={column.id} value={column.id} text={column.label}>
+            {column.label}
+          </Option>
+        ))}
         <Option value="__reset__" text="Reset to defaults">
           Reset to defaults
         </Option>
       </Dropdown>
+
+      {/*
+        Reordering lives outside the listbox. Buttons nested in a Fluent Option are invalid ARIA
+        and never receive focus, because a listbox moves focus between options rather than into
+        them, so a keyboard-only operator could show and hide columns but never order them.
+      */}
+      <Dropdown
+        size="small"
+        placeholder="Reorder"
+        value={reorderTarget ? columnLabel(reorderTarget) : ""}
+        selectedOptions={reorderTarget ? [reorderTarget] : []}
+        style={{ minWidth: "104px" }}
+        title="Pick a column, then use the arrows to move it."
+        onOptionSelect={(_, data) => {
+          if (data.optionValue) setReorderTarget(data.optionValue as EvtxColumnId);
+        }}
+      >
+        {columnConfig.order.map((id) => (
+          <Option key={id} value={id} text={columnLabel(id)}>
+            {columnLabel(id)}
+          </Option>
+        ))}
+      </Dropdown>
+
+      <Button
+        size="small"
+        appearance="outline"
+        aria-label="Move the selected column earlier"
+        title="Move the selected column earlier"
+        disabled={!reorderTarget || columnConfig.order.indexOf(reorderTarget) <= 0}
+        onClick={() => reorderTarget && moveColumnBy(reorderTarget, -1)}
+        style={{ minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize }}
+      >
+        {"\u2191"}
+      </Button>
+      <Button
+        size="small"
+        appearance="outline"
+        aria-label="Move the selected column later"
+        title="Move the selected column later"
+        disabled={
+          !reorderTarget ||
+          columnConfig.order.indexOf(reorderTarget) === columnConfig.order.length - 1
+        }
+        onClick={() => reorderTarget && moveColumnBy(reorderTarget, 1)}
+        style={{ minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize }}
+      >
+        {"\u2193"}
+      </Button>
 
       <Dropdown
         size="small"
@@ -354,7 +374,7 @@ export function EvtxFilterBar() {
         style={{ minWidth: "104px" }}
         title="Apply a saved filter"
         onOptionSelect={(_, data) => {
-          if (data.optionValue === "__save__") saveCurrentFilter();
+          if (data.optionValue === "__save__") setPendingName("");
           else if (data.optionValue) applySavedFilter(data.optionValue);
         }}
       >
@@ -410,6 +430,23 @@ export function EvtxFilterBar() {
           </Option>
         ))}
       </Dropdown>
+
+      {pendingName !== null && (
+        <Input
+          autoFocus
+          size="small"
+          value={pendingName}
+          placeholder="Name this filter"
+          aria-label="Name this filter"
+          style={{ width: "180px" }}
+          onChange={(_, data) => setPendingName(data.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitFilterName(pendingName);
+            if (event.key === "Escape") setPendingName(null);
+          }}
+          onBlur={() => setPendingName(null)}
+        />
+      )}
 
       {exportState && (
         <span style={{ fontSize: controlFontSize, color: tokens.colorNeutralForeground3 }}>

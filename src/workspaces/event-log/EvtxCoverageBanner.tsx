@@ -21,14 +21,20 @@ export function EvtxCoverageBanner() {
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
-  if (gaps.length === 0) return null;
-
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary = summarizeCoverageGaps(gaps);
+
+  // The live region stays mounted and empty rather than appearing with its content. A screen
+  // reader announces changes inside a region it was already tracking; one that arrives already
+  // populated is usually read as ordinary page content, so the first gaps went unannounced.
+  if (gaps.length === 0) {
+    return <div role="status" aria-live="polite" style={{ display: "none" }} />;
+  }
 
   return (
     <div
       role="status"
+      aria-live="polite"
       style={{
         flexShrink: 0,
         display: "flex",
@@ -50,6 +56,7 @@ export function EvtxCoverageBanner() {
         <Button
           size="small"
           appearance="transparent"
+          aria-expanded={!collapsed}
           onClick={() => setCollapsed((value) => !value)}
         >
           {collapsed ? "Show" : "Hide"}
