@@ -23,7 +23,9 @@ use super::sources::{
     classify_event, classify_setting_report, decode_bundle, ComplianceSignal,
     ComplianceSourceInput, SettingObservation,
 };
-use crate::intune::evidence::{IntuneEvidenceRef, IntuneTimestamp, IntuneTimestampKind};
+use crate::intune::evidence::{
+    IntuneErrorCode, IntuneEvidenceRef, IntuneTimestamp, IntuneTimestampKind,
+};
 
 /// Decode a supplied evidence bundle and reduce it in one call.
 pub fn analyze_compliance_bundle(
@@ -87,14 +89,29 @@ fn reduce_device_context(input: &ComplianceInput) -> ComplianceDeviceContextView
 
 // ── Phase 1: local evaluation ───────────────────────────────────────────────
 
+/// One policy-level statement, before the statements about that policy are
+/// merged. Held rather than folded on arrival so the merge can see all of them.
+struct PolicyStatement {
+    state: CompliancePolicyState,
+    scope: ComplianceScope,
+    evidence: IntuneEvidenceRef,
+}
+
+/// One prerequisite statement, before merging. See [`PolicyStatement`].
+struct PrerequisiteStatement {
+    state: CompliancePrerequisiteState,
+    detail: Option<String>,
+    evidence: IntuneEvidenceRef,
+}
+
 fn reduce_local(
     input: &ComplianceInput,
     generated_at: Option<DateTime<Utc>>,
 ) -> ComplianceLocalPhase {
     let mut phase = ComplianceLocalPhase::default();
     let mut grouped: BTreeMap<String, Vec<SettingObservation>> = BTreeMap::new();
-    let mut policies: BTreeMap<String, CompliancePolicyObservation> = BTreeMap::new();
-    let mut prerequisites: BTreeMap<String, CompliancePrerequisite> = BTreeMap::new();
+    let mut policies: BTreeMap<String, Vec<PolicyStatement>> = BTreeMap::new();
+    let mut prerequisites: BTreeMap<String, Vec<PrerequisiteStatement>> = BTreeMap::new();
     let mut evidence = Vec::new();
 
     for event in &input.events {
@@ -111,39 +128,23 @@ fn reduce_local(
                 name,
                 state,
                 detail,
-            }) => {
-                let entry =
-                    prerequisites
-                        .entry(name.clone())
-                        .or_insert_with(|| CompliancePrerequisite {
-                            name,
-                            state,
-                            detail: detail.clone(),
-                            evidence: Vec::new(),
-                        });
-                // An unmet prerequisite outranks a met one: the device saying
-                // "blocked" at any point is the fact worth surfacing.
-                if state == CompliancePrerequisiteState::Unmet {
-                    entry.state = state;
-                    entry.detail = detail;
-                }
-                entry.evidence.push(reference);
-            }
+            }) => prerequisites
+                .entry(name)
+                .or_default()
+                .push(PrerequisiteStatement {
+                    state,
+                    detail,
+                    evidence: reference,
+                }),
             Some(ComplianceSignal::PolicyState {
                 policy_id,
                 state,
                 scope,
-            }) => {
-                let entry = policies.entry(policy_id.clone()).or_insert_with(|| {
-                    CompliancePolicyObservation {
-                        policy_id,
-                        state,
-                        scope,
-                        evidence: Vec::new(),
-                    }
-                });
-                entry.evidence.push(reference);
-            }
+            }) => policies.entry(policy_id).or_default().push(PolicyStatement {
+                state,
+                scope,
+                evidence: reference,
+            }),
             // Reporting signals belong to phase 3.
             Some(ComplianceSignal::ReportSubmission { .. }) => {}
             // The record was supplied as compliance evidence but names no
@@ -171,14 +172,14 @@ fn reduce_local(
         .into_iter()
         .map(|(token, observations)| merge_setting(token, observations, generated_at))
         .collect();
-    phase.policies = policies.into_values().collect();
-    phase.prerequisites = prerequisites.into_values().collect();
-    for policy in &mut phase.policies {
-        normalize_evidence(&mut policy.evidence);
-    }
-    for prerequisite in &mut phase.prerequisites {
-        normalize_evidence(&mut prerequisite.evidence);
-    }
+    phase.policies = policies
+        .into_iter()
+        .map(|(policy_id, statements)| merge_policy(policy_id, statements))
+        .collect();
+    phase.prerequisites = prerequisites
+        .into_iter()
+        .map(|(name, statements)| merge_prerequisite(name, statements))
+        .collect();
 
     phase.custom_compliance = input
         .custom_compliance
@@ -197,6 +198,12 @@ fn reduce_local(
             }
         })
         .collect();
+    // The exported array is a set of results, not a sequence: no custom-compliance
+    // source states a run order, so leaving it in the caller's vector order made
+    // the serialized snapshot a function of the collector.
+    phase
+        .custom_compliance
+        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
 
     phase.latest_evaluation_at_utc = latest_evaluation(&phase.settings).map(format_utc);
     normalize_evidence(&mut phase.unkeyed_observations);
@@ -205,64 +212,154 @@ fn reduce_local(
     phase
 }
 
+/// Fold every statement about one policy into one observation.
+///
+/// Both fields resolve by *agreement*, not by arrival: two sources saying the
+/// policy was received and not received are equally authoritative here, and
+/// there is no third fact to break the tie. Reporting `Unknown` says that
+/// outright, where naming a winner would have made the export a function of the
+/// caller's vector (ADR-003).
+fn merge_policy(policy_id: String, statements: Vec<PolicyStatement>) -> CompliancePolicyObservation {
+    CompliancePolicyObservation {
+        policy_id,
+        state: agreed(
+            statements
+                .iter()
+                .map(|statement| statement.state)
+                .filter(|state| *state != CompliancePolicyState::Unknown),
+        )
+        .unwrap_or(CompliancePolicyState::Unknown),
+        scope: agreed_scope(statements.iter().map(|statement| statement.scope)),
+        evidence: collect_evidence(statements.iter().map(|statement| &statement.evidence)),
+    }
+}
+
+/// Fold every statement about one prerequisite into one entry.
+///
+/// The precedence is a rank rather than an order: a device saying "blocked" at
+/// any point is the fact worth surfacing, so `Unmet` outranks `Met`, which
+/// outranks `Unknown`. The detail is then the smallest stated by the statements
+/// that carry the winning state — previously the *last* unmet statement's detail
+/// won, which two unmet rows swapped between them.
+fn merge_prerequisite(
+    name: String,
+    statements: Vec<PrerequisiteStatement>,
+) -> CompliancePrerequisite {
+    let state = [
+        CompliancePrerequisiteState::Unmet,
+        CompliancePrerequisiteState::Met,
+    ]
+    .into_iter()
+    .find(|ranked| {
+        statements
+            .iter()
+            .any(|statement| statement.state == *ranked)
+    })
+    .unwrap_or(CompliancePrerequisiteState::Unknown);
+
+    CompliancePrerequisite {
+        name,
+        state,
+        detail: statements
+            .iter()
+            .filter(|statement| statement.state == state)
+            .filter_map(|statement| statement.detail.as_ref())
+            .min()
+            .cloned(),
+        evidence: collect_evidence(statements.iter().map(|statement| &statement.evidence)),
+    }
+}
+
+/// The one value every stating source agreed on, or `None` when they disagreed.
+///
+/// This is the conservative merge ADR-003 asks for: an unresolved contradiction
+/// between equally authoritative sources is reported as no value rather than as
+/// whichever the caller listed first.
+fn agreed<T: PartialEq>(values: impl IntoIterator<Item = T>) -> Option<T> {
+    let mut agreed: Option<T> = None;
+    for value in values {
+        match &agreed {
+            None => agreed = Some(value),
+            Some(existing) if *existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    agreed
+}
+
+/// The scope every source that stated one agreed on.
+///
+/// Scope decides whether a setting is read as a user-targeted policy that was
+/// never evaluated — missing coverage — or as a device failure, so a
+/// disagreement must not be settled by vector position. `Unknown` covers both
+/// "nobody said" and "they disagreed"; the observations stay cited either way.
+fn agreed_scope(scopes: impl IntoIterator<Item = ComplianceScope>) -> ComplianceScope {
+    agreed(
+        scopes
+            .into_iter()
+            .filter(|scope| *scope != ComplianceScope::Unknown),
+    )
+    .unwrap_or(ComplianceScope::Unknown)
+}
+
 /// Fold every observation that shares a grouping token into one evaluation.
 ///
 /// Two *definite* states that disagree produce
 /// [`ComplianceSettingState::Contradictory`] rather than an arbitrary winner.
 /// Preferring the newest would silently pick a side in exactly the case where
 /// the evidence does not support picking one.
+///
+/// # Why no field here reads the vector
+///
+/// ADR-003 lets a reducer read caller order as chronology only where the source
+/// contract defines it, and no compliance source defines it: these records reach
+/// the group from an event log, an exported report, and a script host,
+/// interleaved by the collector. Every field below is therefore derived from
+/// record *content* — the smallest stated value, the agreed value, or the newest
+/// timestamp — and never from a position. Real chronology comes from
+/// [`latest_evaluated_at`].
 fn merge_setting(
     grouping_token: String,
-    observations: Vec<SettingObservation>,
+    mut observations: Vec<SettingObservation>,
     generated_at: Option<DateTime<Utc>>,
 ) -> ComplianceSettingEvaluation {
-    let mut key = ComplianceSettingKey::default();
-    let mut scope = ComplianceScope::Unknown;
-    let mut display_name = None;
-    let mut error = None;
-    let mut evaluated_at: Option<IntuneTimestamp> = None;
-    let mut evidence = Vec::new();
-    let mut named_data = Vec::new();
+    // Canonicalize anyway. Every merge below is individually content-determined,
+    // so today this changes no output; it is here so that a field added later
+    // which *does* walk the vector inherits a stable order rather than silently
+    // reintroducing the defect this function was rewritten to remove.
+    observations.sort_by(|left, right| left.context.evidence_ref.cmp(&right.context.evidence_ref));
+
+    let key = ComplianceSettingKey {
+        policy_id: smallest_stated(&observations, |observation| observation.key.policy_id.as_ref()),
+        setting_id: smallest_stated(&observations, |observation| {
+            observation.key.setting_id.as_ref()
+        }),
+        setting_uri: smallest_stated(&observations, |observation| {
+            observation.key.setting_uri.as_ref()
+        }),
+    };
+    // Unchanged in meaning: more than one usable value for one identifier is a
+    // contradiction. Asking whether the stating records agree gives the same
+    // answer as comparing each record against the accumulated key did, without
+    // reading the order they arrived in.
+    let identity_contradiction = contradicts(&observations, |observation| {
+        observation.key.policy_id.as_ref()
+    }) || contradicts(&observations, |observation| {
+        observation.key.setting_id.as_ref()
+    }) || contradicts(&observations, |observation| {
+        observation.key.setting_uri.as_ref()
+    });
+
     let mut definite = Vec::new();
     let mut indefinite = Vec::new();
-    let mut time_contradiction = false;
-    let mut identity_contradiction = false;
-
-    for observation in observations {
-        identity_contradiction |= conflicts(&key.policy_id, &observation.key.policy_id)
-            || conflicts(&key.setting_id, &observation.key.setting_id)
-            || conflicts(&key.setting_uri, &observation.key.setting_uri);
-        key.policy_id = key.policy_id.or(observation.key.policy_id);
-        key.setting_id = key.setting_id.or(observation.key.setting_id);
-        key.setting_uri = key.setting_uri.or(observation.key.setting_uri);
-        if scope == ComplianceScope::Unknown {
-            scope = observation.scope;
-        }
-        display_name = display_name.or(observation.display_name);
-        error = error.or(observation.error);
-
+    let mut named_data = Vec::new();
+    for observation in &observations {
         if observation.state.is_definite() {
             definite.push(observation.state);
         } else {
             indefinite.push(observation.state);
         }
-
-        if let Some(timestamp) = observation.evaluated_at {
-            if let (Some(candidate), Some(generated_at)) =
-                (normalized_timestamp(&timestamp), generated_at)
-            {
-                if candidate > generated_at {
-                    time_contradiction = true;
-                }
-            }
-            evaluated_at = Some(match evaluated_at {
-                Some(existing) if is_newer(&existing, &timestamp) => existing,
-                _ => timestamp,
-            });
-        }
-
-        evidence.push(observation.context.evidence_ref);
-        named_data.extend(observation.named_data);
+        named_data.extend(observation.named_data.iter().cloned());
     }
 
     definite.sort();
@@ -273,7 +370,21 @@ fn merge_setting(
         _ => ComplianceSettingState::Contradictory,
     };
 
-    normalize_evidence(&mut evidence);
+    // A record stamped after the snapshot was generated is a provenance
+    // contradiction whichever record it is, so this is a property of the set.
+    let time_contradiction = observations.iter().any(|observation| {
+        match (
+            observation
+                .evaluated_at
+                .as_ref()
+                .and_then(normalized_timestamp),
+            generated_at,
+        ) {
+            (Some(candidate), Some(generated_at)) => candidate > generated_at,
+            _ => false,
+        }
+    });
+
     named_data.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -284,32 +395,85 @@ fn merge_setting(
     ComplianceSettingEvaluation {
         key,
         grouping_token,
-        scope,
+        scope: agreed_scope(observations.iter().map(|observation| observation.scope)),
         state,
-        display_name,
-        error,
-        evaluated_at,
+        // The noncompliance and evaluation-error findings quote this name, so two
+        // records naming one setting differently used to change the exported
+        // summary depending on the caller's vector. The smallest is named
+        // instead; both records stay cited, so nothing is hidden.
+        display_name: smallest_stated(&observations, |observation| {
+            observation.display_name.as_ref()
+        }),
+        error: terminal_error(&observations),
+        evaluated_at: latest_evaluated_at(
+            observations
+                .iter()
+                .filter_map(|observation| observation.evaluated_at.as_ref()),
+        ),
         observed_states: definite,
         time_contradiction,
         identity_contradiction,
-        evidence,
+        evidence: collect_evidence(
+            observations
+                .iter()
+                .map(|observation| &observation.context.evidence_ref),
+        ),
         named_data,
     }
 }
 
-/// Whether two sources declare different non-empty values for one identifier.
-fn conflicts(existing: &Option<String>, candidate: &Option<String>) -> bool {
-    let usable = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_ascii_lowercase)
-    };
-    match (usable(existing), usable(candidate)) {
-        (Some(existing), Some(candidate)) => existing != candidate,
-        _ => false,
+/// The smallest value stated by any observation in the group.
+///
+/// "Smallest" is arbitrary but *content-determined*, which "first" was not.
+fn smallest_stated(
+    observations: &[SettingObservation],
+    pick: fn(&SettingObservation) -> Option<&String>,
+) -> Option<String> {
+    observations.iter().filter_map(pick).min().cloned()
+}
+
+/// The terminal code this setting reported.
+///
+/// When two records report different codes the smallest by canonical ordering is
+/// named rather than whichever arrived first. Both records stay cited either
+/// way; only the choice of which code to lead with is made stable.
+fn terminal_error(observations: &[SettingObservation]) -> Option<IntuneErrorCode> {
+    observations
+        .iter()
+        .filter_map(|observation| observation.error.as_ref())
+        .min_by(|left, right| {
+            (&left.decimal, &left.hex, &left.raw).cmp(&(&right.decimal, &right.hex, &right.raw))
+        })
+        .cloned()
+}
+
+/// Whether two records state different non-empty values for one identifier.
+///
+/// Deliberately not expressed as `agreed(..).is_none()`: `agreed` also returns
+/// `None` for an empty set, and "nobody stated an id" is not a contradiction.
+fn contradicts(
+    observations: &[SettingObservation],
+    pick: fn(&SettingObservation) -> Option<&String>,
+) -> bool {
+    let mut stated: Option<String> = None;
+    for value in observations
+        .iter()
+        .filter_map(pick)
+        .filter_map(|value| usable_identifier(value))
+    {
+        match &stated {
+            None => stated = Some(value),
+            Some(existing) if *existing == value => {}
+            Some(_) => return true,
+        }
     }
+    false
+}
+
+/// An identifier reduced to its comparable form, or `None` when it states nothing.
+fn usable_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_ascii_lowercase())
 }
 
 /// Rank the non-definite states so a merge keeps the most informative one.
@@ -328,12 +492,94 @@ fn most_informative_indefinite(states: &[ComplianceSettingState]) -> ComplianceS
         .unwrap_or(ComplianceSettingState::InsufficientEvidence)
 }
 
-fn is_newer(left: &IntuneTimestamp, right: &IntuneTimestamp) -> bool {
-    match (normalized_timestamp(left), normalized_timestamp(right)) {
-        (Some(left), Some(right)) => left > right,
-        (Some(_), None) => true,
-        _ => false,
+/// The most recent evaluation instant a group of records states.
+///
+/// An orderable instant always beats an unorderable one, and among orderable
+/// instants the newest wins — the behavior this reducer has always had. What is
+/// new is the tie-break: two records whose instants compare equal, and a group in
+/// which *nothing* is orderable, used to resolve to whichever the caller listed
+/// last. Both now resolve to the smallest by content.
+///
+/// Unlike [`latest_submission_at`] this does not refuse an unorderable group.
+/// The field is provenance rather than a conclusion, and the one place a
+/// conclusion is drawn from it — [`latest_evaluation`] — re-filters to orderable
+/// instants anyway, so keeping the raw stamp loses nothing and preserves evidence.
+fn latest_evaluated_at<'a>(
+    stamps: impl IntoIterator<Item = &'a IntuneTimestamp>,
+) -> Option<IntuneTimestamp> {
+    stamps
+        .into_iter()
+        .max_by(|left, right| {
+            normalized_timestamp(left)
+                .cmp(&normalized_timestamp(right))
+                // Reversed, so `max_by` settles a tie on the *smallest* content.
+                .then_with(|| timestamp_content_key(right).cmp(&timestamp_content_key(left)))
+        })
+        .cloned()
+}
+
+/// The most recent instant at which a report is known to have been submitted.
+///
+/// This is the input to the staleness gate, so the semantics are chosen for what
+/// that gate asks: "does the service hold a copy of the most recent local
+/// evaluation?" The answer depends on the **latest** successful submission, by
+/// timestamp. It never depended on vector position, which is what the previous
+/// unconditional last-wins assignment actually read — two submissions straddling
+/// the evaluation exported `Submitted` or `Stale` according to the collector's
+/// serialization order.
+///
+/// Where the evidence cannot support an answer, none is given:
+///
+/// - a single submission is unambiguous whatever its zone, so it is reported;
+/// - several submissions are ordered only when *every* one of them carries a
+///   timestamp whose zone is known. One zone-less stamp among them means we
+///   cannot say which submission is last, and naming one anyway would let the
+///   gate declare `Stale` on a guess. `None` is reported instead, which leaves
+///   the state at `Submitted` — the claim the evidence does support.
+fn latest_submission_at<'a>(
+    stamps: impl IntoIterator<Item = &'a IntuneTimestamp>,
+) -> Option<IntuneTimestamp> {
+    let mut distinct: Vec<&IntuneTimestamp> = Vec::new();
+    for stamp in stamps {
+        if !distinct.contains(&stamp) {
+            distinct.push(stamp);
+        }
     }
+    match distinct.len() {
+        0 => None,
+        1 => distinct.first().copied().cloned(),
+        _ if distinct
+            .iter()
+            .any(|stamp| normalized_timestamp(stamp).is_none()) =>
+        {
+            None
+        }
+        _ => distinct
+            .into_iter()
+            .max_by(|left, right| {
+                normalized_timestamp(left)
+                    .cmp(&normalized_timestamp(right))
+                    .then_with(|| timestamp_content_key(left).cmp(&timestamp_content_key(right)))
+            })
+            .cloned(),
+    }
+}
+
+/// A total, content-derived ordering key, used only to settle ties deterministically.
+fn timestamp_content_key(timestamp: &IntuneTimestamp) -> (&str, Option<&str>, Option<&str>, u8) {
+    let kind = match timestamp.kind {
+        IntuneTimestampKind::Utc => 0,
+        IntuneTimestampKind::Offset => 1,
+        IntuneTimestampKind::Local => 2,
+        IntuneTimestampKind::Unspecified => 3,
+        IntuneTimestampKind::Invalid => 4,
+    };
+    (
+        &timestamp.raw_text,
+        timestamp.original_offset.as_deref(),
+        timestamp.normalized_utc.as_deref(),
+        kind,
+    )
 }
 
 fn latest_evaluation(settings: &[ComplianceSettingEvaluation]) -> Option<DateTime<Utc>> {
@@ -469,6 +715,7 @@ fn reduce_reporting(
         .as_deref()
         .and_then(parse_rfc3339);
 
+    let mut submissions = Vec::new();
     for event in &input.events {
         let Some(ComplianceSignal::ReportSubmission {
             state,
@@ -480,32 +727,42 @@ fn reduce_reporting(
             continue;
         };
         evidence.push(event.context.evidence_ref.clone());
-        // A submission is the terminal outcome: once the bundle shows the report
-        // went out, a later queued or failed row cannot take that back. A failure
-        // still outranks queued, because a later "queued" does not undo an
-        // observed submission failure.
-        match state {
-            ComplianceReportState::Submitted => phase.state = state,
-            ComplianceReportState::Failed => {
-                if phase.state != ComplianceReportState::Submitted {
-                    phase.state = state;
-                }
-            }
-            _ => {
-                if !matches!(
-                    phase.state,
-                    ComplianceReportState::Submitted | ComplianceReportState::Failed
-                ) {
-                    phase.state = state;
-                }
-            }
-        }
-        phase.report_id = phase.report_id.or(report_id);
-        phase.error = phase.error.or(error);
-        if state == ComplianceReportState::Submitted {
-            phase.last_submission_at = submitted_at;
-        }
+        submissions.push((state, report_id, error, submitted_at));
     }
+
+    // A submission is the terminal outcome: once the bundle shows the report went
+    // out, a queued or failed row elsewhere cannot take that back. A failure still
+    // outranks queued, because an observed submission failure is not undone by a
+    // queued row. Expressed as a rank over the whole set rather than as a running
+    // assignment: the two strongest tokens were already order-free, but the
+    // remaining three fell through to a plain last-writer-wins, so a queued row
+    // and an uninterpretable one swapped the exported state between them.
+    phase.state = submissions
+        .iter()
+        .map(|(state, ..)| *state)
+        .max_by_key(|state| report_state_rank(*state))
+        .unwrap_or(ComplianceReportState::Unknown);
+    // Smallest stated rather than first stated, for the same reason the setting
+    // merge names the smallest: "first" was the collector's serializer. Every
+    // submission row stays cited, so neither value is hidden.
+    phase.report_id = submissions
+        .iter()
+        .filter_map(|(_, report_id, ..)| report_id.as_ref())
+        .min()
+        .cloned();
+    phase.error = submissions
+        .iter()
+        .filter_map(|(_, _, error, _)| error.as_ref())
+        .min_by(|left, right| {
+            (&left.decimal, &left.hex, &left.raw).cmp(&(&right.decimal, &right.hex, &right.raw))
+        })
+        .cloned();
+    phase.last_submission_at = latest_submission_at(
+        submissions
+            .iter()
+            .filter(|(state, ..)| *state == ComplianceReportState::Submitted)
+            .filter_map(|(_, _, _, submitted_at)| submitted_at.as_ref()),
+    );
 
     // A submission that predates the most recent local evaluation cannot carry
     // that evaluation's result, whatever the submission itself reported.
@@ -549,6 +806,13 @@ fn reduce_reporting(
         })
         .collect();
 
+    // As with the custom-compliance results: a set of service records, not a
+    // sequence. Nothing downstream reads their position, and leaving them in the
+    // caller's order put it in the serialized snapshot.
+    phase
+        .service_results
+        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+
     phase.service_freshness = fold_freshness(&phase.service_results);
     phase.service_disagrees_with_local = phase
         .service_results
@@ -573,6 +837,22 @@ fn reduce_reporting(
     normalize_evidence(&mut evidence);
     phase.evidence = evidence;
     phase
+}
+
+/// Precedence of one report-status token over another, strongest first.
+///
+/// Injective over the five variants, so a fold by maximum rank has no ties to
+/// break and cannot depend on the order the rows were read in.
+fn report_state_rank(state: ComplianceReportState) -> u8 {
+    match state {
+        ComplianceReportState::Submitted => 4,
+        ComplianceReportState::Failed => 3,
+        // A source calling its own submission stale still reports a completed
+        // one, which says more than a row that is only queued.
+        ComplianceReportState::Stale => 2,
+        ComplianceReportState::Queued => 1,
+        ComplianceReportState::Unknown => 0,
+    }
 }
 
 fn fold_freshness(results: &[ComplianceServiceResult]) -> ComplianceServiceFreshness {
@@ -680,6 +960,12 @@ fn reduce_access(
             evidence: vec![fact.context.evidence_ref.clone()],
         });
     }
+
+    // Access decisions are correlated by identity and time, never by position, so
+    // the exported order is a set order like the two above.
+    phase
+        .decisions
+        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
 
     normalize_evidence(&mut evidence);
     phase.evidence = evidence;
@@ -1043,6 +1329,193 @@ mod tests {
             normalized_timestamp(&unusable),
             None,
             "a zone-less timestamp must not be treated as an ordered UTC instant"
+        );
+    }
+
+    // ── Caller order must not decide anything ───────────────────────────────
+
+    fn named(name: &str, value: &str) -> crate::intune::evidence::IntuneNamedValue {
+        crate::intune::evidence::IntuneNamedValue {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+
+    fn analyze_events(events: Vec<NormalizedWindowsEvent>) -> ComplianceSnapshot {
+        analyze_compliance(&ComplianceInput {
+            generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+            events,
+            ..ComplianceInput::default()
+        })
+    }
+
+    /// The severe case: the staleness gate reads `last_submission_at`, which was
+    /// an unconditional last-wins overwrite. Two submissions straddling the most
+    /// recent local evaluation therefore exported `Submitted` or `Stale`
+    /// depending only on which one the caller listed last.
+    #[test]
+    fn two_submissions_straddling_the_evaluation_do_not_flip_the_report_state() {
+        let evaluated = setting_event("e1", "./Device/X", "compliant", "2026-07-31T10:00:00Z");
+        let early = report_event("r-early", "submitted", "2026-07-31T09:00:00Z");
+        let late = report_event("r-late", "submitted", "2026-07-31T11:00:00Z");
+
+        let forward = analyze_events(vec![evaluated.clone(), early.clone(), late.clone()]);
+        let reverse = analyze_events(vec![evaluated, late, early]);
+
+        assert_eq!(
+            forward.reporting.state, reverse.reporting.state,
+            "the staleness gate must not read whichever submission the caller listed last"
+        );
+        assert_eq!(
+            forward.reporting.state,
+            ComplianceReportState::Submitted,
+            "a submission that postdates the evaluation carries it, whatever else was submitted earlier"
+        );
+        assert_eq!(
+            forward.reporting.last_submission_at, reverse.reporting.last_submission_at,
+            "the reported submission instant must be a function of the evidence, not the vector"
+        );
+    }
+
+    /// The `Submitted` and `Failed` arms of the report fold outrank everything,
+    /// but the remaining tokens fell through to a plain last-writer-wins
+    /// assignment, so a queued row and an uninterpretable one swapped the
+    /// exported state between them.
+    #[test]
+    fn a_queued_row_and_an_unknown_row_do_not_swap_the_report_state() {
+        let queued = report_event("r-queued", "queued", "2026-07-31T10:00:00Z");
+        let unknown = report_event("r-unknown", "banana", "2026-07-31T11:00:00Z");
+
+        let forward = analyze_events(vec![queued.clone(), unknown.clone()]);
+        let reverse = analyze_events(vec![unknown, queued]);
+
+        assert_eq!(
+            forward.reporting.state, reverse.reporting.state,
+            "the weaker report tokens must fold by rank like the stronger ones do"
+        );
+        assert_eq!(
+            forward.reporting.state,
+            ComplianceReportState::Queued,
+            "an uninterpretable status must not erase an observed queued submission"
+        );
+    }
+
+    /// Two submission rows naming different report ids or codes must not let the
+    /// caller's vector pick which one the export leads with.
+    #[test]
+    fn two_submission_rows_do_not_let_caller_order_pick_the_report_id_or_error() {
+        let mut zebra = report_event("r-zebra", "failed", "2026-07-31T10:00:00Z");
+        zebra
+            .named_data
+            .extend([named("ReportId", "zebra"), named("ErrorCode", "0x80070005")]);
+        let mut alpha = report_event("r-alpha", "failed", "2026-07-31T11:00:00Z");
+        alpha
+            .named_data
+            .extend([named("ReportId", "alpha"), named("ErrorCode", "0x80070002")]);
+
+        let forward = analyze_events(vec![zebra.clone(), alpha.clone()]);
+        let reverse = analyze_events(vec![alpha, zebra]);
+
+        assert_eq!(
+            forward.reporting.report_id, reverse.reporting.report_id,
+            "the exported report id must not depend on the caller's vector"
+        );
+        assert_eq!(
+            forward.reporting.error, reverse.reporting.error,
+            "the exported submission error must not depend on the caller's vector"
+        );
+    }
+
+    /// A merged setting's display name is quoted by the noncompliance finding, so
+    /// letting the first record in the vector win made the exported summary a
+    /// function of the serializer.
+    #[test]
+    fn a_merged_setting_display_name_does_not_follow_caller_order() {
+        let mut zebra = setting_event("e-zebra", "./Device/X", "compliant", "2026-07-31T10:00:00Z");
+        zebra.named_data.push(named("DisplayName", "Zebra setting"));
+        let mut alpha = setting_event("e-alpha", "./Device/X", "compliant", "2026-07-31T10:05:00Z");
+        alpha.named_data.push(named("DisplayName", "Alpha setting"));
+
+        let forward = analyze_events(vec![zebra.clone(), alpha.clone()]);
+        let reverse = analyze_events(vec![alpha, zebra]);
+
+        assert_eq!(
+            forward.local_evaluation.settings[0].display_name,
+            reverse.local_evaluation.settings[0].display_name,
+            "two records naming one setting differently must not flip which name is exported"
+        );
+    }
+
+    /// Two records stating different terminal codes for one setting must not flip
+    /// which code the export quotes.
+    #[test]
+    fn a_merged_setting_error_does_not_follow_caller_order() {
+        let mut first = setting_event("e-first", "./Device/X", "error", "2026-07-31T10:00:00Z");
+        first.named_data.push(named("ErrorCode", "0x80070005"));
+        let mut second = setting_event("e-second", "./Device/X", "error", "2026-07-31T10:05:00Z");
+        second.named_data.push(named("ErrorCode", "0x80070002"));
+
+        let forward = analyze_events(vec![first.clone(), second.clone()]);
+        let reverse = analyze_events(vec![second, first]);
+
+        assert_eq!(
+            forward.local_evaluation.settings[0].error, reverse.local_evaluation.settings[0].error,
+            "the exported setting error must not depend on the caller's vector"
+        );
+    }
+
+    /// Scope decides whether the "user-targeted policy was never evaluated"
+    /// finding fires at all, so two sources disagreeing about it must not be
+    /// resolved by vector position.
+    #[test]
+    fn two_records_disagreeing_about_scope_do_not_follow_caller_order() {
+        let mut as_device =
+            setting_event("e-device", "./Device/X", "notevaluated", "2026-07-31T10:00:00Z");
+        as_device.named_data.push(named("Scope", "device"));
+        let mut as_user =
+            setting_event("e-user", "./Device/X", "notevaluated", "2026-07-31T10:05:00Z");
+        as_user.named_data.push(named("Scope", "user"));
+
+        let forward = analyze_events(vec![as_device.clone(), as_user.clone()]);
+        let reverse = analyze_events(vec![as_user, as_device]);
+
+        assert_eq!(
+            forward.local_evaluation.settings[0].scope, reverse.local_evaluation.settings[0].scope,
+            "an unresolved scope disagreement must not be decided by vector position"
+        );
+        assert_eq!(
+            forward.local_evaluation.settings[0].scope,
+            ComplianceScope::Unknown,
+            "two equally authoritative sources disagreeing about scope state no scope (ADR-003)"
+        );
+    }
+
+    /// Two rows describing one policy differently must not export whichever the
+    /// caller happened to hand over first.
+    #[test]
+    fn two_policy_rows_do_not_let_caller_order_pick_the_policy_state() {
+        let policy_event = |evidence_id: &str, state: &str, scope: &str, at: &str| {
+            let mut event = setting_event(evidence_id, "./Device/X", "compliant", at);
+            event.named_data = vec![
+                named("PolicyId", "policy-1"),
+                named("PolicyState", state),
+                named("Scope", scope),
+            ];
+            event
+        };
+        let received = policy_event("p-received", "received", "device", "2026-07-31T10:00:00Z");
+        let missing = policy_event("p-missing", "missing", "user", "2026-07-31T11:00:00Z");
+
+        let forward = analyze_events(vec![received.clone(), missing.clone()]);
+        let reverse = analyze_events(vec![missing, received]);
+
+        assert_eq!(
+            forward.local_evaluation.policies[0].state, reverse.local_evaluation.policies[0].state,
+            "the exported policy state must not depend on the caller's vector"
+        );
+        assert_eq!(
+            forward.local_evaluation.policies[0].scope, reverse.local_evaluation.policies[0].scope,
+            "the exported policy scope must not depend on the caller's vector"
         );
     }
 }
