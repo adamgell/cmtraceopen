@@ -757,6 +757,155 @@ fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
     );
 }
 
+/// Facts that agree on every *named* ordering key but differ elsewhere must
+/// still not be ordered by the caller's vector.
+///
+/// This is the same defect one level in. Sorting on `evidence` alone left facts
+/// sharing a ref in caller order; chaining a few of each record's own fields
+/// after it left facts agreeing on *those* fields in caller order. The bundle
+/// below is built so every pair agrees on the whole named chain and differs only
+/// in a field the chain omits:
+///
+/// - customCompliance chains policyId, runId, settingName; the pair differs in
+///   `state`, `error`, `rawOutput`, and `namedData`.
+/// - serviceResults chains policyId, settingId, reportedAt; the pair differs in
+///   `state`, `deviceKey`, and `userKey`.
+/// - accessDecisions chains occurredAt, deviceKey, userKey, resource; the pair
+///   differs in `decision` and `failureCode`.
+///
+/// Naming more fields would only move the boundary again: the property under
+/// test is that a field the ordering does not name cannot decide the exported
+/// order, and that has to hold for fields nobody has written yet.
+fn facts_agreeing_on_every_named_key() -> ComplianceInput {
+    ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        custom_compliance: vec![
+            ComplianceCustomFact {
+                outcome: ComplianceCustomState::DiscoveryNoncompliant,
+                error: Some(error_code("0x80070005")),
+                raw_output: Some("{\"BitLocker\":false}".to_owned()),
+                named_data: vec![IntuneNamedValue {
+                    name: "Rule".to_owned(),
+                    value: "Zebra".to_owned(),
+                }],
+                ..twin_custom_fact()
+            },
+            ComplianceCustomFact {
+                outcome: ComplianceCustomState::DiscoveryCompliant,
+                error: None,
+                raw_output: Some("{\"BitLocker\":true}".to_owned()),
+                named_data: vec![IntuneNamedValue {
+                    name: "Rule".to_owned(),
+                    value: "Alpha".to_owned(),
+                }],
+                ..twin_custom_fact()
+            },
+        ],
+        service_results: vec![
+            ComplianceServiceFact {
+                state: ComplianceServiceState::Noncompliant,
+                device_key: Some("device-zebra".to_owned()),
+                user_key: Some("user-zebra".to_owned()),
+                ..twin_service_fact()
+            },
+            ComplianceServiceFact {
+                state: ComplianceServiceState::Compliant,
+                device_key: Some("device-alpha".to_owned()),
+                user_key: Some("user-alpha".to_owned()),
+                ..twin_service_fact()
+            },
+        ],
+        access_decisions: vec![
+            ComplianceAccessFact {
+                decision: ComplianceAccessDecision::Denied,
+                failure_code: Some(error_code("0x80070005")),
+                ..twin_access_fact()
+            },
+            ComplianceAccessFact {
+                decision: ComplianceAccessDecision::Granted,
+                failure_code: None,
+                ..twin_access_fact()
+            },
+        ],
+        ..ComplianceInput::default()
+    }
+}
+
+#[test]
+fn facts_agreeing_on_every_named_key_do_not_follow_caller_order() {
+    let forward = facts_agreeing_on_every_named_key();
+    let mut reverse = facts_agreeing_on_every_named_key();
+    reverse.custom_compliance.reverse();
+    reverse.service_results.reverse();
+    reverse.access_decisions.reverse();
+
+    assert_eq!(
+        wire(&analyze_compliance(&forward)),
+        wire(&analyze_compliance(&reverse)),
+        "facts that agree on every field the ordering names must still be \
+         ordered by their own content, not by the caller's vector"
+    );
+}
+
+fn error_code(raw: &str) -> cmtraceopen_parser::intune::evidence::IntuneErrorCode {
+    cmtraceopen_parser::intune::evidence::IntuneErrorCode {
+        raw: raw.to_owned(),
+        decimal: None,
+        hex: Some(raw.to_owned()),
+    }
+}
+
+/// The half of a custom-compliance fact that both twins share, including the
+/// evidence ref and every field the comparator names.
+fn twin_custom_fact() -> ComplianceCustomFact {
+    ComplianceCustomFact {
+        context: event("twin-custom", None, Vec::new()).context,
+        policy_id: Some("policy-twin".to_owned()),
+        run_id: Some("run-twin".to_owned()),
+        setting_name: Some("BitLockerCheck".to_owned()),
+        outcome: ComplianceCustomState::DiscoveryCompliant,
+        error: None,
+        raw_output: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn twin_service_fact() -> ComplianceServiceFact {
+    ComplianceServiceFact {
+        context: event("twin-service", None, Vec::new()).context,
+        policy_id: Some("policy-twin".to_owned()),
+        setting_id: Some("setting-twin".to_owned()),
+        state: ComplianceServiceState::Compliant,
+        reported_at: Some(IntuneTimestamp {
+            raw_text: "2026-07-31T11:30:00Z".to_owned(),
+            original_offset: None,
+            normalized_utc: Some("2026-07-31T11:30:00Z".to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: None,
+        user_key: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn twin_access_fact() -> ComplianceAccessFact {
+    ComplianceAccessFact {
+        context: event("twin-access", None, Vec::new()).context,
+        decision: ComplianceAccessDecision::Denied,
+        failure_code: None,
+        occurred_at: Some(IntuneTimestamp {
+            raw_text: "2026-07-31T11:50:00Z".to_owned(),
+            original_offset: None,
+            normalized_utc: Some("2026-07-31T11:50:00Z".to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: Some("device-twin".to_owned()),
+        user_key: Some("user-twin".to_owned()),
+        resource: Some("https://example.invalid/resource".to_owned()),
+        named_data: Vec::new(),
+    }
+}
+
 /// Re-collecting the same **events and setting reports** must not change the
 /// analysis.
 ///
