@@ -481,6 +481,31 @@ mod tests {
     }
 
     #[test]
+    fn a_delimited_export_works_from_a_payload_without_raw_xml() {
+        // The frontend omits rawXml for CSV and TSV because neither reads it and it dominates the
+        // IPC payload. Deserializing has to tolerate that, and the output must be unchanged.
+        let mut trimmed = record("x");
+        trimmed.raw_xml = String::new();
+
+        let with_xml = export_records(&[record("x")], ExportFormat::Csv).expect("exports");
+        let without = export_records(&[trimmed], ExportFormat::Csv).expect("exports");
+        assert_eq!(with_xml, without);
+    }
+
+    #[test]
+    fn a_record_missing_raw_xml_still_deserializes() {
+        let json = serde_json::json!([{
+            "id": 0, "eventRecordId": 1, "timestamp": "", "timestampEpoch": 0,
+            "provider": "P", "channel": "C", "eventId": 1, "level": "Error",
+            "computer": "TESTHOST-01", "message": "m", "sourceLabel": "Live", "mapped": []
+        }]);
+        let records: Vec<EvtxRecord> =
+            serde_json::from_value(json).expect("a trimmed payload deserializes");
+        assert_eq!(records[0].raw_xml, "");
+        assert!(records[0].event_data.is_empty());
+    }
+
+    #[test]
     fn extensions_match_the_format() {
         assert_eq!(ExportFormat::Csv.extension(), "csv");
         assert_eq!(ExportFormat::Tsv.extension(), "tsv");

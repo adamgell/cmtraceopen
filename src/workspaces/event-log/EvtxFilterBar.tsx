@@ -166,8 +166,15 @@ export function EvtxFilterBar() {
       });
       if (!destination) return;
       setExportState("Exporting...");
+      // Only the XML and JSON formats read rawXml, and it dominates the payload: sending it for a
+      // delimited export serializes every record's XML across the IPC bridge for nothing, which on
+      // a hundred-thousand-record export is the bulk of the transfer.
+      const payload =
+        format.value === "csv" || format.value === "tsv"
+          ? records.map(({ rawXml: _rawXml, ...rest }) => rest)
+          : records;
       const bytes = await invoke<unknown>("evtx_export_records", {
-        records,
+        records: payload,
         format: format.value,
         destination,
       });

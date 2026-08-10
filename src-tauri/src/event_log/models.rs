@@ -13,7 +13,14 @@ pub struct EvtxRecord {
     pub level: EvtxLevel,
     pub computer: String,
     pub message: String,
+    #[serde(default)]
     pub event_data: Vec<EvtxField>,
+    /// The provider's own XML.
+    ///
+    /// Defaulted so a caller can omit it. The export command receives records over IPC, and this
+    /// field dominates the payload: only the XML and JSON formats read it, so sending it for a
+    /// delimited export serialized every record's XML across the bridge for nothing.
+    #[serde(default)]
     pub raw_xml: String,
     pub source_label: String,
     /// Provider-defined task grouping, when the event declares one.
