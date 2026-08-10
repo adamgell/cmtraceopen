@@ -24,6 +24,7 @@ PR with its own issue, not a refactor.**
 |---|---|---|
 | Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Additive-only. Append variants and `Option<T>` fields at the end. |
 | `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
+| The citation **verdict**: is a finding backed by anything at all | `intune/evidence.rs` line 355 (`IntuneFinding::is_evidence_backed`) | One owner, called by all five Windows lanes. The predicate reads two emptiness bits and no lane-specific state, so its input space is four cells; Autopilot and Compliance each restated its De Morgan negation inline until they were converted to call it. Where each lane asks the question is *not* shared; see divergence 9. |
 | Redaction **grammar** (which byte patterns are masked and how) | `intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `win32/redaction.rs` lines 9-15. |
 | Fixture corpus envelope: manifest version, path safety, byte-count truth, file/manifest closure, synthetic marker, privacy scan | `crates/cmtraceopen-parser/tests/support/mod.rs` | Every Intune corpus. |
 | Fixture `captureState` -> library vocabulary | `tests/support/mod.rs` (`artifact_status_for_capture_state`, `access_state_for_capture_state`) | The collector boundary the fixtures stand in for. The access-state form is the status form composed with the crate's own mapping, so a fixture can never disagree with the crate about what `parseFailed` means. |
@@ -174,6 +175,50 @@ without any test failing.
 Autopilot likewise keeps its own `capture_state` helper: its input type is the
 lane-local `AutopilotCaptureState`, and the mapping is serde's own
 `rename_all = "camelCase"` rather than a hand-written table.
+
+### 9. The citation verdict is shared; the finding constructors around it are not
+
+The verdict is one predicate with one owner (see "Actually shared" above).
+The constructor that asks it is per-lane, in three different shapes, and the
+next consistency PR should stop at the predicate rather than continue into the
+constructors.
+
+| Lane | Shape | Where the verdict is asked | What else the constructor owns |
+|---|---|---|---|
+| Autopilot | `fn finding(...) -> Option<IntuneFinding>` | `.../autopilot/rules.rs` line 912 | Sorts and de-duplicates **both** citation sets first (`normalized_evidence` plus `sort`/`dedup` on the gap ids); takes `recommended_checks: &[String]` |
+| Compliance | `fn finding(...) -> Option<IntuneFinding>` | `.../compliance/rules.rs` line 697 | Keeps citations verbatim; takes a single `check: &str` and wraps it |
+| Win32 | build always, gate in `push` | `.../win32/findings.rs` line 191 | Runs the shared redaction grammar over `summary` **after** the gate, so an uncited finding is never redacted-and-dropped |
+| Microsoft Store | build inside `push_finding`, gate there | `.../microsoft_store/findings.rs` line 187 | Takes `recommended_checks: &[&str]` |
+| Configuration | build always, gate in `push_finding` | `.../configuration/rules.rs` line 152 | Nothing beyond the gate |
+
+**Why the verdict could be shared:** every lane's own doc comment already named
+`IntuneFinding::is_evidence_backed` as the invariant it was enforcing, so the
+five agreed for the same stated reason rather than by coincidence, and a lane
+that emitted an uncited finding would be violating the invariant declared on
+`IntuneFinding` itself. That is the extraction test below, all three parts.
+
+**Why the constructors cannot be:** they disagree on normalization and on the
+arity of `recommended_checks`, and Win32 additionally has a side effect ordered
+against the gate. A single shared constructor would have to pick one
+normalization policy, which would either impose Autopilot's byte-identical
+ordering contract on Compliance or retire it from Autopilot.
+
+Autopilot's normalization runs *before* it asks the verdict. That is safe
+rather than lucky: `sort` never changes a vector's length and `dedup` never
+empties a non-empty one, so normalization preserves both emptiness bits and
+cannot move the answer. Pinned by
+`the_constructor_sorts_and_dedupes_both_citation_sets`
+(`.../autopilot/rules.rs` line 983) against
+`the_constructor_preserves_citation_order_and_duplicates_verbatim`
+(`.../compliance/rules.rs` line 835), with the four-cell input space asserted
+in both lanes by `the_citation_guard_agrees_with_the_shared_invariant_on_every_input`
+(`.../autopilot/rules.rs` line 956, `.../compliance/rules.rs` line 803).
+
+The ESP lane carries the same constructor shape at `src/esp/rules.rs` line 669
+over `EspDiagnosticFinding` and `EspEvidenceRef`, a separate type family that
+cannot call this predicate at all. It is out of this owner's scope for the same
+reason it is out of the redaction owner's scope (divergence 7), and its
+similarity is not evidence that the shapes should converge.
 
 ## Extraction test
 
