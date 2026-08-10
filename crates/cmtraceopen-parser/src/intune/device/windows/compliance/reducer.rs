@@ -1171,6 +1171,56 @@ fn format_utc(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intune::evidence::IntuneNamedValue;
+
+    /// `structural_key` orders observations by their `Debug` rendering, so every
+    /// field must reach that rendering. A hand-written or lossy `Debug` on
+    /// `SettingObservation`, or on any type it nests, would silently drop a field
+    /// from the key and hand the export order back to the caller's vector.
+    ///
+    /// This pins each field individually rather than the struct as a whole, so a
+    /// field that stops participating fails here and names itself.
+    /// A fully populated observation, so every field has something to lose.
+    fn observation_for_key_coverage() -> SettingObservation {
+        SettingObservation {
+            key: ComplianceSettingKey {
+                policy_id: Some("policy".to_owned()),
+                setting_id: Some("setting".to_owned()),
+                setting_uri: Some("./Device/Vendor/MSFT/Policy/Result/Probe".to_owned()),
+            },
+            grouping_token: "uri:./device/vendor/msft/policy/result/probe".to_owned(),
+            scope: ComplianceScope::Device,
+            state: ComplianceSettingState::Compliant,
+            display_name: Some("a name".to_owned()),
+            error: None,
+            evaluated_at: None,
+            named_data: Vec::new(),
+            context: context("obs-1", "mdm-report"),
+        }
+    }
+
+    #[test]
+    fn structural_key_separates_observations_differing_in_any_single_field() {
+        let base = observation_for_key_coverage();
+        let mutations: Vec<(&str, SettingObservation)> = vec![
+            ("grouping_token", SettingObservation { grouping_token: "other-token".to_owned(), ..observation_for_key_coverage() }),
+            ("scope", SettingObservation { scope: ComplianceScope::User, ..observation_for_key_coverage() }),
+            ("state", SettingObservation { state: ComplianceSettingState::Noncompliant, ..observation_for_key_coverage() }),
+            ("display_name", SettingObservation { display_name: Some("other name".to_owned()), ..observation_for_key_coverage() }),
+            ("error", SettingObservation { error: Some(IntuneErrorCode { raw: "0x1".to_owned(), decimal: None, hex: None }), ..observation_for_key_coverage() }),
+            ("named_data", SettingObservation { named_data: vec![IntuneNamedValue { name: "n".to_owned(), value: "v".to_owned() }], ..observation_for_key_coverage() }),
+        ];
+
+        for (field, mutated) in mutations {
+            assert_ne!(
+                structural_key(&base),
+                structural_key(&mutated),
+                "changing `{field}` must change the structural key, or that field \
+                 stops participating in the export order"
+            );
+        }
+    }
+
     use crate::intune::evidence::{
         IntuneAccessState, IntuneEvidenceRef, IntuneObservationContext, IntuneParseState,
         IntuneProvenance, IntuneSensitivity, IntuneSourceKind, IntuneTimestampKind,

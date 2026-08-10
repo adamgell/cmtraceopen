@@ -845,6 +845,26 @@ fn facts_agreeing_on_every_named_key_do_not_follow_caller_order() {
         "facts that agree on every field the ordering names must still be \
          ordered by their own content, not by the caller's vector"
     );
+
+    // Symmetry alone does not pin the export: reversing the content-key
+    // comparison, or swapping it for any other symmetric rule, keeps the two
+    // sides equal while changing what ships. Pin the resolved order too.
+    let exported = wire(&analyze_compliance(&forward));
+    assert_eq!(
+        exported["localEvaluation"]["customCompliance"][0]["namedData"][0]["value"],
+        serde_json::json!("Alpha"),
+        "the custom-compliance twins must order by content, Alpha before Zebra"
+    );
+    assert_eq!(
+        exported["reporting"]["serviceResults"][0]["deviceKey"],
+        serde_json::json!("device-alpha"),
+        "the service twins must order by content, device-alpha before device-zebra"
+    );
+    assert_eq!(
+        exported["accessImpact"]["decisions"][0]["decision"],
+        serde_json::json!("denied"),
+        "the access twins must order by content, denied before granted"
+    );
 }
 
 fn error_code(raw: &str) -> cmtraceopen_parser::intune::evidence::IntuneErrorCode {
