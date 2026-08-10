@@ -16,6 +16,9 @@
 use crate::eventmap::EventNode;
 
 /// How the payload bytes were interpreted.
+// Growable: UTF-16BE and single-byte code pages are both plausible additions. Marking it now keeps
+// adding one a minor change; after the first release that exposes the type it is itself breaking.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadEncoding {
     /// UTF-16 little endian, which is what Windows writes most often.

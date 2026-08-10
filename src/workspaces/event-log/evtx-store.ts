@@ -9,7 +9,7 @@ import type {
   EvtxLevel,
   EvtxParseResult,
   EvtxTimeWindow,
-  EventQueryFilter,
+  EventQueryFilterSubset,
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
 
@@ -32,7 +32,7 @@ import {
  * existing controls filter records already in memory; moving them server-side changes what a
  * reload fetches, which is a behavioural change worth making deliberately rather than implicitly.
  */
-function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilter {
+function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
   if (timeWindow === "all") return {};
   return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
 }
@@ -287,6 +287,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadedChannels: newLoaded,
         isLoading: false,
         loadError: null,
+        // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
+        // backend reported here would show a complete view of a partly unreadable set.
+        coverageGaps: mergeCoverageGaps(state.coverageGaps, result.errorMessages),
         selectedRecordId: null,
       });
     } catch (error) {
@@ -316,6 +319,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       isLoading: true,
       loadStartTime: startTime,
       loadElapsedMs: null,
+      // Cleared with the records they describe. Keeping them would report gaps from a set that is
+      // no longer on screen, while the new results' own gaps went unreported.
+      coverageGaps: [],
     });
 
     const promises = loaded.map(async (ch) => {
@@ -343,6 +349,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, result.errorMessages),
         });
       } catch (e) {
         console.warn(`[evtx] Refresh failed for ${ch}:`, e);

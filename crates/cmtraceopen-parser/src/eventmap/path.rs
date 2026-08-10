@@ -398,4 +398,19 @@ mod tests {
         let path = ValuePath::parse("/Other/EventData").expect("parses");
         assert_eq!(path.evaluate(&event()), None);
     }
+
+    #[test]
+    fn an_attribute_selector_reads_only_the_first_repeated_element() {
+        // Deliberately asymmetric with text content, which joins repeats with ", " to match
+        // EvtxECmd. Nothing pinned the attribute half, so a change making attributes join too
+        // would have passed the whole suite.
+        let event = EventNode::new("Event").with_child(
+            EventNode::new("EventData")
+                .with_child(EventNode::new("Data").with_attribute("Name", "first"))
+                .with_child(EventNode::new("Data").with_attribute("Name", "second")),
+        );
+
+        let path = ValuePath::parse("/Event/EventData/Data/@Name").expect("parses");
+        assert_eq!(path.evaluate(&event).as_deref(), Some("first"));
+    }
 }

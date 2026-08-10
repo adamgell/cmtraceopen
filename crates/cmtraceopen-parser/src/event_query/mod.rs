@@ -206,10 +206,27 @@ fn quote_literal(value: &str) -> Result<String, QueryBuildError> {
 
 /// Why a filter could not be compiled into a query.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum QueryBuildError {
     /// The value contains both `'` and `"`, which an XPath 1.0 string literal cannot express.
     #[error("value contains both quote characters and cannot be an XPath string literal: {0}")]
     UnquotableValue(String),
+    /// The terms that cannot be split across nodes already exceed what one node may carry.
+    ///
+    /// Levels, providers, the time window and the keyword mask repeat in every node, so no amount
+    /// of chunking the Event IDs can bring them under the limit. Refused rather than emitted,
+    /// because the service rejects an oversized query and the tolerate-errors flag turns that
+    /// refusal into a channel that reports no events at all.
+    #[error(
+        "filter needs {needed} expressions before Event IDs, more than the {limit} one query node \
+         may carry; narrow the levels or providers"
+    )]
+    FilterTooComplex {
+        /// Expressions the unsplittable terms require.
+        needed: usize,
+        /// Expressions one node may carry.
+        limit: usize,
+    },
 }
 
 /// XML-escapes a complete XPath expression for embedding inside a `<QueryList>` document.
@@ -273,6 +290,35 @@ fn time_predicate(window: &TimeWindow) -> Result<Option<Predicate>, QueryBuildEr
 }
 
 /// Expressions contributed by everything other than the Event ID list.
+/// Levels with duplicates removed, preserving the order they were given in.
+///
+/// A caller can legitimately hand the same level twice. Emitting `Level=2 or Level=2` costs two
+/// expressions to say one thing, and the budget is small enough that spending it that way pushes a
+/// query over the limit for no benefit.
+fn distinct_levels(filter: &EventQueryFilter) -> Vec<u8> {
+    let mut seen = Vec::new();
+    for level in &filter.levels {
+        if !seen.contains(level) {
+            seen.push(*level);
+        }
+    }
+    seen
+}
+
+/// Provider names with duplicates removed, compared case-insensitively as the service matches.
+fn distinct_providers(filter: &EventQueryFilter) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for provider in &filter.providers {
+        if !seen
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(provider))
+        {
+            seen.push(provider.clone());
+        }
+    }
+    seen
+}
+
 fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
     let time = filter
         .time
@@ -280,7 +326,9 @@ fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
         .and_then(|window| time_predicate(window).ok().flatten())
         .map(|predicate| predicate.expressions)
         .unwrap_or(0);
-    time + filter.levels.len() + filter.providers.len() + usize::from(filter.keywords.is_some())
+    time + distinct_levels(filter).len()
+        + distinct_providers(filter).len()
+        + usize::from(filter.keywords.is_some())
 }
 
 fn system_predicates(
@@ -295,9 +343,9 @@ fn system_predicates(
         }
     }
 
-    if !filter.levels.is_empty() {
-        let levels: Vec<String> = filter
-            .levels
+    let levels = distinct_levels(filter);
+    if !levels.is_empty() {
+        let levels: Vec<String> = levels
             .iter()
             .map(|level| format!("Level={level}"))
             .collect();
@@ -316,13 +364,14 @@ fn system_predicates(
         });
     }
 
-    if !filter.providers.is_empty() {
+    let distinct = distinct_providers(filter);
+    if !distinct.is_empty() {
         let (operator, joiner) = match filter.provider_mode {
             SelectorMode::Include => ("=", " or "),
             SelectorMode::Exclude => ("!=", " and "),
         };
-        let mut providers = Vec::with_capacity(filter.providers.len());
-        for provider in &filter.providers {
+        let mut providers = Vec::with_capacity(distinct.len());
+        for provider in &distinct {
             providers.push(format!("@Name{operator}{}", quote_literal(provider)?));
         }
         predicates.push(format!("Provider[{}]", providers.join(joiner)));
@@ -389,6 +438,17 @@ pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError>
         .iter()
         .map(EventIdSelector::expression_cost)
         .sum();
+
+    // Refused before anything is built. These terms repeat in every node, so no amount of chunking
+    // the Event IDs brings them under the limit; emitting anyway produces a query the service
+    // rejects, and the tolerate-errors flag turns that into a channel reporting no events. An
+    // error the caller can show beats a filter that appears to work and returns nothing.
+    if fixed_cost > MAX_EXPRESSIONS_PER_SELECT {
+        return Err(QueryBuildError::FilterTooComplex {
+            needed: fixed_cost,
+            limit: MAX_EXPRESSIONS_PER_SELECT,
+        });
+    }
 
     let over_budget =
         !filter.event_ids.is_empty() && fixed_cost + event_id_cost > MAX_EXPRESSIONS_PER_SELECT;
@@ -1144,8 +1204,9 @@ mod expression_budget_tests {
     }
 
     #[test]
-    fn a_filter_whose_fixed_terms_fill_the_budget_still_produces_a_query() {
-        // Pathological but must not loop forever or emit an empty node.
+    fn repeated_levels_collapse_instead_of_spending_the_budget_twice() {
+        // The same level given twice would emit "Level=2 or Level=2": two expressions to say one
+        // thing, out of a budget of twenty.
         let f = EventQueryFilter {
             levels: (0..30).map(|n| (n % 6) as u8).collect(),
             event_ids: singles(3),
@@ -1153,8 +1214,62 @@ mod expression_budget_tests {
         };
 
         let query = build_query(&f).expect("builds");
-        assert!(query.contains("<Select>"));
-        assert_eq!(query.matches("<Select>").count(), 3, "one id per node");
+        assert_eq!(
+            query.matches("Level=").count(),
+            6,
+            "six distinct levels, however many times each was given: {query}"
+        );
+    }
+
+    #[test]
+    fn repeated_providers_collapse_case_insensitively() {
+        // The service matches provider names without regard to case, so two spellings of one name
+        // are one term.
+        let f = EventQueryFilter {
+            providers: vec![
+                "Microsoft-Windows-Kernel-General".into(),
+                "microsoft-windows-kernel-general".into(),
+                "Another-Provider".into(),
+            ],
+            ..Default::default()
+        };
+
+        let query = build_query(&f).expect("builds");
+        assert_eq!(query.matches("@Name=").count(), 2, "{query}");
+    }
+
+    #[test]
+    fn a_filter_whose_unsplittable_terms_exceed_one_node_is_refused() {
+        // Levels, providers, time and keywords repeat in every node, so chunking the Event IDs
+        // cannot bring them under the limit. Emitting anyway produces a query the service rejects,
+        // and EvtQueryTolerateQueryErrors turns that refusal into a channel reporting no events:
+        // the filter looks like it worked and returns nothing. An error the caller can show is the
+        // only honest outcome.
+        let f = EventQueryFilter {
+            providers: (0..30).map(|n| format!("Provider-{n}")).collect(),
+            event_ids: singles(3),
+            ..Default::default()
+        };
+
+        match build_query(&f) {
+            Err(QueryBuildError::FilterTooComplex { needed, limit }) => {
+                assert_eq!(needed, 30);
+                assert_eq!(limit, MAX_EXPRESSIONS_PER_SELECT);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_filter_exactly_at_the_budget_is_still_built() {
+        // The boundary is inclusive: twenty is what a node may carry, so it must not be refused.
+        let f = EventQueryFilter {
+            providers: (0..MAX_EXPRESSIONS_PER_SELECT)
+                .map(|n| format!("Provider-{n}"))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(build_query(&f).is_ok());
     }
 }
 
@@ -1359,8 +1474,16 @@ mod expression_budget_service_tests {
     fn no_emitted_node_can_exceed_the_budget() {
         // The property that matters, checked across shapes rather than for one case: whatever the
         // filter, every node the builder emits stays inside the budget.
-        for id_count in [1usize, 5, 19, 20, 21, 40, 100] {
-            for levels in [vec![], vec![1, 2], vec![1, 2, 3, 4, 5]] {
+        // Level lists past the budget included, since the gap this test missed the first time was
+        // a filter whose unsplittable terms alone exceeded a node.
+        for id_count in [0usize, 1, 5, 19, 20, 21, 40, 100] {
+            for levels in [
+                vec![],
+                vec![1, 2],
+                vec![1, 2, 3, 4, 5],
+                (0..30).map(|n| (n % 6) as u8).collect(),
+                (0..40u8).collect(),
+            ] {
                 let filter = EventQueryFilter {
                     time: Some(TimeWindow::Between {
                         from: Some("2020-01-01T00:00:00.000Z".into()),
@@ -1373,7 +1496,11 @@ mod expression_budget_service_tests {
                     keywords: Some(0x8020_0000_0000_0000),
                     ..Default::default()
                 };
-                let query = build_query(&filter).expect("builds");
+                // A refusal is a correct outcome here: it is what the builder does instead of
+                // emitting something the service would reject.
+                let Ok(query) = build_query(&filter) else {
+                    continue;
+                };
                 for node in query.split("<Select>").skip(1) {
                     let body = node.split("</Select>").next().unwrap_or_default();
                     // Each comparison is one expression; they are joined by `and` or `or`.
@@ -1385,6 +1512,14 @@ mod expression_budget_service_tests {
                     assert!(
                         comparisons <= MAX_EXPRESSIONS_PER_SELECT,
                         "{comparisons} expressions in one node for {id_count} ids, {levels:?} levels"
+                    );
+                }
+                // Suppressions are nodes too, and are bounded by the same limit.
+                for node in query.split("<Suppress>").skip(1) {
+                    let body = node.split("</Suppress>").next().unwrap_or_default();
+                    assert!(
+                        body.matches("EventID").count() <= MAX_EXPRESSIONS_PER_SELECT,
+                        "a suppression exceeded the budget: {body}"
                     );
                 }
             }

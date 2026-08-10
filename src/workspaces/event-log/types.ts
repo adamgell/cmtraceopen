@@ -80,8 +80,17 @@ export const EVTX_TIME_WINDOW_LABELS: Record<EvtxTimeWindow, string> = {
   all: "All time",
 };
 
-/** Mirrors `cmtraceopen_parser::event_query::EventQueryFilter`. */
-export interface EventQueryFilter {
+/**
+ * The subset of the backend's query filter this workspace currently sends.
+ *
+ * Deliberately not the whole contract. `cmtraceopen_parser::event_query::EventQueryFilter` also
+ * carries `eventIds`, `eventIdMode`, `providerMode` and `keywords`, and its `TimeWindow` has a
+ * `between` variant as well as `last`. The Rust struct is `#[serde(default)]`, so omitting them
+ * deserializes to defaults and this works; what is absent is UI for them, not backend support.
+ *
+ * Named as a subset so nobody reads a missing field here as a capability the backend lacks.
+ */
+export interface EventQueryFilterSubset {
   time?: { kind: "last"; milliseconds: number };
   levels?: number[];
   providers?: string[];

@@ -41,3 +41,21 @@ describe("summarizeCoverageGaps", () => {
     expect(summarizeCoverageGaps(["a", "b"])).toBe("2 gaps in this view");
   });
 });
+
+describe("gaps across load paths", () => {
+  it("a refresh replaces gaps rather than carrying stale ones forward", () => {
+    // The refresh clears records, so the gaps describing them have to go too. Keeping them would
+    // report a gap from a set no longer on screen while the new result's own gap went unsaid.
+    const beforeRefresh = ["Application: 3 records unreadable"];
+    const afterClear = mergeCoverageGaps([], ["System: stopped at 100000 events"]);
+    expect(afterClear).not.toContain(beforeRefresh[0]);
+    expect(afterClear).toEqual(["System: stopped at 100000 events"]);
+  });
+
+  it("an incremental channel load adds to what is already reported", () => {
+    // Channels load one at a time, so replacing here would leave only the last channel's gaps.
+    const first = mergeCoverageGaps([], ["Application: 3 records unreadable"]);
+    const second = mergeCoverageGaps(first, ["Security: 1 record unreadable"]);
+    expect(second).toHaveLength(2);
+  });
+});
