@@ -3,7 +3,7 @@
 ## Why this file exists
 
 Framework v1 asked what the Intune Windows workload reducers have in common. The
-answer, after inspection, was: much less than it looks. Four lanes (Win32,
+answer, after inspection, was: much less than it looks. Five lanes (Win32,
 Microsoft Store, Autopilot, Configuration, plus Compliance) use the same
 vocabulary and the same doc-comment idioms, so their rules *read* alike while
 deciding different things about different evidence.
@@ -43,7 +43,7 @@ PR with its own issue, not a refactor.**
 - **Autopilot / Compliance:** the opposite. Assessability is an allowlist
   (`access_state == Available && parse_state == Parsed`), so `Capped` is simply
   not assessable and proves nothing.
-  - `.../autopilot/models.rs` ~248-256; `.../device/windows/compliance/sources.rs`
+  - `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/models.rs` ~248-256; `crates/cmtraceopen-parser/src/intune/device/windows/compliance/sources.rs`
     ~447-455.
 - **Why both are right:** Win32 evidence is CCM-framed log records with explicit
   record boundaries, so "this record is complete" is a checkable property of the
@@ -53,15 +53,26 @@ PR with its own issue, not a refactor.**
 
 ### 2. Autopilot: `time_basis` is deliberately ungated
 
-Every reduction path in the Autopilot reducer passes through `is_assessable`.
-`time_basis` is the one deliberate exception, and the exception is the
-conservative direction: an unfiltered scan lets a non-assessable record with an
-unnormalized timestamp *downgrade* the basis. Gating it would remove that record
-from consideration and thereby **upgrade** the reported basis on thinner
-evidence.
+Assessability is the admission rule for the Autopilot reducer's status-bearing
+paths, but it is not applied uniformly, and the departures are deliberate:
 
-- `.../autopilot/reducer.rs` ~534-559 (the unfiltered scan), with the rationale
-  stated at ~595-606 on `is_assessable` itself.
+- **Gated** (the default): status, phase, and signal reduction filter on
+  `is_assessable` / `is_assessable_section` before reading an observation.
+- **Deliberately inverted:** the coverage-gap paths select on
+  `!is_assessable_section` and `!is_assessable` precisely so unusable input is
+  reported as a gap rather than silently dropped.
+- **Deliberately ungated:** `time_basis` (this section) and
+  `AutopilotKeyGate::Detecting` (section 3).
+
+`time_basis` is ungated in the conservative direction: an unfiltered scan lets a
+non-assessable record with an unnormalized timestamp *downgrade* the basis.
+Gating it would remove that record from consideration and thereby **upgrade**
+the reported basis on thinner evidence.
+
+- `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs:541`
+  (the unfiltered `all_normalized` scan), with the rationale stated at
+  `:604` on `is_assessable` itself, and the inverted coverage-gap
+  filters at `:672` and `:705`.
 - Adding the gate here for symmetry would be a behavior regression that no
   compile error would catch.
 
@@ -78,7 +89,7 @@ More evidence is the conservative direction for conflict detection, and the
 restrictive direction for proof. Collapsing the two passes into one gate breaks
 whichever half it is collapsed toward.
 
-- `.../autopilot/reducer.rs` ~1311-1327 (enum + doc), applied ~1349-1352, both
+- `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs` ~1311-1327 (enum + doc), applied ~1349-1352, both
   passes ~1426-1452.
 
 ### 4. Configuration admits `IntuneParseState::Raw` as interpretable
@@ -87,9 +98,9 @@ Configuration's `is_uninterpretable` excludes only `Malformed` and `Unsupported`
 (plus partially-read sources); `Raw` falls through as interpretable. Autopilot
 and Compliance both require `Parsed` exactly.
 
-- Configuration: `.../device/windows/configuration/sources.rs` ~146-151.
-- Autopilot: `.../autopilot/models.rs` ~253-256.
-- Compliance: `.../device/windows/compliance/sources.rs` ~447-455.
+- Configuration: `crates/cmtraceopen-parser/src/intune/device/windows/configuration/sources.rs` ~146-151.
+- Autopilot: `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/models.rs` ~253-256.
+- Compliance: `crates/cmtraceopen-parser/src/intune/device/windows/compliance/sources.rs` ~447-455.
 - **Why:** Configuration's `Raw` retains a record whose typed fields were not
   modelled but whose structure was read. For that lane, a retained raw setting
   report is usable input. For Autopilot, `Raw` means the document never declared
@@ -103,9 +114,9 @@ and Compliance both require `Parsed` exactly.
 | Microsoft Store | only `IntuneParseState::Malformed` (with a non-`Available` access state as a separate contributor) | `Low` |
 | Win32 | degraded coverage generally | `Medium` (demotion from `High` only) |
 
-- Store: `.../apps/windows/microsoft_store/reducer.rs` ~857-858 (contributors),
+- Store: `crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/reducer.rs` ~857-858 (contributors),
   ~905-909 (call site), ~956-972 (`degraded` forces `Low`).
-- Win32: `.../apps/windows/win32/reducer.rs` ~1711-1715.
+- Win32: `crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs` ~1711-1715.
 
 Both are correct against their own contract. Store transactions are assembled
 from OS event channels where a malformed contributor means the channel itself is
