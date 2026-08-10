@@ -75,13 +75,39 @@ struct ParsedImeAttrs<'a> {
 
 /// Parse IME log content into structured logical records.
 pub fn parse_ime_content(content: &str) -> Vec<ImeLine> {
-    let parsed = parse_ime_records(content);
+    let parsed = parse_ime_records(content, usize::MAX);
     parsed.entries.into_iter().map(|entry| entry.line).collect()
+}
+
+/// Parse at most `limit` entries — framed records and fragments both count
+/// toward the bound — stopping entry production there.
+///
+/// The scan frames one entry past the bound so the caller can distinguish
+/// "exactly `limit` entries" from "entries past the bound existed", then
+/// discards the sentinel; the returned bool reports the latter. Record
+/// framing, fragment collection, and the fallback line parser all stop at the
+/// bound, so a pathologically large artifact costs bounded per-entry work and
+/// allocation instead of being fully parsed and truncated afterwards.
+///
+/// What is *not* bounded: the newline index built for exact line numbers
+/// ([`build_line_starts`]) performs one O(bytes) scan over the whole input
+/// before framing starts, so the bound caps entry materialization, not that
+/// single linear pass.
+pub fn parse_ime_content_bounded(content: &str, limit: usize) -> (Vec<ImeLine>, bool) {
+    let parsed = parse_ime_records(content, limit.saturating_add(1));
+    let mut lines: Vec<ImeLine> = parsed
+        .entries
+        .into_iter()
+        .map(|entry| entry.line)
+        .collect();
+    let truncated = lines.len() > limit;
+    lines.truncate(limit);
+    (lines, truncated)
 }
 
 /// Parse IME log content into shared log entries while preserving logical records.
 pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32) {
-    let parsed = parse_ime_records(content);
+    let parsed = parse_ime_records(content, usize::MAX);
     let entries = parsed
         .entries
         .into_iter()
@@ -188,14 +214,23 @@ struct ParsedImeChunk {
     parse_errors: u32,
 }
 
-fn parse_ime_records(content: &str) -> ParsedImeChunk {
+/// `max_entries` bounds every entry-producing path — framed records,
+/// fragments, and fallback lines all count — so a caller with a cap pays
+/// bounded per-entry work; pass `usize::MAX` for an unbounded parse. The
+/// [`build_line_starts`] newline index below is the one deliberate exception:
+/// it scans the full input once (O(bytes)) so every produced entry carries an
+/// exact line number.
+fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
     let line_starts = build_line_starts(content);
-    let mut entries = Vec::with_capacity(line_starts.len());
+    let mut entries = Vec::with_capacity(line_starts.len().min(max_entries));
     let mut parse_errors = 0u32;
     let mut cursor = 0usize;
     let mut matched_any = false;
 
     for caps in ime_record_re().captures_iter(content) {
+        if entries.len() >= max_entries {
+            break;
+        }
         let Some(full_match) = caps.get(0) else {
             continue;
         };
@@ -206,6 +241,7 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
             &line_starts,
             &mut entries,
             &mut parse_errors,
+            max_entries,
         );
 
         if let Some(record) = parse_record(&caps, full_match.start(), &line_starts) {
@@ -217,6 +253,7 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
                 &line_starts,
                 &mut entries,
                 &mut parse_errors,
+                max_entries,
             );
         }
 
@@ -230,6 +267,7 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
         &line_starts,
         &mut entries,
         &mut parse_errors,
+        max_entries,
     );
 
     if matched_any {
@@ -238,7 +276,7 @@ fn parse_ime_records(content: &str) -> ParsedImeChunk {
             parse_errors,
         }
     } else {
-        parse_fallback_lines(content)
+        parse_fallback_lines(content, max_entries)
     }
 }
 
@@ -598,10 +636,14 @@ fn push_unmatched_segment(
     line_starts: &[usize],
     entries: &mut Vec<ParsedImeRecord>,
     parse_errors: &mut u32,
+    max_entries: usize,
 ) {
     let mut local_offset = 0usize;
 
     for piece in segment.split_inclusive('\n') {
+        if entries.len() >= max_entries {
+            return;
+        }
         let line = piece.trim_end_matches(['\r', '\n']);
         let trimmed = line.trim();
         if !trimmed.is_empty() {
@@ -628,10 +670,13 @@ fn push_unmatched_segment(
     }
 }
 
-fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
+fn parse_fallback_lines(content: &str, max_entries: usize) -> ParsedImeChunk {
     let mut entries = Vec::new();
 
     for (index, line) in content.lines().enumerate() {
+        if entries.len() >= max_entries {
+            break;
+        }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -710,6 +755,57 @@ mod tests {
         assert_eq!(lines[2].line_number, 4);
         assert_eq!(lines[1].message, "Second line one\nSecond line two");
         assert_eq!(lines[0].timestamp_utc, expected_utc);
+    }
+
+    #[test]
+    fn bounded_parsing_stops_at_the_limit_and_reports_the_remainder() {
+        let record = |index: usize| {
+            format!(
+                "<![LOG[Record {index}]LOG]!><time=\"11:16:37.000\" date=\"3-12-2026\" \
+                 component=\"Win32App\" context=\"\" type=\"1\" thread=\"50\" file=\"\">\n"
+            )
+        };
+        let content: String = (1..=5).map(record).collect();
+
+        let (bounded, truncated) = parse_ime_content_bounded(&content, 3);
+        assert_eq!(bounded.len(), 3);
+        assert!(truncated, "records past the bound existed and were not read");
+
+        let (all, truncated) = parse_ime_content_bounded(&content, 5);
+        assert_eq!(all.len(), 5);
+        assert!(!truncated, "an exactly-at-the-limit artifact is not truncated");
+
+        // The bounded prefix is the same records the unbounded parse yields.
+        let unbounded = parse_ime_content(&content);
+        for (bounded_line, unbounded_line) in bounded.iter().zip(&unbounded) {
+            assert_eq!(bounded_line.message, unbounded_line.message);
+            assert_eq!(bounded_line.line_number, unbounded_line.line_number);
+        }
+    }
+
+    #[test]
+    fn bounded_parsing_bounds_the_fallback_and_fragment_paths_too() {
+        // No CCM record frames here, so the fallback line parser runs; it must
+        // honor the same bound.
+        let fallback: String = (1..=4)
+            .map(|index| format!("2026-03-12 11:16:37.000 plain line {index}\n"))
+            .collect();
+        let (lines, truncated) = parse_ime_content_bounded(&fallback, 2);
+        assert_eq!(lines.len(), 2);
+        assert!(truncated);
+
+        // A single huge unmatched segment between records must stop pushing
+        // fragments once the bound is reached.
+        let mut mixed = String::from(
+            "<![LOG[framed]LOG]!><time=\"11:16:37.000\" date=\"3-12-2026\" \
+             component=\"Win32App\" context=\"\" type=\"1\" thread=\"50\" file=\"\">\n",
+        );
+        for index in 0..10 {
+            mixed.push_str(&format!("orphan tail {index}\n"));
+        }
+        let (lines, truncated) = parse_ime_content_bounded(&mixed, 4);
+        assert_eq!(lines.len(), 4);
+        assert!(truncated);
     }
 
     #[test]

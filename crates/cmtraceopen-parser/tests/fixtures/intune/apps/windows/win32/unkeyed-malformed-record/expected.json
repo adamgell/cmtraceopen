@@ -1,0 +1,67 @@
+{
+  "scenario": "unkeyed-malformed-record",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "enforcing",
+      "lastConfirmedPhase": "assignment",
+      "confidence": "low",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppWorkload.log rotation containing the enforcement result",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "unkeyedObservationCount": 1,
+  "fragmentRecords": 1,
+  "findings": [
+    {
+      "findingId": "win32-unkeyed-signal",
+      "severity": "info",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:4",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "win32-unresolved:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "info",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:2",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unkeyed terminal record stays visible and terminates nothing",
+    "an unframed line naming an app is still not a record"
+  ],
+  "unknownVocabularyObserved": false
+}

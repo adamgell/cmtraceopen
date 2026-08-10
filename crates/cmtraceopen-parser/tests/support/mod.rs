@@ -241,13 +241,120 @@ pub fn validate_scenario(
     let mut failures = Failures::new();
 
     validate_envelope(scenario, manifest, expected, &mut failures);
-    let referenced = validate_artifacts(scenario, scenario_root, manifest, &mut failures);
+    let probes = privacy_probes(scenario, manifest, expected, &mut failures);
+    let referenced = validate_artifacts(scenario, scenario_root, manifest, &probes, &mut failures);
     validate_evidence_closure(scenario, scenario_root, &referenced, &mut failures);
     validate_expected_coverage(scenario, manifest, expected, &mut failures);
     validate_findings_are_evidence_backed(scenario, expected, &mut failures);
-    validate_descriptor_privacy(scenario, scenario_root, &mut failures);
+    validate_descriptor_privacy(scenario, scenario_root, &probes, &mut failures);
 
     failures
+}
+
+/// Privacy-probe material a scenario deliberately embeds to prove redaction.
+///
+/// The corpus-wide prohibitions (`C:\Users\`, SIDs, …) made the very shapes the
+/// redaction contract must catch impossible to put into a fixture, so the gap
+/// they exist to close was untestable. A manifest may declare exactly the
+/// probe strings it plants under `privacyProbes`; those exact substrings are
+/// exempt from the prohibition scan over the *evidence files* only, and each
+/// one must be declared **verbatim** as a `redactionMustNotContain` needle:
+/// substring coverage would prove only a fragment of the sensitive payload
+/// redacted while the rest leaked unasserted.
+fn privacy_probes(
+    scenario: &str,
+    manifest: &Value,
+    expected: &Value,
+    failures: &mut Failures,
+) -> Vec<String> {
+    // A declaration that is present but not an array of non-empty strings is
+    // a corrupt contract, never a silently empty one: ignoring it would leave
+    // sensitive-shaped material in the fixture with nothing proving it
+    // redacted.
+    let probes: Vec<String> = match &manifest["privacyProbes"] {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|value| match value.as_str() {
+                Some(probe) if !probe.is_empty() => Some(probe.to_owned()),
+                _ => {
+                    failures.push(format!(
+                        "{scenario}: privacyProbes entries must be non-empty strings, got {value}"
+                    ));
+                    None
+                }
+            })
+            .collect(),
+        other => {
+            failures.push(format!(
+                "{scenario}: privacyProbes must be an array of strings, got {other}"
+            ));
+            Vec::new()
+        }
+    };
+
+    let must_not_contain: Vec<&str> = expected["redactionMustNotContain"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str())
+        .collect();
+    for probe in &probes {
+        failures.require(
+            must_not_contain.contains(&probe.as_str()),
+            || {
+                format!(
+                    "{scenario}: privacy probe {probe:?} is not covered by any \
+                     redactionMustNotContain assertion; the probe must be declared \
+                     verbatim as a needle so the whole sensitive payload is proven \
+                     redacted"
+                )
+            },
+        );
+    }
+    probes
+}
+
+/// The JSON string-escaped form of a probe, covering quotes and control
+/// characters, not just backslashes.
+fn json_escaped(probe: &str) -> String {
+    let quoted = serde_json::to_string(probe).expect("a string escapes");
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
+/// Byte ranges of `contents` covered by a declared probe, in the raw and the
+/// JSON string-escaped form (evidence files embed JSON payloads).
+fn probe_ranges(contents: &str, probes: &[String]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for probe in probes {
+        for needle in [probe.clone(), json_escaped(probe)] {
+            for (start, matched) in contents.match_indices(&needle) {
+                ranges.push((start, start + matched.len()));
+            }
+        }
+    }
+    ranges
+}
+
+fn covered(ranges: &[(usize, usize)], span: (usize, usize)) -> bool {
+    ranges
+        .iter()
+        .any(|&(start, end)| start <= span.0 && span.1 <= end)
+}
+
+/// Extend a profile-path prefix match through the profile-name segment that
+/// follows it: that segment is the sensitive value, so the exempting probe
+/// must cover it, not merely the prefix. A bare `C:\Users\` probe therefore
+/// exempts nothing beyond itself, and an undeclared `C:\Users\alice\…` stays
+/// detectable.
+fn extend_through_profile_segment(contents: &str, end: usize) -> usize {
+    let tail = &contents[end..];
+    let stop = tail
+        .find([
+            '\\', '/', '"', '\'', ',', ';', '<', '>', '|', ' ', '\t', '\r', '\n',
+        ])
+        .unwrap_or(tail.len());
+    end + stop
 }
 
 /// Scan `manifest.json` and `expected.json` themselves for private data.
@@ -256,14 +363,55 @@ pub fn validate_scenario(
 /// written and carry exactly the free-text fields where a real path or identity
 /// gets typed by mistake: `sanitizedSourcePath`, `displayName`, and finding
 /// summaries. Scanning only the evidence left the likeliest leak unchecked.
-pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failures: &mut Failures) {
-    for descriptor in ["manifest.json", "expected.json"] {
+///
+/// Probe exemption is entry-precise: only the *declared probe strings* are
+/// removed from within the two declaration arrays (`privacyProbes` in the
+/// manifest, `redactionMustNotContain` in the expectations) before the scan.
+/// A needle that is not a declared probe stays subject to the prohibition
+/// scan — removing the whole array silently exempted sensitive-shaped needles
+/// nothing had asserted as probes. A probe appearing in any *other* descriptor
+/// field — an expected output, an assertion, a sanitized path — is a leak in
+/// the asserted outputs and stays detectable too.
+pub fn validate_descriptor_privacy(
+    scenario: &str,
+    scenario_root: &Path,
+    probes: &[String],
+    failures: &mut Failures,
+) {
+    for (descriptor, declaration_field) in [
+        ("manifest.json", "privacyProbes"),
+        ("expected.json", "redactionMustNotContain"),
+    ] {
         let path = scenario_root.join(descriptor);
         match std::fs::read_to_string(&path) {
             Ok(contents) => {
-                failures.absorb(privacy_problems(&format!("{scenario}/{descriptor}"), &contents))
+                let scanned = match serde_json::from_str::<Value>(&contents) {
+                    Ok(mut value) => {
+                        if let Some(entries) = value
+                            .get_mut(declaration_field)
+                            .and_then(Value::as_array_mut)
+                        {
+                            entries.retain(|entry| {
+                                entry
+                                    .as_str()
+                                    .is_none_or(|needle| !probes.iter().any(|probe| probe == needle))
+                            });
+                        }
+                        serde_json::to_string_pretty(&value)
+                            .expect("descriptor JSON reserializes")
+                    }
+                    // Unparseable descriptors are scanned raw; other checks
+                    // already report the parse failure itself.
+                    Err(_) => contents,
+                };
+                failures.absorb(privacy_problems(
+                    &format!("{scenario}/{descriptor}"),
+                    &scanned,
+                ));
             }
-            Err(error) => failures.push(format!("{scenario}: {descriptor} is not readable: {error}")),
+            Err(error) => {
+                failures.push(format!("{scenario}: {descriptor} is not readable: {error}"))
+            }
         }
     }
 }
@@ -303,6 +451,7 @@ fn validate_artifacts(
     scenario: &str,
     scenario_root: &Path,
     manifest: &Value,
+    probes: &[String],
     failures: &mut Failures,
 ) -> BTreeSet<PathBuf> {
     let mut referenced = BTreeSet::new();
@@ -391,9 +540,10 @@ fn validate_artifacts(
                         "{scenario}/{id}: first line of {relative_path} must contain {SYNTHETIC_MARKER:?}"
                     )
                 });
-                failures.absorb(privacy_problems(
+                failures.absorb(privacy_problems_excluding_probes(
                     &format!("{scenario}/{id}:{relative_path}"),
                     &contents,
+                    probes,
                 ));
             }
             Err(error) => failures.push(format!(
@@ -587,50 +737,95 @@ fn validate_findings_are_evidence_backed(
 /// Checked as plain substrings and simple scans rather than regexes so this stays
 /// cheap enough to run over every file of every corpus.
 pub fn privacy_problems(context: &str, contents: &str) -> Failures {
-    let mut failures = Failures::new();
+    privacy_problems_excluding_probes(context, contents, &[])
+}
 
-    for forbidden in [
-        "C:\\Users\\",
-        "/Users/",
-        "Authorization:",
-        "Bearer ",
-        "client_secret",
-        "BEGIN PRIVATE KEY",
-        "BEGIN RSA PRIVATE KEY",
+/// [`privacy_problems`] with declared probe material exempted *as whole
+/// values* — no text is deleted before scanning.
+///
+/// The previous implementation stripped every probe occurrence from the
+/// contents first, so a bare-prefix probe like `C:\Users\` erased the prefix
+/// of every path in the file and hid undeclared leaks such as
+/// `C:\Users\alice\secret.txt` from the scan. Here a prohibited match is
+/// exempt only when a probe occurrence covers the *sensitive span* — for the
+/// profile-path roots that is the prefix plus the profile-name segment after
+/// it — so a probe exempts exactly the payload it declares and nothing else.
+pub fn privacy_problems_excluding_probes(
+    context: &str,
+    contents: &str,
+    probes: &[String],
+) -> Failures {
+    let mut failures = Failures::new();
+    let exempt = probe_ranges(contents, probes);
+
+    for (forbidden, is_profile_root) in [
+        ("C:\\Users\\", true),
+        ("/Users/", true),
+        ("Authorization:", false),
+        ("Bearer ", false),
+        ("client_secret", false),
+        ("BEGIN PRIVATE KEY", false),
+        ("BEGIN RSA PRIVATE KEY", false),
     ] {
         // Check the JSON-escaped form too. Inside manifest.json and
         // expected.json a Windows path is necessarily written `C:\\Users\\`,
         // so searching only for the literal `C:\Users\` never matches and the
         // descriptors leak exactly the paths this list exists to block.
         let escaped = forbidden.replace('\\', "\\\\");
-        failures.require(
-            !contents.contains(forbidden) && !contents.contains(escaped.as_str()),
-            || format!("{context}: contains forbidden fixture material {forbidden:?}"),
-        );
+        let mut needles = vec![forbidden.to_owned()];
+        if escaped != forbidden {
+            needles.push(escaped);
+        }
+        let leaked = needles.iter().any(|needle| {
+            contents
+                .match_indices(needle.as_str())
+                .any(|(start, matched)| {
+                    let end = start + matched.len();
+                    let span_end = if is_profile_root {
+                        extend_through_profile_segment(contents, end)
+                    } else {
+                        end
+                    };
+                    !covered(&exempt, (start, span_end))
+                })
+        });
+        failures.require(!leaked, || {
+            format!("{context}: contains forbidden fixture material {forbidden:?}")
+        });
     }
 
-    if let Some(sid) = find_windows_sid(contents) {
+    if let Some(sid) = windows_sid_occurrences(contents)
+        .into_iter()
+        .find(|(start, candidate)| !covered(&exempt, (*start, start + candidate.len())))
+        .map(|(_, candidate)| candidate)
+    {
         failures.push(format!("{context}: contains a Windows SID {sid:?}"));
     }
-    if let Some(email) = find_email(contents) {
+    if let Some(email) = email_occurrences(contents)
+        .into_iter()
+        .find(|(start, email)| !covered(&exempt, (*start, start + email.len())))
+        .map(|(_, email)| email)
+    {
         failures.push(format!("{context}: contains an email address {email:?}"));
     }
 
     failures
 }
 
-/// Find a `S-1-…` SID with at least three sub-authorities.
-fn find_windows_sid(contents: &str) -> Option<String> {
+/// Every `S-1-…` SID with at least three sub-authorities, with its byte offset.
+fn windows_sid_occurrences(contents: &str) -> Vec<(usize, String)> {
+    let mut occurrences = Vec::new();
     for (index, _) in contents.match_indices("S-1-") {
         let candidate = contents[index..]
             .split(|c: char| !(c.is_ascii_digit() || c == '-' || c == 'S'))
             .next()
             .unwrap_or_default();
-        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit()) {
-            return Some(candidate.to_owned());
+        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit())
+        {
+            occurrences.push((index, candidate.to_owned()));
         }
     }
-    None
+    occurrences
 }
 
 /// Find an email address, ignoring the reserved `.invalid` and `.example` TLDs
@@ -642,15 +837,39 @@ fn find_windows_sid(contents: &str) -> Option<String> {
 /// skipped, so *both* real addresses slip through. Semicolon-joined recipient
 /// lists are exactly the shape a pasted mail header has, so this is the case the
 /// scanner most needs to catch.
-fn find_email(contents: &str) -> Option<String> {
-    for token in contents.split(|c: char| {
+fn email_occurrences(contents: &str) -> Vec<(usize, String)> {
+    fn is_delimiter(c: char) -> bool {
         c.is_whitespace()
             || matches!(
                 c,
                 '"' | '\'' | ',' | ';' | ':' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '='
                     | '|'
             )
-    }) {
+    }
+
+    let mut occurrences = Vec::new();
+    let mut last_token_end = 0usize;
+    for (at, _) in contents.match_indices('@') {
+        // A second `@` inside a token already examined stays with that token.
+        if at < last_token_end {
+            continue;
+        }
+        let start = match contents[..at].rfind(is_delimiter) {
+            Some(index) => {
+                index
+                    + contents[index..]
+                        .chars()
+                        .next()
+                        .expect("delimiter char exists at its own index")
+                        .len_utf8()
+            }
+            None => 0,
+        };
+        let end = contents[at..]
+            .find(is_delimiter)
+            .map_or(contents.len(), |offset| at + offset);
+        last_token_end = end;
+        let token = &contents[start..end];
         let Some((local, domain)) = token.split_once('@') else {
             continue;
         };
@@ -665,8 +884,8 @@ fn find_email(contents: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
         {
-            return Some(token.to_owned());
+            occurrences.push((start, token.to_owned()));
         }
     }
-    None
+    occurrences
 }
