@@ -3,7 +3,7 @@
 ## Why this file exists
 
 Framework v1 asked what the Intune Windows workload reducers have in common. The
-answer, after inspection, was: much less than it looks. Four lanes (Win32,
+answer, after inspection, was: much less than it looks. Five lanes (Win32,
 Microsoft Store, Autopilot, Configuration, plus Compliance) use the same
 vocabulary and the same doc-comment idioms, so their rules *read* alike while
 deciding different things about different evidence.
@@ -22,12 +22,12 @@ PR with its own issue, not a refactor.**
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Additive-only. Append variants and `Option<T>` fields at the end. |
-| `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
-| The citation **verdict**: is a finding backed by anything at all | `intune/evidence.rs` line 355 (`IntuneFinding::is_evidence_backed`) | One owner, called by all five Windows lanes. The predicate reads two emptiness bits and no lane-specific state, so its input space is four cells; Autopilot and Compliance each restated its De Morgan negation inline until they were converted to call it. Where each lane asks the question is *not* shared; see divergence 9. |
-| Redaction **grammar** (which byte patterns are masked and how) | `intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `win32/redaction.rs` lines 9-15. |
+| Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Two separate compatibility questions, and only one of them has an "additive" answer. **Wire format:** exactly as `INTUNE_EVIDENCE_SCHEMA_VERSION` states at `crates/cmtraceopen-parser/src/intune/evidence.rs:23-24` — only an optional field, or a variant on an `intune_raw_preserving_string_enum!` type, is additive. The plain `#[derive(Deserialize)]` enums (`IntuneTimestampKind`, `IntuneSensitivity`, `IntuneParseState`, `IntuneAccessState`, `IntuneArtifactStatus`) have no `#[serde(other)]` arm, so an unknown variant is a hard decode error: adding one breaks older readers and bumps the schema version. **Rust API:** no additive guarantee at all. None of these types are `#[non_exhaustive]` and `cmtraceopen-parser` is published, so a new variant or public field breaks downstream `match` arms and struct literals and needs a semver-major release, or `#[non_exhaustive]` first. |
+| `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `crates/cmtraceopen-parser/src/intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
+| The citation **verdict**: is a finding backed by anything at all | `crates/cmtraceopen-parser/src/intune/evidence.rs:355` (`IntuneFinding::is_evidence_backed`) | One owner, called by all five Windows lanes. The predicate reads two emptiness bits and no lane-specific state, so its input space is four cells; Autopilot and Compliance each restated its De Morgan negation inline until they were converted to call it. Where each lane asks the question is *not* shared; see divergence 9. |
+| Redaction **grammar** (which byte patterns are masked and how) | `crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines 9-15. |
 | Fixture corpus envelope: manifest version, path safety, byte-count truth, file/manifest closure, synthetic marker, privacy scan | `crates/cmtraceopen-parser/tests/support/mod.rs` | Every Intune corpus. |
-| Fixture `captureState` -> library vocabulary | `tests/support/mod.rs` (`artifact_status_for_capture_state`, `access_state_for_capture_state`) | The collector boundary the fixtures stand in for. The access-state form is the status form composed with the crate's own mapping, so a fixture can never disagree with the crate about what `parseFailed` means. |
+| Fixture `captureState` -> library vocabulary | `crates/cmtraceopen-parser/tests/support/mod.rs` (`artifact_status_for_capture_state`, `access_state_for_capture_state`) | The collector boundary the fixtures stand in for. The access-state form is the status form composed with the crate's own mapping, so a fixture can never disagree with the crate about what `parseFailed` means. |
 | The ADR-001 *directional doctrine* as prose | `docs/architecture/decisions/ADR-001-evidence-strength-confidence.md` (addendum) | The sentence is shared. The mechanism is not; see below. |
 
 ## Protected divergences
@@ -38,13 +38,13 @@ PR with its own issue, not a refactor.**
   completely. A complete framed record inside a capped artifact is authentic
   evidence and may prove a terminal outcome, including `Succeeded`. What capping
   costs is *confidence*: `High` is demoted to `Medium`, never more.
-  - `intune/apps/windows/win32/reducer.rs` ~1687-1716 (`confidence_for`).
+  - `crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs` ~1687-1716 (`confidence_for`).
   - Test: `a_capped_artifact_proves_a_terminal_outcome_only_at_demoted_confidence`,
     same file ~2262-2286.
 - **Autopilot / Compliance:** the opposite. Assessability is an allowlist
   (`access_state == Available && parse_state == Parsed`), so `Capped` is simply
   not assessable and proves nothing.
-  - `.../autopilot/models.rs` ~248-256; `.../device/windows/compliance/sources.rs`
+  - `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/models.rs` ~248-256; `crates/cmtraceopen-parser/src/intune/device/windows/compliance/sources.rs`
     ~447-455.
 - **Why both are right:** Win32 evidence is CCM-framed log records with explicit
   record boundaries, so "this record is complete" is a checkable property of the
@@ -54,15 +54,26 @@ PR with its own issue, not a refactor.**
 
 ### 2. Autopilot: `time_basis` is deliberately ungated
 
-Every reduction path in the Autopilot reducer passes through `is_assessable`.
-`time_basis` is the one deliberate exception, and the exception is the
-conservative direction: an unfiltered scan lets a non-assessable record with an
-unnormalized timestamp *downgrade* the basis. Gating it would remove that record
-from consideration and thereby **upgrade** the reported basis on thinner
-evidence.
+Assessability is the admission rule for the Autopilot reducer's status-bearing
+paths, but it is not applied uniformly, and the departures are deliberate:
 
-- `.../autopilot/reducer.rs` ~534-559 (the unfiltered scan), with the rationale
-  stated at ~595-606 on `is_assessable` itself.
+- **Gated** (the default): status, phase, and signal reduction filter on
+  `is_assessable` / `is_assessable_section` before reading an observation.
+- **Deliberately inverted:** the coverage-gap paths select on
+  `!is_assessable_section` and `!is_assessable` precisely so unusable input is
+  reported as a gap rather than silently dropped.
+- **Deliberately ungated:** `time_basis` (this section) and
+  `AutopilotKeyGate::Detecting` (section 3).
+
+`time_basis` is ungated in the conservative direction: an unfiltered scan lets a
+non-assessable record with an unnormalized timestamp *downgrade* the basis.
+Gating it would remove that record from consideration and thereby **upgrade**
+the reported basis on thinner evidence.
+
+- `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs:541`
+  (the unfiltered `all_normalized` scan), with the rationale stated at
+  `:604` on `is_assessable` itself, and the inverted coverage-gap
+  filters at `:672` and `:705`.
 - Adding the gate here for symmetry would be a behavior regression that no
   compile error would catch.
 
@@ -79,7 +90,7 @@ More evidence is the conservative direction for conflict detection, and the
 restrictive direction for proof. Collapsing the two passes into one gate breaks
 whichever half it is collapsed toward.
 
-- `.../autopilot/reducer.rs` ~1311-1327 (enum + doc), applied ~1349-1352, both
+- `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs` ~1311-1327 (enum + doc), applied ~1349-1352, both
   passes ~1426-1452.
 
 ### 4. Configuration admits `IntuneParseState::Raw` as interpretable
@@ -88,9 +99,9 @@ Configuration's `is_uninterpretable` excludes only `Malformed` and `Unsupported`
 (plus partially-read sources); `Raw` falls through as interpretable. Autopilot
 and Compliance both require `Parsed` exactly.
 
-- Configuration: `.../device/windows/configuration/sources.rs` ~146-151.
-- Autopilot: `.../autopilot/models.rs` ~253-256.
-- Compliance: `.../device/windows/compliance/sources.rs` ~447-455.
+- Configuration: `crates/cmtraceopen-parser/src/intune/device/windows/configuration/sources.rs` ~146-151.
+- Autopilot: `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/models.rs` ~253-256.
+- Compliance: `crates/cmtraceopen-parser/src/intune/device/windows/compliance/sources.rs` ~447-455.
 - **Why:** Configuration's `Raw` retains a record whose typed fields were not
   modelled but whose structure was read. For that lane, a retained raw setting
   report is usable input. For Autopilot, `Raw` means the document never declared
@@ -104,9 +115,9 @@ and Compliance both require `Parsed` exactly.
 | Microsoft Store | only `IntuneParseState::Malformed` (with a non-`Available` access state as a separate contributor) | `Low` |
 | Win32 | degraded coverage generally | `Medium` (demotion from `High` only) |
 
-- Store: `.../apps/windows/microsoft_store/reducer.rs` ~857-858 (contributors),
+- Store: `crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/reducer.rs` ~857-858 (contributors),
   ~905-909 (call site), ~956-972 (`degraded` forces `Low`).
-- Win32: `.../apps/windows/win32/reducer.rs` ~1711-1715.
+- Win32: `crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs` ~1711-1715.
 
 Both are correct against their own contract. Store transactions are assembled
 from OS event channels where a malformed contributor means the channel itself is
@@ -132,11 +143,11 @@ Configuration produce a link its evidence does not support.
 ### 7. Redaction: the grammar is shared, the projection is not
 
 The masking grammar has exactly one owner
-(`intune/apps/windows/common/redaction.rs::redact_text`). What each lane
+(`crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs`, `redact_text`). What each lane
 *classifies as sensitive*, and what its redacted-export equality scope is, is a
 property of that analyzer's contract and is not shared.
 
-The dividing line is stated in `intune/apps/windows/win32/redaction.rs` lines
+The dividing line is stated in `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines
 9-15: the module "owns only the *projection*: which Win32 fields are classified
 sensitive is a property of this analyzer's contract, not of the shared grammar."
 The same file records why the grammar has one owner: a local fork of the rules
@@ -162,12 +173,12 @@ the Windows family.
 
 ### 8. Test helpers: `evidence_ids` ordering is per-corpus
 
-`tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
+`crates/cmtraceopen-parser/tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
 for consumers whose contract is the *set* of citations. Compliance uses it and
 sorts both sides of every such assertion.
 
 Microsoft Store keeps its own insertion-ordered, panicking version in
-`tests/intune_windows_microsoft_store.rs`, because that leaf asserts citation
+`crates/cmtraceopen-parser/tests/intune_windows_microsoft_store.rs`, because that leaf asserts citation
 *order*: a transaction's `evidence` is positionally in step with its
 `observations`. Forcing both corpora onto one helper would retire that pairing
 without any test failing.
@@ -214,7 +225,7 @@ cannot move the answer. Pinned by
 in both lanes by `the_citation_guard_agrees_with_the_shared_invariant_on_every_input`
 (`.../autopilot/rules.rs` line 956, `.../compliance/rules.rs` line 803).
 
-The ESP lane carries the same constructor shape at `src/esp/rules.rs` line 669
+The ESP lane carries the same constructor shape at `crates/cmtraceopen-parser/src/esp/rules.rs:669`
 over `EspDiagnosticFinding` and `EspEvidenceRef`, a separate type family that
 cannot call this predicate at all. It is out of this owner's scope for the same
 reason it is out of the redaction owner's scope (divergence 7), and its

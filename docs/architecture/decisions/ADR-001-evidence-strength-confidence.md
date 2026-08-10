@@ -23,7 +23,7 @@ gate on the same thing and must not be merged:
 
 | Lane | What is unreadable | What it gates on |
 |---|---|---|
-| Autopilot | the artifact or section itself (envelope not `Available` + `Parsed`) | the envelope **plus** a failure-shaped signal: `!is_assessable(observation)` AND `observation.signal.is_terminal_failure()` |
+| Autopilot | the artifact or section envelope, i.e. `!(access_state == Available && parse_state == Parsed)` | the envelope **plus** a failure-shaped signal: `!is_assessable(observation)` AND `observation.signal.is_terminal_failure()` |
 | Configuration | nothing about the envelope; the *result token inside a readable record* | a readable, device-side `CommandFailure` event whose disposition never reached terminal. "The direction is evidence; the code is not." |
 
 Sites:
@@ -38,7 +38,7 @@ Sites:
     ~248-256 (`is_assessable` = `Available` + `Parsed`).
 - Configuration: `crates/cmtraceopen-parser/src/intune/device/windows/configuration/sources.rs`
   ~163-174 (`is_unassessable_failure`), enforced in
-  `.../configuration/reducer.rs` ~246-263, which turns `Applied`/`Removed` into
+  `crates/cmtraceopen-parser/src/intune/device/windows/configuration/reducer.rs` ~246-263, which turns `Applied`/`Removed` into
   `Contested` rather than into an outcome-free state.
 
 **Consequence for future work:** a PR that "unifies the ADR-001 gate" across
