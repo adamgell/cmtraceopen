@@ -7,8 +7,8 @@ import type { EvtxRecord, EvtxLevel } from "./types";
 import {
   columnValue,
   columnWidth,
-  visibleColumns,
   type EvtxColumnConfig,
+  type EvtxColumnSpec,
 } from "./evtx-columns";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 
@@ -37,6 +37,8 @@ export interface EvtxTimelineRowProps {
   monoFontSize: number;
   lineHeight: string;
   columnConfig: EvtxColumnConfig;
+  /** Precomputed by the list, since columnConfig is stable and this renders once per row. */
+  columns: EvtxColumnSpec[];
   /** Passed rather than read from the store, so a memoized row re-renders when the clock changes. */
   timeZoneMode: EvtxTimeZoneMode;
   onSelect: (id: number | null) => void;
@@ -53,6 +55,7 @@ export const EvtxTimelineRow = memo(
       monoFontSize,
       lineHeight,
       columnConfig,
+      columns,
       timeZoneMode,
       onSelect,
     },
@@ -94,7 +97,7 @@ export const EvtxTimelineRow = memo(
           minWidth: 0,
         }}
       >
-        {visibleColumns(columnConfig).map((column) => {
+        {columns.map((column) => {
           const width = columnWidth(columnConfig, column);
           const value = columnValue(record, column.id, timeZoneMode);
 

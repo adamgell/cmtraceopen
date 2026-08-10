@@ -268,13 +268,23 @@ impl ProviderStore {
             }
         }
 
-        if let Ok(mut open) = self.open_databases.lock() {
-            *open = databases;
-        }
+        // The locks are taken before anything is published, and a failure aborts rather than
+        // continuing. This takes &mut self, so neither lock can be contended and the only failure
+        // is poisoning; swallowing it left `info` describing databases that were never opened, so
+        // registered() reported coverage that no lookup could deliver.
+        let mut open = self
+            .open_databases
+            .lock()
+            .map_err(|_| "provider store lock was poisoned".to_string())?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| "provider cache lock was poisoned".to_string())?;
+        *open = databases;
+        cache.clear();
+        drop(open);
+        drop(cache);
         self.info = info.clone();
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
-        }
 
         if info.is_empty() && !failures.is_empty() {
             return Err(failures.join("; "));

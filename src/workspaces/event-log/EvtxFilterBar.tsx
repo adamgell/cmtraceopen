@@ -311,9 +311,8 @@ export function EvtxFilterBar() {
         style={{ minWidth: "104px" }}
         title="Choose which columns the list shows."
         onOptionSelect={(_, data) => {
-          const id = data.optionValue as EvtxColumnId | "__reset__";
-          if (id === "__reset__") resetColumns();
-          else if (id) toggleColumnVisible(id);
+          const id = data.optionValue as EvtxColumnId | undefined;
+          if (id) toggleColumnVisible(id);
         }}
       >
         {choosableColumns.map((column) => (
@@ -321,10 +320,22 @@ export function EvtxFilterBar() {
             {column.label}
           </Option>
         ))}
-        <Option value="__reset__" text="Reset to defaults">
-          Reset to defaults
-        </Option>
       </Dropdown>
+
+      {/*
+        A button, not an option. In a multiselect listbox every option carries a selection
+        indicator, so "Reset to defaults" rendered as though it were a column that could be
+        checked, and it is an action rather than a member of the set.
+      */}
+      <Button
+        size="small"
+        appearance="outline"
+        onClick={resetColumns}
+        title="Restore the default columns, order and widths"
+        style={{ minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize }}
+      >
+        Reset columns
+      </Button>
 
       {/*
         Reordering lives outside the listbox. Buttons nested in a Fluent Option are invalid ARIA

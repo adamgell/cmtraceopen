@@ -138,4 +138,23 @@ describe("the time window reaches the service", () => {
 
     expect(filterOf(0)?.time).toBeUndefined();
   });
+
+  it("drops a non-string gap the reader sent rather than rendering it", () => {
+    // The guard normalizes, but only if callers use what it returns. Ignoring the return value
+    // left the raw reply in place and stored 42 in coverageGaps.
+    invoke.mockResolvedValueOnce({
+      records: [],
+      channels: [],
+      totalRecords: 0,
+      parseErrors: 1,
+      errorMessages: ["real gap", 42, null],
+    });
+
+    return useEvtxStore
+      .getState()
+      .queryChannels(["Application"])
+      .then(() => {
+        expect(useEvtxStore.getState().coverageGaps).toEqual(["real gap"]);
+      });
+  });
 });

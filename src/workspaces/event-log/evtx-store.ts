@@ -153,8 +153,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     set({ isLoading: true, loadError: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
-      assertParseResultShape(result);
-      set(applyParseResult(result, "files"));
+      const checked = assertParseResultShape(result);
+      set(applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -194,7 +194,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       });
 
       // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
-      const mergeResult = (ch: string, result: EvtxParseResult) => {
+      const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -216,10 +216,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // Channels load one at a time and each may report its own gaps, so they accumulate
           // rather than replace. Deduplicated because re-querying a channel would otherwise
           // repeat the same line.
-          coverageGaps: mergeCoverageGaps(
-            state.coverageGaps,
-            result.errorMessages
-          ),
+          coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
         });
       };
 
@@ -230,8 +227,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             maxEvents: null,
             filter: buildServerFilter(get().timeWindow),
           });
-          assertParseResultShape(result);
-          mergeResult(ch, result);
+          const checked = assertParseResultShape(result);
+          mergeResult(ch, result, checked.errorMessages);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
@@ -262,7 +259,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         maxEvents: maxEvents ?? null,
         filter: buildServerFilter(get().timeWindow),
       });
-      assertParseResultShape(result);
+      const checked = assertParseResultShape(result);
 
       // Merge new records with existing ones (for incremental channel loading)
       const state = get();
@@ -292,7 +289,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadError: null,
         // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
         // backend reported here would show a complete view of a partly unreadable set.
-        coverageGaps: mergeCoverageGaps(state.coverageGaps, result.errorMessages),
+        coverageGaps: mergeCoverageGaps(state.coverageGaps, checked.errorMessages),
         selectedRecordId: null,
       });
     } catch (error) {
@@ -338,7 +335,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // outside the window the toolbar was still showing as selected.
           filter: buildServerFilter(get().timeWindow),
         });
-        assertParseResultShape(result);
+        const checked = assertParseResultShape(result);
 
         const s = get();
         const merged = [...s.records, ...result.records];
@@ -358,7 +355,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, result.errorMessages),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, checked.errorMessages),
         });
       } catch (e) {
         console.warn(`[evtx] Refresh failed for ${ch}:`, e);

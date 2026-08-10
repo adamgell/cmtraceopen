@@ -43,6 +43,17 @@ pub enum PathError {
         /// The single step that would not parse, which is the part to correct.
         step: String,
     },
+    /// A step was empty, from a doubled or dangling separator, or an attribute with no name.
+    ///
+    /// Refused rather than skipped: `/Event//EventData/Data` is a typo, and quietly reading it as
+    /// `/Event/EventData/Data` would apply a map the author did not write.
+    #[error("value path has an empty step '{step}': {path}")]
+    MalformedStep {
+        /// The whole expression, so the map entry it came from can be identified.
+        path: String,
+        /// The offending step, empty for a doubled separator.
+        step: String,
+    },
     /// An attribute selector appeared somewhere other than the final step.
     #[error("value path may only select an attribute in its final step: {0}")]
     MisplacedAttribute(String),
@@ -52,7 +63,12 @@ pub enum PathError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Predicate {
     /// `[@Name="value"]`, selecting the first sibling whose attribute matches.
-    AttributeEquals { name: String, value: String },
+    AttributeEquals {
+        /// Attribute to compare, without the leading `@`.
+        name: String,
+        /// Value it must equal, already unquoted.
+        value: String,
+    },
     /// `[n]`, a 1-based index across same-named siblings, as XPath numbers them.
     Index(usize),
 }
@@ -81,14 +97,38 @@ impl ValuePath {
             return Err(PathError::NotAbsolute(expression.to_string()));
         };
 
+        if body.trim().is_empty() {
+            return Err(PathError::Empty(expression.to_string()));
+        }
+
         let mut steps = Vec::new();
         let mut attribute = None;
-        let segments: Vec<&str> = body.split('/').filter(|s| !s.is_empty()).collect();
+        // Not filtered. Dropping empty segments quietly accepted `/Event//EventData/Data` and
+        // `/Event/`, which are malformed paths that would then evaluate as though they were the
+        // path the author meant. A map with a typo should be reported, not silently reinterpreted.
+        let segments: Vec<&str> = body.split('/').collect();
 
         for (index, segment) in segments.iter().enumerate() {
+            if segment.is_empty() {
+                // A single trailing slash is the one benign case: `/Event/EventData/` names the
+                // same element as without it.
+                if index + 1 == segments.len() && !steps.is_empty() {
+                    continue;
+                }
+                return Err(PathError::MalformedStep {
+                    path: expression.to_string(),
+                    step: String::new(),
+                });
+            }
             if let Some(attribute_name) = segment.strip_prefix('@') {
                 if index + 1 != segments.len() {
                     return Err(PathError::MisplacedAttribute(expression.to_string()));
+                }
+                if attribute_name.is_empty() {
+                    return Err(PathError::MalformedStep {
+                        path: expression.to_string(),
+                        step: segment.to_string(),
+                    });
                 }
                 attribute = Some(attribute_name.to_string());
                 continue;
@@ -417,5 +457,36 @@ mod tests {
 
         let path = ValuePath::parse("/Event/EventData/Data/@Name").expect("parses");
         assert_eq!(path.evaluate(&event).as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn a_doubled_separator_is_refused_rather_than_reinterpreted() {
+        // `/Event//EventData/Data` is a typo. Skipping the empty segment would read it as
+        // `/Event/EventData/Data` and apply a map the author did not write.
+        assert!(matches!(
+            ValuePath::parse("/Event//EventData/Data"),
+            Err(PathError::MalformedStep { .. })
+        ));
+    }
+
+    #[test]
+    fn an_attribute_with_no_name_is_refused() {
+        assert!(matches!(
+            ValuePath::parse("/Event/@"),
+            Err(PathError::MalformedStep { .. })
+        ));
+    }
+
+    #[test]
+    fn a_single_trailing_slash_names_the_same_element() {
+        // The one benign empty segment: `/Event/EventData/` selects what `/Event/EventData` does.
+        let with = ValuePath::parse("/Event/EventData/").expect("parses");
+        let without = ValuePath::parse("/Event/EventData").expect("parses");
+        assert_eq!(with, without);
+    }
+
+    #[test]
+    fn a_bare_slash_is_still_an_empty_path() {
+        assert!(matches!(ValuePath::parse("/"), Err(PathError::Empty(_))));
     }
 }

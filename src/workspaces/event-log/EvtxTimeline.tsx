@@ -13,6 +13,7 @@ import {
   type EvtxRow,
 } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
+import { visibleColumns } from "./evtx-columns";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
@@ -114,6 +115,11 @@ export function EvtxTimeline() {
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
+  // Computed once rather than per row: columnConfig is stable between renders, and the row
+  // renderer was rebuilding the spec array and re-synthesizing every map column spec for each of
+  // potentially a hundred thousand rows.
+  const columns = useMemo(() => visibleColumns(columnConfig), [columnConfig]);
+
   const rows: EvtxRow[] = useMemo(
     () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
     [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
@@ -222,7 +228,10 @@ export function EvtxTimeline() {
   return (
     <div
       ref={parentRef}
-      role="listbox"
+      // A flat list is a listbox; once grouped it is a tree, because a group header is not an
+      // option and a listbox may only own option and group children. Declaring the wrong one let
+      // assistive technology drop the headers or stop treating the rows as a set.
+      role={groupBy.length > 0 ? "tree" : "listbox"}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
@@ -261,7 +270,8 @@ export function EvtxTimeline() {
                   key={virtualRow.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  role="button"
+                  role="treeitem"
+                  aria-level={row.depth + 1}
                   // Focusable and activated by keyboard. It was reachable only by pointer, so a
                   // keyboard user could not expand or collapse a group at all.
                   tabIndex={0}
@@ -313,6 +323,7 @@ export function EvtxTimeline() {
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
                 columnConfig={columnConfig}
+                columns={columns}
                 timeZoneMode={timeZoneMode}
                 onSelect={setSelectedRecordId}
               />
