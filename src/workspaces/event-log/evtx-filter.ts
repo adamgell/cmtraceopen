@@ -24,7 +24,11 @@ export function parseEventIdFilter(raw: string): Set<number> | null {
       const low = Number(range[1]);
       const high = Number(range[2]);
       const [from, to] = low <= high ? [low, high] : [high, low];
-      for (let id = from; id <= to; id += 1) ids.add(id);
+      // Clamped to the range an Event ID can actually occupy. This runs on every keystroke, so
+      // "4624-46240000" typed halfway would otherwise build a set of tens of millions on the UI
+      // thread and freeze the tab before the operator finished the number.
+      if (from > MAX_EVENT_ID) continue;
+      for (let id = from; id <= Math.min(to, MAX_EVENT_ID); id += 1) ids.add(id);
       continue;
     }
     const single = Number(token);
@@ -32,6 +36,15 @@ export function parseEventIdFilter(raw: string): Set<number> | null {
   }
   return ids.size > 0 ? ids : null;
 }
+
+/**
+ * Largest value a Windows Event ID can hold.
+ *
+ * The field is 16 bits, so nothing above this can match an event and expanding past it only costs
+ * time. Used to bound range expansion rather than to reject input: an operator mid-way through
+ * typing a number should see no result, not an error.
+ */
+const MAX_EVENT_ID = 65535;
 
 /** The subset of store state that decides which records are on screen. */
 export interface VisibleRecordsInput {

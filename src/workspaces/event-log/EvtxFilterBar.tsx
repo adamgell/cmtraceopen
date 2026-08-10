@@ -5,6 +5,8 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
+import { getLogListMetrics } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import {
   availableColumns,
   discoverMappedProperties,
@@ -70,6 +72,11 @@ export function EvtxFilterBar() {
   const setSortDirection = useEvtxStore((s) => s.setSortDirection);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  // Sized from the operator's list font rather than hardcoded, so raising the list size raises
+  // these controls with it. Clamped down a step because a toolbar control sits beside the list
+  // rather than in it.
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const controlFontSize = `${Math.max(11, getLogListMetrics(logListFontSize).fontSize - 1)}px`;
   const records = useEvtxStore((s) => s.records);
   // Map columns are offered only when a loaded map actually produced them, so the chooser does not
   // fill with columns that are empty for the log in front of the operator.
@@ -223,7 +230,7 @@ export function EvtxFilterBar() {
         size="small"
         appearance="outline"
         onClick={() => setTimeZoneMode(timeZoneMode === "local" ? "utc" : "local")}
-        style={{ minWidth: "auto", padding: "2px 8px", fontSize: "11px" }}
+        style={{ minWidth: "auto", padding: "2px 8px", fontSize: controlFontSize }}
         title={
           timeZoneMode === "utc"
             ? "Event times are shown in UTC, as Windows recorded them. Click for local time."
@@ -252,7 +259,7 @@ export function EvtxFilterBar() {
             style={{
               minWidth: "auto",
               padding: "2px 8px",
-              fontSize: "11px",
+              fontSize: controlFontSize,
               borderColor: active ? undefined : LEVEL_COLORS[level],
               color: active ? undefined : LEVEL_COLORS[level],
             }}
@@ -405,7 +412,7 @@ export function EvtxFilterBar() {
       </Dropdown>
 
       {exportState && (
-        <span style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>
+        <span style={{ fontSize: controlFontSize, color: tokens.colorNeutralForeground3 }}>
           {exportState}
         </span>
       )}
@@ -423,7 +430,7 @@ export function EvtxFilterBar() {
       <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
         <span
           style={{
-            fontSize: "11px",
+            fontSize: controlFontSize,
             color: tokens.colorNeutralForeground3,
           }}
         >

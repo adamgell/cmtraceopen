@@ -117,7 +117,10 @@ fn self_service_log_yields_user_actions() {
     let Some(dir) = fixture_dir() else { return };
     let events = parse_self_service_log_impl(&dir.join("logs/selfservice.log")).expect("parse");
 
-    assert!(!events.is_empty(), "real selfservice.log produced no events");
+    assert!(
+        !events.is_empty(),
+        "real selfservice.log produced no events"
+    );
     assert!(
         events.iter().any(|e| e.action == "triggerPolicy"),
         "capture is known to contain Self Service-initiated installs"
@@ -170,8 +173,8 @@ fn captured_profiles_xml_parses_and_filters_to_jamf() {
         profiles.len()
     );
 
-    let filtered = app_lib::jamf::profiles::filter_jamf_profiles_impl(profiles, None)
-        .expect("filter");
+    let filtered =
+        app_lib::jamf::profiles::filter_jamf_profiles_impl(profiles, None).expect("filter");
     assert!(
         !filtered.profiles.is_empty(),
         "payload-prefix matching found no JAMF profiles in a JAMF capture"

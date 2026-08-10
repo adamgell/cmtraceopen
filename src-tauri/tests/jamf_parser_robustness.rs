@@ -32,7 +32,11 @@ fn policy_log_survives_invalid_utf8_and_keeps_all_lines() {
 
     let result = parse_policy_log_impl(&path).expect("must not fail on invalid UTF-8");
     assert_eq!(result.total_lines, 3);
-    assert_eq!(result.events.len(), 3, "every line must still yield an event");
+    assert_eq!(
+        result.events.len(),
+        3,
+        "every line must still yield an event"
+    );
     assert_eq!(result.unparsed_lines, 0);
 
     let names: Vec<&str> = result
@@ -42,7 +46,11 @@ fn policy_log_survives_invalid_utf8_and_keeps_all_lines() {
         .collect();
     assert_eq!(names[0], "First");
     assert_eq!(names[2], "Third");
-    assert!(names[1].starts_with("Ba"), "decoded lossily: {:?}", names[1]);
+    assert!(
+        names[1].starts_with("Ba"),
+        "decoded lossily: {:?}",
+        names[1]
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -77,7 +85,10 @@ fn policy_log_tolerates_a_truncated_final_line() {
     let result = parse_policy_log_impl(&path).expect("parse");
     assert_eq!(result.total_lines, 2);
     assert_eq!(result.events.len(), 1);
-    assert_eq!(result.unparsed_lines, 1, "the partial line is counted, not fatal");
+    assert_eq!(
+        result.unparsed_lines, 1,
+        "the partial line is counted, not fatal"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -190,9 +201,11 @@ fn an_over_long_line_does_not_disturb_later_offsets() {
 fn missing_files_are_not_errors_except_for_the_policy_log() {
     // Self Service / Connect may legitimately be absent; jamf.log going missing
     // is a condition worth surfacing.
-    assert!(parse_self_service_log_impl(Path::new("/nonexistent/ss.log"))
-        .expect("absent Self Service log is empty, not an error")
-        .is_empty());
+    assert!(
+        parse_self_service_log_impl(Path::new("/nonexistent/ss.log"))
+            .expect("absent Self Service log is empty, not an error")
+            .is_empty()
+    );
     assert!(parse_connect_log_impl(Path::new("/nonexistent/jc.log"))
         .expect("absent Connect log is empty, not an error")
         .is_empty());

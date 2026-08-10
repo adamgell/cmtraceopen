@@ -37,3 +37,27 @@ describe("parseEventIdFilter", () => {
     expect(parseEventIdFilter("abc, def")).toBeNull();
   });
 });
+
+describe("event id range bounds", () => {
+  it("does not expand past the 16-bit event id space", () => {
+    // Typed on every keystroke. Unbounded, "4624-46240000" builds a set of tens of millions on the
+    // UI thread and the tab stops responding before the operator finishes typing.
+    const started = Date.now();
+    const ids = parseEventIdFilter("4624-46240000");
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(ids).not.toBeNull();
+    expect(ids!.size).toBeLessThanOrEqual(65536);
+    expect(ids!.has(4624)).toBe(true);
+    expect(ids!.has(65535)).toBe(true);
+    expect(ids!.has(65536)).toBe(false);
+  });
+
+  it("yields nothing for a range entirely above the id space", () => {
+    expect(parseEventIdFilter("100000-200000")).toBeNull();
+  });
+
+  it("still expands an ordinary range", () => {
+    const ids = parseEventIdFilter("4624-4626");
+    expect([...ids!].sort((a, b) => a - b)).toEqual([4624, 4625, 4626]);
+  });
+});

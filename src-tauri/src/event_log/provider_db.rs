@@ -45,15 +45,29 @@ pub struct ProviderDbInfo {
 ///
 /// An empty BLOB is a legitimately empty section rather than a fault, so it deserializes to the
 /// type's default instead of erroring.
+/// Largest decompressed provider payload accepted from a database.
+///
+/// The biggest real provider in a 15.8 MB capture inflates to well under a megabyte, so 64 MB
+/// refuses only what could not be a genuine payload.
+const MAX_PROVIDER_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
 fn inflate_json<T: serde::de::DeserializeOwned + Default>(blob: &[u8]) -> Result<T, String> {
     if blob.is_empty() {
         return Ok(T::default());
     }
-    let mut decoder = GzDecoder::new(blob);
+    // Capped. These databases are evidence supplied by someone else, and an unbounded inflate lets
+    // a small blob expand to gigabytes and exhaust memory before serde_json ever sees it. The cap
+    // is far above any real provider payload, so it refuses only what could not be genuine.
+    let mut decoder = GzDecoder::new(blob).take(MAX_PROVIDER_PAYLOAD_BYTES + 1);
     let mut json = String::new();
     decoder
         .read_to_string(&mut json)
         .map_err(|error| format!("provider payload is not valid gzip: {error}"))?;
+    if json.len() as u64 > MAX_PROVIDER_PAYLOAD_BYTES {
+        return Err(format!(
+            "provider payload inflates past {MAX_PROVIDER_PAYLOAD_BYTES} bytes and was refused"
+        ));
+    }
     if json.trim().is_empty() {
         return Ok(T::default());
     }

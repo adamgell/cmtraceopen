@@ -89,7 +89,7 @@ fn identity_is_populated_rather_than_defaulted() {
             "record {} has no channel",
             record.event_record_id
         );
-        assert_ne!(record.event_id, 0, "record has no event id");
+        // Event ID 0 is legal and several in-box providers emit it, so it is not an invariant.
         assert_ne!(
             record.timestamp_epoch, 0,
             "record {} sorted to the epoch, so the timeline order is wrong",
@@ -143,12 +143,18 @@ fn the_xml_export_emits_the_provider_representation() {
 #[test]
 fn a_healthy_capture_reports_no_gaps() {
     let Some(result) = parsed() else { return };
-    // The messages are a gap report. A clean file producing one would train an operator to ignore
-    // them, which is how a real gap goes unnoticed.
+    // A gap report on a clean file would train an operator to ignore it, which is how a real gap
+    // goes unnoticed. Not an unconditional invariant, though: a capture larger than the reader's
+    // per-file cap legitimately reports being truncated, and that message is correct rather than a
+    // false alarm. Anything else on a healthy file is not.
+    let unexpected: Vec<&String> = result
+        .error_messages
+        .iter()
+        .filter(|message| !message.contains("stopped at"))
+        .collect();
     assert!(
-        result.error_messages.is_empty(),
-        "clean capture reported gaps: {:?}",
-        result.error_messages
+        unexpected.is_empty(),
+        "clean capture reported gaps: {unexpected:?}"
     );
     assert_eq!(result.total_records, result.records.len() as u64);
 }

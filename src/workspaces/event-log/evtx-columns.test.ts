@@ -43,7 +43,7 @@ function record(partial: Partial<EvtxRecord> = {}): EvtxRecord {
     channel: "Application",
     eventId: 326,
     level: "Error",
-    computer: "RING0IVY24-01",
+    computer: "TESTHOST-01",
     message: "something happened",
     eventData: [],
     rawXml: "",

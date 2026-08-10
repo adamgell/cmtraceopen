@@ -183,7 +183,12 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
     };
 
     SystemFields {
-        provider: attribute_of("Provider", "Name"),
+        // Manifest providers write Name; classic sources write only EventSourceName, for example
+        // <Provider EventSourceName="Application Error" />. Reading just Name left every classic
+        // event with provider "Unknown", which meant no map could match it and no description
+        // could be rendered for it.
+        provider: attribute_of("Provider", "Name")
+            .or_else(|| attribute_of("Provider", "EventSourceName")),
         // Classic providers write `<EventID Qualifiers="49152">1000</EventID>`. The id is the
         // element text in both shapes; the qualifier is separate and not part of the id.
         event_id: text_of("EventID").and_then(|value| value.parse().ok()),
@@ -378,5 +383,30 @@ mod tests {
     fn malformed_xml_is_an_error_rather_than_a_partial_tree() {
         assert!(parse_event_xml("<Event><System>").is_err() || parse_event_xml("<Event").is_err());
         assert!(parse_event_xml("").is_err());
+    }
+
+    #[test]
+    fn a_classic_source_is_named_from_event_source_name() {
+        // <Provider EventSourceName="..."/> with no Name is what classic sources emit. Reading
+        // only Name left these as "Unknown", so no map matched and no description rendered.
+        let xml = r#"<Event><System>
+            <Provider EventSourceName="Application Error" />
+            <EventID>1000</EventID>
+        </System></Event>"#;
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(fields.provider.as_deref(), Some("Application Error"));
+    }
+
+    #[test]
+    fn a_manifest_provider_still_wins_on_name() {
+        // Some events carry both; Name is the modern identity and must take precedence.
+        let xml = r#"<Event><System>
+            <Provider Name="Microsoft-Windows-Kernel-General" EventSourceName="Legacy" />
+        </System></Event>"#;
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(
+            fields.provider.as_deref(),
+            Some("Microsoft-Windows-Kernel-General")
+        );
     }
 }

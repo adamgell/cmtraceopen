@@ -93,6 +93,22 @@ fn escape_delimited(value: &str, delimiter: char) -> String {
     }
 }
 
+/// Removes a leading `<?xml ... ?>` declaration.
+///
+/// Returns the input unchanged when there is none, and leaves everything after the declaration
+/// exactly as the source wrote it.
+fn strip_xml_declaration(xml: &str) -> &str {
+    let trimmed = xml.trim_start();
+    let Some(rest) = trimmed.strip_prefix("<?xml") else {
+        return xml;
+    };
+    match rest.find("?>") {
+        Some(end) => rest[end + 2..].trim_start(),
+        // A declaration that never closes is not something to silently repair.
+        None => xml,
+    }
+}
+
 fn optional(value: Option<impl ToString>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
@@ -147,9 +163,12 @@ pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<St
         ExportFormat::Xml => {
             let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Events>\n");
             for record in records {
-                // The provider's own XML is passed through untouched. Re-encoding it would risk
-                // changing what the source actually said, which matters when an export is evidence.
-                out.push_str(record.raw_xml.trim());
+                // The provider's own XML is passed through otherwise untouched: re-encoding it
+                // would risk changing what the source actually said, which matters when an export
+                // is evidence. Only the per-record declaration is removed, because the evtx reader
+                // prefixes every record with one and a declaration is legal only at the very start
+                // of a document. Concatenating them produced a file no XML parser would open.
+                out.push_str(strip_xml_declaration(record.raw_xml.trim()));
                 out.push('\n');
             }
             out.push_str("</Events>\n");
@@ -274,6 +293,31 @@ mod tests {
         assert!(out.contains("<Events>"));
         assert!(out.contains("<Event><System /></Event>"));
         assert!(out.trim_end().ends_with("</Events>"));
+    }
+
+    #[test]
+    fn per_record_xml_declarations_are_stripped_from_the_concatenation() {
+        // The evtx reader prefixes every record with a declaration, and a declaration is legal
+        // only at the very start of a document. Concatenating them produced a file no XML parser
+        // would open.
+        let mut record = record("x");
+        record.raw_xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Event><System /></Event>".into();
+        let out = export_records(&[record.clone(), record], ExportFormat::Xml).expect("exports");
+
+        assert_eq!(
+            out.matches("<?xml").count(),
+            1,
+            "only the document's own declaration may remain: {out}"
+        );
+        assert!(out.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert_eq!(out.matches("<Event>").count(), 2, "both records survive");
+    }
+
+    #[test]
+    fn a_record_without_a_declaration_is_untouched() {
+        let out = export_records(&[record("x")], ExportFormat::Xml).expect("exports");
+        assert!(out.contains("<Event><System /></Event>"));
     }
 
     #[test]
