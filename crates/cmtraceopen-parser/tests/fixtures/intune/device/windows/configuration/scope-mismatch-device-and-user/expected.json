@@ -1,0 +1,74 @@
+{
+  "scenario": "scope-mismatch-device-and-user",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "available"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/start/hiderecentlyaddedapps",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Start/HideRecentlyAddedApps",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "1",
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
+      "evidenceIds": [
+        "evt-device-applied"
+      ]
+    },
+    {
+      "key": "user|uri:user/vendor/msft/policy/config/start/hiderecentlyaddedapps",
+      "scope": "user",
+      "canonicalUri": "User/Vendor/MSFT/Policy/Config/Start/HideRecentlyAddedApps",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "rejected",
+      "service": "noEvidence",
+      "resolution": "rejected",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": "0x82B00006",
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
+      "evidenceIds": [
+        "evt-user-failed"
+      ]
+    }
+  ],
+  "findingConfidence": {
+    "configuration-local-rejection": "high",
+    "configuration-scope-split": "high",
+    "configuration-device-only-evidence": "high",
+    "configuration-applied": "high"
+  },
+  "findingIds": [
+    "configuration-local-rejection",
+    "configuration-scope-split",
+    "configuration-device-only-evidence",
+    "configuration-applied"
+  ],
+  "assertions": [
+    "device and user scope of one node are two transactions with two outcomes",
+    "the shared resource path is what makes the scope split detectable without merging them"
+  ]
+}
