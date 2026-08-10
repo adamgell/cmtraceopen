@@ -17,13 +17,24 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::compliance::{
-    analyze_compliance_bundle, redacted_export_projection, ComplianceSnapshot,
-    ComplianceSourceInput,
+    analyze_compliance, analyze_compliance_bundle, decode_bundle, redacted_export_projection,
+    ComplianceAccessDecision, ComplianceAccessFact, ComplianceCustomFact, ComplianceCustomState,
+    ComplianceInput, ComplianceReportState, ComplianceServiceFact, ComplianceServiceState,
+    ComplianceSnapshot, ComplianceSourceInput,
+};
+use cmtraceopen_parser::intune::evidence::{
+    IntuneAccessState, IntuneEvidenceRef, IntuneNamedValue, IntuneObservationContext,
+    IntuneParseState, IntuneProvenance, IntuneSensitivity, IntuneSourceKind, IntuneTimestamp,
+    IntuneTimestampKind,
+};
+use cmtraceopen_parser::intune::normalized::{
+    NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,
+    NormalizedWindowsEvent,
 };
 use serde_json::{json, Value};
 use support::{
     artifact_status_for_capture_state, corpus_root, load_json, mutated, scenario_names,
-    sorted_evidence_ids, validate_scenario, Failures,
+    sorted_evidence_ids, validate_scenario, wire, Failures,
 };
 
 const CORPUS: &str = "device/windows/compliance";
@@ -121,6 +132,20 @@ fn load(scenario: &str) -> Loaded {
         snapshot,
         actual,
     }
+}
+
+/// The decoded facts of one scenario, before reduction.
+///
+/// The permutation, duplication, and irrelevant-evidence tests need to rearrange
+/// the analyzer's *input vectors*, which the bundle entry point hides. Decoding
+/// once here keeps those tests reading the same corpus every other test does.
+fn load_input(scenario: &str) -> ComplianceInput {
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    decode_bundle(
+        &sources(&root, &manifest),
+        manifest["generatedAtUtc"].as_str().expect("generatedAtUtc"),
+    )
 }
 
 /// artifactId -> family, for deciding whether cited evidence is local.
@@ -500,6 +525,765 @@ fn the_reduction_is_deterministic_across_runs() {
             serde_json::to_string(&second).expect("serializes"),
             "{scenario}: the same bundle must reduce to byte-identical output"
         );
+    }
+}
+
+// ── Caller order, duplication, and irrelevant evidence ──────────────────────
+
+/// The inputs the order-invariance tests sweep.
+///
+/// The 16 corpus scenarios are the regression net, but every one of them is a
+/// single-record-per-setting bundle: none carries two observations sharing a
+/// grouping token, two report submissions, or two rows describing one policy.
+/// Sweeping only the corpus therefore proves nothing about the order-dependent
+/// merges — the gate would pass vacuously. [`contended_bundle`] supplies the
+/// contended shapes the corpus does not have, so these tests can actually fail.
+fn order_invariance_cases() -> Vec<(String, ComplianceInput)> {
+    let mut cases = SCENARIOS
+        .iter()
+        .map(|scenario| ((*scenario).to_owned(), load_input(scenario)))
+        .collect::<Vec<_>>();
+    cases.push(("contended-bundle".to_owned(), contended_bundle()));
+    cases
+}
+
+/// Every ordering of one bundle's sibling records must produce the same
+/// snapshot, byte for byte.
+///
+/// ADR-003's executable invariant. `the_reduction_is_deterministic_across_runs`
+/// re-runs the *same* vector and so cannot see a first-wins or last-wins field;
+/// this permutes the vector instead. No compliance source contract defines
+/// caller order as chronology, so any field that reads it is reading the
+/// collector's serializer.
+#[test]
+fn permuting_sibling_records_does_not_change_the_analysis() {
+    for (case, input) in order_invariance_cases() {
+        let baseline = wire(&analyze_compliance(&input));
+        for permutation in permutations_of(input) {
+            assert_eq!(
+                wire(&analyze_compliance(&permutation)),
+                baseline,
+                "{case}: input order must not change the analysis"
+            );
+        }
+    }
+}
+
+/// Orderings of each input vector, capped so a large bundle stays a test rather
+/// than a benchmark.
+///
+/// The two vectors that feed the setting merge are crossed with each other; the
+/// three fact vectors are permuted one at a time against the baseline, because
+/// crossing all five is a combinatorial explosion that proves nothing the
+/// one-at-a-time sweep plus the all-reversed case does not.
+fn permutations_of(input: ComplianceInput) -> Vec<ComplianceInput> {
+    fn orderings<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        if items.len() > 4 {
+            let mut reversed = items.to_vec();
+            reversed.reverse();
+            return vec![items.to_vec(), reversed];
+        }
+        let mut result = Vec::new();
+        for index in 0..items.len() {
+            let mut rest = items.to_vec();
+            let head = rest.remove(index);
+            for mut tail in orderings(&rest) {
+                tail.insert(0, head.clone());
+                result.push(tail);
+            }
+        }
+        result
+    }
+
+    fn reversed<T: Clone>(items: &[T]) -> Vec<T> {
+        let mut items = items.to_vec();
+        items.reverse();
+        items
+    }
+
+    let mut permutations = Vec::new();
+    for events in orderings(&input.events) {
+        for setting_reports in orderings(&input.setting_reports) {
+            permutations.push(ComplianceInput {
+                events: events.clone(),
+                setting_reports,
+                ..input.clone()
+            });
+        }
+    }
+    for custom_compliance in orderings(&input.custom_compliance) {
+        permutations.push(ComplianceInput {
+            custom_compliance,
+            ..input.clone()
+        });
+    }
+    for service_results in orderings(&input.service_results) {
+        permutations.push(ComplianceInput {
+            service_results,
+            ..input.clone()
+        });
+    }
+    for access_decisions in orderings(&input.access_decisions) {
+        permutations.push(ComplianceInput {
+            access_decisions,
+            ..input.clone()
+        });
+    }
+    permutations.push(ComplianceInput {
+        events: reversed(&input.events),
+        setting_reports: reversed(&input.setting_reports),
+        custom_compliance: reversed(&input.custom_compliance),
+        service_results: reversed(&input.service_results),
+        access_decisions: reversed(&input.access_decisions),
+        ..input
+    });
+    permutations
+}
+
+/// Facts sharing one evidence ref must not be ordered by the caller's vector.
+///
+/// The three exported fact arrays are canonicalized by sorting on the `evidence`
+/// vector, and each of those vectors holds exactly the one ref its fact was
+/// decoded with. `slice::sort_by` is stable, so two facts stamped with the same
+/// ref compare equal and keep the order the caller handed them over in. That is
+/// the defect the sorts were added to close, still open for this shape.
+///
+/// The shape is reachable, not hypothetical. `custom_compliance`,
+/// `service_results`, and `access_decisions` are deserialized straight out of the
+/// collector's envelope by `sources::stage_record`, which reads
+/// `context.evidenceRef` verbatim and asserts nothing about uniqueness; a
+/// collector that stamps one artifact-level ref on every row it emits produces
+/// exactly this. `analyze_compliance` is public and takes the fact vectors
+/// directly besides.
+fn facts_sharing_one_evidence_ref() -> ComplianceInput {
+    ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        custom_compliance: vec![
+            custom_fact("shared-custom", "ZebraCheck"),
+            custom_fact("shared-custom", "AlphaCheck"),
+        ],
+        service_results: vec![
+            service_fact("shared-service", "2026-07-31T11:30:00Z"),
+            service_fact("shared-service", "2026-07-31T11:40:00Z"),
+        ],
+        access_decisions: vec![
+            access_fact("shared-access", "2026-07-31T11:50:00Z"),
+            access_fact("shared-access", "2026-07-31T11:55:00Z"),
+        ],
+        ..ComplianceInput::default()
+    }
+}
+
+/// Several submissions are ordered only when every one of them states its zone.
+///
+/// `latest_submission_at` reports a single submission whatever its zone, and the
+/// newest of several when all of them are zoned. Between those two lies a third
+/// branch PR #545 added deliberately and left untested: several submissions of
+/// which at least one carries no known zone. Such a set is only partially
+/// orderable, so no submission can be named the last one, and naming one anyway
+/// would let the staleness gate declare `Stale` on a guess.
+///
+/// Every submission in [`contended_bundle`] is `Utc`, because `event` builds
+/// only `Utc` stamps, so nothing in the corpus or the contended bundle reaches
+/// this branch.
+///
+/// The bundle below is built so a wrong answer is visible in the export rather
+/// than only in the unnamed instant: the zone-less submission predates the local
+/// evaluation and the zoned one postdates it, so an implementation that ranked
+/// the zone-less stamp by its guessed instant would flip `Submitted` to `Stale`.
+#[test]
+fn several_submissions_with_one_unknown_zone_name_no_latest_submission() {
+    let evaluated = event(
+        "evt-eval-zoned",
+        Some("2026-07-31T10:00:00Z"),
+        vec![
+            ("SettingUri", "./Device/Vendor/MSFT/Policy/Result/BitLocker"),
+            ("EvaluationResult", "compliant"),
+        ],
+    );
+    let zoned = event(
+        "evt-submit-zoned",
+        Some("2026-07-31T11:00:00Z"),
+        vec![("ReportStatus", "submitted")],
+    );
+    let mut zoneless = event(
+        "evt-submit-zoneless",
+        None,
+        vec![("ReportStatus", "submitted")],
+    );
+    // A bare wall-clock stamp: a normalized form exists, but it is a guess, so
+    // `normalized_timestamp` declines it and the set stops being orderable.
+    zoneless.context.source_timestamp = Some(IntuneTimestamp {
+        raw_text: "2026-07-31T09:00:00".to_owned(),
+        original_offset: None,
+        normalized_utc: Some("2026-07-31T09:00:00Z".to_owned()),
+        kind: IntuneTimestampKind::Unspecified,
+    });
+
+    let snapshot = analyze_compliance(&ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        events: vec![evaluated, zoned, zoneless],
+        ..ComplianceInput::default()
+    });
+
+    assert_eq!(
+        snapshot.reporting.last_submission_at, None,
+        "a partially orderable set of submissions has no last member to name"
+    );
+    assert_eq!(
+        snapshot.reporting.state,
+        ComplianceReportState::Submitted,
+        "with no submission instant the staleness gate cannot fire, and the claim \
+         the evidence does support is that a report was submitted"
+    );
+}
+
+#[test]
+fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
+    let forward = facts_sharing_one_evidence_ref();
+    let mut reverse = facts_sharing_one_evidence_ref();
+    reverse.custom_compliance.reverse();
+    reverse.service_results.reverse();
+    reverse.access_decisions.reverse();
+
+    assert_eq!(
+        wire(&analyze_compliance(&forward)),
+        wire(&analyze_compliance(&reverse)),
+        "facts that share an evidence ref must be ordered by their own content, \
+         not by the vector the collector serialized them into"
+    );
+}
+
+/// Caller-order invariance does not say *which* order ships, so pin it.
+///
+/// [`permuting_sibling_records_does_not_change_the_analysis`] sweeps
+/// [`contended_bundle`] and proves only that every permutation agrees. Reversing
+/// the decision comparator would keep them agreeing while changing the export.
+///
+/// The bundle already discriminates: `acc-zebra` occurred at 11:50 and
+/// `acc-alpha` at 11:55, so time asks for zebra first while their evidence ids
+/// sort alpha first. Chronology decides the array, so zebra leads.
+#[test]
+fn contended_access_decisions_export_in_chronological_order() {
+    let exported = wire(&analyze_compliance(&contended_bundle()));
+    let ids = exported["accessImpact"]["decisions"]
+        .as_array()
+        .expect("decisions array")
+        .iter()
+        .map(|decision| decision["evidence"][0]["evidenceId"].clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ids,
+        vec![
+            serde_json::json!("acc-zebra"),
+            serde_json::json!("acc-alpha")
+        ],
+        "access decisions must export in the order they occurred, not in the \
+         order their evidence ids sort"
+    );
+}
+
+/// Facts that agree on every *named* ordering key but differ elsewhere must
+/// still not be ordered by the caller's vector.
+///
+/// This is the same defect one level in. Sorting on `evidence` alone left facts
+/// sharing a ref in caller order; chaining a few of each record's own fields
+/// after it left facts agreeing on *those* fields in caller order. The bundle
+/// below is built so every pair agrees on the whole named chain and differs only
+/// in a field the chain omits:
+///
+/// - customCompliance chains policyId, runId, settingName; the pair differs in
+///   `state`, `error`, `rawOutput`, and `namedData`.
+/// - serviceResults chains policyId, settingId, reportedAt; the pair differs in
+///   `state`, `deviceKey`, and `userKey`.
+/// - accessDecisions chains occurredAt (its normalized instant, then its raw
+///   text), deviceKey, userKey, resource; the pair differs in `decision` and
+///   `failureCode`.
+///
+/// Every twin pair shares its evidence ref as well, so the `evidence` link
+/// decides nothing here either.
+///
+/// Naming more fields would only move the boundary again: the property under
+/// test is that a field the ordering does not name cannot decide the exported
+/// order, and that has to hold for fields nobody has written yet.
+///
+/// The equivalent coverage for `SettingObservation` lives in `reducer.rs`'s unit
+/// tests, not here: that type is `pub(super)`, so an integration test cannot name
+/// it. See `single_field_mutations` there.
+fn facts_agreeing_on_every_named_key() -> ComplianceInput {
+    ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        custom_compliance: vec![
+            ComplianceCustomFact {
+                outcome: ComplianceCustomState::DiscoveryNoncompliant,
+                error: Some(error_code("0x80070005")),
+                raw_output: Some("{\"BitLocker\":false}".to_owned()),
+                named_data: vec![IntuneNamedValue {
+                    name: "Rule".to_owned(),
+                    value: "Zebra".to_owned(),
+                }],
+                ..twin_custom_fact()
+            },
+            ComplianceCustomFact {
+                outcome: ComplianceCustomState::DiscoveryCompliant,
+                error: None,
+                raw_output: Some("{\"BitLocker\":true}".to_owned()),
+                named_data: vec![IntuneNamedValue {
+                    name: "Rule".to_owned(),
+                    value: "Alpha".to_owned(),
+                }],
+                ..twin_custom_fact()
+            },
+        ],
+        service_results: vec![
+            ComplianceServiceFact {
+                state: ComplianceServiceState::Noncompliant,
+                device_key: Some("device-zebra".to_owned()),
+                user_key: Some("user-zebra".to_owned()),
+                ..twin_service_fact()
+            },
+            ComplianceServiceFact {
+                state: ComplianceServiceState::Compliant,
+                device_key: Some("device-alpha".to_owned()),
+                user_key: Some("user-alpha".to_owned()),
+                ..twin_service_fact()
+            },
+        ],
+        access_decisions: vec![
+            ComplianceAccessFact {
+                decision: ComplianceAccessDecision::Denied,
+                failure_code: Some(error_code("0x80070005")),
+                ..twin_access_fact()
+            },
+            ComplianceAccessFact {
+                decision: ComplianceAccessDecision::Granted,
+                failure_code: None,
+                ..twin_access_fact()
+            },
+        ],
+        ..ComplianceInput::default()
+    }
+}
+
+#[test]
+fn facts_agreeing_on_every_named_key_do_not_follow_caller_order() {
+    let forward = facts_agreeing_on_every_named_key();
+    let mut reverse = facts_agreeing_on_every_named_key();
+    reverse.custom_compliance.reverse();
+    reverse.service_results.reverse();
+    reverse.access_decisions.reverse();
+
+    assert_eq!(
+        wire(&analyze_compliance(&forward)),
+        wire(&analyze_compliance(&reverse)),
+        "facts that agree on every field the ordering names must still be \
+         ordered by their own content, not by the caller's vector"
+    );
+
+    // Symmetry alone does not pin the export: reversing the content-key
+    // comparison, or swapping it for any other symmetric rule, keeps the two
+    // sides equal while changing what ships. Pin the resolved order too.
+    let exported = wire(&analyze_compliance(&forward));
+    assert_eq!(
+        exported["localEvaluation"]["customCompliance"][0]["namedData"][0]["value"],
+        serde_json::json!("Alpha"),
+        "the custom-compliance twins must order by content, Alpha before Zebra"
+    );
+    assert_eq!(
+        exported["reporting"]["serviceResults"][0]["deviceKey"],
+        serde_json::json!("device-alpha"),
+        "the service twins must order by content, device-alpha before device-zebra"
+    );
+    assert_eq!(
+        exported["accessImpact"]["decisions"][0]["decision"],
+        serde_json::json!("denied"),
+        "the access twins must order by content, denied before granted"
+    );
+}
+
+fn error_code(raw: &str) -> cmtraceopen_parser::intune::evidence::IntuneErrorCode {
+    cmtraceopen_parser::intune::evidence::IntuneErrorCode {
+        raw: raw.to_owned(),
+        decimal: None,
+        hex: Some(raw.to_owned()),
+    }
+}
+
+/// The half of a custom-compliance fact that both twins share, including the
+/// evidence ref and every field the comparator names.
+fn twin_custom_fact() -> ComplianceCustomFact {
+    ComplianceCustomFact {
+        context: event("twin-custom", None, Vec::new()).context,
+        policy_id: Some("policy-twin".to_owned()),
+        run_id: Some("run-twin".to_owned()),
+        setting_name: Some("BitLockerCheck".to_owned()),
+        outcome: ComplianceCustomState::DiscoveryCompliant,
+        error: None,
+        raw_output: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn twin_service_fact() -> ComplianceServiceFact {
+    ComplianceServiceFact {
+        context: event("twin-service", None, Vec::new()).context,
+        policy_id: Some("policy-twin".to_owned()),
+        setting_id: Some("setting-twin".to_owned()),
+        state: ComplianceServiceState::Compliant,
+        reported_at: Some(IntuneTimestamp {
+            raw_text: "2026-07-31T11:30:00Z".to_owned(),
+            original_offset: None,
+            normalized_utc: Some("2026-07-31T11:30:00Z".to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: None,
+        user_key: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn twin_access_fact() -> ComplianceAccessFact {
+    ComplianceAccessFact {
+        context: event("twin-access", None, Vec::new()).context,
+        decision: ComplianceAccessDecision::Denied,
+        failure_code: None,
+        occurred_at: Some(IntuneTimestamp {
+            raw_text: "2026-07-31T11:50:00Z".to_owned(),
+            original_offset: None,
+            normalized_utc: Some("2026-07-31T11:50:00Z".to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: Some("device-twin".to_owned()),
+        user_key: Some("user-twin".to_owned()),
+        resource: Some("https://example.invalid/resource".to_owned()),
+        named_data: Vec::new(),
+    }
+}
+
+/// Re-collecting the same **events and setting reports** must not change the
+/// analysis.
+///
+/// A collector that reads an event log twice, or a rotation that overlaps, hands
+/// the same evidence over more than once. Those two vectors are the ones that
+/// survive it: every local observation is keyed and merged by grouping token and
+/// every evidence list is normalized, so the reduction is idempotent under
+/// duplication unless a field folds by counting or by vector position.
+///
+/// `custom_compliance`, `service_results`, and `access_decisions` are excluded
+/// on purpose, which is why `doubled` concatenates only the first two vectors
+/// and passes the rest through untouched. Those three export one entry per input
+/// fact with no merge and no deduplication, so doubling them doubles the exported
+/// array by design: two custom-compliance rows are two runs, two service rows are
+/// two service records, two decisions are two access attempts, and collapsing
+/// them would be the reducer inventing a merge key the sources never state.
+/// Making this test cover them would therefore assert the opposite of the
+/// intended behavior.
+#[test]
+fn re_collecting_the_same_records_does_not_change_the_analysis() {
+    for (case, input) in order_invariance_cases() {
+        let baseline = wire(&analyze_compliance(&input));
+
+        let doubled = ComplianceInput {
+            events: [input.events.clone(), input.events.clone()].concat(),
+            setting_reports: [
+                input.setting_reports.clone(),
+                input.setting_reports.clone(),
+            ]
+            .concat(),
+            ..input
+        };
+        assert_eq!(
+            wire(&analyze_compliance(&doubled)),
+            baseline,
+            "{case}: re-collected records must not change the analysis"
+        );
+    }
+}
+
+/// Evidence that states nothing about compliance must not disturb a conclusion
+/// already drawn from evidence that does.
+///
+/// Such a record is legitimately visible as an unkeyed observation and may raise
+/// a coverage finding about itself; what it must never do is move an aggregate,
+/// a setting state, a reporting state, or the verdict of a finding that was
+/// already there.
+#[test]
+fn irrelevant_evidence_does_not_change_an_existing_conclusion() {
+    for (case, input) in order_invariance_cases() {
+        let baseline = conclusions(&analyze_compliance(&input));
+
+        let mut widened = input;
+        widened.events.push(evidence_that_says_nothing("irrelevant-1"));
+        widened
+            .events
+            .insert(0, evidence_that_says_nothing("irrelevant-2"));
+        let after = conclusions(&analyze_compliance(&widened));
+
+        for (key, value) in baseline.as_object().expect("conclusions is an object") {
+            assert_eq!(
+                after.get(key),
+                Some(value),
+                "{case}: unrelated evidence changed {key}"
+            );
+        }
+    }
+}
+
+/// The claims a reader would act on, isolated from coverage bookkeeping.
+fn conclusions(snapshot: &ComplianceSnapshot) -> Value {
+    let value = wire(snapshot);
+    json!({
+        "aggregate": value["aggregate"]["state"],
+        "rationale": value["aggregate"]["rationale"],
+        "reportingState": value["reporting"]["state"],
+        "serviceFreshness": value["reporting"]["serviceFreshness"],
+        "serviceDisagreesWithLocal": value["reporting"]["serviceDisagreesWithLocal"],
+        "settings": value["localEvaluation"]["settings"]
+            .as_array()
+            .expect("settings")
+            .iter()
+            .map(|setting| json!([setting["groupingToken"], setting["state"], setting["scope"]]))
+            .collect::<Vec<_>>(),
+        "access": value["accessImpact"]["decisions"]
+            .as_array()
+            .expect("decisions")
+            .iter()
+            .map(|decision| json!([decision["decision"], decision["linkage"]]))
+            .collect::<Vec<_>>(),
+        "findings": value["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .filter(|finding| finding["findingId"] != json!("compliance-unkeyed-observations"))
+            .map(|finding| {
+                json!([finding["findingId"], finding["severity"], finding["confidence"]])
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// A record that was collected, parsed, and carries no compliance signal at all.
+fn evidence_that_says_nothing(evidence_id: &str) -> NormalizedWindowsEvent {
+    event(evidence_id, None, Vec::new())
+}
+
+fn event(
+    evidence_id: &str,
+    at: Option<&str>,
+    named_data: Vec<(&str, &str)>,
+) -> NormalizedWindowsEvent {
+    NormalizedWindowsEvent {
+        context: IntuneObservationContext {
+            evidence_ref: IntuneEvidenceRef {
+                evidence_id: evidence_id.to_owned(),
+                source_artifact_id: "mdm-events".to_owned(),
+            },
+            provenance: IntuneProvenance {
+                source_kind: IntuneSourceKind::EventLog,
+                source_artifact_id: "mdm-events".to_owned(),
+                file_path: None,
+                line_number: None,
+                record_number: None,
+                registry: None,
+                event: None,
+            },
+            source_timestamp: at.map(|value| IntuneTimestamp {
+                raw_text: value.to_owned(),
+                original_offset: None,
+                normalized_utc: Some(value.to_owned()),
+                kind: IntuneTimestampKind::Utc,
+            }),
+            observed_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+            sensitivity: IntuneSensitivity::Public,
+            parse_state: IntuneParseState::Parsed,
+            access_state: IntuneAccessState::Available,
+        },
+        channel: "DeviceManagement-Enterprise-Diagnostics-Provider/Admin".to_owned(),
+        provider: "DeviceManagement-Enterprise-Diagnostics-Provider".to_owned(),
+        event_id: 1,
+        level: NormalizedEventLevel::Information,
+        task: None,
+        keywords: None,
+        record_id: None,
+        activity_id: None,
+        event_version: None,
+        named_data: named_data
+            .into_iter()
+            .map(|(name, value)| IntuneNamedValue {
+                name: name.to_owned(),
+                value: value.to_owned(),
+            })
+            .collect(),
+        message: None,
+    }
+}
+
+/// One bundle in which every order-sensitive merge is actually contended.
+///
+/// The corpus has no scenario like this, which is why the order-invariance gates
+/// passed over it while the reducer was still reading the caller's vector. Every
+/// pair below states one fact two ways with equal authority:
+///
+/// - two `Submitted` rows straddling the latest local evaluation, which decides
+///   `Submitted` against `Stale` — the conclusion-flipping case;
+/// - two rows for one setting differing in display name, scope, and error code;
+/// - two rows describing one policy with opposite states and scopes;
+/// - two rows describing one prerequisite as unmet with different detail;
+/// - a report row for the same setting, so the second input vector is contended
+///   too;
+/// - two custom-compliance results, two service records, and two access
+///   decisions, so the three fact vectors carry more than one entry each and the
+///   order of the *exported arrays* is exercised.
+fn contended_bundle() -> ComplianceInput {
+    ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        events: vec![
+            event(
+                "evt-eval-zebra",
+                Some("2026-07-31T10:00:00Z"),
+                vec![
+                    ("SettingUri", "./Device/Vendor/MSFT/Policy/Result/BitLocker"),
+                    ("EvaluationResult", "error"),
+                    ("DisplayName", "Zebra requires encryption"),
+                    ("Scope", "device"),
+                    ("ErrorCode", "0x80070005"),
+                ],
+            ),
+            event(
+                "evt-eval-alpha",
+                Some("2026-07-31T10:05:00Z"),
+                vec![
+                    ("SettingUri", "./Device/Vendor/MSFT/Policy/Result/BitLocker"),
+                    ("EvaluationResult", "error"),
+                    ("DisplayName", "Alpha requires encryption"),
+                    ("Scope", "user"),
+                    ("ErrorCode", "0x80070002"),
+                ],
+            ),
+            event(
+                "evt-submit-early",
+                Some("2026-07-31T09:00:00Z"),
+                vec![("ReportStatus", "submitted"), ("ReportId", "zebra-report")],
+            ),
+            event(
+                "evt-submit-late",
+                Some("2026-07-31T11:00:00Z"),
+                vec![("ReportStatus", "submitted"), ("ReportId", "alpha-report")],
+            ),
+            event(
+                "evt-policy-received",
+                Some("2026-07-31T09:30:00Z"),
+                vec![
+                    ("PolicyId", "policy-contended"),
+                    ("PolicyState", "received"),
+                    ("Scope", "device"),
+                ],
+            ),
+            event(
+                "evt-policy-missing",
+                Some("2026-07-31T09:40:00Z"),
+                vec![
+                    ("PolicyId", "policy-contended"),
+                    ("PolicyState", "missing"),
+                    ("Scope", "user"),
+                ],
+            ),
+            event(
+                "evt-prereq-zebra",
+                Some("2026-07-31T09:50:00Z"),
+                vec![
+                    ("Prerequisite", "unmet"),
+                    ("PrerequisiteName", "TpmReady"),
+                    ("PrerequisiteDetail", "Zebra detail"),
+                ],
+            ),
+            event(
+                "evt-prereq-alpha",
+                Some("2026-07-31T09:55:00Z"),
+                vec![
+                    ("Prerequisite", "unmet"),
+                    ("PrerequisiteName", "TpmReady"),
+                    ("PrerequisiteDetail", "Alpha detail"),
+                ],
+            ),
+        ],
+        setting_reports: vec![NormalizedSettingReport {
+            context: event("rpt-bitlocker", Some("2026-07-31T10:02:00Z"), Vec::new()).context,
+            setting_uri: Some("./Device/Vendor/MSFT/Policy/Result/BitLocker".to_owned()),
+            setting_id: None,
+            policy_id: None,
+            display_name: Some("Middle requires encryption".to_owned()),
+            outcome: NormalizedSettingOutcome::Failed,
+            value: None,
+            error: None,
+            named_data: Vec::new(),
+        }],
+        custom_compliance: vec![
+            custom_fact("cus-zebra", "ZebraCheck"),
+            custom_fact("cus-alpha", "AlphaCheck"),
+        ],
+        service_results: vec![
+            service_fact("svc-zebra", "2026-07-31T11:30:00Z"),
+            service_fact("svc-alpha", "2026-07-31T11:40:00Z"),
+        ],
+        access_decisions: vec![
+            access_fact("acc-zebra", "2026-07-31T11:50:00Z"),
+            access_fact("acc-alpha", "2026-07-31T11:55:00Z"),
+        ],
+        ..ComplianceInput::default()
+    }
+}
+
+fn custom_fact(evidence_id: &str, setting_name: &str) -> ComplianceCustomFact {
+    ComplianceCustomFact {
+        context: event(evidence_id, None, Vec::new()).context,
+        policy_id: Some("policy-contended".to_owned()),
+        run_id: Some(evidence_id.to_owned()),
+        setting_name: Some(setting_name.to_owned()),
+        outcome: ComplianceCustomState::DiscoveryCompliant,
+        error: None,
+        raw_output: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn service_fact(evidence_id: &str, at: &str) -> ComplianceServiceFact {
+    ComplianceServiceFact {
+        context: event(evidence_id, None, Vec::new()).context,
+        policy_id: Some("policy-contended".to_owned()),
+        setting_id: None,
+        state: ComplianceServiceState::Compliant,
+        reported_at: Some(IntuneTimestamp {
+            raw_text: at.to_owned(),
+            original_offset: None,
+            normalized_utc: Some(at.to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: Some("device-contended".to_owned()),
+        user_key: None,
+        named_data: Vec::new(),
+    }
+}
+
+fn access_fact(evidence_id: &str, at: &str) -> ComplianceAccessFact {
+    ComplianceAccessFact {
+        context: event(evidence_id, None, Vec::new()).context,
+        decision: ComplianceAccessDecision::Denied,
+        failure_code: None,
+        occurred_at: Some(IntuneTimestamp {
+            raw_text: at.to_owned(),
+            original_offset: None,
+            normalized_utc: Some(at.to_owned()),
+            kind: IntuneTimestampKind::Utc,
+        }),
+        device_key: Some("device-contended".to_owned()),
+        user_key: None,
+        resource: None,
+        named_data: Vec::new(),
     }
 }
 
