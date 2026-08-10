@@ -1033,7 +1033,7 @@ fn redaction_preserves_states_coverage_and_evidence() {
     }
 }
 
-// ── Redaction grammar parity ────────────────────────────────────────────────
+// -- Redaction grammar parity -----------------------------------------------
 //
 // `docs/architecture/shared-vs-workload-invariants.md` divergence 7 states the
 // arrangement these tests enforce: the masking *grammar* has exactly one owner

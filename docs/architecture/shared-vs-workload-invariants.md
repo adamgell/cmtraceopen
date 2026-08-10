@@ -141,6 +141,24 @@ sensitive is a property of this analyzer's contract, not of the shared grammar."
 The same file records why the grammar has one owner: a local fork of the rules
 previously reintroduced an already-fixed JSON-escaped-path bug.
 
+**This has now happened twice.** Compliance also carried a private copy of the
+grammar, and by the time it was found the copy had drifted in nine places, every
+one of them in the leaking direction: a SID with the minimum identifying
+sub-authority count, the legacy `Documents and Settings` profile root,
+JSON-escaped profile paths, and the device-name, UNC-server, account, tenant,
+inline-credential and MSI-property rules were all absent or weaker, so each was
+exported verbatim. A fork does not announce itself; it simply stops receiving
+the owner's fixes. `intune/device/windows/compliance/redaction.rs` now
+re-exports the owner, and
+`tests/intune_windows_compliance.rs::the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`
+asserts equal *output*, not merely equal masking decisions, so a future fork
+fails rather than drifts.
+
+Lanes outside this family (`esp`, and the Apple and Company Portal lanes) mask a
+different vocabulary against different evidence and are not covered by this
+owner. Their relationship to it is unsettled and is not a licence to fork within
+the Windows family.
+
 ### 8. Test helpers: `evidence_ids` ordering is per-corpus
 
 `tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
