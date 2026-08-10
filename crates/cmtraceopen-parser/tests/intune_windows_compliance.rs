@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::intune::device::windows::compliance::{
     analyze_compliance, analyze_compliance_bundle, decode_bundle, redacted_export_projection,
     ComplianceAccessDecision, ComplianceAccessFact, ComplianceCustomFact, ComplianceCustomState,
-    ComplianceInput, ComplianceServiceFact, ComplianceServiceState, ComplianceSnapshot,
-    ComplianceSourceInput,
+    ComplianceInput, ComplianceReportState, ComplianceServiceFact, ComplianceServiceState,
+    ComplianceSnapshot, ComplianceSourceInput,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneEvidenceRef, IntuneNamedValue, IntuneObservationContext,
@@ -677,6 +677,70 @@ fn facts_sharing_one_evidence_ref() -> ComplianceInput {
     }
 }
 
+/// Several submissions are ordered only when every one of them states its zone.
+///
+/// `latest_submission_at` reports a single submission whatever its zone, and the
+/// newest of several when all of them are zoned. Between those two lies a third
+/// branch PR #545 added deliberately and left untested: several submissions of
+/// which at least one carries no known zone. Such a set is only partially
+/// orderable, so no submission can be named the last one, and naming one anyway
+/// would let the staleness gate declare `Stale` on a guess.
+///
+/// Every submission in [`contended_bundle`] is `Utc`, because `event` builds
+/// only `Utc` stamps, so nothing in the corpus or the contended bundle reaches
+/// this branch.
+///
+/// The bundle below is built so a wrong answer is visible in the export rather
+/// than only in the unnamed instant: the zone-less submission predates the local
+/// evaluation and the zoned one postdates it, so an implementation that ranked
+/// the zone-less stamp by its guessed instant would flip `Submitted` to `Stale`.
+#[test]
+fn several_submissions_with_one_unknown_zone_name_no_latest_submission() {
+    let evaluated = event(
+        "evt-eval-zoned",
+        Some("2026-07-31T10:00:00Z"),
+        vec![
+            ("SettingUri", "./Device/Vendor/MSFT/Policy/Result/BitLocker"),
+            ("EvaluationResult", "compliant"),
+        ],
+    );
+    let zoned = event(
+        "evt-submit-zoned",
+        Some("2026-07-31T11:00:00Z"),
+        vec![("ReportStatus", "submitted")],
+    );
+    let mut zoneless = event(
+        "evt-submit-zoneless",
+        None,
+        vec![("ReportStatus", "submitted")],
+    );
+    // A bare wall-clock stamp: a normalized form exists, but it is a guess, so
+    // `normalized_timestamp` declines it and the set stops being orderable.
+    zoneless.context.source_timestamp = Some(IntuneTimestamp {
+        raw_text: "2026-07-31T09:00:00".to_owned(),
+        original_offset: None,
+        normalized_utc: Some("2026-07-31T09:00:00Z".to_owned()),
+        kind: IntuneTimestampKind::Unspecified,
+    });
+
+    let snapshot = analyze_compliance(&ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        events: vec![evaluated, zoned, zoneless],
+        ..ComplianceInput::default()
+    });
+
+    assert_eq!(
+        snapshot.reporting.last_submission_at, None,
+        "a partially orderable set of submissions has no last member to name"
+    );
+    assert_eq!(
+        snapshot.reporting.state,
+        ComplianceReportState::Submitted,
+        "with no submission instant the staleness gate cannot fire, and the claim \
+         the evidence does support is that a report was submitted"
+    );
+}
+
 #[test]
 fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
     let forward = facts_sharing_one_evidence_ref();
@@ -693,12 +757,24 @@ fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
     );
 }
 
-/// Re-collecting the same records must not change the analysis.
+/// Re-collecting the same **events and setting reports** must not change the
+/// analysis.
 ///
 /// A collector that reads an event log twice, or a rotation that overlaps, hands
-/// the same evidence over more than once. Every local observation is keyed and
+/// the same evidence over more than once. Those two vectors are the ones that
+/// survive it: every local observation is keyed and merged by grouping token and
 /// every evidence list is normalized, so the reduction is idempotent under
-/// duplication — unless a field folds by counting or by vector position.
+/// duplication unless a field folds by counting or by vector position.
+///
+/// `custom_compliance`, `service_results`, and `access_decisions` are excluded
+/// on purpose, which is why `doubled` concatenates only the first two vectors
+/// and passes the rest through untouched. Those three export one entry per input
+/// fact with no merge and no deduplication, so doubling them doubles the exported
+/// array by design: two custom-compliance rows are two runs, two service rows are
+/// two service records, two decisions are two access attempts, and collapsing
+/// them would be the reducer inventing a merge key the sources never state.
+/// Making this test cover them would therefore assert the opposite of the
+/// intended behavior.
 #[test]
 fn re_collecting_the_same_records_does_not_change_the_analysis() {
     for (case, input) in order_invariance_cases() {
