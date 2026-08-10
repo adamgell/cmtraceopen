@@ -322,6 +322,19 @@ fn distinct_providers(filter: &EventQueryFilter) -> Vec<String> {
 ///
 /// These repeat in every node, so they are what decides whether chunking the Event IDs can bring a
 /// query under the limit at all.
+/// The most expressions any single Event ID selector costs.
+///
+/// A selector cannot be split: a range is two comparisons and stays together. So if the budget
+/// left after the fixed terms is smaller than this, no chunking can produce a conforming node.
+fn largest_selector_cost(filter: &EventQueryFilter) -> usize {
+    filter
+        .event_ids
+        .iter()
+        .map(EventIdSelector::expression_cost)
+        .max()
+        .unwrap_or(0)
+}
+
 fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
     let time = filter
         .time
@@ -399,13 +412,15 @@ fn select_body(
 }
 
 /// Splits Event ID selectors so each group fits the expression budget alongside the fixed terms.
+///
+/// Every returned chunk costs at most `MAX_EXPRESSIONS_PER_SELECT - fixed_cost`. The caller must
+/// have already established that no single selector exceeds that, which
+/// [`largest_selector_cost`] is for; there is no fallback that emits an oversized node.
 fn chunk_by_expression_budget(
     selectors: &[EventIdSelector],
     fixed_cost: usize,
 ) -> Vec<Vec<EventIdSelector>> {
-    // At least one selector per node even when the fixed terms alone fill the budget, so a
-    // pathological filter still produces a query rather than an empty or infinite split.
-    let budget = MAX_EXPRESSIONS_PER_SELECT.saturating_sub(fixed_cost).max(1);
+    let budget = MAX_EXPRESSIONS_PER_SELECT.saturating_sub(fixed_cost);
     let mut chunks: Vec<Vec<EventIdSelector>> = Vec::new();
     let mut current: Vec<EventIdSelector> = Vec::new();
     let mut spent = 0usize;
@@ -446,9 +461,14 @@ pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError>
     // the Event IDs brings them under the limit; emitting anyway produces a query the service
     // rejects, and the tolerate-errors flag turns that into a channel reporting no events. An
     // error the caller can show beats a filter that appears to work and returns nothing.
-    if fixed_cost > MAX_EXPRESSIONS_PER_SELECT {
+    // The unsplittable terms plus the largest single selector, since a selector cannot be divided:
+    // a range is two comparisons and stays together. Checking only the fixed terms left a gap where
+    // nineteen providers plus one range emitted a node of twenty-one expressions, because the
+    // chunker's old floor handed out a budget of one to a selector that costs two.
+    let indivisible = fixed_cost + largest_selector_cost(filter);
+    if indivisible > MAX_EXPRESSIONS_PER_SELECT {
         return Err(QueryBuildError::FilterTooComplex {
-            needed: fixed_cost,
+            needed: indivisible,
             limit: MAX_EXPRESSIONS_PER_SELECT,
         });
     }
@@ -1256,11 +1276,52 @@ mod expression_budget_tests {
 
         match build_query(&f) {
             Err(QueryBuildError::FilterTooComplex { needed, limit }) => {
-                assert_eq!(needed, 30);
+                // Thirty providers plus the largest single selector, which is one here.
+                assert_eq!(needed, 31);
                 assert_eq!(limit, MAX_EXPRESSIONS_PER_SELECT);
             }
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_range_that_cannot_fit_beside_the_fixed_terms_is_refused() {
+        // A selector cannot be split: a range is two comparisons and stays together. Nineteen
+        // providers leave a budget of one, and the chunker used to hand that one out anyway,
+        // emitting a node of twenty-one expressions. The budget exists to hold headroom under the
+        // measured cliff, so spending it silently is what the refusal now prevents.
+        let filter = EventQueryFilter {
+            providers: (0..19).map(|n| format!("Provider-{n}")).collect(),
+            event_ids: vec![EventIdSelector::Range {
+                low: 1000,
+                high: 1050,
+            }],
+            ..Default::default()
+        };
+
+        match build_query(&filter) {
+            Err(QueryBuildError::FilterTooComplex { needed, limit }) => {
+                assert_eq!(needed, 21, "19 fixed plus a range costing 2");
+                assert_eq!(limit, MAX_EXPRESSIONS_PER_SELECT);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_range_that_just_fits_beside_the_fixed_terms_is_built() {
+        // Eighteen leaves a budget of two, which is exactly a range. The boundary must build.
+        let filter = EventQueryFilter {
+            providers: (0..18).map(|n| format!("Provider-{n}")).collect(),
+            event_ids: vec![EventIdSelector::Range {
+                low: 1000,
+                high: 1050,
+            }],
+            ..Default::default()
+        };
+        let query = build_query(&filter).expect("builds");
+        let expressions = query.matches("EventID").count() + query.matches("@Name").count();
+        assert_eq!(expressions, MAX_EXPRESSIONS_PER_SELECT);
     }
 
     #[test]
@@ -1487,43 +1548,56 @@ mod expression_budget_service_tests {
                 (0..30).map(|n| (n % 6) as u8).collect(),
                 (0..40u8).collect(),
             ] {
-                let filter = EventQueryFilter {
-                    time: Some(TimeWindow::Between {
-                        from: Some("2020-01-01T00:00:00.000Z".into()),
-                        to: Some("2030-01-01T00:00:00.000Z".into()),
-                    }),
-                    levels: levels.clone(),
-                    event_ids: (0..id_count as u32)
-                        .map(|id| EventIdSelector::Single { id: 1000 + id })
-                        .collect(),
-                    keywords: Some(0x8020_0000_0000_0000),
-                    ..Default::default()
-                };
-                // A refusal is a correct outcome here: it is what the builder does instead of
-                // emitting something the service would reject.
-                let Ok(query) = build_query(&filter) else {
-                    continue;
-                };
-                for node in query.split("<Select>").skip(1) {
-                    let body = node.split("</Select>").next().unwrap_or_default();
-                    // Each comparison is one expression; they are joined by `and` or `or`.
-                    let comparisons = body.matches("EventID").count()
-                        + body.matches("Level=").count()
-                        + body.matches("@SystemTime").count()
-                        + body.matches("timediff").count()
-                        + body.matches("band").count();
-                    assert!(
+                // Ranges as well as singles. Covering only singles is precisely why a range being
+                // handed a budget of one went unnoticed.
+                for use_ranges in [false, true] {
+                    let filter = EventQueryFilter {
+                        time: Some(TimeWindow::Between {
+                            from: Some("2020-01-01T00:00:00.000Z".into()),
+                            to: Some("2030-01-01T00:00:00.000Z".into()),
+                        }),
+                        levels: levels.clone(),
+                        event_ids: (0..id_count as u32)
+                            .map(|id| {
+                                if use_ranges {
+                                    EventIdSelector::Range {
+                                        low: 1000 + id * 10,
+                                        high: 1000 + id * 10 + 5,
+                                    }
+                                } else {
+                                    EventIdSelector::Single { id: 1000 + id }
+                                }
+                            })
+                            .collect(),
+                        keywords: Some(0x8020_0000_0000_0000),
+                        ..Default::default()
+                    };
+                    // A refusal is a correct outcome here: it is what the builder does instead of
+                    // emitting something the service would reject.
+                    let Ok(query) = build_query(&filter) else {
+                        continue;
+                    };
+                    for node in query.split("<Select>").skip(1) {
+                        let body = node.split("</Select>").next().unwrap_or_default();
+                        // Each comparison is one expression; they are joined by `and` or `or`.
+                        let comparisons = body.matches("EventID").count()
+                            + body.matches("Level=").count()
+                            + body.matches("@SystemTime").count()
+                            + body.matches("timediff").count()
+                            + body.matches("band").count();
+                        assert!(
                         comparisons <= MAX_EXPRESSIONS_PER_SELECT,
                         "{comparisons} expressions in one node for {id_count} ids, {levels:?} levels"
                     );
-                }
-                // Suppressions are nodes too, and are bounded by the same limit.
-                for node in query.split("<Suppress>").skip(1) {
-                    let body = node.split("</Suppress>").next().unwrap_or_default();
-                    assert!(
-                        body.matches("EventID").count() <= MAX_EXPRESSIONS_PER_SELECT,
-                        "a suppression exceeded the budget: {body}"
-                    );
+                    }
+                    // Suppressions are nodes too, and are bounded by the same limit.
+                    for node in query.split("<Suppress>").skip(1) {
+                        let body = node.split("</Suppress>").next().unwrap_or_default();
+                        assert!(
+                            body.matches("EventID").count() <= MAX_EXPRESSIONS_PER_SELECT,
+                            "a suppression exceeded the budget: {body}"
+                        );
+                    }
                 }
             }
         }

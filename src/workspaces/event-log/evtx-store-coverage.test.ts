@@ -91,3 +91,51 @@ describe("coverage gaps through the store", () => {
     expect(useEvtxStore.getState().coverageGaps).toEqual(["Application: fresh gap"]);
   });
 });
+
+describe("the time window reaches the service", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+      timeWindow: "1h",
+    });
+  });
+
+  const filterOf = (call: number) =>
+    (invoke.mock.calls[call]?.[1] as { filter?: { time?: { milliseconds: number } } })?.filter;
+
+  it("sends the selected window when a channel is queried", () => {
+    invoke.mockResolvedValueOnce(result("Application", []));
+    return useEvtxStore
+      .getState()
+      .queryChannels(["Application"])
+      .then(() => {
+        expect(filterOf(0)?.time?.milliseconds).toBe(60 * 60 * 1000);
+      });
+  });
+
+  it("sends it on refresh too", async () => {
+    // The window is a server-side predicate and a refresh is the only thing that applies it.
+    // Omitting it made the control a no-op: selecting 1h triggered a refresh that then fetched the
+    // channel unbounded, so the view filled with events outside the window still shown as selected.
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    expect(filterOf(1)?.time?.milliseconds).toBe(60 * 60 * 1000);
+  });
+
+  it("sends no time predicate when the window is all time", async () => {
+    useEvtxStore.setState({ timeWindow: "all" });
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(filterOf(0)?.time).toBeUndefined();
+  });
+});

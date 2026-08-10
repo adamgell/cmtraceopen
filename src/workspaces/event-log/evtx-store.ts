@@ -329,6 +329,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
           maxEvents: null,
+          // The window is a server-side predicate and a refetch is the only thing that applies it.
+          // Omitting it here made the time-window control a no-op: selecting 1h triggered this
+          // refresh, which then fetched the channel unbounded and replaced the view with events
+          // outside the window the toolbar was still showing as selected.
+          filter: buildServerFilter(get().timeWindow),
         });
 
         const s = get();
