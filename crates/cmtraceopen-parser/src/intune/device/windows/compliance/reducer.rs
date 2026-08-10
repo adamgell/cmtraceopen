@@ -14,8 +14,10 @@
 //! half-built state.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use super::models::*;
 use super::rules::derive_findings;
@@ -208,12 +210,18 @@ fn reduce_local(
     // the run reported on. Nothing dedupes or renumbers evidence ids, so two
     // facts sharing one ref are reachable, and a sort on the ref alone left them
     // in the caller's order because `sort_by` is stable.
+    //
+    // Those four fields are the *reading* order and nothing more. `content_key`
+    // is what makes the comparison total: `state`, `error`, `raw_output` and
+    // `named_data` are not named above, and neither is whatever field this
+    // record gains next. See its doc for why it is not just four more links.
     phase.custom_compliance.sort_by(|left, right| {
         left.evidence
             .cmp(&right.evidence)
             .then_with(|| left.policy_id.cmp(&right.policy_id))
             .then_with(|| left.run_id.cmp(&right.run_id))
             .then_with(|| left.setting_name.cmp(&right.setting_name))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
     });
 
     phase.latest_evaluation_at_utc = latest_evaluation(&phase.settings).map(format_utc);
@@ -338,7 +346,17 @@ fn merge_setting(
     // so today this changes no output; it is here so that a field added later
     // which *does* walk the vector inherits a stable order rather than silently
     // reintroducing the defect this function was rewritten to remove.
-    observations.sort_by(|left, right| left.context.evidence_ref.cmp(&right.context.evidence_ref));
+    //
+    // That promise only holds if the order is total, and two observations may
+    // share an evidence ref, so the ref alone did not keep it. `SettingObservation`
+    // is internal and not `Serialize`, so the structural form stands in for the
+    // serialized one; it names every field the same way.
+    observations.sort_by(|left, right| {
+        left.context
+            .evidence_ref
+            .cmp(&right.context.evidence_ref)
+            .then_with(|| structural_key(left).cmp(&structural_key(right)))
+    });
 
     let key = ComplianceSettingKey {
         policy_id: smallest_stated(&observations, |observation| observation.key.policy_id.as_ref()),
@@ -396,10 +414,17 @@ fn merge_setting(
         }
     });
 
+    // This vector is concatenated across observations, so its input order is the
+    // collector's, and it is exported. Name and value are the reading order;
+    // `content_key` is what keeps the comparison total, because `IntuneNamedValue`
+    // is a shared evidence type and a field added to it there would otherwise
+    // reintroduce caller order here, in another module, with nothing to fail.
+    // `dedup` reads full equality, so a widened value stops collapsing too.
     named_data.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.value.cmp(&right.value))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
     });
     named_data.dedup();
 
@@ -618,6 +643,46 @@ fn timestamp_content_key(timestamp: &IntuneTimestamp) -> (&str, Option<&str>, Op
         timestamp.normalized_utc.as_deref(),
         kind,
     )
+}
+
+/// A total ordering key over a whole record, derived from the record itself.
+///
+/// The three exported fact arrays are canonicalized by sorting, and twice now
+/// the sort key was a hand-written list of fields: first `evidence` alone, then
+/// `evidence` plus a few of the record's own identifiers. Both were partial.
+/// `slice::sort_by` is stable, so every pair the key did not separate kept the
+/// caller's vector order, and the set of such pairs is decided by whichever
+/// fields a human remembered to name. Adding a field to one of those records is
+/// enough to widen it again, silently, with no test to fail.
+///
+/// This key is the record's own serialized form, so it names every field by
+/// construction and a field added later participates without anyone touching
+/// this module. Two records compare Equal here exactly when they serialize
+/// identically, which is exactly when swapping them leaves the exported
+/// snapshot byte-identical: at that point the order genuinely does not matter,
+/// and there is nothing left for caller order to decide.
+///
+/// It is a *tie-breaker*, appended after the named chain each call site states,
+/// not a replacement for it. The named chain is what a reader sees (containment
+/// for the two result arrays, time for the decision array); this only settles
+/// pairs that chain leaves Equal, which no corpus scenario contains, so the
+/// serialization runs on essentially no comparison in practice.
+fn content_key<T: Serialize + Debug>(record: &T) -> (u8, String) {
+    match serde_json::to_string(record) {
+        Ok(json) => (0, json),
+        // Unreachable for these records: every field is a string, an integer, a
+        // fieldless enum, or a struct or vector of the same, and none of those
+        // can fail to serialize. Falling back to a constant would put the pair
+        // back in caller order, though, so fall back to another total form
+        // instead. The leading tag keeps the two key spaces from colliding.
+        Err(_) => structural_key(record),
+    }
+}
+
+/// [`content_key`]'s guarantee for a record that is never exported and so is not
+/// `Serialize`. The derived `Debug` form names every field the same way.
+fn structural_key<T: Debug>(record: &T) -> (u8, String) {
+    (1, format!("{record:?}"))
 }
 
 fn latest_evaluation(settings: &[ComplianceSettingEvaluation]) -> Option<DateTime<Utc>> {
@@ -854,6 +919,9 @@ fn reduce_reporting(
     // time, but two rows for different settings should not be interleaved by it.
     // `timestamp_content_key` is reused rather than the normalized instant, so a
     // zone-less stamp still orders by content instead of collapsing to `None`.
+    //
+    // `content_key` closes the comparison over `state`, `device_key`, `user_key`
+    // and every field added after this was written.
     phase.service_results.sort_by(|left, right| {
         left.evidence
             .cmp(&right.evidence)
@@ -865,6 +933,7 @@ fn reduce_reporting(
                     .map(timestamp_content_key)
                     .cmp(&right.reported_at.as_ref().map(timestamp_content_key))
             })
+            .then_with(|| content_key(left).cmp(&content_key(right)))
     });
 
     phase.service_freshness = fold_freshness(&phase.service_results);
@@ -1024,6 +1093,10 @@ fn reduce_access(
     // sequence of attempts, so ordering two denials by when they happened is the
     // reading that matches the data. Subject and resource then separate two
     // attempts that share an instant.
+    //
+    // `content_key` closes the comparison over `decision`, `linkage`,
+    // `failure_code` and `matched_evidence`, none of which are named above, and
+    // over every field added after this was written.
     phase.decisions.sort_by(|left, right| {
         left.evidence
             .cmp(&right.evidence)
@@ -1036,6 +1109,7 @@ fn reduce_access(
             .then_with(|| left.device_key.cmp(&right.device_key))
             .then_with(|| left.user_key.cmp(&right.user_key))
             .then_with(|| left.resource.cmp(&right.resource))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
     });
 
     normalize_evidence(&mut evidence);
