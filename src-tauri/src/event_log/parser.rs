@@ -263,32 +263,40 @@ fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<Evt
         .iter()
         .filter(|child| child.name == "EventData" || child.name == "UserData");
 
-    for container in containers {
-        // UserData wraps its fields in a provider-named element, so descend through a single
-        // wrapper when the container holds no Data of its own.
-        let holders: Vec<_> = if container.children.iter().any(|c| c.name == "Data") {
-            vec![container]
-        } else {
-            container.children.iter().collect()
+    // A child that carries text is a field. A child that carries only elements is a wrapper, which
+    // is how UserData nests its fields under a provider-named element, so it is descended through.
+    //
+    // Deciding per child rather than per container matters: an EventData holding only <Binary> has
+    // no <Data> at all, and treating the whole container as wrappers would descend into <Binary>,
+    // find no children, and drop the only value the event carried.
+    let push_field = |child: &cmtraceopen_parser::eventmap::EventNode,
+                      fields: &mut Vec<EvtxField>,
+                      unnamed: &mut usize| {
+        let value = sanitize_control_chars(child.text.as_deref().unwrap_or_default());
+        if value.is_empty() {
+            return;
+        }
+        let name = match child.attribute("Name") {
+            Some(name) => name.to_string(),
+            // A positional field. Numbered from one so it lines up with the `%1` style insertion
+            // numbering that message templates use.
+            None if child.name == "Data" => {
+                *unnamed += 1;
+                format!("Data{unnamed}")
+            }
+            None => child.name.clone(),
         };
+        fields.push(EvtxField { name, value });
+    };
 
-        for holder in holders {
-            for child in &holder.children {
-                let value = sanitize_control_chars(child.text.as_deref().unwrap_or_default());
-                if value.is_empty() {
-                    continue;
+    for container in containers {
+        for child in &container.children {
+            if child.text.is_some() || child.children.is_empty() {
+                push_field(child, &mut fields, &mut unnamed);
+            } else {
+                for grandchild in &child.children {
+                    push_field(grandchild, &mut fields, &mut unnamed);
                 }
-                let name = match child.attribute("Name") {
-                    Some(name) => name.to_string(),
-                    // A positional field. Named from one so it lines up with the `%1` style
-                    // insertion numbering that message templates use.
-                    None if child.name == "Data" => {
-                        unnamed += 1;
-                        format!("Data{unnamed}")
-                    }
-                    None => child.name.clone(),
-                };
-                fields.push(EvtxField { name, value });
             }
         }
     }
@@ -432,6 +440,58 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "PolicyName");
         assert_eq!(fields[1].value, "C:\\app.exe");
+    }
+
+    #[test]
+    fn a_binary_only_event_keeps_its_value() {
+        // Classic providers emit <Binary> with no <Data> at all. Treating a container without
+        // <Data> as a set of wrappers descends into <Binary>, finds no children, and drops the
+        // only value the event carried.
+        let fields = fields_of("<Event><EventData><Binary>DEADBEEF</Binary></EventData></Event>");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "Binary");
+        assert_eq!(fields[0].value, "DEADBEEF");
+    }
+
+    #[test]
+    fn data_and_binary_together_both_survive() {
+        let fields = fields_of(
+            r#"<Event><EventData>
+                 <Data Name="Reason">timeout</Data>
+                 <Binary>00FF</Binary>
+               </EventData></Event>"#,
+        );
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "Reason");
+        assert_eq!(fields[1].name, "Binary");
+    }
+
+    #[test]
+    fn a_wrapper_and_a_direct_field_can_coexist() {
+        // Decided per child rather than per container, so one shape does not suppress the other.
+        let fields = fields_of(
+            r#"<Event><UserData>
+                 <Direct>here</Direct>
+                 <Wrapper><Nested>there</Nested></Wrapper>
+               </UserData></Event>"#,
+        );
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "Direct");
+        assert_eq!(fields[1].name, "Nested");
+    }
+
+    #[test]
+    fn positional_numbering_continues_across_containers() {
+        // The %1 style references in a message template are numbered over the whole event, not
+        // restarted per container.
+        let fields = fields_of(
+            r#"<Event>
+                 <EventData><Data>one</Data></EventData>
+                 <UserData><Data>two</Data></UserData>
+               </Event>"#,
+        );
+        assert_eq!(fields[0].name, "Data1");
+        assert_eq!(fields[1].name, "Data2");
     }
 
     #[test]
