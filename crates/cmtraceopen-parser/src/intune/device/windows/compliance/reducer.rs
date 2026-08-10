@@ -14,8 +14,10 @@
 //! half-built state.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 use super::models::*;
 use super::rules::derive_findings;
@@ -201,9 +203,26 @@ fn reduce_local(
     // The exported array is a set of results, not a sequence: no custom-compliance
     // source states a run order, so leaving it in the caller's vector order made
     // the serialized snapshot a function of the collector.
-    phase
-        .custom_compliance
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Evidence first, because a ref is the one identifier every fact is
+    // guaranteed to carry, then the record's own identity from broadest to
+    // narrowest: the policy the run belonged to, the run within it, the setting
+    // the run reported on. Nothing dedupes or renumbers evidence ids, so two
+    // facts sharing one ref are reachable, and a sort on the ref alone left them
+    // in the caller's order because `sort_by` is stable.
+    //
+    // Those four fields are the *reading* order and nothing more. `content_key`
+    // is what makes the comparison total: `state`, `error`, `raw_output` and
+    // `named_data` are not named above, and neither is whatever field this
+    // record gains next. See its doc for why it is not just four more links.
+    phase.custom_compliance.sort_by(|left, right| {
+        left.evidence
+            .cmp(&right.evidence)
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+            .then_with(|| left.setting_name.cmp(&right.setting_name))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
+    });
 
     phase.latest_evaluation_at_utc = latest_evaluation(&phase.settings).map(format_utc);
     normalize_evidence(&mut phase.unkeyed_observations);
@@ -327,7 +346,17 @@ fn merge_setting(
     // so today this changes no output; it is here so that a field added later
     // which *does* walk the vector inherits a stable order rather than silently
     // reintroducing the defect this function was rewritten to remove.
-    observations.sort_by(|left, right| left.context.evidence_ref.cmp(&right.context.evidence_ref));
+    //
+    // That promise only holds if the order is total, and two observations may
+    // share an evidence ref, so the ref alone did not keep it. `SettingObservation`
+    // is internal and not `Serialize`, so the structural form stands in for the
+    // serialized one; it names every field the same way.
+    observations.sort_by(|left, right| {
+        left.context
+            .evidence_ref
+            .cmp(&right.context.evidence_ref)
+            .then_with(|| structural_key(left).cmp(&structural_key(right)))
+    });
 
     let key = ComplianceSettingKey {
         policy_id: smallest_stated(&observations, |observation| observation.key.policy_id.as_ref()),
@@ -385,10 +414,17 @@ fn merge_setting(
         }
     });
 
+    // This vector is concatenated across observations, so its input order is the
+    // collector's, and it is exported. Name and value are the reading order;
+    // `content_key` is what keeps the comparison total, because `IntuneNamedValue`
+    // is a shared evidence type and a field added to it there would otherwise
+    // reintroduce caller order here, in another module, with nothing to fail.
+    // `dedup` reads full equality, so a widened value stops collapsing too.
     named_data.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.value.cmp(&right.value))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
     });
     named_data.dedup();
 
@@ -425,11 +461,34 @@ fn merge_setting(
 /// The smallest value stated by any observation in the group.
 ///
 /// "Smallest" is arbitrary but *content-determined*, which "first" was not.
+///
+/// A present-but-blank value states nothing and is skipped, so it can never win
+/// the `min` and be exported as this group's identifier or display name. Every
+/// other reader of these fields already agrees: [`ComplianceSettingKey::is_identified`]
+/// and [`ComplianceSettingKey::grouping_token`] both drop a blank before deciding,
+/// and [`contradicts`] reads one through [`usable_identifier`]. Only this function
+/// took `Some("")` at face value, which let a group merged on its URI export
+/// `settingId: ""` while `contradicts` had already ruled the same value out.
+///
+/// The gap is reachable through the report path but not the event path:
+/// `sources::classify_setting_report` copies `policy_id`, `setting_id`, and
+/// `setting_uri` verbatim from a `NormalizedSettingReport` deserialized straight
+/// out of the `settingReports` envelope, where `"settingId": ""` is valid JSON,
+/// whereas `sources::event_setting_key` reads every field through `named_any`,
+/// which trims and rejects a blank before it becomes a key at all.
+///
+/// The winning value is still exported verbatim; only the decision about whether
+/// a value was stated is normalized.
 fn smallest_stated(
     observations: &[SettingObservation],
     pick: fn(&SettingObservation) -> Option<&String>,
 ) -> Option<String> {
-    observations.iter().filter_map(pick).min().cloned()
+    observations
+        .iter()
+        .filter_map(pick)
+        .filter(|value| usable_identifier(value).is_some())
+        .min()
+        .cloned()
 }
 
 /// The terminal code this setting reported.
@@ -471,6 +530,10 @@ fn contradicts(
 }
 
 /// An identifier reduced to its comparable form, or `None` when it states nothing.
+///
+/// [`smallest_stated`] reuses the `None` half as the module's single test for
+/// "this string states nothing", including for the display name, which is not an
+/// identifier but is just as meaningless when blank.
 fn usable_identifier(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_ascii_lowercase())
@@ -530,9 +593,12 @@ fn latest_evaluated_at<'a>(
 ///
 /// Where the evidence cannot support an answer, none is given:
 ///
-/// - a single submission is unambiguous whatever its zone, so it is reported;
-/// - several submissions are ordered only when *every* one of them carries a
-///   timestamp whose zone is known. One zone-less stamp among them means we
+/// - one *distinct* stamp is unambiguous whatever its zone, so it is reported.
+///   Several submissions carrying the same stamp are the same instant however
+///   that stamp is spelled, so they collapse to this case rather than to the
+///   next one;
+/// - two or more distinct stamps are ordered only when *every* one of them
+///   carries a zone that is known. One zone-less stamp among them means we
 ///   cannot say which submission is last, and naming one anyway would let the
 ///   gate declare `Stale` on a guess. `None` is reported instead, which leaves
 ///   the state at `Submitted` — the claim the evidence does support.
@@ -565,6 +631,22 @@ fn latest_submission_at<'a>(
     }
 }
 
+/// Where a record sits on the timeline, or that it cannot be placed on one.
+///
+/// [`normalized_timestamp`] declines a stamp whose zone is unknown, so `None`
+/// here means "not placeable", never "earliest". The leading flag says so in the
+/// ordering: `false < true`, so every placeable record sorts before every
+/// unplaceable one and the dated run stays contiguous instead of being prefixed
+/// by a block whose position would read as "before everything".
+///
+/// This key is deliberately *not* total. It answers only "when", so a caller
+/// that needs a total order must chain something after it: the raw stamp for
+/// records that share an instant or have none, and eventually [`content_key`].
+fn chronological_key(timestamp: Option<&IntuneTimestamp>) -> (bool, Option<DateTime<Utc>>) {
+    let instant = timestamp.and_then(normalized_timestamp);
+    (instant.is_none(), instant)
+}
+
 /// A total, content-derived ordering key, used only to settle ties deterministically.
 fn timestamp_content_key(timestamp: &IntuneTimestamp) -> (&str, Option<&str>, Option<&str>, u8) {
     let kind = match timestamp.kind {
@@ -580,6 +662,46 @@ fn timestamp_content_key(timestamp: &IntuneTimestamp) -> (&str, Option<&str>, Op
         timestamp.normalized_utc.as_deref(),
         kind,
     )
+}
+
+/// A total ordering key over a whole record, derived from the record itself.
+///
+/// The three exported fact arrays are canonicalized by sorting, and twice now
+/// the sort key was a hand-written list of fields: first `evidence` alone, then
+/// `evidence` plus a few of the record's own identifiers. Both were partial.
+/// `slice::sort_by` is stable, so every pair the key did not separate kept the
+/// caller's vector order, and the set of such pairs is decided by whichever
+/// fields a human remembered to name. Adding a field to one of those records is
+/// enough to widen it again, silently, with no test to fail.
+///
+/// This key is the record's own serialized form, so it names every field by
+/// construction and a field added later participates without anyone touching
+/// this module. Two records compare Equal here exactly when they serialize
+/// identically, which is exactly when swapping them leaves the exported
+/// snapshot byte-identical: at that point the order genuinely does not matter,
+/// and there is nothing left for caller order to decide.
+///
+/// It is a *tie-breaker*, appended after the named chain each call site states,
+/// not a replacement for it. The named chain is what a reader sees (containment
+/// for the two result arrays, time for the decision array); this only settles
+/// pairs that chain leaves Equal, which no corpus scenario contains, so the
+/// serialization runs on essentially no comparison in practice.
+fn content_key<T: Serialize + Debug>(record: &T) -> (u8, String) {
+    match serde_json::to_string(record) {
+        Ok(json) => (0, json),
+        // Unreachable for these records: every field is a string, an integer, a
+        // fieldless enum, or a struct or vector of the same, and none of those
+        // can fail to serialize. Falling back to a constant would put the pair
+        // back in caller order, though, so fall back to another total form
+        // instead. The leading tag keeps the two key spaces from colliding.
+        Err(_) => structural_key(record),
+    }
+}
+
+/// [`content_key`]'s guarantee for a record that is never exported and so is not
+/// `Serialize`. The derived `Debug` form names every field the same way.
+fn structural_key<T: Debug>(record: &T) -> (u8, String) {
+    (1, format!("{record:?}"))
 }
 
 fn latest_evaluation(settings: &[ComplianceSettingEvaluation]) -> Option<DateTime<Utc>> {
@@ -809,9 +931,29 @@ fn reduce_reporting(
     // As with the custom-compliance results: a set of service records, not a
     // sequence. Nothing downstream reads their position, and leaving them in the
     // caller's order put it in the serialized snapshot.
-    phase
-        .service_results
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Evidence first, then what the record is about (the policy, then the setting
+    // within it), then when the service reported it. The instant is last because
+    // it is the weakest of the three: two service rows for one setting differ by
+    // time, but two rows for different settings should not be interleaved by it.
+    // `timestamp_content_key` is reused rather than the normalized instant, so a
+    // zone-less stamp still orders by content instead of collapsing to `None`.
+    //
+    // `content_key` closes the comparison over `state`, `device_key`, `user_key`
+    // and every field added after this was written.
+    phase.service_results.sort_by(|left, right| {
+        left.evidence
+            .cmp(&right.evidence)
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+            .then_with(|| left.setting_id.cmp(&right.setting_id))
+            .then_with(|| {
+                left.reported_at
+                    .as_ref()
+                    .map(timestamp_content_key)
+                    .cmp(&right.reported_at.as_ref().map(timestamp_content_key))
+            })
+            .then_with(|| content_key(left).cmp(&content_key(right)))
+    });
 
     phase.service_freshness = fold_freshness(&phase.service_results);
     phase.service_disagrees_with_local = phase
@@ -898,7 +1040,9 @@ fn disagrees(service: &ComplianceServiceState, aggregate: ComplianceAggregateSta
 ///
 /// A decision reaches [`ComplianceAccessLinkage::MatchedComplianceState`] only
 /// when a device or user key matches a compliance record *and* both sides carry
-/// a normalized timestamp with the compliance record preceding the decision.
+/// a normalized timestamp with the compliance record no later than the decision
+/// (the two may share an instant; what is refused is a record reported after the
+/// decision it is supposed to explain).
 /// Everything weaker is explicitly uncorrelated; the rules then refuse to make a
 /// causal claim from it.
 fn reduce_access(
@@ -963,9 +1107,52 @@ fn reduce_access(
 
     // Access decisions are correlated by identity and time, never by position, so
     // the exported order is a set order like the two above.
-    phase
-        .decisions
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Time leads here where it trailed the record fields for service results: a
+    // denial *is* an event, and a reader scans the array as a sequence of
+    // attempts, so ordering two denials by when they happened is the reading
+    // that matches the data.
+    //
+    // The leading key is [`chronological_key`], the *normalized instant*, not
+    // `timestamp_content_key`. That key compares `raw_text` first, so leading
+    // with it would order by how the source spelled the time rather than by when
+    // it happened: "07/31/2026 11:50:00" sorts before "2026-07-30T00:00:00Z"
+    // because '0' < '2', and an `Offset` stamp reading 13:50+02:00 sorts after a
+    // `Utc` stamp reading 12:00Z though it is the earlier instant. The corpus
+    // hides this because every stamp in it is one shape, and same-shape RFC 3339
+    // happens to sort chronologically as text.
+    //
+    // A decision carrying no stamp, or one whose zone is unknown, has no instant
+    // `normalized_timestamp` will vouch for, so it cannot be placed on that
+    // timeline at all. `chronological_key` sorts both kinds after every dated
+    // decision instead of interleaving them on a guess.
+    //
+    // `timestamp_content_key` follows, and does three things: within that trailing
+    // group it puts the stampless decisions first (`None` before `Some`) and then
+    // separates the zone-less ones by their raw stamps rather than letting them
+    // collapse; and among dated decisions it settles two that share an instant but
+    // spell it differently. Evidence, subject and resource then separate attempts
+    // that agree on all of it. Two decisions with no stamp at all state nothing
+    // for either time link and fall straight through to those.
+    //
+    // `content_key` closes the comparison over `decision`, `linkage`,
+    // `failure_code` and `matched_evidence`, none of which are named above, and
+    // over every field added after this was written.
+    phase.decisions.sort_by(|left, right| {
+        chronological_key(left.occurred_at.as_ref())
+            .cmp(&chronological_key(right.occurred_at.as_ref()))
+            .then_with(|| {
+                left.occurred_at
+                    .as_ref()
+                    .map(timestamp_content_key)
+                    .cmp(&right.occurred_at.as_ref().map(timestamp_content_key))
+            })
+            .then_with(|| left.evidence.cmp(&right.evidence))
+            .then_with(|| left.device_key.cmp(&right.device_key))
+            .then_with(|| left.user_key.cmp(&right.user_key))
+            .then_with(|| left.resource.cmp(&right.resource))
+            .then_with(|| content_key(left).cmp(&content_key(right)))
+    });
 
     normalize_evidence(&mut evidence);
     phase.evidence = evidence;
@@ -1026,11 +1213,224 @@ fn format_utc(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intune::evidence::IntuneNamedValue;
+
+    /// A fully populated observation, so every field has a stated value to lose.
+    ///
+    /// Every `Option` is `Some` and the collection is non-empty on purpose. A
+    /// mutation from `None` to `Some(_)` changes the `Debug` rendering even if
+    /// the inner value never reaches it, so it would pass against exactly the
+    /// lossy `Debug` this test exists to catch. Each mutation below changes a
+    /// stated value into a different stated value instead.
+    fn observation_for_key_coverage() -> SettingObservation {
+        SettingObservation {
+            key: ComplianceSettingKey {
+                policy_id: Some("policy".to_owned()),
+                setting_id: Some("setting".to_owned()),
+                setting_uri: Some("./Device/Vendor/MSFT/Policy/Result/Probe".to_owned()),
+            },
+            grouping_token: "uri:./device/vendor/msft/policy/result/probe".to_owned(),
+            scope: ComplianceScope::Device,
+            state: ComplianceSettingState::Compliant,
+            display_name: Some("a name".to_owned()),
+            error: Some(IntuneErrorCode {
+                raw: "0x80070005".to_owned(),
+                decimal: Some(-2147024891),
+                hex: Some("0x80070005".to_owned()),
+            }),
+            evaluated_at: Some(timestamp("2026-07-31T10:00:00Z")),
+            named_data: vec![IntuneNamedValue {
+                name: "probe".to_owned(),
+                value: "a value".to_owned(),
+            }],
+            context: context("obs-1", "mdm-report"),
+        }
+    }
+
+    /// Every field of `SettingObservation`, paired with an observation that
+    /// differs from [`observation_for_key_coverage`] in that field alone.
+    ///
+    /// The table is self-maintaining, which is the point of writing it this way
+    /// rather than as a literal list:
+    ///
+    /// - the destructuring carries no `..`, so a field added to
+    ///   `SettingObservation` later stops this function compiling until it is
+    ///   named here;
+    /// - every binding the destructuring introduces is consumed by the
+    ///   `assert_ne!` guarding its mutation, and `unused_variables` is denied
+    ///   below rather than left as a warning, so naming a field without
+    ///   mutating it is a compile error too;
+    /// - those same assertions prove each mutation is a real change rather than
+    ///   a restatement of the base, so no row can pass vacuously.
+    ///
+    /// A field cannot reach the export order without passing through here.
+    #[deny(unused_variables)]
+    fn single_field_mutations() -> Vec<(&'static str, SettingObservation)> {
+        let SettingObservation {
+            key,
+            grouping_token,
+            scope,
+            state,
+            display_name,
+            error,
+            evaluated_at,
+            named_data,
+            context: base_context,
+        } = observation_for_key_coverage();
+
+        let mutated_key = ComplianceSettingKey {
+            policy_id: Some("other-policy".to_owned()),
+            ..key.clone()
+        };
+        let mutated_grouping_token = "uri:./device/vendor/msft/policy/result/other".to_owned();
+        let mutated_scope = ComplianceScope::User;
+        let mutated_state = ComplianceSettingState::Noncompliant;
+        let mutated_display_name = Some("another name".to_owned());
+        let mutated_error = Some(IntuneErrorCode {
+            raw: "0x80070002".to_owned(),
+            decimal: Some(-2147024894),
+            hex: Some("0x80070002".to_owned()),
+        });
+        let mutated_evaluated_at = Some(timestamp("2026-07-31T11:00:00Z"));
+        let mutated_named_data = vec![IntuneNamedValue {
+            name: "probe".to_owned(),
+            value: "another value".to_owned(),
+        }];
+        let mutated_context = context("obs-2", "mdm-report");
+
+        assert_ne!(mutated_key, key, "the `key` mutation must change `key`");
+        assert_ne!(
+            mutated_grouping_token, grouping_token,
+            "the `grouping_token` mutation must change `grouping_token`"
+        );
+        assert_ne!(
+            mutated_scope, scope,
+            "the `scope` mutation must change `scope`"
+        );
+        assert_ne!(
+            mutated_state, state,
+            "the `state` mutation must change `state`"
+        );
+        assert_ne!(
+            mutated_display_name, display_name,
+            "the `display_name` mutation must change `display_name`"
+        );
+        assert_ne!(
+            mutated_error, error,
+            "the `error` mutation must change `error`"
+        );
+        assert_ne!(
+            mutated_evaluated_at, evaluated_at,
+            "the `evaluated_at` mutation must change `evaluated_at`"
+        );
+        assert_ne!(
+            mutated_named_data, named_data,
+            "the `named_data` mutation must change `named_data`"
+        );
+        assert_ne!(
+            mutated_context, base_context,
+            "the `context` mutation must change `context`"
+        );
+
+        vec![
+            (
+                "key",
+                SettingObservation {
+                    key: mutated_key,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "grouping_token",
+                SettingObservation {
+                    grouping_token: mutated_grouping_token,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "scope",
+                SettingObservation {
+                    scope: mutated_scope,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "state",
+                SettingObservation {
+                    state: mutated_state,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "display_name",
+                SettingObservation {
+                    display_name: mutated_display_name,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "error",
+                SettingObservation {
+                    error: mutated_error,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "evaluated_at",
+                SettingObservation {
+                    evaluated_at: mutated_evaluated_at,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "named_data",
+                SettingObservation {
+                    named_data: mutated_named_data,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "context",
+                SettingObservation {
+                    context: mutated_context,
+                    ..observation_for_key_coverage()
+                },
+            ),
+        ]
+    }
+
+    /// `structural_key` orders observations by their `Debug` rendering, so every
+    /// field must reach that rendering. A hand-written or lossy `Debug` on
+    /// `SettingObservation`, or on any type it nests, would silently drop a field
+    /// from the key: `merge_setting` chains `structural_key` after the evidence
+    /// ref and `slice::sort_by` is stable, so a pair the key stops separating
+    /// falls back to the caller's vector order.
+    ///
+    /// This pins each field individually rather than the struct as a whole, so a
+    /// field that stops participating fails here and names itself.
+    /// [`single_field_mutations`] is what makes "each field" true, and what keeps
+    /// it true as the struct grows.
+    #[test]
+    fn structural_key_separates_observations_differing_in_any_single_field() {
+        let base = observation_for_key_coverage();
+        for (field, mutated) in single_field_mutations() {
+            assert_ne!(
+                structural_key(&base),
+                structural_key(&mutated),
+                "changing `{field}` must change the structural key, or that field \
+                 stops participating in the export order"
+            );
+        }
+    }
+
     use crate::intune::evidence::{
         IntuneAccessState, IntuneEvidenceRef, IntuneObservationContext, IntuneParseState,
         IntuneProvenance, IntuneSensitivity, IntuneSourceKind, IntuneTimestampKind,
     };
-    use crate::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
+    use crate::intune::normalized::{
+        NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,
+        NormalizedWindowsEvent,
+    };
 
     fn context(evidence_id: &str, artifact: &str) -> IntuneObservationContext {
         IntuneObservationContext {
@@ -1317,6 +1717,144 @@ mod tests {
         );
     }
 
+    fn access_decision(evidence_id: &str, occurred_at: IntuneTimestamp) -> ComplianceAccessFact {
+        ComplianceAccessFact {
+            context: context(evidence_id, "access"),
+            decision: ComplianceAccessDecision::Denied,
+            failure_code: None,
+            occurred_at: Some(occurred_at),
+            device_key: Some("device-1".to_owned()),
+            user_key: None,
+            resource: None,
+            named_data: Vec::new(),
+        }
+    }
+
+    /// The exported decision array reads chronologically, and nothing else
+    /// decides it.
+    ///
+    /// The bundle is built so every other candidate ordering disagrees with
+    /// chronology, which is what makes the assertion mean something:
+    ///
+    /// - evidence ids sort `a-later` before `z-earlier`, the reverse of time, so
+    ///   a comparison led by `evidence` cannot produce this order;
+    /// - raw stamp text sorts `07/31/2026 ...` before `2026-07-31T...`, also the
+    ///   reverse of time, so `timestamp_content_key` cannot produce it either;
+    /// - the decision whose zone is unknown carries the raw stamp and the
+    ///   evidence id that both sort first, so only refusing to place it on the
+    ///   timeline puts it last.
+    ///
+    /// Only the normalized instant, with the unplaceable stamp sorted after every
+    /// placeable one, yields the asserted sequence.
+    #[test]
+    fn access_decisions_export_in_chronological_order() {
+        let earlier = access_decision(
+            "z-earlier",
+            IntuneTimestamp {
+                raw_text: "2026-07-31T11:00:00Z".to_owned(),
+                original_offset: None,
+                normalized_utc: Some("2026-07-31T11:00:00Z".to_owned()),
+                kind: IntuneTimestampKind::Utc,
+            },
+        );
+        let later = access_decision(
+            "a-later",
+            IntuneTimestamp {
+                raw_text: "07/31/2026 09:30:00 -02:00".to_owned(),
+                original_offset: Some("-02:00".to_owned()),
+                normalized_utc: Some("2026-07-31T11:30:00Z".to_owned()),
+                kind: IntuneTimestampKind::Offset,
+            },
+        );
+        let unplaceable = access_decision(
+            "a-unplaceable",
+            IntuneTimestamp {
+                raw_text: "07/31/2026 08:00:00".to_owned(),
+                original_offset: None,
+                normalized_utc: Some("2026-07-31T08:00:00Z".to_owned()),
+                kind: IntuneTimestampKind::Unspecified,
+            },
+        );
+
+        let order = |access_decisions: Vec<ComplianceAccessFact>| {
+            analyze_compliance(&ComplianceInput {
+                generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+                access_decisions,
+                ..ComplianceInput::default()
+            })
+            .access_impact
+            .decisions
+            .iter()
+            .map(|decision| decision.evidence[0].evidence_id.clone())
+            .collect::<Vec<_>>()
+        };
+
+        let expected = vec![
+            "z-earlier".to_owned(),
+            "a-later".to_owned(),
+            "a-unplaceable".to_owned(),
+        ];
+        assert_eq!(
+            order(vec![earlier.clone(), later.clone(), unplaceable.clone()]),
+            expected,
+            "the decision array must read as a sequence of attempts in time, with \
+             a decision whose zone is unknown after every decision that can be \
+             placed on that timeline"
+        );
+        assert_eq!(
+            order(vec![unplaceable, later, earlier]),
+            expected,
+            "and the resolved order must not depend on the caller's vector"
+        );
+    }
+
+    /// A report row may carry a present-but-blank identifier, because
+    /// `classify_setting_report` copies the key verbatim from JSON while the
+    /// event path filters every field through `named_any`. A blank states
+    /// nothing, so it must not be exported as this setting's id.
+    #[test]
+    fn a_blank_identifier_is_not_exported_as_an_identifier() {
+        let report = NormalizedSettingReport {
+            context: context("r1", "report"),
+            setting_uri: Some("./Device/X".to_owned()),
+            setting_id: Some(String::new()),
+            policy_id: Some("   ".to_owned()),
+            display_name: Some(String::new()),
+            outcome: NormalizedSettingOutcome::Applied,
+            value: None,
+            error: None,
+            named_data: Vec::new(),
+        };
+        let snapshot = analyze_compliance(&ComplianceInput {
+            generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+            setting_reports: vec![report],
+            ..ComplianceInput::default()
+        });
+
+        let setting = &snapshot.local_evaluation.settings[0];
+        assert_eq!(
+            setting.key.setting_uri.as_deref(),
+            Some("./Device/X"),
+            "the one identifier the row actually states must survive"
+        );
+        assert_eq!(
+            setting.key.setting_id, None,
+            "an empty setting id states nothing and must not be exported as one"
+        );
+        assert_eq!(
+            setting.key.policy_id, None,
+            "a whitespace-only policy id states nothing and must not be exported as one"
+        );
+        assert_eq!(
+            setting.display_name, None,
+            "an empty display name must not be quoted by a finding as this setting's name"
+        );
+        assert!(
+            !setting.identity_contradiction,
+            "a blank alongside a stated id is not two records disagreeing"
+        );
+    }
+
     #[test]
     fn a_timestamp_with_no_known_zone_cannot_order_anything() {
         let unusable = IntuneTimestamp {
@@ -1516,6 +2054,23 @@ mod tests {
         assert_eq!(
             forward.local_evaluation.policies[0].scope, reverse.local_evaluation.policies[0].scope,
             "the exported policy scope must not depend on the caller's vector"
+        );
+        // Symmetry alone is too weak an assertion to protect the rule. Replacing
+        // the ADR-003 conservative merge with any fixed rank over the variants
+        // (Received over NotReceived, Device over User, or the reverse) would be
+        // just as symmetric and would still pass the two assertions above. These
+        // two pin what the rows must actually resolve to: two equally
+        // authoritative sources that disagree name no state and no scope, and
+        // both rows stay cited so neither claim is hidden.
+        assert_eq!(
+            forward.local_evaluation.policies[0].state,
+            CompliancePolicyState::Unknown,
+            "received and missing are equally authoritative, so the merge names no state (ADR-003)"
+        );
+        assert_eq!(
+            forward.local_evaluation.policies[0].scope,
+            ComplianceScope::Unknown,
+            "device and user are equally authoritative, so the merge names no scope (ADR-003)"
         );
     }
 }
