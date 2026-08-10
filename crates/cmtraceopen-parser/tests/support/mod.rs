@@ -23,6 +23,9 @@
 //! `src-tauri/tests/common/mod.rs` sets the same precedent.
 #![allow(dead_code)]
 
+use cmtraceopen_parser::intune::evidence::{
+    access_state_for_artifact_status, IntuneAccessState, IntuneArtifactStatus,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -93,6 +96,73 @@ pub fn corpus_root(corpus_relative: &str) -> PathBuf {
         root.push(segment);
     }
     root
+}
+
+/// One scenario directory, e.g. `scenario_root("apps/windows/win32", "install-success")`.
+pub fn scenario_root(corpus_relative: &str, scenario: &str) -> PathBuf {
+    corpus_root(corpus_relative).join(scenario)
+}
+
+// ── Fixture vocabulary -> library vocabulary ────────────────────────────────
+
+/// Map a manifest `captureState` onto the artifact status the analyzers consume.
+///
+/// This is the job of the native collector that will eventually feed the pure
+/// crate, so the fixture harness performs it: the library must never need to
+/// know how a fixture spells things. It lives here, once, because a workload
+/// that spelled this table differently from its neighbours would be declaring a
+/// different collector boundary without saying so.
+///
+/// The `match` is over strings and so cannot be exhaustive; the panic arm is the
+/// substitute, and [`CAPTURE_STATES`] is the list it accepts.
+pub fn artifact_status_for_capture_state(capture_state: &str) -> IntuneArtifactStatus {
+    match capture_state {
+        "captured" => IntuneArtifactStatus::Available,
+        "capped" => IntuneArtifactStatus::Capped,
+        "absent" => IntuneArtifactStatus::Missing,
+        "accessDenied" => IntuneArtifactStatus::PermissionDenied,
+        "skipped" => IntuneArtifactStatus::Skipped,
+        "unsupported" => IntuneArtifactStatus::Unsupported,
+        "parseFailed" => IntuneArtifactStatus::ParseFailed,
+        other => panic!("unknown captureState {other:?}"),
+    }
+}
+
+/// The same table expressed as the observation-level access state.
+///
+/// Some inputs (Win32) are built from `IntuneAccessState` rather than
+/// `IntuneArtifactStatus`. Rather than a second hand-written table, this is the
+/// status table composed with the library's own status -> access mapping, so a
+/// fixture can never disagree with the crate about what `parseFailed` means.
+pub fn access_state_for_capture_state(capture_state: &str) -> IntuneAccessState {
+    access_state_for_artifact_status(&artifact_status_for_capture_state(capture_state))
+}
+
+// ── Wire projections ────────────────────────────────────────────────────────
+
+/// Serialize a shared contract type for comparison against `expected.json`.
+pub fn wire<T: serde::Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).expect("shared contract types serialize")
+}
+
+/// The evidence ids cited by an array, sorted.
+///
+/// For consumers whose contract is the *set* of citations. Sorting both sides of
+/// the assertion is what makes that explicit. A consumer whose contract includes
+/// the citation *order* must not use this; see
+/// `docs/architecture/shared-vs-workload-invariants.md`.
+pub fn sorted_evidence_ids(value: &Value) -> Vec<String> {
+    let mut ids = value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item["evidenceId"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids
 }
 
 /// Sorted scenario directory names inside a corpus.

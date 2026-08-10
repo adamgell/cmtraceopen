@@ -20,9 +20,12 @@ use cmtraceopen_parser::intune::apps::windows::microsoft_store::{
     analyze_store_bundle, redacted_export_projection, StoreAnalysis, StoreArtifactPayload,
     StoreInstallerFamily, StoreSourceArtifact,
 };
-use cmtraceopen_parser::intune::evidence::{IntuneArtifactStatus, IntuneSourceKind};
+use cmtraceopen_parser::intune::evidence::IntuneSourceKind;
 use serde_json::{json, Value};
-use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
+use support::{
+    artifact_status_for_capture_state, corpus_root, load_json, mutated, scenario_names,
+    validate_scenario, Failures,
+};
 
 /// The scenario matrix this leaf commits to.
 ///
@@ -51,24 +54,7 @@ const SCENARIOS: [&str; 17] = [
 const CORPUS: &str = "apps/windows/microsoft-store";
 
 fn scenario_root(scenario: &str) -> PathBuf {
-    corpus_root(CORPUS).join(scenario)
-}
-
-/// Map a manifest capture state onto the artifact status the analyzer consumes.
-///
-/// This is the whole job of the native collector that will eventually feed the
-/// pure crate, so doing it here keeps the fixture honest about the boundary.
-fn status_for(capture_state: &str) -> IntuneArtifactStatus {
-    match capture_state {
-        "captured" => IntuneArtifactStatus::Available,
-        "capped" => IntuneArtifactStatus::Capped,
-        "absent" => IntuneArtifactStatus::Missing,
-        "accessDenied" => IntuneArtifactStatus::PermissionDenied,
-        "skipped" => IntuneArtifactStatus::Skipped,
-        "unsupported" => IntuneArtifactStatus::Unsupported,
-        "parseFailed" => IntuneArtifactStatus::ParseFailed,
-        other => panic!("unknown captureState {other:?}"),
-    }
+    support::scenario_root(CORPUS, scenario)
 }
 
 fn payload_for(path: &Path) -> StoreArtifactPayload {
@@ -104,7 +90,9 @@ fn load_bundle(scenario: &str, manifest: &Value) -> Vec<StoreSourceArtifact> {
                     artifact["sourceKind"].clone(),
                 )
                 .expect("sourceKind"),
-                status: status_for(artifact["captureState"].as_str().expect("captureState")),
+                status: artifact_status_for_capture_state(
+                    artifact["captureState"].as_str().expect("captureState"),
+                ),
                 detail: artifact["detail"].as_str().map(str::to_owned),
                 observed_at_utc: artifact["capturedUtc"]
                     .as_str()
@@ -128,6 +116,13 @@ fn load_scenario(scenario: &str) -> (StoreAnalysis, Value) {
     )
 }
 
+/// The evidence ids cited by an array, **in the order the reducer emitted them**.
+///
+/// Deliberately not `support::sorted_evidence_ids`. This leaf asserts citation
+/// order: a transaction's `evidence` is positionally in step with its
+/// `observations` (see `assert_transactions`), so sorting here would silently
+/// retire that pairing. It also panics rather than defaulting, because a missing
+/// `evidenceId` in this corpus is a corpus bug, not an absent citation.
 fn evidence_ids(value: &Value) -> Vec<String> {
     value
         .as_array()

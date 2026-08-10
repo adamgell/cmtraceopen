@@ -20,10 +20,13 @@ use cmtraceopen_parser::intune::apps::windows::win32::{
     analyze_win32_bundle, derive_findings, redacted_export_projection, Win32Analysis,
     Win32SourceInput,
 };
-use cmtraceopen_parser::intune::evidence::IntuneAccessState;
 use cmtraceopen_parser::intune::ime_parser::parse_ime_content;
 use serde_json::{json, Value};
-use support::{load_json, mutated, scenario_names, validate_scenario, Failures};
+use support::{
+    access_state_for_capture_state, load_json, mutated, scenario_names, validate_scenario, Failures,
+};
+
+const CORPUS: &str = "apps/windows/win32";
 
 /// The scenario matrix issue #357 requires, pinned so that adding or removing a
 /// scenario is a deliberate, compile-visible change rather than a silent drift.
@@ -51,25 +54,11 @@ const SCENARIOS: [&str; 20] = [
 ];
 
 fn corpus() -> PathBuf {
-    support::corpus_root("apps/windows/win32")
+    support::corpus_root(CORPUS)
 }
 
-/// The access state a manifest capture state declares.
-///
-/// Kept here rather than in the crate because it translates the *fixture*
-/// vocabulary into the library's, and the library must never need to know how a
-/// fixture spells things.
-fn access_state(capture_state: &str) -> IntuneAccessState {
-    match capture_state {
-        "captured" => IntuneAccessState::Available,
-        "capped" => IntuneAccessState::Capped,
-        "absent" => IntuneAccessState::Missing,
-        "accessDenied" => IntuneAccessState::PermissionDenied,
-        "skipped" => IntuneAccessState::Skipped,
-        "unsupported" => IntuneAccessState::Unsupported,
-        "parseFailed" => IntuneAccessState::Failed,
-        other => panic!("unknown captureState {other:?}"),
-    }
+fn scenario_root(scenario: &str) -> PathBuf {
+    support::scenario_root(CORPUS, scenario)
 }
 
 fn inputs_for(scenario_root: &Path, manifest: &Value) -> Vec<Win32SourceInput> {
@@ -95,7 +84,7 @@ fn inputs_for(scenario_root: &Path, manifest: &Value) -> Vec<Win32SourceInput> {
                     .expect("originalBasename")
                     .to_owned(),
                 file_path: artifact["sanitizedSourcePath"].as_str().map(str::to_owned),
-                access_state: access_state(
+                access_state: access_state_for_capture_state(
                     artifact["captureState"].as_str().expect("captureState"),
                 ),
                 content,
@@ -106,7 +95,7 @@ fn inputs_for(scenario_root: &Path, manifest: &Value) -> Vec<Win32SourceInput> {
 }
 
 fn load(scenario: &str) -> (Win32Analysis, Value, Value, PathBuf) {
-    let root = corpus().join(scenario);
+    let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let analysis = analyze_win32_bundle(&inputs_for(&root, &manifest));
@@ -1066,7 +1055,7 @@ fn a_bare_prefix_probe_cannot_hide_an_undeclared_profile_path() {
 /// would be sensitive-shaped fixture material nothing proves redacted.
 #[test]
 fn a_privacy_probe_without_a_redaction_assertion_is_rejected() {
-    let root = corpus().join("privacy-redaction");
+    let root = scenario_root("privacy-redaction");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let corrupted = mutated(
@@ -1090,7 +1079,7 @@ fn a_privacy_probe_without_a_redaction_assertion_is_rejected() {
 /// partially proven redacted.
 #[test]
 fn a_probe_covered_only_by_a_substring_needle_is_rejected() {
-    let root = corpus().join("privacy-redaction");
+    let root = scenario_root("privacy-redaction");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     // Replace the exact-path needle with an unrelated one; the path probe is
@@ -1127,7 +1116,7 @@ fn a_probe_covered_only_by_a_substring_needle_is_rejected() {
 /// the fixture with nothing proving it redacted.
 #[test]
 fn a_non_array_privacy_probes_declaration_is_rejected() {
-    let root = corpus().join("privacy-redaction");
+    let root = scenario_root("privacy-redaction");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let corrupted = mutated(
@@ -1152,7 +1141,7 @@ fn a_non_array_privacy_probes_declaration_is_rejected() {
 /// which the old whole-descriptor substring strip silently hid.
 #[test]
 fn a_probe_leaking_into_a_descriptor_output_field_is_detected() {
-    let root = corpus().join("privacy-redaction");
+    let root = scenario_root("privacy-redaction");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let corrupted = mutated(
@@ -1201,7 +1190,7 @@ fn a_probe_leaking_into_a_descriptor_output_field_is_detected() {
 /// smuggled in as an unasserted needle must stay detectable.
 #[test]
 fn a_non_probe_needle_carrying_forbidden_material_is_rejected() {
-    let root = corpus().join("privacy-redaction");
+    let root = scenario_root("privacy-redaction");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let mut corrupted = expected.clone();
@@ -1245,7 +1234,7 @@ fn a_non_probe_needle_carrying_forbidden_material_is_rejected() {
 
 #[test]
 fn a_coverage_status_contradicting_the_capture_state_is_rejected() {
-    let root = corpus().join("incomplete-bundle-missing-appworkload");
+    let root = scenario_root("incomplete-bundle-missing-appworkload");
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
     let corrupted = mutated(&expected, "/coverage/1/status", json!("available"));

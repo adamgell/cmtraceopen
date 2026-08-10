@@ -23,7 +23,7 @@ use cmtraceopen_parser::intune::device::windows::configuration::{
     ConfigurationSetting, ConfigurationSnapshot, INTUNE_CONFIGURATION_SCHEMA_VERSION,
 };
 use cmtraceopen_parser::intune::evidence::{
-    IntuneArtifactCoverage, IntuneArtifactStatus, IntuneEvidenceRef, IntuneNamedValue,
+    IntuneArtifactCoverage, IntuneEvidenceRef, IntuneNamedValue,
     IntuneObservationContext, IntuneParseState, IntuneProvenance, IntuneSensitivity,
     IntuneSourceKind, IntuneTimestamp, IntuneTimestampKind,
 };
@@ -31,7 +31,10 @@ use cmtraceopen_parser::intune::normalized::{
     NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,
     NormalizedWindowsEvent, INTUNE_NORMALIZED_SCHEMA_VERSION,
 };
-use support::{load_json, mutated, scenario_names, validate_scenario, Failures};
+use support::{
+    artifact_status_for_capture_state, load_json, mutated, scenario_names, validate_scenario, wire,
+    Failures,
+};
 
 const CORPUS: &str = "device/windows/configuration";
 
@@ -91,7 +94,7 @@ fn corpus_root() -> PathBuf {
 }
 
 fn scenario_root(scenario: &str) -> PathBuf {
-    corpus_root().join(scenario)
+    support::scenario_root(CORPUS, scenario)
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -166,7 +169,7 @@ fn coverage_entry(artifact: &Value) -> IntuneArtifactCoverage {
             .expect("artifact declares an id")
             .to_owned(),
         family: artifact["family"].as_str().unwrap_or_default().to_owned(),
-        status: status_for(capture_state),
+        status: artifact_status_for_capture_state(capture_state),
         detail: None,
         observed_at_utc: artifact["capturedUtc"]
             .as_str()
@@ -174,27 +177,6 @@ fn coverage_entry(artifact: &Value) -> IntuneArtifactCoverage {
             .to_owned(),
         evidence: Vec::new(),
     }
-}
-
-/// The manifest's capture state, mapped onto the shared coverage vocabulary.
-///
-/// Kept explicit rather than derived from the harness table so a drift in either
-/// direction is a compile-visible change here.
-fn status_for(capture_state: &str) -> IntuneArtifactStatus {
-    match capture_state {
-        "captured" => IntuneArtifactStatus::Available,
-        "capped" => IntuneArtifactStatus::Capped,
-        "absent" => IntuneArtifactStatus::Missing,
-        "accessDenied" => IntuneArtifactStatus::PermissionDenied,
-        "skipped" => IntuneArtifactStatus::Skipped,
-        "unsupported" => IntuneArtifactStatus::Unsupported,
-        "parseFailed" => IntuneArtifactStatus::ParseFailed,
-        other => panic!("unknown captureState {other:?}"),
-    }
-}
-
-fn wire<T: serde::Serialize>(value: &T) -> Value {
-    serde_json::to_value(value).expect("shared contract types serialize")
 }
 
 /// The semantic projection compared against `expected.json`.

@@ -12,7 +12,7 @@
 //! would silently classify as an unknown artifact.
 
 use crate::intune::evidence::{
-    IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneSourceKind,
+    artifact_status_for_access_state, IntuneAccessState, IntuneArtifactCoverage, IntuneSourceKind,
 };
 
 use super::models::Win32SourceKind;
@@ -224,22 +224,6 @@ pub fn classify_artifact(
     }
 }
 
-/// Map a caller-declared access state onto the shared coverage status.
-///
-/// Binding these two vocabularies in one place is what stops a bundle declaring
-/// an artifact absent and then reporting coverage for it as available.
-pub(super) fn coverage_status(access_state: &IntuneAccessState) -> IntuneArtifactStatus {
-    match access_state {
-        IntuneAccessState::Available => IntuneArtifactStatus::Available,
-        IntuneAccessState::Missing => IntuneArtifactStatus::Missing,
-        IntuneAccessState::PermissionDenied => IntuneArtifactStatus::PermissionDenied,
-        IntuneAccessState::Capped => IntuneArtifactStatus::Capped,
-        IntuneAccessState::Skipped => IntuneArtifactStatus::Skipped,
-        IntuneAccessState::Failed => IntuneArtifactStatus::ParseFailed,
-        IntuneAccessState::Unsupported => IntuneArtifactStatus::Unsupported,
-    }
-}
-
 /// The shared source kind that matches a Win32 artifact kind.
 pub(super) fn intune_source_kind(kind: Win32SourceKind) -> IntuneSourceKind {
     match kind {
@@ -273,7 +257,7 @@ pub(super) fn artifact_coverage(
     IntuneArtifactCoverage {
         artifact_id: input.artifact_id.clone(),
         family: coverage_family(kind).to_owned(),
-        status: coverage_status(&input.access_state),
+        status: artifact_status_for_access_state(&input.access_state),
         detail,
         observed_at_utc: input.captured_at_utc.clone().unwrap_or_default(),
         evidence: Vec::new(),
@@ -403,27 +387,7 @@ mod tests {
         assert_eq!(split_rotation("aé.lo"), ("aé.lo".to_string(), Some(0)));
     }
 
-    #[test]
-    fn every_access_state_maps_to_exactly_one_coverage_status() {
-        for (state, status) in [
-            (
-                IntuneAccessState::Available,
-                IntuneArtifactStatus::Available,
-            ),
-            (IntuneAccessState::Missing, IntuneArtifactStatus::Missing),
-            (
-                IntuneAccessState::PermissionDenied,
-                IntuneArtifactStatus::PermissionDenied,
-            ),
-            (IntuneAccessState::Capped, IntuneArtifactStatus::Capped),
-            (IntuneAccessState::Skipped, IntuneArtifactStatus::Skipped),
-            (IntuneAccessState::Failed, IntuneArtifactStatus::ParseFailed),
-            (
-                IntuneAccessState::Unsupported,
-                IntuneArtifactStatus::Unsupported,
-            ),
-        ] {
-            assert_eq!(coverage_status(&state), status);
-        }
-    }
+    // `every_access_state_maps_to_exactly_one_coverage_status` moved to
+    // `crate::intune::evidence` with the mapping it asserts, where it now also
+    // pins the inverse direction the Microsoft Store lane depends on.
 }
