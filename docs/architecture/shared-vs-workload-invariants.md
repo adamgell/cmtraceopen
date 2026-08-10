@@ -24,7 +24,7 @@ PR with its own issue, not a refactor.**
 |---|---|---|
 | Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Additive-only **for the serialized wire format**: append variants and `Option<T>` fields so older readers keep parsing newer output. This is not a Rust API compatibility claim. None of these types are `#[non_exhaustive]`, so adding a variant or a public field is a breaking change for downstream `match` arms and struct literals, and `cmtraceopen-parser` is published. Additive wire changes still need a semver-major crate release, or `#[non_exhaustive]` first. |
 | `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `crates/cmtraceopen-parser/src/intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
-| Redaction **grammar** (which byte patterns are masked and how) | `crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `win32/redaction.rs` lines 9-15. |
+| Redaction **grammar** (which byte patterns are masked and how) | `crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines 9-15. |
 | Fixture corpus envelope: manifest version, path safety, byte-count truth, file/manifest closure, synthetic marker, privacy scan | `crates/cmtraceopen-parser/tests/support/mod.rs` | Every Intune corpus. |
 | Fixture `captureState` -> library vocabulary | `crates/cmtraceopen-parser/tests/support/mod.rs` (`artifact_status_for_capture_state`, `access_state_for_capture_state`) | The collector boundary the fixtures stand in for. The access-state form is the status form composed with the crate's own mapping, so a fixture can never disagree with the crate about what `parseFailed` means. |
 | The ADR-001 *directional doctrine* as prose | `docs/architecture/decisions/ADR-001-evidence-strength-confidence.md` (addendum) | The sentence is shared. The mechanism is not; see below. |
@@ -37,7 +37,7 @@ PR with its own issue, not a refactor.**
   completely. A complete framed record inside a capped artifact is authentic
   evidence and may prove a terminal outcome, including `Succeeded`. What capping
   costs is *confidence*: `High` is demoted to `Medium`, never more.
-  - `intune/apps/windows/win32/reducer.rs` ~1687-1716 (`confidence_for`).
+  - `crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs` ~1687-1716 (`confidence_for`).
   - Test: `a_capped_artifact_proves_a_terminal_outcome_only_at_demoted_confidence`,
     same file ~2262-2286.
 - **Autopilot / Compliance:** the opposite. Assessability is an allowlist
@@ -142,11 +142,11 @@ Configuration produce a link its evidence does not support.
 ### 7. Redaction: the grammar is shared, the projection is not
 
 The masking grammar has exactly one owner
-(`intune/apps/windows/common/redaction.rs::redact_text`). What each lane
+(`crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs`, `redact_text`). What each lane
 *classifies as sensitive*, and what its redacted-export equality scope is, is a
 property of that analyzer's contract and is not shared.
 
-The dividing line is stated in `intune/apps/windows/win32/redaction.rs` lines
+The dividing line is stated in `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines
 9-15: the module "owns only the *projection*: which Win32 fields are classified
 sensitive is a property of this analyzer's contract, not of the shared grammar."
 The same file records why the grammar has one owner: a local fork of the rules
@@ -154,7 +154,7 @@ previously reintroduced an already-fixed JSON-escaped-path bug.
 
 ### 8. Test helpers: `evidence_ids` ordering is per-corpus
 
-`tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
+`crates/cmtraceopen-parser/tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
 for consumers whose contract is the *set* of citations. Compliance uses it and
 sorts both sides of every such assertion.
 
