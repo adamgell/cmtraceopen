@@ -158,3 +158,49 @@ describe("allGroupKeys", () => {
     expect(allGroupKeys([record({})], []).size).toBe(0);
   });
 });
+
+describe("group key encoding", () => {
+  it("keeps distinct ancestries distinct when a value contains the delimiters", () => {
+    // Unencoded, a provider literally named "x/level=Error" produces the same key as the
+    // Error subgroup of provider "x", and collapsing one would collapse the other.
+    const rows = buildGroupedRows(
+      [
+        record({ id: 1, provider: "x/level=Error", level: "Information" }),
+        record({ id: 2, provider: "x", level: "Error" }),
+      ],
+      ["provider", "level"],
+      new Set()
+    );
+
+    const keys = rows.flatMap((r) => (r.kind === "group" ? [r.key] : []));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("collapsing one group does not collapse an unrelated one", () => {
+    const all = buildGroupedRows(
+      [
+        record({ id: 1, provider: "x/level=Error", level: "Information" }),
+        record({ id: 2, provider: "x", level: "Error" }),
+      ],
+      ["provider", "level"],
+      new Set()
+    );
+    const target = all.find((r) => r.kind === "group" && r.label === "Error");
+    expect(target?.kind).toBe("group");
+    const targetKey = target && target.kind === "group" ? target.key : "";
+
+    const collapsed = buildGroupedRows(
+      [
+        record({ id: 1, provider: "x/level=Error", level: "Information" }),
+        record({ id: 2, provider: "x", level: "Error" }),
+      ],
+      ["provider", "level"],
+      new Set([targetKey])
+    );
+
+    // Exactly one record disappears; the other ancestry is untouched.
+    const visible = collapsed.filter((r) => r.kind === "record");
+    expect(visible).toHaveLength(1);
+    expect(visible[0].record.id).toBe(1);
+  });
+});

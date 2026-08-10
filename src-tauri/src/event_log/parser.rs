@@ -178,14 +178,18 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
         let timestamp_str = system.time_created.clone().unwrap_or_default();
         let timestamp_epoch = parse_timestamp_to_epoch_ms(&timestamp_str);
 
-        let mut event_data = extract_event_data(&parsed);
+        let EventFields {
+            mut fields,
+            insertions,
+        } = extract_event_data(&parsed);
 
         // Same treatment as the live path: a trace-backed event carries its message as hex, and
         // without decoding it the row is a wall of digits.
         let payload = cmtraceopen_parser::event_payload::decode_payload_in(&parsed)
             .map(|decoded| sanitize_control_chars(&decoded.text));
         if let Some(text) = &payload {
-            event_data.push(EvtxField {
+            // Appended after every real field, so it cannot disturb the positional insertions.
+            fields.push(EvtxField {
                 name: "EventPayload".to_string(),
                 value: text.clone(),
             });
@@ -194,9 +198,9 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = describe_event(&provider, event_id, &event_data)
+        let message = describe_event(&provider, event_id, &insertions)
             .or(payload)
-            .unwrap_or_else(|| build_message(&event_data));
+            .unwrap_or_else(|| build_message(&fields));
 
         let mapped = super::maps::apply_global(&channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
@@ -210,7 +214,7 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
             level: evtx_level,
             computer,
             message,
-            event_data,
+            event_data: fields,
             raw_xml,
             source_label: source_label.clone(),
             task: system.task,
@@ -254,8 +258,9 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
 /// A `Data` element with no `Name` attribute is numbered by its position, matching how the event
 /// message template refers to it. Values are sanitized to strip control characters that would
 /// render as unexpected glyphs.
-fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<EvtxField> {
+fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> EventFields {
     let mut fields = Vec::new();
+    let mut insertions = Vec::new();
     let mut unnamed = 0usize;
 
     let containers = root
@@ -271,8 +276,13 @@ fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<Evt
     // find no children, and drop the only value the event carried.
     let push_field = |child: &cmtraceopen_parser::eventmap::EventNode,
                       fields: &mut Vec<EvtxField>,
+                      insertions: &mut Vec<String>,
                       unnamed: &mut usize| {
         let value = sanitize_control_chars(child.text.as_deref().unwrap_or_default());
+        // Recorded even when empty. The provider's message template addresses fields by position,
+        // so skipping one here shifts every later %N and renders the description with the wrong
+        // values substituted into it, which reads as fact.
+        insertions.push(value.clone());
         if value.is_empty() {
             return;
         }
@@ -292,16 +302,26 @@ fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<Evt
     for container in containers {
         for child in &container.children {
             if child.text.is_some() || child.children.is_empty() {
-                push_field(child, &mut fields, &mut unnamed);
+                push_field(child, &mut fields, &mut insertions, &mut unnamed);
             } else {
                 for grandchild in &child.children {
-                    push_field(grandchild, &mut fields, &mut unnamed);
+                    push_field(grandchild, &mut fields, &mut insertions, &mut unnamed);
                 }
             }
         }
     }
 
-    fields
+    EventFields { fields, insertions }
+}
+
+/// What an event's data section yielded, in the two shapes that are needed.
+///
+/// They differ, and conflating them corrupts messages. The display list omits fields the provider
+/// left empty, because a column of blanks is noise. The insertion list keeps them, because the
+/// message template addresses fields by position and a gap shifts every later reference.
+struct EventFields {
+    fields: Vec<EvtxField>,
+    insertions: Vec<String>,
 }
 
 /// Renders the provider's own description for this event, when metadata for it is loaded.
@@ -313,13 +333,12 @@ fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<Evt
 /// A partially rendered description is rejected rather than shown. If the template references
 /// insertions the event did not supply, the metadata and the event disagree, and a sentence with
 /// `%4` embedded in it is less honest than the field summary it would replace.
-fn describe_event(provider: &str, event_id: u32, event_data: &[EvtxField]) -> Option<String> {
+fn describe_event(provider: &str, event_id: u32, insertions: &[String]) -> Option<String> {
     let metadata = super::provider_db::provider(provider)?;
     let event = metadata.event(event_id, None)?;
     let template = event.description.as_deref()?;
 
-    let insertions: Vec<String> = event_data.iter().map(|field| field.value.clone()).collect();
-    let rendered = cmtraceopen_parser::provider::render_description(template, &insertions);
+    let rendered = cmtraceopen_parser::provider::render_description(template, insertions);
     if rendered.is_complete() {
         Some(super::sanitize_control_chars(&rendered.text))
     } else {
@@ -357,7 +376,11 @@ mod tests {
     }
 
     fn fields_of(xml: &str) -> Vec<EvtxField> {
-        extract_event_data(&parse(xml))
+        extract_event_data(&parse(xml)).fields
+    }
+
+    fn insertions_of(xml: &str) -> Vec<String> {
+        extract_event_data(&parse(xml)).insertions
     }
 
     #[test]
@@ -440,6 +463,41 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "PolicyName");
         assert_eq!(fields[1].value, "C:\\app.exe");
+    }
+
+    #[test]
+    fn an_empty_field_still_holds_its_insertion_position() {
+        // The provider's template addresses fields by position. Dropping the empty one would make
+        // %3 resolve to what %4 said, and the rendered description would state it as fact.
+        let xml = r#"<Event><EventData>
+                 <Data Name="First">alpha</Data>
+                 <Data Name="Second"></Data>
+                 <Data Name="Third">gamma</Data>
+               </EventData></Event>"#;
+
+        assert_eq!(insertions_of(xml), vec!["alpha", "", "gamma"]);
+        // The display list still omits the blank, because a column of blanks is noise.
+        assert_eq!(
+            fields_of(xml)
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First", "Third"]
+        );
+    }
+
+    #[test]
+    fn a_leading_empty_field_does_not_shift_the_rest() {
+        let xml = "<Event><EventData><Data></Data><Data>second</Data></EventData></Event>";
+        assert_eq!(insertions_of(xml), vec!["", "second"]);
+    }
+
+    #[test]
+    fn insertions_cover_user_data_too() {
+        let xml = r#"<Event><UserData><Wrapper>
+                 <A>one</A><B></B><C>three</C>
+               </Wrapper></UserData></Event>"#;
+        assert_eq!(insertions_of(xml), vec!["one", "", "three"]);
     }
 
     #[test]
@@ -554,26 +612,27 @@ mod tests {
 mod description_tests {
     use super::*;
 
-    fn fields(values: &[(&str, &str)]) -> Vec<EvtxField> {
+    /// Positional insertions, which is what a description template consumes.
+    ///
+    /// Names are kept in the call sites for readability but are not what the template addresses;
+    /// it refers to fields by position, which is why the insertion list carries empties.
+    fn insertions(values: &[(&str, &str)]) -> Vec<String> {
         values
             .iter()
-            .map(|(name, value)| EvtxField {
-                name: name.to_string(),
-                value: value.to_string(),
-            })
+            .map(|(_name, value)| value.to_string())
             .collect()
     }
 
     #[test]
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
-        let data = fields(&[("HRESULT", "0x80180005")]);
+        let data = insertions(&[("HRESULT", "0x80180005")]);
         assert!(describe_event("Nobody-Has-This-Provider", 1, &data).is_none());
     }
 
     #[test]
     fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
-        let data = fields(&[("X", "1")]);
+        let data = insertions(&[("X", "1")]);
         assert!(describe_event("Still-Not-Loaded", 999_999, &data).is_none());
     }
 
@@ -587,7 +646,7 @@ mod description_tests {
             .expect("database has a parent directory");
         super::super::provider_db::load_directory(directory).expect("databases load");
 
-        let data = fields(&[("HRESULT", "0x80180005")]);
+        let data = insertions(&[("HRESULT", "0x80180005")]);
         let described = describe_event(
             "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
             2,
@@ -612,8 +671,11 @@ mod description_tests {
         super::super::provider_db::load_directory(directory).expect("databases load");
 
         // A provider that genuinely is not in a Windows capture.
-        assert!(
-            describe_event("Definitely-Not-A-Real-Provider", 1, &fields(&[("a", "b")])).is_none()
-        );
+        assert!(describe_event(
+            "Definitely-Not-A-Real-Provider",
+            1,
+            &insertions(&[("a", "b")])
+        )
+        .is_none());
     }
 }

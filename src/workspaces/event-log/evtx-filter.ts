@@ -163,7 +163,9 @@ export function buildGroupedRows(
     }
 
     for (const [value, bucket] of buckets) {
-      const key = `${parentKey}/${field}=${value}`;
+      // Encoded, so a value containing the delimiters cannot forge another group's ancestry. Two
+      // distinct paths sharing a key would make collapsing one collapse the other.
+      const key = `${parentKey}/${field}=${encodeURIComponent(value)}`;
       const collapsed = collapsedKeys.has(key);
       rows.push({
         kind: "group",

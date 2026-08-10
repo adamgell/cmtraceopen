@@ -187,18 +187,24 @@ mod tests {
 
     #[test]
     fn every_level_maps_without_panicking() {
-        for level in [
-            EvtxLevel::Critical,
-            EvtxLevel::Error,
-            EvtxLevel::Warning,
-            EvtxLevel::Information,
-            EvtxLevel::Verbose,
+        // Every arm asserted, not just the two ends. The loop previously only checked the
+        // timestamp, which is independent of the level, so a wrong arm for Warning, Error or
+        // Information passed.
+        for (level, expected) in [
+            (EvtxLevel::Critical, TimelineSeverity::Critical),
+            (EvtxLevel::Error, TimelineSeverity::Error),
+            (EvtxLevel::Warning, TimelineSeverity::Warning),
+            (EvtxLevel::Information, TimelineSeverity::Info),
+            (EvtxLevel::Verbose, TimelineSeverity::Verbose),
         ] {
             let item = from_event(&record(1, "x", level)).expect("placed");
             assert_eq!(item.timestamp_ms, 1);
+            assert_eq!(
+                item.severity, expected,
+                "{level:?} must map to {expected:?}"
+            );
+            assert_eq!(severity_of(level), expected);
         }
-        assert_eq!(severity_of(EvtxLevel::Critical), TimelineSeverity::Critical);
-        assert_eq!(severity_of(EvtxLevel::Verbose), TimelineSeverity::Verbose);
     }
 
     #[test]

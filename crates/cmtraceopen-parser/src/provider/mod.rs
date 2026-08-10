@@ -148,15 +148,20 @@ impl ProviderMetadata {
     /// Only bits the provider declares are named. Undeclared bits are ignored rather than reported
     /// as unknown keywords, because the reserved high bits are set by the system on most events.
     pub fn keyword_names(&self, mask: u64) -> Vec<&str> {
-        let mut names = Vec::new();
-        for (raw_bit, name) in &self.keywords {
-            if let Ok(bit) = raw_bit.parse::<u64>() {
-                if bit != 0 && mask & bit == bit {
-                    names.push(name.as_str());
-                }
-            }
-        }
-        names
+        // Sorted by bit value, not by key. The map is keyed by the decimal bit as a string, so its
+        // own order is lexicographic: "1", "16", "2", "32", "4". Returning that would put the names
+        // in an order matching neither the mask nor the provider's manifest, which reads as
+        // meaningful when it is an artefact of string comparison.
+        let mut matched: Vec<(u64, &str)> = self
+            .keywords
+            .iter()
+            .filter_map(|(raw_bit, name)| {
+                let bit = raw_bit.parse::<u64>().ok()?;
+                (bit != 0 && mask & bit == bit).then_some((bit, name.as_str()))
+            })
+            .collect();
+        matched.sort_by_key(|(bit, _)| *bit);
+        matched.into_iter().map(|(_, name)| name).collect()
     }
 }
 
@@ -448,5 +453,45 @@ mod tests {
         assert_eq!(meta.events[0].keywords, vec![576_460_752_303_423_488]);
         assert_eq!(meta.source_os_build, Some(26200));
         assert_eq!(meta.task_name(1), Some("None"));
+    }
+
+    #[test]
+    fn keyword_names_come_back_in_bit_order_not_key_order() {
+        // The map is keyed by the decimal bit as a string, so its own order is "1", "16", "2",
+        // "32", "4". Returning that reads as meaningful when it is an artefact of string sorting.
+        let mut keywords = std::collections::BTreeMap::new();
+        for (bit, name) in [
+            ("1", "Startup"),
+            ("2", "Shutdown"),
+            ("4", "Network"),
+            ("16", "Disk"),
+            ("32", "Memory"),
+        ] {
+            keywords.insert(bit.to_string(), name.to_string());
+        }
+        let metadata = ProviderMetadata {
+            keywords,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            metadata.keyword_names(0b11_0111),
+            vec!["Startup", "Shutdown", "Network", "Disk", "Memory"]
+        );
+    }
+
+    #[test]
+    fn only_the_bits_present_in_the_mask_are_named() {
+        let mut keywords = std::collections::BTreeMap::new();
+        keywords.insert("1".to_string(), "Startup".to_string());
+        keywords.insert("16".to_string(), "Disk".to_string());
+        keywords.insert("32".to_string(), "Memory".to_string());
+        let metadata = ProviderMetadata {
+            keywords,
+            ..Default::default()
+        };
+
+        assert_eq!(metadata.keyword_names(0b10_0001), vec!["Startup", "Memory"]);
+        assert!(metadata.keyword_names(0).is_empty());
     }
 }

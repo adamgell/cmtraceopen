@@ -24,7 +24,17 @@ use app_lib::event_log::models::EvtxParseResult;
 use app_lib::event_log::parser::parse_evtx_files;
 
 fn fixture() -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var_os("CMTRACE_EVTX_FIXTURE")?);
+    let Some(raw) = std::env::var_os("CMTRACE_EVTX_FIXTURE") else {
+        // Said out loud rather than passing silently. Seven tests reporting ok with nothing run is
+        // the same failure this suite exists to catch: an empty result that reads as a verified
+        // one. Visible with `cargo test -- --nocapture`, and in CI logs.
+        eprintln!(
+            "SKIP: CMTRACE_EVTX_FIXTURE is not set, so nothing in this file actually ran. \
+             Point it at an .evtx file to exercise the real parse path."
+        );
+        return None;
+    };
+    let path = PathBuf::from(raw);
     assert!(
         path.is_file(),
         "CMTRACE_EVTX_FIXTURE is set but {} is not a file",

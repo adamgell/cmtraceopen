@@ -668,18 +668,11 @@ mod live_service_tests {
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn a_time_filter_is_applied_by_the_service_and_narrows_the_result() {
-        let wide = query_channel_filtered(
-            CHANNEL,
-            &EventQueryFilter {
-                time: Some(TimeWindow::Last {
-                    milliseconds: 30 * 24 * 60 * 60 * 1000,
-                }),
-                ..Default::default()
-            },
-            None,
-        )
-        .expect("30 day query succeeds");
-
+        // The narrow window is queried first. Running the wide one first leaves a gap in which a
+        // newly written event lands inside the one-hour result and outside the thirty-day one
+        // already collected, failing the assertion for a reason that has nothing to do with
+        // filtering. Querying narrow first makes any new event land in the wide result, which is
+        // the direction the assertion tolerates.
         let narrow = query_channel_filtered(
             CHANNEL,
             &EventQueryFilter {
@@ -691,6 +684,18 @@ mod live_service_tests {
             None,
         )
         .expect("1 hour query succeeds");
+
+        let wide = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 30 * 24 * 60 * 60 * 1000,
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("30 day query succeeds");
 
         assert!(
             narrow.len() <= wide.len(),

@@ -86,7 +86,11 @@ impl ProviderDb {
     pub fn open(path: &Path) -> Result<Self, String> {
         let connection = Connection::open_with_flags(
             path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+            // Read-only, and deliberately without SQLITE_OPEN_URI. With that flag any path
+            // starting with "file:" is parsed as a URI and its parameters honoured, including
+            // vfs=. These paths come from scanning a directory the operator pointed at, so a
+            // file dropped there could otherwise choose how SQLite opens it.
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|error| format!("cannot open provider database {}: {error}", path.display()))?;
 
