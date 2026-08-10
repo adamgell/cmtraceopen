@@ -24,31 +24,37 @@ export function EvtxCoverageBanner() {
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary = summarizeCoverageGaps(gaps);
 
-  // The live region stays mounted and empty rather than appearing with its content. A screen
-  // reader announces changes inside a region it was already tracking; one that arrives already
-  // populated is usually read as ordinary page content, so the first gaps went unannounced.
-  if (gaps.length === 0) {
-    return <div role="status" aria-live="polite" style={{ display: "none" }} />;
-  }
+  // The live region is always rendered, and the banner content appears inside it. A screen reader
+  // announces changes within a region it was already tracking, so a region that arrives already
+  // populated is read as ordinary page content and the first gaps go unannounced. It must also
+  // stay in the accessibility tree while empty, which display:none would prevent, so an empty
+  // region is simply an unstyled element with no children.
+  const empty = gaps.length === 0;
 
   return (
     <div
       role="status"
       aria-live="polite"
-      style={{
-        flexShrink: 0,
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-        padding: "6px 12px",
-        fontFamily: LOG_UI_FONT_FAMILY,
-        fontSize,
-        lineHeight: `${rowLineHeight}px`,
-        color: tokens.colorPaletteDarkOrangeForeground1,
-        backgroundColor: tokens.colorPaletteDarkOrangeBackground1,
-        borderBottom: `1px solid ${tokens.colorPaletteDarkOrangeBorderActive}`,
-      }}
+      style={
+        empty
+          ? undefined
+          : {
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+              padding: "6px 12px",
+              fontFamily: LOG_UI_FONT_FAMILY,
+              fontSize,
+              lineHeight: `${rowLineHeight}px`,
+              color: tokens.colorPaletteDarkOrangeForeground1,
+              backgroundColor: tokens.colorPaletteDarkOrangeBackground1,
+              borderBottom: `1px solid ${tokens.colorPaletteDarkOrangeBorderActive}`,
+            }
+      }
     >
+      {empty ? null : (
+        <>
       <div
         style={{ display: "flex", alignItems: "center", gap: "8px" }}
       >
@@ -70,6 +76,8 @@ export function EvtxCoverageBanner() {
             </li>
           ))}
         </ul>
+      )}
+        </>
       )}
     </div>
   );

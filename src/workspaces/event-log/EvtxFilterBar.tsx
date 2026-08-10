@@ -166,12 +166,12 @@ export function EvtxFilterBar() {
       });
       if (!destination) return;
       setExportState("Exporting...");
-      // Only the XML and JSON formats read rawXml, and it dominates the payload: sending it for a
-      // delimited export serializes every record's XML across the IPC bridge for nothing, which on
-      // a hundred-thousand-record export is the bulk of the transfer.
+      // The delimited writers read neither rawXml nor eventData, and rawXml dominates the payload:
+      // sending them for a CSV export serializes every record's XML and field list across the IPC
+      // bridge for nothing, which on a hundred-thousand-record export is the bulk of the transfer.
       const payload =
         format.value === "csv" || format.value === "tsv"
-          ? records.map(({ rawXml: _rawXml, ...rest }) => rest)
+          ? records.map(({ rawXml: _rawXml, eventData: _eventData, ...rest }) => rest)
           : records;
       const bytes = await invoke<unknown>("evtx_export_records", {
         records: payload,
@@ -181,7 +181,9 @@ export function EvtxFilterBar() {
       // The IPC boundary is typed by assertion, not by the compiler. A malformed reply would
       // otherwise render as "Exported ... (NaN KB)", which still reads as success, and an operator
       // would believe a file was written.
-      if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+      // A safe integer, not merely finite: a count past Number.MAX_SAFE_INTEGER would format into
+      // a confidently wrong size.
+      if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) {
         setExportState("Export failed: the writer did not report how much it wrote");
         return;
       }
