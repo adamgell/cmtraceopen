@@ -636,7 +636,8 @@ mod tests {
         let has_app = channels.iter().any(|c| c.name == "Application");
         println!("Has Application channel: {has_app}");
 
-        let records = query_channel("Application", Some(3)).expect("query should work");
+        let records =
+            query_channel("Application", &MapRegistry::new(), Some(3)).expect("query should work");
         println!("Application records: {}", records.len());
         for (i, r) in records.iter().enumerate() {
             println!("--- Record {i} ---");
@@ -671,10 +672,16 @@ mod live_service_tests {
 
     const CHANNEL: &str = "Application";
 
+    /// A registry local to the call, replacing what used to be an implicit process global. These
+    /// tests are about the query reaching the service, not about mapping.
+    fn no_maps() -> MapRegistry {
+        MapRegistry::new()
+    }
+
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn an_unfiltered_query_returns_records() {
-        let records = query_channel(CHANNEL, Some(50)).expect("query succeeds");
+        let records = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
         assert!(
             !records.is_empty(),
             "Application channel should have events"
@@ -701,6 +708,8 @@ mod live_service_tests {
                 }),
                 ..Default::default()
             },
+            &no_maps(),
+            &no_maps(),
             None,
         )
         .expect("1 hour query succeeds");
@@ -713,6 +722,8 @@ mod live_service_tests {
                 }),
                 ..Default::default()
             },
+            &no_maps(),
+            &no_maps(),
             None,
         )
         .expect("30 day query succeeds");
@@ -736,6 +747,7 @@ mod live_service_tests {
                 levels: vec![2],
                 ..Default::default()
             },
+            &no_maps(),
             Some(200),
         )
         .expect("level query succeeds");
@@ -762,6 +774,7 @@ mod live_service_tests {
                 }],
                 ..Default::default()
             },
+            &no_maps(),
             Some(50),
         )
         .expect("query succeeds");
@@ -776,8 +789,9 @@ mod live_service_tests {
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn system_fields_are_populated_from_real_events() {
-        let records = query_channel_filtered(CHANNEL, &EventQueryFilter::default(), Some(200))
-            .expect("query succeeds");
+        let records =
+            query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), Some(200))
+                .expect("query succeeds");
 
         assert!(!records.is_empty());
         assert!(
