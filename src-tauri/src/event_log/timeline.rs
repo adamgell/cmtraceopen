@@ -87,7 +87,8 @@ mod tests {
     fn record(timestamp_epoch: i64, message: &str, level: EvtxLevel) -> EvtxRecord {
         EvtxRecord {
             id: 0,
-            event_record_id: 76,
+            // Distinct from event_id below, so a test cannot pass while reading the wrong one.
+            event_record_id: 1234,
             timestamp: String::new(),
             timestamp_epoch,
             provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider"
@@ -168,8 +169,9 @@ mod tests {
                 ..
             } => {
                 assert!(channel.contains("DeviceManagement"));
+                // Distinct values, so mapping event_id to record_id or the reverse fails here.
                 assert_eq!(*event_id, 76);
-                assert_eq!(*record_id, 76);
+                assert_eq!(*record_id, 1234);
             }
             other => panic!("expected an event origin, got {other:?}"),
         }

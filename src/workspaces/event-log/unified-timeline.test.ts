@@ -57,7 +57,11 @@ describe("originDetail", () => {
   });
 
   it("gives channel, provider, event and record for an event", () => {
+    // All four, as the name promises. Asserting only two let a change that dropped the channel or
+    // the provider from the detail line pass.
     const detail = originDetail(eventOrigin);
+    expect(detail).toContain(eventOrigin.channel);
+    expect(detail).toContain(eventOrigin.provider);
     expect(detail).toContain("event 76");
     expect(detail).toContain("record 1234");
   });

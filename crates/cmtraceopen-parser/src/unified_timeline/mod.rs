@@ -23,9 +23,12 @@ use crate::models::log_entry::{LogEntry, Severity};
 pub enum TimelineSeverity {
     /// Diagnostic detail, from a verbose event. Text logs have no equivalent.
     Verbose,
+    /// Ordinary progress. The default, since a line carrying no severity is not a problem.
     #[default]
     Info,
+    /// Something the source flagged as worth noticing but did not treat as a failure.
     Warning,
+    /// A failure the source reported. The highest a text log reaches.
     Error,
     /// Only events carry this; text logs top out at error.
     Critical,
@@ -62,6 +65,9 @@ impl TimelineSeverity {
 
 /// Where a timeline item came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Growable: a third kind of source, such as a registry export or an ETW trace read directly, is a
+// plausible addition. Marking it now keeps that a minor change.
+#[non_exhaustive]
 // rename_all covers the variant names; rename_all_fields is what camel-cases the fields inside a
 // struct variant. Without the second one, event_id went over the wire as "event_id" while the
 // timeline view reads origin.eventId, so every event row rendered undefined.
