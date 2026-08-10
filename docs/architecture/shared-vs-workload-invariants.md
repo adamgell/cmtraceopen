@@ -22,7 +22,7 @@ PR with its own issue, not a refactor.**
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Additive-only **for the serialized wire format**: append variants and `Option<T>` fields so older readers keep parsing newer output. This is not a Rust API compatibility claim. None of these types are `#[non_exhaustive]`, so adding a variant or a public field is a breaking change for downstream `match` arms and struct literals, and `cmtraceopen-parser` is published. Additive wire changes still need a semver-major crate release, or `#[non_exhaustive]` first. |
+| Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Two separate compatibility questions, and only one of them has an "additive" answer. **Wire format:** exactly as `INTUNE_EVIDENCE_SCHEMA_VERSION` states at `crates/cmtraceopen-parser/src/intune/evidence.rs:23-24` — only an optional field, or a variant on an `intune_raw_preserving_string_enum!` type, is additive. The plain `#[derive(Deserialize)]` enums (`IntuneTimestampKind`, `IntuneSensitivity`, `IntuneParseState`, `IntuneAccessState`, `IntuneArtifactStatus`) have no `#[serde(other)]` arm, so an unknown variant is a hard decode error: adding one breaks older readers and bumps the schema version. **Rust API:** no additive guarantee at all. None of these types are `#[non_exhaustive]` and `cmtraceopen-parser` is published, so a new variant or public field breaks downstream `match` arms and struct literals and needs a semver-major release, or `#[non_exhaustive]` first. |
 | `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `crates/cmtraceopen-parser/src/intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
 | Redaction **grammar** (which byte patterns are masked and how) | `crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines 9-15. |
 | Fixture corpus envelope: manifest version, path safety, byte-count truth, file/manifest closure, synthetic marker, privacy scan | `crates/cmtraceopen-parser/tests/support/mod.rs` | Every Intune corpus. |
@@ -159,7 +159,7 @@ for consumers whose contract is the *set* of citations. Compliance uses it and
 sorts both sides of every such assertion.
 
 Microsoft Store keeps its own insertion-ordered, panicking version in
-`tests/intune_windows_microsoft_store.rs`, because that leaf asserts citation
+`crates/cmtraceopen-parser/tests/intune_windows_microsoft_store.rs`, because that leaf asserts citation
 *order*: a transaction's `evidence` is positionally in step with its
 `observations`. Forcing both corpora onto one helper would retire that pairing
 without any test failing.
