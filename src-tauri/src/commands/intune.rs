@@ -56,6 +56,46 @@ struct IntuneAnalysisProgressPayload {
     total_files: Option<usize>,
 }
 
+/// Sink for the verbose GUID-enrichment trace, off unless explicitly asked for.
+///
+/// The detail this carries is an organisation's app inventory: every registry
+/// GUID with its application name, every enriched event name, and every download
+/// name and content id. It was written to `%TEMP%/cmtrace-guid-diag.log` on every
+/// analysis run, without the operator asking, and never cleaned up.
+///
+/// Nobody chose that. It is developer instrumentation for diagnosing GUID
+/// enrichment, and the summary an operator actually needs already goes to the
+/// application log. Set `CMTRACE_INTUNE_GUID_DIAG` to collect the verbose trace
+/// while debugging; leave it unset and nothing is written to disk.
+///
+/// Implements `fmt::Write` so the existing `writeln!` call sites are unchanged
+/// and discard when the trace is off.
+struct GuidDiagLog(Option<String>);
+
+impl GuidDiagLog {
+    fn from_env() -> Self {
+        Self(
+            std::env::var_os("CMTRACE_INTUNE_GUID_DIAG")
+                .filter(|value| !value.is_empty())
+                .map(|_| String::new()),
+        )
+    }
+
+    /// The collected trace, or `None` when collection was off.
+    fn contents(&self) -> Option<&str> {
+        self.0.as_deref().filter(|trace| !trace.is_empty())
+    }
+}
+
+impl FmtWrite for GuidDiagLog {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if let Some(trace) = &mut self.0 {
+            trace.push_str(text);
+        }
+        Ok(())
+    }
+}
+
 /// Analyze Intune Management Extension logs and return structured results.
 ///
 /// Supports either:
@@ -236,7 +276,7 @@ fn analyze_intune_logs_blocking(
     }
 
     // Enrich event and download names using the global GUID registry
-    let mut diag_buffer = String::new();
+    let mut diag_buffer = GuidDiagLog::from_env();
     let mut enriched_events = 0u32;
     let mut enriched_downloads = 0u32;
     let mut missed_events = 0u32;
@@ -347,10 +387,12 @@ fn analyze_intune_logs_blocking(
             "event=guid_enrichment_summary registry={} enriched_events={} missed_events={} enriched_downloads={} missed_downloads={} total_downloads={}",
             guid_registry.len(), enriched_events, missed_events, enriched_downloads, missed_downloads, all_downloads.len()
         );
-        let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
-        if let Ok(mut f) = fs::File::create(&diag_path) {
-            let _ = f.write_all(diag_buffer.as_bytes());
-            log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
+        if let Some(contents) = diag_buffer.contents() {
+            let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
+            if let Ok(mut f) = fs::File::create(&diag_path) {
+                let _ = f.write_all(contents.as_bytes());
+                log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
+            }
         }
     }
 
@@ -1394,6 +1436,74 @@ fn download_signal_rank(state: DownloadSignalState) -> u8 {
         DownloadSignalState::InProgress => 1,
         DownloadSignalState::Success => 2,
         DownloadSignalState::Failed => 3,
+    }
+}
+
+#[cfg(test)]
+mod guid_diag_tests {
+    use super::GuidDiagLog;
+    use std::fmt::Write as _;
+
+    /// Serializes the env-var mutation these tests share; cargo runs them on threads.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_var<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var_os("CMTRACE_INTUNE_GUID_DIAG");
+        match value {
+            Some(value) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", value),
+            None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
+        }
+        let outcome = body();
+        match previous {
+            Some(previous) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", previous),
+            None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
+        }
+        outcome
+    }
+
+    #[test]
+    fn collects_nothing_when_the_trace_was_not_asked_for() {
+        // The trace carries an organisation's app inventory. Unset means nothing is retained, so
+        // there is nothing for the caller to write to disk.
+        with_var(None, || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            assert!(log.contents().is_none(), "no trace may be retained");
+        });
+    }
+
+    #[test]
+    fn an_empty_value_does_not_enable_it() {
+        // CMTRACE_INTUNE_GUID_DIAG= in a shell profile is not a request for the trace.
+        with_var(Some(""), || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            assert!(log.contents().is_none());
+        });
+    }
+
+    #[test]
+    fn collects_the_trace_when_asked_for() {
+        with_var(Some("1"), || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            let trace = log.contents().expect("the trace was requested");
+            assert!(trace.contains("Contoso Payroll"), "got {trace:?}");
+        });
+    }
+
+    #[test]
+    fn an_enabled_but_unused_trace_writes_no_file() {
+        // contents() is what gates the write, so an enabled run that logged nothing must still
+        // produce no file rather than an empty one sitting in TEMP.
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            assert!(log.contents().is_none());
+        });
     }
 }
 
