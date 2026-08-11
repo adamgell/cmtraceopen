@@ -879,6 +879,12 @@ fn signal_evidence(
 /// This is the single enforcement point for the invariant
 /// [`IntuneFinding::is_evidence_backed`] describes. Keeping it here means no
 /// individual rule can forget it.
+///
+/// The verdict is delegated to the owning predicate rather than restated. The
+/// normalization above it is this lane's own contract and stays local; sorting
+/// and de-duplication cannot turn a non-empty citation set empty, so the
+/// candidate is asked the question after normalization exactly as it was
+/// before.
 #[allow(clippy::too_many_arguments)]
 fn finding(
     id: &str,
@@ -890,27 +896,110 @@ fn finding(
     evidence: Vec<IntuneEvidenceRef>,
     coverage_gap_ids: Vec<String>,
 ) -> Option<IntuneFinding> {
-    let evidence = normalized_evidence(evidence);
     let mut coverage_gap_ids = coverage_gap_ids;
     coverage_gap_ids.sort();
     coverage_gap_ids.dedup();
-    if evidence.is_empty() && coverage_gap_ids.is_empty() {
-        return None;
-    }
-    Some(IntuneFinding {
+    let candidate = IntuneFinding {
         finding_id: id.to_owned(),
         severity,
         confidence,
         title: title.to_owned(),
         summary: summary.to_owned(),
         recommended_checks: recommended_checks.to_vec(),
-        evidence,
+        evidence: normalized_evidence(evidence),
         coverage_gap_ids,
-    })
+    };
+    candidate.is_evidence_backed().then_some(candidate)
 }
 
 fn push(findings: &mut Vec<IntuneFinding>, finding: Option<IntuneFinding>) {
     if let Some(finding) = finding {
         findings.push(finding);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evidence_ref(id: &str) -> IntuneEvidenceRef {
+        IntuneEvidenceRef {
+            evidence_id: id.to_owned(),
+            source_artifact_id: "autopilot-events".to_owned(),
+        }
+    }
+
+    fn build(
+        evidence: Vec<IntuneEvidenceRef>,
+        coverage_gap_ids: Vec<String>,
+    ) -> Option<IntuneFinding> {
+        finding(
+            "autopilot-pin",
+            IntuneFindingSeverity::Warning,
+            IntuneFindingConfidence::Low,
+            "title",
+            "summary",
+            &["check".to_owned()],
+            evidence,
+            coverage_gap_ids,
+        )
+    }
+
+    /// Pins the whole input space of the citation guard: two emptiness bits, and
+    /// nothing else. The constructor reads no snapshot, access state, parse state,
+    /// severity or confidence, so these four cells are exhaustive.
+    ///
+    /// Suppression must agree exactly with the negation of the shared invariant
+    /// [`IntuneFinding::is_evidence_backed`], which is what this constructor
+    /// claims to enforce.
+    #[test]
+    fn the_citation_guard_agrees_with_the_shared_invariant_on_every_input() {
+        for (evidence, gaps, expected_backed) in [
+            (Vec::new(), Vec::new(), false),
+            (Vec::new(), vec!["gap".to_owned()], true),
+            (vec![evidence_ref("e1")], Vec::new(), true),
+            (vec![evidence_ref("e1")], vec!["gap".to_owned()], true),
+        ] {
+            let built = build(evidence.clone(), gaps.clone());
+            assert_eq!(
+                built.is_some(),
+                expected_backed,
+                "evidence={evidence:?} gaps={gaps:?}"
+            );
+            if let Some(built) = built {
+                assert!(
+                    built.is_evidence_backed(),
+                    "an emitted finding must satisfy the invariant it was gated on"
+                );
+            }
+        }
+    }
+
+    /// The Autopilot constructor normalizes before it decides. Sorting and
+    /// de-duplication cannot turn a non-empty vector empty, so normalization
+    /// never changes the verdict, but it is part of this lane's byte-identical
+    /// output contract and must survive any rework of the guard.
+    #[test]
+    fn the_constructor_sorts_and_dedupes_both_citation_sets() {
+        let built = build(
+            vec![evidence_ref("e2"), evidence_ref("e1"), evidence_ref("e2")],
+            vec!["b".to_owned(), "a".to_owned(), "b".to_owned()],
+        )
+        .expect("cited finding");
+        assert_eq!(built.evidence, vec![evidence_ref("e1"), evidence_ref("e2")]);
+        assert_eq!(built.coverage_gap_ids, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    /// De-duplicating down to a single entry still leaves a cited finding; the
+    /// guard can only suppress when the caller supplied nothing at all.
+    #[test]
+    fn duplicate_only_citations_still_produce_a_finding() {
+        let built = build(
+            vec![evidence_ref("e1"), evidence_ref("e1")],
+            vec!["a".to_owned(), "a".to_owned()],
+        )
+        .expect("cited finding");
+        assert_eq!(built.evidence, vec![evidence_ref("e1")]);
+        assert_eq!(built.coverage_gap_ids, vec!["a".to_owned()]);
     }
 }

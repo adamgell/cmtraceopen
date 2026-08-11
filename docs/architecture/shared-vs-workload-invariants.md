@@ -24,6 +24,7 @@ PR with its own issue, not a refactor.**
 |---|---|---|
 | Evidence envelope types (`IntuneObservationContext`, `IntuneEvidenceRef`, `IntuneProvenance`, `IntuneArtifactCoverage`, `IntuneFinding`, ...) | `crates/cmtraceopen-parser/src/intune/evidence.rs` | Two separate compatibility questions, and only one of them has an "additive" answer. **Wire format:** exactly as `INTUNE_EVIDENCE_SCHEMA_VERSION` states at `crates/cmtraceopen-parser/src/intune/evidence.rs:23-24` — only an optional field, or a variant on an `intune_raw_preserving_string_enum!` type, is additive. The plain `#[derive(Deserialize)]` enums (`IntuneTimestampKind`, `IntuneSensitivity`, `IntuneParseState`, `IntuneAccessState`, `IntuneArtifactStatus`) have no `#[serde(other)]` arm, so an unknown variant is a hard decode error: adding one breaks older readers and bumps the schema version. **Rust API:** no additive guarantee at all. None of these types are `#[non_exhaustive]` and `cmtraceopen-parser` is published, so a new variant or public field breaks downstream `match` arms and struct literals and needs a semver-major release, or `#[non_exhaustive]` first. |
 | `IntuneAccessState` <-> `IntuneArtifactStatus` mapping, both directions | `crates/cmtraceopen-parser/src/intune/evidence.rs` (`artifact_status_for_access_state`, `access_state_for_artifact_status`) | A total 7-arm bijection. Exhaustive `match`, no `_` arm, so a new variant is a compile error rather than a silently defaulted status. Was three byte-identical copies before Framework v1 PR 4. |
+| The citation **verdict**: is a finding backed by anything at all | `crates/cmtraceopen-parser/src/intune/evidence.rs:355` (`IntuneFinding::is_evidence_backed`) | One owner, called by all five Windows lanes. The predicate reads two emptiness bits and no lane-specific state, so its input space is four cells; Autopilot and Compliance each restated its De Morgan negation inline until they were converted to call it. Where each lane asks the question is *not* shared; see divergence 9. |
 | Redaction **grammar** (which byte patterns are masked and how) | `crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs` (`redact_text`) | One owner. A local fork previously reintroduced a fixed JSON-escaped-path bug; see `crates/cmtraceopen-parser/src/intune/apps/windows/win32/redaction.rs` lines 9-15. |
 | Fixture corpus envelope: manifest version, path safety, byte-count truth, file/manifest closure, synthetic marker, privacy scan | `crates/cmtraceopen-parser/tests/support/mod.rs` | Every Intune corpus. |
 | Fixture `captureState` -> library vocabulary | `crates/cmtraceopen-parser/tests/support/mod.rs` (`artifact_status_for_capture_state`, `access_state_for_capture_state`) | The collector boundary the fixtures stand in for. The access-state form is the status form composed with the crate's own mapping, so a fixture can never disagree with the crate about what `parseFailed` means. |
@@ -152,6 +153,24 @@ sensitive is a property of this analyzer's contract, not of the shared grammar."
 The same file records why the grammar has one owner: a local fork of the rules
 previously reintroduced an already-fixed JSON-escaped-path bug.
 
+**This has now happened twice.** Compliance also carried a private copy of the
+grammar, and by the time it was found the copy had drifted in nine places, every
+one of them in the leaking direction: a SID with the minimum identifying
+sub-authority count, the legacy `Documents and Settings` profile root,
+JSON-escaped profile paths, and the device-name, UNC-server, account, tenant,
+inline-credential and MSI-property rules were all absent or weaker, so each was
+exported verbatim. A fork does not announce itself; it simply stops receiving
+the owner's fixes. `crates/cmtraceopen-parser/src/intune/device/windows/compliance/redaction.rs` now
+re-exports the owner, and
+`crates/cmtraceopen-parser/tests/intune_windows_compliance.rs::the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`
+asserts equal *output*, not merely equal masking decisions, so a future fork
+fails rather than drifts.
+
+Lanes outside this family (`esp`, and the Apple and Company Portal lanes) mask a
+different vocabulary against different evidence and are not covered by this
+owner. Their relationship to it is unsettled and is not a licence to fork within
+the Windows family.
+
 ### 8. Test helpers: `evidence_ids` ordering is per-corpus
 
 `crates/cmtraceopen-parser/tests/support/mod.rs` provides `sorted_evidence_ids`, named for what it does,
@@ -167,6 +186,50 @@ without any test failing.
 Autopilot likewise keeps its own `capture_state` helper: its input type is the
 lane-local `AutopilotCaptureState`, and the mapping is serde's own
 `rename_all = "camelCase"` rather than a hand-written table.
+
+### 9. The citation verdict is shared; the finding constructors around it are not
+
+The verdict is one predicate with one owner (see "Actually shared" above).
+The constructor that asks it is per-lane, in three different shapes, and the
+next consistency PR should stop at the predicate rather than continue into the
+constructors.
+
+| Lane | Shape | Where the verdict is asked | What else the constructor owns |
+|---|---|---|---|
+| Autopilot | `fn finding(...) -> Option<IntuneFinding>` | `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:912` | Sorts and de-duplicates **both** citation sets first (`normalized_evidence` plus `sort`/`dedup` on the gap ids); takes `recommended_checks: &[String]` |
+| Compliance | `fn finding(...) -> Option<IntuneFinding>` | `crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:697` | Keeps citations verbatim; takes a single `check: &str` and wraps it |
+| Win32 | build always, gate in `push` | `crates/cmtraceopen-parser/src/intune/apps/windows/win32/findings.rs:191` | Runs the shared redaction grammar over `summary` **after** the gate, so an uncited finding is never redacted-and-dropped |
+| Microsoft Store | build inside `push_finding`, gate there | `crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/findings.rs:187` | Takes `recommended_checks: &[&str]` |
+| Configuration | build always, gate in `push_finding` | `crates/cmtraceopen-parser/src/intune/device/windows/configuration/rules.rs:152` | Nothing beyond the gate |
+
+**Why the verdict could be shared:** every lane's own doc comment already named
+`IntuneFinding::is_evidence_backed` as the invariant it was enforcing, so the
+five agreed for the same stated reason rather than by coincidence, and a lane
+that emitted an uncited finding would be violating the invariant declared on
+`IntuneFinding` itself. That is the extraction test below, all three parts.
+
+**Why the constructors cannot be:** they disagree on normalization and on the
+arity of `recommended_checks`, and Win32 additionally has a side effect ordered
+against the gate. A single shared constructor would have to pick one
+normalization policy, which would either impose Autopilot's byte-identical
+ordering contract on Compliance or retire it from Autopilot.
+
+Autopilot's normalization runs *before* it asks the verdict. That is safe
+rather than lucky: `sort` never changes a vector's length and `dedup` never
+empties a non-empty one, so normalization preserves both emptiness bits and
+cannot move the answer. Pinned by
+`the_constructor_sorts_and_dedupes_both_citation_sets`
+(`crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:983`) against
+`the_constructor_preserves_citation_order_and_duplicates_verbatim`
+(`crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:835`), with the four-cell input space asserted
+in both lanes by `the_citation_guard_agrees_with_the_shared_invariant_on_every_input`
+(`crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:956`, `crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:803`).
+
+The ESP lane carries the same constructor shape at `crates/cmtraceopen-parser/src/esp/rules.rs:669`
+over `EspDiagnosticFinding` and `EspEvidenceRef`, a separate type family that
+cannot call this predicate at all. It is out of this owner's scope for the same
+reason it is out of the redaction owner's scope (divergence 7), and its
+similarity is not evidence that the shapes should converge.
 
 ## Extraction test
 
