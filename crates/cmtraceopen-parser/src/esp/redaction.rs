@@ -600,6 +600,11 @@ fn mac_address_pattern() -> &'static Regex {
 /// redacted, reference-bearing identifiers are consistently pseudonymized,
 /// and source records that could contain credentials, raw Graph responses,
 /// or hardware hashes are omitted completely.
+///
+/// This is the implementation of the ESP export boundary, not the boundary
+/// itself: exports go through [`EspSessionCapture`](super::EspSessionCapture),
+/// which is the only exportable shape and applies this projection on
+/// construction.
 pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagnosticsSnapshot {
     let mut safe = snapshot.clone();
     let reference_pseudonyms = collect_reference_pseudonyms(&safe);
@@ -681,7 +686,55 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         redact_graph_overlay(graph);
     }
 
-    safe
+    // Reassembled field by field, never with `..`. A field added to
+    // `EspDiagnosticsSnapshot` stops compiling here until someone decides how
+    // it is exported, instead of riding out through the `clone()` above
+    // unexamined.
+    let EspDiagnosticsSnapshot {
+        schema_version,
+        scenario,
+        phase,
+        generated_at_utc,
+        elevation,
+        identity,
+        profile,
+        enrollments,
+        sessions,
+        workloads,
+        installer_correlations,
+        node_cache,
+        registration_events,
+        delivery_optimization,
+        hardware,
+        activity,
+        findings,
+        coverage,
+        raw_evidence,
+        graph,
+    } = safe;
+
+    EspDiagnosticsSnapshot {
+        schema_version,
+        scenario,
+        phase,
+        generated_at_utc,
+        elevation,
+        identity,
+        profile,
+        enrollments,
+        sessions,
+        workloads,
+        installer_correlations,
+        node_cache,
+        registration_events,
+        delivery_optimization,
+        hardware,
+        activity,
+        findings,
+        coverage,
+        raw_evidence,
+        graph,
+    }
 }
 
 fn redact_identity(identity: &mut EspIdentityEvidence) {

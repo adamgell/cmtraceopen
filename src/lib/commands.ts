@@ -42,6 +42,7 @@ import type {
   EspRelaunchResult,
   EspSessionEnvelope,
 } from "../workspaces/esp-diagnostics/types";
+import type { EspSessionCaptureMeta } from "../workspaces/esp-diagnostics/esp-session-capture";
 import type {
   SccmCaptureResult,
   SccmAdvancedCaptureAuthorizationRequest,
@@ -680,6 +681,26 @@ export async function analyzeEspEvidence(
   return invokeCommand<EspDiagnosticsSnapshot>("analyze_esp_evidence", {
     path,
     requestId,
+  });
+}
+
+/**
+ * Write an ESP session to a user-chosen file.
+ *
+ * The backend builds the capture: the redaction projection is applied inside
+ * the parser crate, which is the only place that can produce an exportable
+ * session. The frontend never serializes a snapshot to a file itself
+ * (issue #549).
+ */
+export async function exportEspSession(
+  destination: string,
+  snapshot: EspDiagnosticsSnapshot,
+  meta: EspSessionCaptureMeta,
+): Promise<void> {
+  return invokeCommand<void>("export_esp_session", {
+    destination,
+    snapshot,
+    meta,
   });
 }
 

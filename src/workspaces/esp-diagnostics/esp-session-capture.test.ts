@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildEspSessionCapture,
   ESP_SESSION_CAPTURE_KIND,
   ESP_SESSION_CAPTURE_VERSION,
   parseEspSessionCapture,
-  serializeEspSessionCapture,
 } from "./esp-session-capture";
+import type { EspSessionCapture } from "./esp-session-capture";
+import type { EspDiagnosticsSnapshot } from "./types";
 import {
   makeEspAppsSection,
   makeEspGraphApp,
@@ -15,6 +15,22 @@ import {
   makeEspWorkload,
 } from "./esp-session-fixtures";
 
+// Captures are written by the `export_esp_session` command, which is the
+// parser crate's export boundary. The frontend can only read them, so these
+// tests build the envelope the backend writes and exercise the parse side.
+function captureEnvelope(
+  snapshot: EspDiagnosticsSnapshot,
+): EspSessionCapture {
+  return {
+    kind: ESP_SESSION_CAPTURE_KIND,
+    version: ESP_SESSION_CAPTURE_VERSION,
+    capturedAtUtc: "2026-07-23T21:30:00Z",
+    app: { version: null, commit: null },
+    redacted: true,
+    snapshot,
+  };
+}
+
 describe("esp session capture", () => {
   it("round-trips a snapshot (incl. its Graph overlay) through build/serialize/parse", () => {
     const snapshot = makeEspSnapshot({
@@ -23,13 +39,11 @@ describe("esp session capture", () => {
         apps: makeEspAppsSection([makeEspGraphApp()]),
       }),
     });
-    const capture = buildEspSessionCapture(snapshot, {
-      capturedAtUtc: "2026-07-23T21:30:00Z",
-    });
+    const capture = captureEnvelope(snapshot);
     expect(capture.kind).toBe(ESP_SESSION_CAPTURE_KIND);
     expect(capture.version).toBe(ESP_SESSION_CAPTURE_VERSION);
 
-    const parsed = parseEspSessionCapture(serializeEspSessionCapture(capture));
+    const parsed = parseEspSessionCapture(JSON.stringify(capture));
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.snapshot).toEqual(snapshot);
@@ -46,10 +60,9 @@ describe("esp session capture", () => {
     const snapshot = makeEspSnapshot({
       rawEvidence: [makeEspRawEvidence({ rawValue: { unsigned: 134319134940000000 } })],
     });
-    const capture = buildEspSessionCapture(snapshot, {
-      capturedAtUtc: "2026-07-23T21:30:00Z",
-    });
-    const parsed = parseEspSessionCapture(serializeEspSessionCapture(capture));
+    const parsed = parseEspSessionCapture(
+      JSON.stringify(captureEnvelope(snapshot)),
+    );
     expect(parsed.ok).toBe(true);
   });
 
@@ -68,18 +81,14 @@ describe("esp session capture", () => {
   });
 
   it("rejects a capture from a newer format version", () => {
-    const capture = buildEspSessionCapture(makeEspSnapshot(), {
-      capturedAtUtc: "2026-07-23T21:30:00Z",
-    });
+    const capture = captureEnvelope(makeEspSnapshot());
     const bumped = { ...capture, version: ESP_SESSION_CAPTURE_VERSION + 1 };
     const parsed = parseEspSessionCapture(JSON.stringify(bumped));
     expect(parsed.ok).toBe(false);
   });
 
   it("rejects a malformed snapshot inside a valid envelope", () => {
-    const capture = buildEspSessionCapture(makeEspSnapshot(), {
-      capturedAtUtc: "2026-07-23T21:30:00Z",
-    });
+    const capture = captureEnvelope(makeEspSnapshot());
     const broken = {
       ...capture,
       snapshot: { ...capture.snapshot, schemaVersion: 999 },

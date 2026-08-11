@@ -261,6 +261,8 @@ pub fn run() {
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::analyze_esp_evidence,
             #[cfg(feature = "esp-diagnostics")]
+            commands::esp_diagnostics::export_esp_session,
+            #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::start_esp_diagnostics_session,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::get_esp_diagnostics_session,
