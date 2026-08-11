@@ -94,18 +94,43 @@ impl GuidDiagLog {
     /// directory is world-writable, so a fixed name there is the classic clobber target — and this
     /// trace is opt-in precisely because its contents are sensitive.
     fn create_file(&self) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+        Self::create_file_at(Self::trace_path())
+    }
+
+    /// A path no other analysis will pick, in the system temp directory.
+    fn trace_path() -> std::path::PathBuf {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
             .unwrap_or_default();
-        let path = std::env::temp_dir().join(format!(
+        std::env::temp_dir().join(format!(
             "cmtrace-guid-diag-{}-{stamp}.log",
             std::process::id()
-        ));
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
+        ))
+    }
+
+    /// Creates `path` exclusively, readable only by the user who ran the analysis.
+    ///
+    /// Split from [`create_file`](Self::create_file) so the exclusive-open behaviour can be
+    /// exercised against a path that already exists, which is the case that matters and which a
+    /// test calling the composed function cannot reach.
+    fn create_file_at(
+        path: std::path::PathBuf,
+    ) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        // The default umask leaves this world-readable, and the temp directory is shared. The
+        // trace holds the app inventory this whole change exists to stop leaking, so on the one
+        // path that does write it, only the owner may read it. Windows inherits the directory
+        // ACL, which is already per-user for the profile temp directory.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let file = options.open(&path)?;
         Ok((path, file))
     }
 }
@@ -412,10 +437,18 @@ fn analyze_intune_logs_blocking(
         );
         if let Some(contents) = diag_buffer.contents() {
             match diag_buffer.create_file() {
-                Ok((diag_path, mut file)) => {
-                    let _ = file.write_all(contents.as_bytes());
-                    log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
-                }
+                // Reported only once the bytes are actually down. Discarding the write result
+                // logged success over a partial file, which is the same "looks fine, is not"
+                // shape this change is about.
+                Ok((diag_path, mut file)) => match file.write_all(contents.as_bytes()) {
+                    Ok(()) => {
+                        log::info!("event=guid_diag_written path=\"{}\"", diag_path.display())
+                    }
+                    Err(error) => log::warn!(
+                        "event=guid_diag_write_failed path=\"{}\" error=\"{error}\"",
+                        diag_path.display()
+                    ),
+                },
                 Err(error) => log::warn!("event=guid_diag_write_failed error=\"{error}\""),
             }
         }
@@ -1554,6 +1587,23 @@ mod guid_diag_tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_trace_file_is_readable_only_by_its_owner() {
+        // The temp directory is shared and the default umask leaves new files world-readable.
+        // This trace holds the app inventory the whole change exists to stop leaking, so on the
+        // one path that does write it, nobody else on the machine may read it.
+        use std::os::unix::fs::PermissionsExt;
+
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            let (path, _file) = log.create_file().expect("creates");
+            let mode = fs::metadata(&path).expect("stat").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+            let _ = fs::remove_file(&path);
+        });
+    }
+
     #[test]
     fn the_trace_file_refuses_to_write_through_something_that_exists() {
         // The system temp directory is world-writable, so a fixed name there is the classic
@@ -1568,12 +1618,14 @@ mod guid_diag_tests {
             let (second_path, _second) = log.create_file().expect("creates");
             assert_ne!(first_path, second_path);
 
-            // And re-opening an existing path is refused rather than truncating it.
-            let existing = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&first_path);
-            assert!(existing.is_err(), "create_new must refuse an existing path");
+            // The helper itself is asked to open a path that already exists. Asserting on
+            // OpenOptions directly would have proved only that the standard library works, and
+            // would still pass if the helper dropped create_new.
+            let refused = GuidDiagLog::create_file_at(first_path.clone());
+            assert!(
+                refused.is_err(),
+                "create_file_at must refuse a path that already exists"
+            );
 
             let _ = fs::remove_file(&first_path);
             let _ = fs::remove_file(&second_path);
