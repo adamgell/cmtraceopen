@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-08-11
+
+### Fixed
+
+- **Windows clipboard history (#520)**: Info-pane copies now register in Windows clipboard history, and Ctrl+C preserves a selected text range instead of copying the entire log entry.
+
 ## [Unreleased]
 
 ### Added
