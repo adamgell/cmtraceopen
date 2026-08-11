@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 
 use super::model::{EventMap, MapEntry, MapProperty};
 use super::node::EventNode;
-use super::path::ValuePath;
 
 /// One normalized column produced from an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,15 +73,17 @@ fn apply_entry(
     let template = entry.property_value.as_str();
     let mut resolved: BTreeMap<&str, String> = BTreeMap::new();
 
-    for binding in &entry.values {
+    // Paths and placeholders are parsed once per map, not once per record. This runs for every
+    // event on a channel, so re-parsing an expression that cannot change was the dominant cost.
+    for (binding, compiled) in entry.values.iter().zip(entry.compiled()) {
         // Checked against the original template, never against partially rendered output.
-        if !template.contains(&format!("%{}%", binding.name)) {
+        if !template.contains(&compiled.placeholder) {
             continue;
         }
 
-        let value = match ValuePath::parse(&binding.value) {
-            Ok(path) => path.evaluate(event).map(|value| value.into_owned()),
-            Err(_) => {
+        let value = match &compiled.path {
+            Some(path) => path.evaluate(event).map(|value| value.into_owned()),
+            None => {
                 let defect = (binding.name.clone(), binding.value.clone());
                 if !invalid_paths.contains(&defect) {
                     invalid_paths.push(defect);
@@ -210,14 +211,14 @@ mod tests {
     #[test]
     fn substitutes_multiple_placeholders_in_one_template() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::UserName,
-                property_value: "%domain%\\%user%".to_string(),
-                values: vec![
+            vec![MapEntry::new(
+                MapProperty::UserName,
+                "%domain%\\%user%".to_string(),
+                vec![
                     binding("domain", "SubjectDomainName"),
                     binding("user", "SubjectUserName"),
                 ],
-            }],
+            )],
             vec![],
         );
 
@@ -229,11 +230,11 @@ mod tests {
     #[test]
     fn missing_field_is_reported_and_leaves_the_placeholder_visible() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "LogonType %LogonType%".to_string(),
-                values: vec![binding("LogonType", "LogonType")],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "LogonType %LogonType%".to_string(),
+                vec![binding("LogonType", "LogonType")],
+            )],
             vec![],
         );
 
@@ -247,11 +248,11 @@ mod tests {
     #[test]
     fn lookup_translates_a_bound_variable() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "Bus: %BusType%".to_string(),
-                values: vec![binding("BusType", "BusType")],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "Bus: %BusType%".to_string(),
+                vec![binding("BusType", "BusType")],
+            )],
             vec![Lookup {
                 name: "BusType".to_string(),
                 default: Some("Unknown code".to_string()),
@@ -269,11 +270,11 @@ mod tests {
     #[test]
     fn lookup_default_applies_to_an_unknown_code() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "Bus: %BusType%".to_string(),
-                values: vec![binding("BusType", "BusType")],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "Bus: %BusType%".to_string(),
+                vec![binding("BusType", "BusType")],
+            )],
             vec![Lookup {
                 name: "BusType".to_string(),
                 default: Some("Unknown code".to_string()),
@@ -291,11 +292,11 @@ mod tests {
     #[test]
     fn a_template_with_no_placeholders_is_emitted_verbatim() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "Screen saver invoked".to_string(),
-                values: vec![],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "Screen saver invoked".to_string(),
+                vec![],
+            )],
             vec![],
         );
 
@@ -310,11 +311,11 @@ mod tests {
     #[test]
     fn a_placeholder_with_no_binding_is_reported_unresolved() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "Value %NeverBound%".to_string(),
-                values: vec![],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "Value %NeverBound%".to_string(),
+                vec![],
+            )],
             vec![],
         );
 
@@ -325,14 +326,14 @@ mod tests {
     #[test]
     fn a_malformed_path_is_a_map_defect_not_a_missing_field() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "%broken%".to_string(),
-                values: vec![ValueBinding {
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "%broken%".to_string(),
+                vec![ValueBinding {
                     name: "broken".to_string(),
                     value: "EventData/Data".to_string(),
                 }],
-            }],
+            )],
             vec![],
         );
 
@@ -362,14 +363,14 @@ mod tests {
                 ),
         );
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::UserName,
-                property_value: "%domain%\\%user%".to_string(),
-                values: vec![
+            vec![MapEntry::new(
+                MapProperty::UserName,
+                "%domain%\\%user%".to_string(),
+                vec![
                     binding("domain", "SubjectDomainName"),
                     binding("user", "SubjectUserName"),
                 ],
-            }],
+            )],
             vec![],
         );
 
@@ -383,11 +384,11 @@ mod tests {
     #[test]
     fn a_literal_percent_does_not_hide_the_placeholder_that_follows_it() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "50% off %Cost%".to_string(),
-                values: vec![],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "50% off %Cost%".to_string(),
+                vec![],
+            )],
             vec![],
         );
 
@@ -401,11 +402,11 @@ mod tests {
     #[test]
     fn a_literal_percent_survives_when_a_later_placeholder_resolves() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "50% off for %user%".to_string(),
-                values: vec![binding("user", "SubjectUserName")],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "50% off for %user%".to_string(),
+                vec![binding("user", "SubjectUserName")],
+            )],
             vec![],
         );
 
@@ -420,11 +421,11 @@ mod tests {
     #[test]
     fn an_unpaired_trailing_percent_is_preserved_verbatim() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "complete: 100%".to_string(),
-                values: vec![],
-            }],
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "complete: 100%".to_string(),
+                vec![],
+            )],
             vec![],
         );
 
@@ -439,14 +440,14 @@ mod tests {
     #[test]
     fn an_unused_binding_does_not_affect_the_result() {
         let map = map_with(
-            vec![MapEntry {
-                property: MapProperty::PayloadData(1),
-                property_value: "User %user%".to_string(),
-                values: vec![
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "User %user%".to_string(),
+                vec![
                     binding("user", "SubjectUserName"),
                     binding("unused", "DoesNotExist"),
                 ],
-            }],
+            )],
             vec![],
         );
 

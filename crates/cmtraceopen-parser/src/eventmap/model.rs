@@ -6,8 +6,11 @@
 //! of the parser crate and lets tests drive the real corpus through `serde_json`.
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Deserializer};
+
+use super::path::ValuePath;
 
 /// A normalized output column that a map entry writes into.
 ///
@@ -99,8 +102,28 @@ impl Lookup {
     }
 }
 
+/// A binding with its path expression already parsed and its placeholder already formatted.
+///
+/// Both are constant for the life of the map, and applying a map happens once per record. Parsing
+/// the same expression a million times to get a million identical results is the cost this avoids.
+#[derive(Debug, Clone)]
+pub struct CompiledBinding {
+    /// `%Name%`, formatted once.
+    pub placeholder: String,
+    /// The parsed path, or `None` when the expression is malformed.
+    ///
+    /// A malformed expression is kept as a value rather than dropped so the applier can still
+    /// report it: a map with a typo in it is a defect an operator needs told about, not a binding
+    /// that silently resolves to nothing.
+    pub path: Option<ValuePath>,
+}
+
 /// One output column produced from an event.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+///
+/// `PartialEq` compares the deserialized content only. The compiled cache below is derived from
+/// it, so two entries that describe the same mapping are equal whether or not either has been
+/// applied yet.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MapEntry {
     /// Which normalized column this writes.
@@ -110,7 +133,55 @@ pub struct MapEntry {
     /// Variables available to the template.
     #[serde(default)]
     pub values: Vec<ValueBinding>,
+    /// Built on first use and reused for every later record.
+    ///
+    /// Memoized here rather than compiled by whoever owns the map, because a separate compile step
+    /// is one a caller can forget: a map that skipped it would resolve nothing and look like a map
+    /// that simply did not match.
+    #[serde(skip)]
+    compiled: OnceLock<Vec<CompiledBinding>>,
 }
+
+impl MapEntry {
+    /// Builds an entry.
+    ///
+    /// The compiled cache is not a constructor argument: it is derived from these fields and is
+    /// built on first use, so there is no state a caller could supply inconsistently.
+    pub fn new(property: MapProperty, property_value: String, values: Vec<ValueBinding>) -> Self {
+        Self {
+            property,
+            property_value,
+            values,
+            compiled: OnceLock::new(),
+        }
+    }
+
+    /// The entry's bindings, parsed once.
+    ///
+    /// Only bindings whose placeholder appears in the template are compiled, matching what the
+    /// applier will actually consult; the rest cost nothing.
+    pub fn compiled(&self) -> &[CompiledBinding] {
+        self.compiled.get_or_init(|| {
+            self.values
+                .iter()
+                .map(|binding| CompiledBinding {
+                    placeholder: format!("%{}%", binding.name),
+                    path: ValuePath::parse(&binding.value).ok(),
+                })
+                .collect()
+        })
+    }
+}
+
+impl PartialEq for MapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.property == other.property
+            && self.property_value == other.property_value
+            && self.values == other.values
+    }
+}
+
+impl Eq for MapEntry {}
 
 /// A parsed EvtxECmd map file.
 ///
