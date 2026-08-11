@@ -98,13 +98,31 @@ impl GuidDiagLog {
     }
 
     /// A path no other analysis will pick, in the system temp directory.
+    ///
+    /// The sequence number is what makes that true rather than likely. Two analyses in the same
+    /// process can land inside one clock tick, and a clock can move backwards, either of which
+    /// would repeat a timestamp; because the file is opened exclusively, a repeat does not
+    /// overwrite anything but does lose the trace the operator asked for.
     fn trace_path() -> std::path::PathBuf {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
             .unwrap_or_default();
+        Self::trace_path_for(stamp)
+    }
+
+    /// The naming, with the clock supplied.
+    ///
+    /// Split so the sequence's contribution can be proved: a test that only calls `trace_path`
+    /// passes whether or not the sequence exists, because successive clock reads on a fast machine
+    /// happen to differ anyway. Holding the stamp fixed is the only way to show the collision case
+    /// is handled.
+    fn trace_path_for(stamp: u128) -> std::path::PathBuf {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "cmtrace-guid-diag-{}-{stamp}.log",
+            "cmtrace-guid-diag-{}-{stamp}-{sequence}.log",
             std::process::id()
         ))
     }
@@ -1602,6 +1620,18 @@ mod guid_diag_tests {
             assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
             let _ = fs::remove_file(&path);
         });
+    }
+
+    #[test]
+    fn every_trace_path_is_distinct_even_within_one_clock_tick() {
+        // The stamp is held fixed, which is the whole point: two analyses in one process can land
+        // inside a single tick, and a clock can move backwards. Either repeats a timestamp, and
+        // because the file is opened exclusively a repeat does not overwrite anything but does
+        // lose the trace that was asked for. Calling trace_path in a loop would pass whether or
+        // not the sequence existed, because successive clock reads happen to differ.
+        let paths: std::collections::HashSet<_> =
+            (0..256).map(|_| GuidDiagLog::trace_path_for(42)).collect();
+        assert_eq!(paths.len(), 256, "one clock tick must still give distinct paths");
     }
 
     #[test]
