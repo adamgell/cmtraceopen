@@ -146,6 +146,20 @@ fn the_exported_session_states_that_it_was_redacted() {
 }
 
 #[test]
+fn the_exported_session_still_loads_as_a_session() {
+    // The export format is also the replay format: "Open session" must be able
+    // to read what "Export session" wrote, redaction included.
+    let exported: Value =
+        serde_json::from_str(&exported_session_json(&snapshot_with_planted_identifiers()))
+            .expect("export is JSON");
+    let reloaded: EspDiagnosticsSnapshot =
+        serde_json::from_value(exported["snapshot"].clone()).expect("export reloads as a session");
+
+    assert_eq!(reloaded.schema_version, ESP_DIAGNOSTICS_SCHEMA_VERSION);
+    assert_eq!(reloaded.workloads.len(), 1);
+}
+
+#[test]
 fn exporting_does_not_mutate_the_local_session() {
     // The local snapshot keeps its real values: this is an export projection,
     // not an in-place scrub of what the workspace renders.
