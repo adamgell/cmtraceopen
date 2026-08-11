@@ -354,16 +354,17 @@ fn analyze_intune_logs_blocking(
         }
     }
 
-    // Fallback: synthesize DownloadStat records from ContentDownload events
-    // when the regex-based download_stats extractor found nothing.
-    if all_downloads.is_empty() {
-        all_downloads = synthesize_downloads_from_events(&all_events);
-        if !all_downloads.is_empty() {
-            log::info!(
-                "event=download_synthesized_from_events count={}",
-                all_downloads.len()
-            );
-        }
+    // Synthesize DownloadStat records from ContentDownload events for the
+    // content ids the regex-based extractor produced nothing for. Synthesis
+    // supplements extraction per id rather than being all-or-nothing: a
+    // single spurious extracted stat used to suppress every synthesized
+    // download and collapse the downloads panel.
+    let synthesized_count = merge_synthesized_downloads(&mut all_downloads, &all_events);
+    if synthesized_count > 0 {
+        log::info!(
+            "event=download_synthesized_from_events count={}",
+            synthesized_count
+        );
     }
 
     emit_analysis_progress(
@@ -1146,6 +1147,41 @@ fn is_summary_signal_event(event: &IntuneEvent) -> bool {
 /// the regex-based `download_stats` extractor found nothing (i.e. the log
 /// format didn't match `DOWNLOAD_RE`). Groups events by GUID and picks the
 /// latest status per GUID as the outcome.
+/// Merge event-synthesized download records into the extracted stats.
+///
+/// The regex-based extractor is the higher-fidelity source, so an extracted
+/// stat always wins for its content id; synthesis fills in only the ids the
+/// extractor produced nothing for. Returns how many records were added.
+fn merge_synthesized_downloads(
+    downloads: &mut Vec<DownloadStat>,
+    events: &[IntuneEvent],
+) -> usize {
+    let extracted_ids: std::collections::HashSet<String> = downloads
+        .iter()
+        .map(|download| download.content_id.clone())
+        .collect();
+    let mut added = 0usize;
+    for stat in synthesize_downloads_from_events(events) {
+        if !extracted_ids.contains(&stat.content_id) {
+            downloads.push(stat);
+            added += 1;
+        }
+    }
+    if added > 0 {
+        // Keep the combined list chronological. The epoch is the ordering
+        // truth — the timestamp *text* is MM-DD-YYYY, which reverses across a
+        // year boundary — and text plus content id are deterministic
+        // tie-breakers for records without a parseable timestamp.
+        downloads.sort_by(|left, right| {
+            left.timestamp_epoch
+                .cmp(&right.timestamp_epoch)
+                .then_with(|| left.timestamp.cmp(&right.timestamp))
+                .then_with(|| left.content_id.cmp(&right.content_id))
+        });
+    }
+    added
+}
+
 fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat> {
     let mut by_guid: HashMap<String, Vec<&IntuneEvent>> = HashMap::new();
     for event in events {
@@ -1540,6 +1576,141 @@ mod tests {
         }
     ]
 }"#
+    }
+
+    #[test]
+    fn one_spurious_extracted_stat_does_not_suppress_synthesized_downloads() {
+        // The extractor produced a single (low-quality) stat for app A. The
+        // ContentDownload events cover apps A and B; synthesis must fill in
+        // B instead of being suppressed entirely, and must not duplicate A.
+        let event = |id: u64, guid: &str, status: IntuneStatus| IntuneEvent {
+            id,
+            event_type: IntuneEventType::ContentDownload,
+            name: format!("Download ({guid})"),
+            guid: Some(guid.to_string()),
+            status,
+            start_time: Some("01-15-2024 10:00:05.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        };
+        let guid_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let guid_b = "11111111-2222-3333-4444-555555555555";
+        let mut downloads = vec![DownloadStat {
+            content_id: guid_a.to_string(),
+            name: format!("Download ({guid_a})"),
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: 0.0,
+            success: false,
+            timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+            timestamp_epoch: None,
+        }];
+        let events = vec![
+            event(1, guid_a, IntuneStatus::Failed),
+            event(2, guid_b, IntuneStatus::Success),
+        ];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+
+        assert_eq!(added, 1, "only the missing content id is synthesized");
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(
+            downloads
+                .iter()
+                .filter(|download| download.content_id == guid_a)
+                .count(),
+            1,
+            "the extracted stat wins for its own content id"
+        );
+        let synthesized = downloads
+            .iter()
+            .find(|download| download.content_id == guid_b)
+            .expect("the uncovered content id is filled in from events");
+        assert!(synthesized.success);
+    }
+
+    #[test]
+    fn merge_synthesized_downloads_still_covers_the_no_extraction_case() {
+        let mut downloads: Vec<DownloadStat> = Vec::new();
+        let events = vec![IntuneEvent {
+            id: 1,
+            event_type: IntuneEventType::ContentDownload,
+            name: "Download (aaaa)".to_string(),
+            guid: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+            status: IntuneStatus::Failed,
+            start_time: Some("01-15-2024 10:00:05.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        }];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+        assert_eq!(added, 1);
+        assert_eq!(downloads.len(), 1);
+        assert!(!downloads[0].success);
+    }
+
+    #[test]
+    fn merged_downloads_sort_chronologically_across_a_year_boundary() {
+        // The timestamp *text* is MM-DD-YYYY, so "12-31-2023 …" sorts after
+        // "01-01-2024 …" lexically and a text sort shows reverse chronology
+        // across years. The merge must order by the parsed epoch.
+        let mut downloads = vec![DownloadStat {
+            content_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            name: "Older download".to_string(),
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: 0.0,
+            success: true,
+            timestamp: Some("12-31-2023 23:59:59.000".to_string()),
+            timestamp_epoch: Some(1_704_067_199_000),
+        }];
+        let events = vec![IntuneEvent {
+            id: 1,
+            event_type: IntuneEventType::ContentDownload,
+            name: "Newer download".to_string(),
+            guid: Some("11111111-2222-3333-4444-555555555555".to_string()),
+            status: IntuneStatus::Success,
+            start_time: Some("01-01-2024 00:00:00.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        }];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+        assert_eq!(added, 1);
+        assert_eq!(
+            downloads
+                .iter()
+                .map(|download| download.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Older download", "Newer download"],
+            "the merged list must be chronological, not text-ordered"
+        );
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {

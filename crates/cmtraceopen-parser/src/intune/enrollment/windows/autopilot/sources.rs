@@ -21,8 +21,8 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::intune::evidence::{
-    intune_raw_preserving_string_enum, IntuneAccessState, IntuneArtifactStatus, IntuneErrorCode,
-    IntuneNamedValue, IntuneObservationContext,
+    artifact_status_for_access_state, intune_raw_preserving_string_enum, IntuneAccessState,
+    IntuneArtifactStatus, IntuneErrorCode, IntuneNamedValue, IntuneObservationContext,
 };
 use crate::intune::normalized::NormalizedWindowsEvent;
 
@@ -72,16 +72,13 @@ pub enum AutopilotCaptureState {
 impl AutopilotCaptureState {
     /// The coverage status this capture state implies before the reducer has
     /// looked at any bytes.
+    ///
+    /// Derived from [`Self::access_state`] through the shared access-state ->
+    /// status mapping rather than restated as its own table: this lane only gets
+    /// to choose how a *collector* vocabulary lands on `IntuneAccessState`. How
+    /// that then lands on `IntuneArtifactStatus` is not Autopilot's to decide.
     pub fn declared_status(self) -> IntuneArtifactStatus {
-        match self {
-            Self::Captured => IntuneArtifactStatus::Available,
-            Self::Capped => IntuneArtifactStatus::Capped,
-            Self::Absent => IntuneArtifactStatus::Missing,
-            Self::AccessDenied => IntuneArtifactStatus::PermissionDenied,
-            Self::Skipped => IntuneArtifactStatus::Skipped,
-            Self::Unsupported => IntuneArtifactStatus::Unsupported,
-            Self::ParseFailed => IntuneArtifactStatus::ParseFailed,
-        }
+        artifact_status_for_access_state(&self.access_state())
     }
 
     /// The observation-level access state records from this artifact carry.

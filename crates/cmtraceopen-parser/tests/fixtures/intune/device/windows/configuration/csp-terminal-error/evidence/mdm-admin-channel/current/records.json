@@ -1,0 +1,46 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized MDM Admin channel events, no real device data",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "evt-failure",
+          "sourceArtifactId": "mdm-admin-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "mdm-admin-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 102,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+            "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+            "eventId": 404,
+            "recordId": 102
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:01:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:01:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+      "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+      "eventId": 404,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 102,
+      "activityId": "66666666-6666-4666-8666-666666666666",
+      "namedData": [],
+      "message": "MDM ConfigurationManager: Command failure status. Configuration Source ID: (11111111-1111-4111-8111-111111111111), Enrollment Name: (MDMDeviceWithAAD), Provider Name: (Policy), Command Type: (Add), CSP URI: (./Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate), Result: (0x82B00006)."
+    }
+  ]
+}

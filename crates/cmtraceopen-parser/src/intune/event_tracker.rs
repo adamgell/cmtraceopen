@@ -1,10 +1,18 @@
+//! Event-level tracking over the shared IME logs.
+//!
+//! Ownership note: `intune::apps::windows::win32` is the canonical *transaction*
+//! view of Win32 app deployments and owns that behavior alone. This module keeps
+//! its event/timeline surface and public API unchanged; the identifier grammar
+//! it shares with the transaction analyzer (the GUID shape) is owned by
+//! [`super::guid_registry`], so the two cannot drift apart.
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::guid_registry::{self, guid_re, GuidRegistry};
+use super::guid_registry::{self, guid_re, GuidRegistry, GUID_PATTERN};
 use super::ime_parser::ImeLine;
 use super::models::{IntuneEvent, IntuneEventType, IntuneStatus};
 
@@ -26,17 +34,17 @@ fn win32_result_re() -> &'static Regex {
 fn win32_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#).unwrap()
+    Regex::new(&format!(
+        r"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+({GUID_PATTERN})"
+    ))
+    .unwrap()
 })
 }
 /// Matches "for app <GUID>" — common in StatusReport lines where a user GUID precedes the app GUID.
 fn for_app_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r#"(?i)for\s+app\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"#,
-        )
-        .unwrap()
+        Regex::new(&format!(r"(?i)for\s+app\s+({GUID_PATTERN})")).unwrap()
     })
 }
 fn winget_re() -> &'static Regex {
@@ -1200,7 +1208,7 @@ fn extract_guid(msg: &str) -> Option<String> {
 fn extract_policy_id(msg: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r#"(?i)"PolicyId"\s*:\s*\\?"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\?""#).unwrap()
+        Regex::new(&format!(r#"(?i)"PolicyId"\s*:\s*\\?"({GUID_PATTERN})\\?""#)).unwrap()
     });
     re.captures(msg)
         .and_then(|cap| cap.get(1))

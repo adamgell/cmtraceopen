@@ -30,7 +30,9 @@ use cmtraceopen_parser::intune::enrollment::windows::autopilot::{
     AutopilotPhase, AutopilotSnapshot, AutopilotSourceInput,
 };
 use serde_json::{json, Value};
-use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
+use support::{
+    corpus_root, load_json, mutated, scenario_names, validate_scenario, wire, Failures,
+};
 
 /// The corpus this leaf owns.
 const CORPUS: &str = "enrollment/windows/autopilot";
@@ -56,9 +58,17 @@ const SCENARIOS: [&str; 15] = [
 ];
 
 fn scenario_root(scenario: &str) -> PathBuf {
-    corpus_root(CORPUS).join(scenario)
+    support::scenario_root(CORPUS, scenario)
 }
 
+/// The manifest's capture state as this lane's own collector vocabulary.
+///
+/// Deliberately not `support::artifact_status_for_capture_state`: Autopilot's
+/// input is `AutopilotCaptureState`, not `IntuneArtifactStatus`, and the mapping
+/// is serde's own `rename_all = "camelCase"` rather than a hand-written table.
+/// Routing it through the shared helper would mean re-deriving a lane enum from
+/// a status, which is backwards, and would drop serde as the single definition of
+/// how that enum spells itself on the wire.
 fn capture_state(raw: &str) -> AutopilotCaptureState {
     serde_json::from_value(Value::String(raw.to_owned()))
         .unwrap_or_else(|error| panic!("captureState {raw:?} is a known state: {error}"))
@@ -117,10 +127,6 @@ fn bundle(scenario: &str) -> AutopilotBundleInput {
 fn reduce(scenario: &str) -> (AutopilotSnapshot, Value) {
     let expected = load_json(&scenario_root(scenario).join("expected.json"));
     (reduce_autopilot_bundle(&bundle(scenario)), expected)
-}
-
-fn wire(value: &impl serde::Serialize) -> Value {
-    serde_json::to_value(value).expect("snapshot must serialize")
 }
 
 // ── The shared contract ─────────────────────────────────────────────────────

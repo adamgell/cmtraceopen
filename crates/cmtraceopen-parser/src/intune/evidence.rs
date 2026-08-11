@@ -253,6 +253,45 @@ pub enum IntuneArtifactStatus {
     Unsupported,
 }
 
+/// The coverage status a declared access state implies.
+///
+/// [`IntuneAccessState`] and [`IntuneArtifactStatus`] are the same seven facts
+/// told from two vantage points: the observation envelope says how readable a
+/// source was, coverage says what became of the artifact. Binding the two
+/// vocabularies in one place is what stops a bundle declaring an artifact absent
+/// and then reporting coverage for it as available.
+///
+/// The `match` is exhaustive by design. A new variant on either enum must be a
+/// compile error here, not a silently defaulted arm in whichever workload
+/// happened to copy the table last.
+pub fn artifact_status_for_access_state(access_state: &IntuneAccessState) -> IntuneArtifactStatus {
+    match access_state {
+        IntuneAccessState::Available => IntuneArtifactStatus::Available,
+        IntuneAccessState::Missing => IntuneArtifactStatus::Missing,
+        IntuneAccessState::PermissionDenied => IntuneArtifactStatus::PermissionDenied,
+        IntuneAccessState::Capped => IntuneArtifactStatus::Capped,
+        IntuneAccessState::Skipped => IntuneArtifactStatus::Skipped,
+        IntuneAccessState::Failed => IntuneArtifactStatus::ParseFailed,
+        IntuneAccessState::Unsupported => IntuneArtifactStatus::Unsupported,
+    }
+}
+
+/// The access state a coverage status implies.
+///
+/// The exact inverse of [`artifact_status_for_access_state`]; see that function
+/// for why the pair lives here rather than in each workload.
+pub fn access_state_for_artifact_status(status: &IntuneArtifactStatus) -> IntuneAccessState {
+    match status {
+        IntuneArtifactStatus::Available => IntuneAccessState::Available,
+        IntuneArtifactStatus::Missing => IntuneAccessState::Missing,
+        IntuneArtifactStatus::PermissionDenied => IntuneAccessState::PermissionDenied,
+        IntuneArtifactStatus::Capped => IntuneAccessState::Capped,
+        IntuneArtifactStatus::Skipped => IntuneAccessState::Skipped,
+        IntuneArtifactStatus::ParseFailed => IntuneAccessState::Failed,
+        IntuneArtifactStatus::Unsupported => IntuneAccessState::Unsupported,
+    }
+}
+
 /// One expected artifact and what became of it.
 ///
 /// Coverage is emitted for artifacts that were *not* read as well as those that
@@ -360,6 +399,35 @@ mod tests {
             (IntuneAccessState::Skipped, "\"skipped\""),
         ] {
             assert_eq!(serde_json::to_string(&state).unwrap(), wire);
+        }
+    }
+
+    /// Ported from `intune::apps::windows::win32::sources`, where this table was
+    /// asserted against one of three byte-identical copies of the mapping.
+    #[test]
+    fn every_access_state_maps_to_exactly_one_coverage_status() {
+        for (state, status) in [
+            (
+                IntuneAccessState::Available,
+                IntuneArtifactStatus::Available,
+            ),
+            (IntuneAccessState::Missing, IntuneArtifactStatus::Missing),
+            (
+                IntuneAccessState::PermissionDenied,
+                IntuneArtifactStatus::PermissionDenied,
+            ),
+            (IntuneAccessState::Capped, IntuneArtifactStatus::Capped),
+            (IntuneAccessState::Skipped, IntuneArtifactStatus::Skipped),
+            (IntuneAccessState::Failed, IntuneArtifactStatus::ParseFailed),
+            (
+                IntuneAccessState::Unsupported,
+                IntuneArtifactStatus::Unsupported,
+            ),
+        ] {
+            assert_eq!(artifact_status_for_access_state(&state), status);
+            // The pair is a bijection, so the same table read backwards is the
+            // whole contract of the inverse.
+            assert_eq!(access_state_for_artifact_status(&status), state);
         }
     }
 
