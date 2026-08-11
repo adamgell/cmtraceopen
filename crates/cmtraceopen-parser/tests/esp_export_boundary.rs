@@ -14,11 +14,11 @@
 //!    identifier shapes (mail address, SID, MAC, IPv4). A field that starts
 //!    carrying an identifier fails here even if no named marker was updated.
 //!
-//! What this does NOT cover: a bare device serial or DNS domain sitting in
-//! narrative text. Those are masked where they are typed fields but carry no
-//! label and no distinctive shape in free text, so the redaction rules leave
-//! them. `bare_identifiers_in_free_text_are_a_known_residual_gap` pins that
-//! limitation so it stays visible.
+//! A bare device serial or DNS tenant domain has no label and no distinctive
+//! shape, so no free-text rule can find it. Those are covered instead by
+//! scrubbing the literal values the projection masks as typed fields out of
+//! every free-text field, and the fixture plants them unlabelled in narrative
+//! so guard 1 above proves it.
 
 use cmtraceopen_parser::esp::*;
 use regex::Regex;
@@ -172,23 +172,79 @@ fn exporting_does_not_mutate_the_local_session() {
 }
 
 #[test]
-fn bare_identifiers_in_free_text_are_a_known_residual_gap() {
-    // Not an endorsement: a characterization of what this boundary does NOT
-    // do, so the gap is visible instead of assumed closed. A device serial and
-    // a DNS tenant domain are masked where they are typed fields, but in
-    // narrative text they carry no label and no distinctive shape, so the
-    // free-text rules leave them alone. Whoever closes that gap should delete
-    // this test along with the note in the module docs.
+fn a_bare_serial_or_tenant_domain_in_narrative_text_is_scrubbed() {
+    // Neither value can be found by shape: a serial is an arbitrary token and a
+    // tenant domain is an ordinary DNS name. They are removed because the
+    // projection already knows them as typed fields it is about to mask, and
+    // scrubs those exact values out of free text too.
     let mut snapshot = snapshot_with_planted_identifiers();
     snapshot.activity[0].detail = Some(format!("device {SERIAL} joined {TENANT_DOMAIN}"));
 
     let exported = exported_session_json(&snapshot);
 
-    assert!(exported.contains(SERIAL), "the free-text serial gap closed");
     assert!(
-        exported.contains(TENANT_DOMAIN),
-        "the free-text tenant-domain gap closed"
+        !exported.contains(SERIAL),
+        "the exported session leaks a bare device serial in narrative text"
     );
+    assert!(
+        !exported.contains(TENANT_DOMAIN),
+        "the exported session leaks a bare tenant domain in narrative text"
+    );
+}
+
+#[test]
+fn a_narrative_mention_that_differs_only_in_case_is_still_scrubbed() {
+    // Logs are inconsistent about case: the same serial appears lowercased in
+    // one line and uppercased in the next.
+    let mut snapshot = snapshot_with_planted_identifiers();
+    snapshot.activity[0].detail = Some(format!(
+        "serial {} then {}",
+        SERIAL.to_lowercase(),
+        SERIAL.to_uppercase()
+    ));
+
+    let exported = exported_session_json(&snapshot);
+
+    assert!(!exported.contains(&SERIAL.to_lowercase()));
+    assert!(!exported.contains(&SERIAL.to_uppercase()));
+}
+
+#[test]
+fn a_degenerate_firmware_serial_does_not_scrub_unrelated_narrative() {
+    // Firmware routinely reports junk serials. A value that short is
+    // indistinguishable from an ordinary word or number once it sits
+    // unlabelled in narrative, so scrubbing it would mangle readable evidence
+    // without protecting anything.
+    let mut snapshot = snapshot_with_planted_identifiers();
+    snapshot.identity.serial_number = Some(sensitive("0"));
+    snapshot
+        .hardware
+        .as_mut()
+        .expect("fixture has hardware")
+        .serial_number = Some(sensitive("0"));
+    snapshot.activity[0].detail = Some("retry 0 of 3 after a 0 second wait".to_string());
+
+    let exported: Value =
+        serde_json::from_str(&exported_session_json(&snapshot)).expect("export is JSON");
+
+    assert_eq!(
+        exported["snapshot"]["activity"][0]["detail"],
+        Value::String("retry 0 of 3 after a 0 second wait".to_string())
+    );
+}
+
+#[test]
+fn scrubbing_a_literal_does_not_hide_a_longer_identifier_it_sits_inside() {
+    // The tenant domain is a substring of the UPN. Whichever runs first must
+    // not leave the other half of the longer value behind.
+    let mut snapshot = snapshot_with_planted_identifiers();
+    snapshot.activity[0].detail = Some(format!("signed in as {UPN}"));
+
+    let exported = exported_session_json(&snapshot);
+
+    assert!(!exported.contains(UPN));
+    assert!(!exported.contains(PROFILE_USER));
+    assert!(!exported.contains(TENANT_DOMAIN));
 }
 
 fn collect_strings(value: &Value, path: String, out: &mut Vec<(String, String)>) {
@@ -341,11 +397,9 @@ fn snapshot_with_planted_identifiers() -> EspDiagnosticsSnapshot {
                 },
                 EspNamedValue {
                     name: "Detail".to_string(),
-                    // The serial deliberately does not appear here: an
-                    // unlabelled serial in narrative text is a documented gap,
-                    // characterized by
-                    // `bare_identifiers_in_free_text_are_a_known_residual_gap`.
-                    value: format!("device registered on nic {NIC_MAC}"),
+                    // Unlabelled and unshaped: only the projection's knowledge
+                    // of the typed serial field can find this one.
+                    value: format!("device {SERIAL} registered on nic {NIC_MAC}"),
                 },
             ],
             evidence: vec![evidence_ref("registration")],
@@ -387,9 +441,7 @@ fn snapshot_with_planted_identifiers() -> EspDiagnosticsSnapshot {
             ),
             raw_record(
                 "raw-network",
-                // Same gap as above: the tenant domain is masked where it is a
-                // typed field, not where it sits unlabelled in narrative.
-                format!("client {CLIENT_IPV4} nic {NIC_MAC} joined the assigned tenant"),
+                format!("client {CLIENT_IPV4} nic {NIC_MAC} joined {TENANT_DOMAIN}"),
             ),
             raw_record(
                 "raw-profile-path",
