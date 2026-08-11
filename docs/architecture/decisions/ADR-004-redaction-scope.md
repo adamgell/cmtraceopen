@@ -1,10 +1,13 @@
 # ADR-004: Redaction scope and correlation
 
-> **A revision is proposed and awaiting a ruling:**
-> `ADR-004-redaction-scope-revision-1.md`. It decides equality scope and
-> ownership, and records a direct contradiction between this document's
-> prohibition on stable correlation tokens and what five of six lanes ship.
-> This document remains authoritative until that revision is ruled on.
+> **Superseded in part by `ADR-004-redaction-scope-revision-1.md`, which is
+> ACCEPTED.** That revision records eight rulings covering the export boundary,
+> the equality scope, the caller-owned redaction context, the ownership split,
+> `Restricted`, recursive structural enforcement, and cross-lane correlation.
+> The token algorithm, caller-controlled key, equality scope, and
+> cross-artifact/session/export behaviour described as provisional below are no
+> longer provisional. Where the two documents disagree, revision 1 governs;
+> every provision below that revision 1 does not touch stays in force.
 
 - **Status:** Architecture boundary accepted; token/equality scope provisional
 - **Context:** Redaction can preserve or destroy equality used for diagnostic correlation. Independent workload token algorithms can create accidental cross-artifact or cross-session joins.
