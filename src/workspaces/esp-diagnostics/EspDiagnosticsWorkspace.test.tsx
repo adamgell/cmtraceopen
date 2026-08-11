@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { DEFAULT_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
@@ -2455,5 +2456,65 @@ describe("complete single-page evidence composition", () => {
       .map((element) => element.textContent?.trim().slice(0, 80));
 
     expect(undersizedLabels).toEqual([]);
+  });
+});
+
+describe("ESP session export boundary", () => {
+  const EXPORTED_UPN = "adele.vance@contoso.onmicrosoft.com";
+
+  async function clickExport() {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(save).mockResolvedValue("/tmp/esp-session.json");
+    showSnapshot(
+      makeSnapshot({
+        identity: {
+          ...makeSnapshot().identity,
+          userPrincipalName: {
+            value: EXPORTED_UPN,
+            sensitivity: "restricted",
+          },
+        },
+      }),
+    );
+    render(<EspDiagnosticsWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Export session" }));
+    await waitFor(() => expect(vi.mocked(save)).toHaveBeenCalled());
+  }
+
+  it("never writes a cleartext session to the chosen file", async () => {
+    await clickExport();
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command !== "get_esp_elevation_state"),
+      ).toBe(true),
+    );
+
+    const writtenText = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "write_text_output_file")
+      .map(([, args]) => String((args as { contents?: unknown })?.contents));
+
+    for (const text of writtenText) {
+      expect(text).not.toContain(EXPORTED_UPN);
+    }
+  });
+
+  it("produces the export through the redacting backend boundary", async () => {
+    // The frontend must not be able to serialize a session itself: the only
+    // path to a file is the command that applies the crate's export
+    // projection.
+    await clickExport();
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === "export_esp_session"),
+      ).toBe(true),
+    );
   });
 });
