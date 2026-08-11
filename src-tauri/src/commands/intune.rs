@@ -85,6 +85,29 @@ impl GuidDiagLog {
     fn contents(&self) -> Option<&str> {
         self.0.as_deref().filter(|trace| !trace.is_empty())
     }
+
+    /// Creates the trace file, refusing to write through anything that already exists.
+    ///
+    /// The name carries the process id and a monotonic stamp, and the file is opened with
+    /// `create_new`, so two analyses cannot overwrite each other and the call fails rather than
+    /// following a symlink an unprivileged user planted at a guessable path. The system temp
+    /// directory is world-writable, so a fixed name there is the classic clobber target — and this
+    /// trace is opt-in precisely because its contents are sensitive.
+    fn create_file(&self) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "cmtrace-guid-diag-{}-{stamp}.log",
+            std::process::id()
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok((path, file))
+    }
 }
 
 impl FmtWrite for GuidDiagLog {
@@ -388,10 +411,12 @@ fn analyze_intune_logs_blocking(
             guid_registry.len(), enriched_events, missed_events, enriched_downloads, missed_downloads, all_downloads.len()
         );
         if let Some(contents) = diag_buffer.contents() {
-            let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
-            if let Ok(mut f) = fs::File::create(&diag_path) {
-                let _ = f.write_all(contents.as_bytes());
-                log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
+            match diag_buffer.create_file() {
+                Ok((diag_path, mut file)) => {
+                    let _ = file.write_all(contents.as_bytes());
+                    log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
+                }
+                Err(error) => log::warn!("event=guid_diag_write_failed error=\"{error}\""),
             }
         }
     }
@@ -1443,22 +1468,44 @@ fn download_signal_rank(state: DownloadSignalState) -> u8 {
 mod guid_diag_tests {
     use super::GuidDiagLog;
     use std::fmt::Write as _;
+    use std::fs;
 
     /// Serializes the env-var mutation these tests share; cargo runs them on threads.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Restores the variable on drop, so a failing assertion cannot leak the mutation.
+    ///
+    /// A plain restore after `body()` is skipped while unwinding, which would leave the trace
+    /// enabled for every test that ran afterwards and turn one real failure into a cascade of
+    /// unrelated ones.
+    struct EnvRestore {
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", previous),
+                None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
+            }
+        }
+    }
+
     fn with_var<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var_os("CMTRACE_INTUNE_GUID_DIAG");
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let restore = EnvRestore {
+            previous: std::env::var_os("CMTRACE_INTUNE_GUID_DIAG"),
+            _lock: lock,
+        };
         match value {
             Some(value) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", value),
             None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
         }
         let outcome = body();
-        match previous {
-            Some(previous) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", previous),
-            None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
-        }
+        drop(restore);
         outcome
     }
 
@@ -1497,12 +1544,39 @@ mod guid_diag_tests {
     }
 
     #[test]
-    fn an_enabled_but_unused_trace_writes_no_file() {
-        // contents() is what gates the write, so an enabled run that logged nothing must still
-        // produce no file rather than an empty one sitting in TEMP.
+    fn an_enabled_trace_that_collected_nothing_reports_no_contents() {
+        // Deliberately a statement about the sink, not about the file. In the real analysis the
+        // pipeline summary always writes once the trace is on, so an enabled run does produce a
+        // file; claiming otherwise here would be a test passing for a reason its name denies.
         with_var(Some("1"), || {
             let log = GuidDiagLog::from_env();
             assert!(log.contents().is_none());
+        });
+    }
+
+    #[test]
+    fn the_trace_file_refuses_to_write_through_something_that_exists() {
+        // The system temp directory is world-writable, so a fixed name there is the classic
+        // clobber and symlink-follow target, and this trace is opt-in precisely because its
+        // contents are sensitive.
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            let (first_path, _first) = log.create_file().expect("creates");
+            assert!(first_path.exists());
+
+            // A second call must not reuse the name, so no analysis can truncate another's trace.
+            let (second_path, _second) = log.create_file().expect("creates");
+            assert_ne!(first_path, second_path);
+
+            // And re-opening an existing path is refused rather than truncating it.
+            let existing = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&first_path);
+            assert!(existing.is_err(), "create_new must refuse an existing path");
+
+            let _ = fs::remove_file(&first_path);
+            let _ = fs::remove_file(&second_path);
         });
     }
 }
