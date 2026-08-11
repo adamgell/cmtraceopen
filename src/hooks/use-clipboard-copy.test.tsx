@@ -162,11 +162,23 @@ describe("useKeyboard Ctrl+C fallback (#520)", () => {
 });
 
 describe("useClipboardHistoryMirror (#520)", () => {
+  // The hook defers its write with setTimeout so the native copy lands first, so the two tests
+  // that assert a write have to let that timer run. The negative cases below need no timer: they
+  // assert the write never happens, and a pending timer would not change that.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("mirrors a native copy of a DOM selection through the clipboard plugin", () => {
     stubSelection("part of the message");
     renderHook(() => useClipboardHistoryMirror());
 
     fireEvent.copy(document.body);
+    vi.runAllTimers();
 
     expect(clipboardMocks.writeText).toHaveBeenCalledWith("part of the message");
   });
@@ -180,6 +192,7 @@ describe("useClipboardHistoryMirror (#520)", () => {
     input.setSelectionRange(0, 6);
 
     fireEvent.copy(input);
+    vi.runAllTimers();
 
     expect(clipboardMocks.writeText).toHaveBeenCalledWith("search");
     input.remove();
