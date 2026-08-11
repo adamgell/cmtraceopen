@@ -109,7 +109,6 @@ beforeEach(() => {
     showSettingsDialog: false,
     showEvidenceBundleDialog: false,
     showFileAssociationPrompt: false,
-    elevationPrompt: null,
   });
   useLogStore.getState().clear();
   useLogStore
