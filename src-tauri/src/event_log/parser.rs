@@ -231,7 +231,7 @@ fn parse_single_file(
         // every other cross-platform reader shows and why they are hard to read.
         let message = describe_event(&providers, &provider, event_id, &insertions)
             .or(payload)
-            .unwrap_or_else(|| build_message(&fields));
+            .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields));
 
         let mapped = super::maps::apply_registered(&maps, &channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
@@ -305,16 +305,6 @@ fn describe_event(
     } else {
         None
     }
-}
-
-/// Build a human-readable message from the first few EventData fields.
-fn build_message(event_data: &[EvtxField]) -> String {
-    event_data
-        .iter()
-        .take(5)
-        .map(|f| format!("{}: {}", f.name, f.value))
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 #[cfg(test)]
@@ -575,22 +565,6 @@ mod tests {
             parse_timestamp_to_epoch_ms(system.time_created.as_deref().unwrap_or_default()),
             1_786_276_800_000
         );
-    }
-
-    #[test]
-    fn test_build_message() {
-        let fields = vec![
-            EvtxField {
-                name: "Key1".into(),
-                value: "Val1".into(),
-            },
-            EvtxField {
-                name: "Key2".into(),
-                value: "Val2".into(),
-            },
-        ];
-        let msg = build_message(&fields);
-        assert_eq!(msg, "Key1: Val1; Key2: Val2");
     }
 }
 
