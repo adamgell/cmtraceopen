@@ -179,8 +179,11 @@ impl MapEntry {
 
     /// The entry's bindings, parsed once.
     ///
-    /// Only bindings whose placeholder appears in the template are compiled, matching what the
-    /// applier will actually consult; the rest cost nothing.
+    /// Every binding is compiled, including any whose placeholder the template never references.
+    /// Compiling all of them keeps this positionally aligned with [`bindings`](Self::bindings),
+    /// which is what lets the applier zip the two; skipping some would misalign the pair. The
+    /// applier decides separately which to *evaluate*, and an unreferenced binding is never
+    /// evaluated or reported.
     pub fn compiled(&self) -> &[CompiledBinding] {
         self.compiled.get_or_init(|| {
             self.values
