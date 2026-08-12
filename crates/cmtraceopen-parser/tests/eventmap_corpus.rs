@@ -226,7 +226,7 @@ fn every_fixture_parses_with_no_malformed_paths() {
     for raw in [SHELL_CORE_9701, SECURITY_4624, NTFS_146] {
         let map = load(raw);
         for entry in &map.maps {
-            for binding in &entry.values {
+            for binding in entry.bindings() {
                 assert!(
                     ValuePath::parse(&binding.value).is_ok(),
                     "upstream map {} binding {} has an expression this engine cannot parse: {}",

@@ -70,12 +70,12 @@ fn apply_entry(
     event: &EventNode,
     invalid_paths: &mut Vec<(String, String)>,
 ) -> MappedValue {
-    let template = entry.property_value.as_str();
+    let template = entry.template();
     let mut resolved: BTreeMap<&str, String> = BTreeMap::new();
 
     // Paths and placeholders are parsed once per map, not once per record. This runs for every
     // event on a channel, so re-parsing an expression that cannot change was the dominant cost.
-    for (binding, compiled) in entry.values.iter().zip(entry.compiled()) {
+    for (binding, compiled) in entry.bindings().iter().zip(entry.compiled()) {
         // Checked against the original template, never against partially rendered output.
         if !template.contains(&compiled.placeholder) {
             continue;
@@ -457,5 +457,84 @@ mod tests {
             Some("User adam")
         );
         assert!(mapped.values[0].is_complete());
+    }
+
+    #[test]
+    fn applying_an_entry_twice_gives_the_same_answer() {
+        // The compiled bindings are memoized and a OnceLock never invalidates, so the risk is a
+        // cache that outlives the content it was built from. The inputs are private, which makes
+        // that unrepresentable rather than unlikely: there is no way to reach this entry's
+        // template or bindings and change them between these two calls.
+        let map = map_with(
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "%first% then %second%".to_string(),
+                vec![binding("first", "A"), binding("second", "B")],
+            )],
+            vec![],
+        );
+        let event = EventNode::new("Event").with_child(
+            EventNode::new("EventData")
+                .with_child(
+                    EventNode::new("Data")
+                        .with_attribute("Name", "A")
+                        .with_text("alpha"),
+                )
+                .with_child(
+                    EventNode::new("Data")
+                        .with_attribute("Name", "B")
+                        .with_text("beta"),
+                ),
+        );
+
+        let cold = apply_map(&map, &event);
+        let warm = apply_map(&map, &event);
+        assert_eq!(cold, warm);
+        assert_eq!(
+            warm.value_for(&MapProperty::PayloadData(1)),
+            Some("alpha then beta")
+        );
+    }
+
+    #[test]
+    fn a_rebuilt_entry_compiles_its_own_content() {
+        // Rebuilding is the only way to get different content now, so the guarantee that matters
+        // is that a new entry never inherits an older one's compiled paths.
+        let event = EventNode::new("Event").with_child(
+            EventNode::new("EventData").with_child(
+                EventNode::new("Data")
+                    .with_attribute("Name", "A")
+                    .with_text("alpha"),
+            ),
+        );
+
+        let first = map_with(
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "%only%".to_string(),
+                vec![binding("only", "A")],
+            )],
+            vec![],
+        );
+        assert_eq!(
+            apply_map(&first, &event).value_for(&MapProperty::PayloadData(1)),
+            Some("alpha")
+        );
+
+        // Same placeholder, different path: the second entry must resolve by its own expression.
+        let second = map_with(
+            vec![MapEntry::new(
+                MapProperty::PayloadData(1),
+                "%only%".to_string(),
+                vec![binding("only", "missing")],
+            )],
+            vec![],
+        );
+        let mapped = apply_map(&second, &event);
+        assert_eq!(
+            mapped.value_for(&MapProperty::PayloadData(1)),
+            Some("%only%"),
+            "the rebuilt entry must not resolve through the first entry's path"
+        );
     }
 }

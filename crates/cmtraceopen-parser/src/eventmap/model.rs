@@ -129,10 +129,18 @@ pub struct MapEntry {
     /// Which normalized column this writes.
     pub property: MapProperty,
     /// Template containing `%Name%` placeholders.
-    pub property_value: String,
+    ///
+    /// Private, with [`template`](Self::template) to read it. The compiled cache below is derived
+    /// from this field and from `values`, and a `OnceLock` does not invalidate: a caller who
+    /// mutated either after the first application would leave a complete but stale cache, and the
+    /// applier would pair current bindings with compiled records describing the old ones. Rather
+    /// than add an invalidation path nobody would remember to call, the inputs cannot be changed.
+    property_value: String,
     /// Variables available to the template.
+    ///
+    /// Private for the same reason as `property_value`.
     #[serde(default)]
-    pub values: Vec<ValueBinding>,
+    values: Vec<ValueBinding>,
     /// Built on first use and reused for every later record.
     ///
     /// Memoized here rather than compiled by whoever owns the map, because a separate compile step
@@ -154,6 +162,19 @@ impl MapEntry {
             values,
             compiled: OnceLock::new(),
         }
+    }
+
+    /// The template this entry renders, with its `%Name%` placeholders.
+    pub fn template(&self) -> &str {
+        &self.property_value
+    }
+
+    /// The variables the template can reference, in declaration order.
+    ///
+    /// Positionally aligned with [`compiled`](Self::compiled); both derive from the same field and
+    /// neither can change after construction.
+    pub fn bindings(&self) -> &[ValueBinding] {
+        &self.values
     }
 
     /// The entry's bindings, parsed once.
