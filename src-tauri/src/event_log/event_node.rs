@@ -8,6 +8,8 @@
 //! occasionally emit prefixed elements, but map path expressions are written without prefixes
 //! (`/Event/EventData/Data`), so keeping them would make every such map silently match nothing.
 
+use super::models::EvtxField;
+use super::sanitize_control_chars;
 use cmtraceopen_parser::eventmap::EventNode;
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::{Reader, XmlVersion};
@@ -143,6 +145,7 @@ pub struct SystemFields {
     pub channel: Option<String>,
     pub computer: Option<String>,
     pub time_created: Option<String>,
+    pub event_record_id: Option<u64>,
     pub task: Option<u32>,
     pub opcode: Option<u32>,
     pub process_id: Option<u32>,
@@ -196,6 +199,7 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
         channel: text_of("Channel").map(str::to_string),
         computer: text_of("Computer").map(str::to_string),
         time_created: attribute_of("TimeCreated", "SystemTime"),
+        event_record_id: text_of("EventRecordID").and_then(|value| value.parse().ok()),
         task: text_of("Task").and_then(|value| value.parse().ok()),
         opcode: text_of("Opcode").and_then(|value| value.parse().ok()),
         process_id: attribute_of("Execution", "ProcessID").and_then(|v| v.parse().ok()),
@@ -203,6 +207,87 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
         user_sid: attribute_of("Security", "UserID"),
         keywords: text_of("Keywords").map(str::to_string),
     }
+}
+
+/// What an event's data section yielded, in the two shapes that are needed.
+///
+/// They differ, and conflating them corrupts messages. The display list omits fields the provider
+/// left empty, because a column of blanks is noise. The insertion list keeps them, because the
+/// message template addresses fields by position and a gap shifts every later reference.
+pub struct EventFields {
+    pub fields: Vec<EvtxField>,
+    pub insertions: Vec<String>,
+}
+
+/// Extract event fields as name-value pairs.
+///
+/// Both `EventData` and `UserData` are read. Manifest providers use the former and classic or
+/// trace-backed providers the latter, and skipping `UserData` would leave those events with no
+/// fields at all.
+///
+/// A `Data` element with no `Name` attribute is numbered by its position, matching how the event
+/// message template refers to it. Values are sanitized to strip control characters that would
+/// render as unexpected glyphs.
+pub fn extract_event_data(root: &EventNode) -> EventFields {
+    let mut fields = Vec::new();
+    let mut insertions = Vec::new();
+    let mut unnamed = 0usize;
+
+    let containers = root
+        .children
+        .iter()
+        .filter(|child| child.name == "EventData" || child.name == "UserData");
+
+    // A child that carries text is a field. A child that carries only elements is a wrapper, which
+    // is how UserData nests its fields under a provider-named element, so it is descended through.
+    //
+    // Deciding per child rather than per container matters: an EventData holding only <Binary> has
+    // no <Data> at all, and treating the whole container as wrappers would descend into <Binary>,
+    // find no children, and drop the only value the event carried.
+    let push_field = |child: &EventNode,
+                      fields: &mut Vec<EvtxField>,
+                      insertions: &mut Vec<String>,
+                      unnamed: &mut usize| {
+        let value = sanitize_control_chars(child.text.as_deref().unwrap_or_default());
+        // Recorded even when empty. The provider's message template addresses fields by position,
+        // so skipping one here shifts every later %N and renders the description with the wrong
+        // values substituted into it, which reads as fact.
+        insertions.push(value.clone());
+
+        // Counted before the emptiness check, for the same reason. The label is what an operator
+        // uses to match a field against the provider's template, so skipping the count for a blank
+        // slot would label the second field Data1 while the template calls it %2.
+        let position = if child.attribute("Name").is_none() && child.name == "Data" {
+            *unnamed += 1;
+            Some(*unnamed)
+        } else {
+            None
+        };
+
+        if value.is_empty() {
+            return;
+        }
+        let name = match (child.attribute("Name"), position) {
+            (Some(name), _) => name.to_string(),
+            (None, Some(position)) => format!("Data{position}"),
+            (None, None) => child.name.clone(),
+        };
+        fields.push(EvtxField { name, value });
+    };
+
+    for container in containers {
+        for child in &container.children {
+            if child.text.is_some() || child.children.is_empty() {
+                push_field(child, &mut fields, &mut insertions, &mut unnamed);
+            } else {
+                for grandchild in &child.children {
+                    push_field(grandchild, &mut fields, &mut insertions, &mut unnamed);
+                }
+            }
+        }
+    }
+
+    EventFields { fields, insertions }
 }
 
 #[cfg(test)]
