@@ -267,6 +267,7 @@ fn query_channel_inner(
     let mut records = Vec::new();
     let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
     let mut unparsable = 0usize;
+    let mut unrenderable = 0usize;
 
     let mut gaps = Vec::new();
     let mut batch = EVENT_FETCH_BATCH;
@@ -344,8 +345,22 @@ fn query_channel_inner(
             }
 
             let event_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
-            let xml =
-                render_event_xml(event_handle.raw()).map_err(|e| format_error("EvtRender", &e))?;
+            // A handle that fails to render is counted, not fatal. Propagating it here returned
+            // Err for the whole channel and threw away every record already read, which the caller
+            // then reported as a channel with no events.
+            let xml = match render_event_xml(event_handle.raw()) {
+                Ok(xml) => xml,
+                Err(error) => {
+                    unrenderable += 1;
+                    if unrenderable == 1 {
+                        log::warn!(
+                            "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
+                            format_error("EvtRender", &error)
+                        );
+                    }
+                    continue;
+                }
+            };
 
             // Parsed once here and handed to the record builder. The provider has to be known
             // before the record exists, because it names the publisher whose message template the
@@ -356,9 +371,12 @@ fn query_channel_inner(
                 Err(error) => {
                     unparsable += 1;
                     if unparsable == 1 {
+                        // Sliced by character rather than by byte. A byte cut that lands inside a
+                        // multi-byte character panics, and this XML carries account names and paths
+                        // that are routinely not ASCII.
+                        let prefix: String = xml.chars().take(300).collect();
                         log::warn!(
-                            "event=evtx_parse_failed channel=\"{channel}\" error=\"{error}\" xml_prefix=\"{}\"",
-                            &xml[..xml.len().min(300)]
+                            "event=evtx_parse_failed channel=\"{channel}\" error=\"{error}\" xml_prefix=\"{prefix}\""
                         );
                     }
                     continue;
@@ -402,8 +420,14 @@ fn query_channel_inner(
             "{channel}: {unparsable} events could not be read and are missing from this view"
         ));
     }
+    if unrenderable > 0 {
+        log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
+        gaps.push(format!(
+            "{channel}: {unrenderable} events could not be rendered and are missing from this view"
+        ));
+    }
     log::info!(
-        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} gaps={}",
+        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} gaps={}",
         records.len(),
         gaps.len()
     );
