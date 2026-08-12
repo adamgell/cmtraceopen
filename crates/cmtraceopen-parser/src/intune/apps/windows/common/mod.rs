@@ -7,4 +7,4 @@
 
 mod redaction;
 
-pub use redaction::redact_text;
+pub use redaction::{redact_text, sid_occurrences};

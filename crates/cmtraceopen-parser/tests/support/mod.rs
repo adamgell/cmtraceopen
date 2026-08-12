@@ -23,6 +23,7 @@
 //! `src-tauri/tests/common/mod.rs` sets the same precedent.
 #![allow(dead_code)]
 
+use cmtraceopen_parser::intune::apps::windows::common::sid_occurrences;
 use cmtraceopen_parser::intune::evidence::{
     access_state_for_artifact_status, IntuneAccessState, IntuneArtifactStatus,
 };
@@ -883,19 +884,22 @@ pub fn privacy_problems_excluding_probes(
 }
 
 /// Every `S-1-…` SID with at least three sub-authorities, with its byte offset.
+///
+/// Delegates to the owner grammar rather than restating the shape. This is the
+/// guard that fails the build when a fixture carries an unmasked SID, so a
+/// divergence from what the masker matches is a hole in the safety net, and a
+/// hole there is invisible by construction: the check whose job is catching a
+/// leak is the one place a mismatch goes unnoticed.
+///
+/// The re-implementation this replaced had two such holes. It was
+/// case-sensitive, so a lowercase `s-1-5-21-…` passed; and it required the
+/// candidate to end in a digit, so `S-1-5-21-1010-` passed while the masker
+/// would have masked it.
 fn windows_sid_occurrences(contents: &str) -> Vec<(usize, String)> {
-    let mut occurrences = Vec::new();
-    for (index, _) in contents.match_indices("S-1-") {
-        let candidate = contents[index..]
-            .split(|c: char| !(c.is_ascii_digit() || c == '-' || c == 'S'))
-            .next()
-            .unwrap_or_default();
-        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit())
-        {
-            occurrences.push((index, candidate.to_owned()));
-        }
-    }
-    occurrences
+    sid_occurrences(contents)
+        .into_iter()
+        .map(|(offset, found)| (offset, found.to_owned()))
+        .collect()
 }
 
 /// Find an email address, ignoring the reserved `.invalid` and `.example` TLDs

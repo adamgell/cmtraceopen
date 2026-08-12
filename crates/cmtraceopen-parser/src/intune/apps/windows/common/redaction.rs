@@ -185,11 +185,30 @@ fn tenant_field_re() -> &'static Regex {
 ///
 /// The `S-1-…` shape is unambiguous enough to mask without an anchor, and a
 /// SID identifies a user or machine exactly as strongly as a UPN does.
+///
+/// Case-insensitive like every other rule in this file. Windows itself emits the
+/// uppercase form, but third-party logs and JSON round-trips lowercase
+/// identifiers, and a `s-1-5-21-…` exporting verbatim while the uppercase form
+/// masked was an inconsistency nothing in the code or the docs intended.
 fn sid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
+        Regex::new(r"(?i)\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
     })
+}
+
+/// Every Windows SID in `text`, as `(byte offset, matched text)`.
+///
+/// Public so anything needing to *find* SIDs — the fixture privacy scanner most
+/// of all — asks this grammar instead of restating the shape. A detector that
+/// re-implements what the masker matches will drift from it, and drift in a
+/// safety net is invisible by construction: the check whose job is catching a
+/// leak is the one place a mismatch goes unnoticed.
+pub fn sid_occurrences(text: &str) -> Vec<(usize, &str)> {
+    sid_re()
+        .find_iter(text)
+        .map(|found| (found.start(), found.as_str()))
+        .collect()
 }
 
 /// Whether `kind:hash` is a well-formed token body — the one validity rule
@@ -342,14 +361,18 @@ pub fn redact_text(value: &str) -> String {
 
     sid_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            stable_token("sid", &caps[0])
+            // Hashed from the uppercase form. A SID is case-insensitive, so the
+            // two spellings name one identity and must reach one token; hashing
+            // the text as written would hand an analyst two tokens for the same
+            // account and break the correlation these tokens exist to provide.
+            stable_token("sid", &caps[0].to_ascii_uppercase())
         })
         .into_owned()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::redact_text;
+    use super::{redact_text, sid_occurrences};
 
     #[test]
     fn a_json_escaped_windows_path_is_masked() {
@@ -494,6 +517,44 @@ mod tests {
         assert!(!escaped.contains("John"), "got {escaped:?}");
         assert!(!escaped.contains("Doe"), "got {escaped:?}");
         assert!(escaped.contains("AppData"), "got {escaped:?}");
+    }
+
+    #[test]
+    fn a_lowercase_sid_masks_to_the_same_token_as_the_uppercase_form() {
+        // Every other rule in this file is case-insensitive; this one was not, so a
+        // lowercase identifier from a third-party log or a JSON round-trip exported
+        // verbatim while the uppercase form masked.
+        let upper = redact_text("owner S-1-5-21-397955417-626881126-188441444-1010 end");
+        let lower = redact_text("owner s-1-5-21-397955417-626881126-188441444-1010 end");
+
+        assert!(!lower.contains("397955417"), "got {lower:?}");
+        // One identity, one token. Hashing the text as written would hand an analyst
+        // two tokens for the same account.
+        assert_eq!(upper, lower, "case must not change the masked result");
+    }
+
+    #[test]
+    fn sid_occurrences_finds_what_the_masker_masks() {
+        // The fixture privacy scanner uses this, so anything it fails to find is
+        // material the masker would have hidden and the guard would have waved past.
+        for text in [
+            "S-1-5-21-397955417-626881126-188441444-1010",
+            "s-1-5-21-397955417-626881126-188441444-1010",
+            // A trailing separator: the re-implementation this replaced required the
+            // candidate to end in a digit, so this passed the scan while the masker
+            // masked it.
+            "S-1-5-21-1-2-3-",
+            "\"S-1-5-21-1-2-3\"",
+        ] {
+            assert!(
+                !sid_occurrences(text).is_empty(),
+                "the scanner must see {text:?}"
+            );
+            assert_ne!(redact_text(text), text, "the masker must mask {text:?}");
+        }
+
+        // Below the sub-authority threshold, both agree it identifies nobody.
+        assert!(sid_occurrences("running as S-1-5-18").is_empty());
     }
 
     #[test]
