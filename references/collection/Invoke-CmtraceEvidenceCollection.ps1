@@ -9,7 +9,8 @@ param(
     [string]$OperatorName = 'SYSTEM',
     [string]$OperatorTeam = 'Intune',
     [string]$OperatorContact = '',
-    [switch]$LocalOnly
+    [switch]$LocalOnly,
+    [switch]$SkipLocaleMetadata
 )
 
 Set-StrictMode -Version Latest
@@ -112,6 +113,61 @@ function Join-RelativePath {
     )
 
     return (($Left.TrimEnd('/')) + '/' + ($Right.TrimStart('/')))
+}
+
+function Get-LocaleMetadataRelativePath {
+    <#
+        .SYNOPSIS
+        Returns the manifest-relative LocaleMetaData folder that sits beside an exported channel.
+
+        .DESCRIPTION
+        wevtutil.exe archive-log writes its .MTA sidecars into a LocaleMetaData subdirectory
+        created next to the exported .evtx, so the manifest path has to mirror that layout.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EvtxRelativePath
+    )
+
+    $normalizedPath = $EvtxRelativePath -replace '\\', '/'
+    $lastSeparatorIndex = $normalizedPath.LastIndexOf('/')
+
+    if ($lastSeparatorIndex -lt 0) {
+        return 'LocaleMetaData'
+    }
+
+    return (Join-RelativePath -Left $normalizedPath.Substring(0, $lastSeparatorIndex) -Right 'LocaleMetaData')
+}
+
+function Get-LocaleMetadataLcid {
+    <#
+        .SYNOPSIS
+        Extracts the locale identifier wevtutil.exe encoded into an .MTA sidecar's file name.
+
+        .DESCRIPTION
+        Sidecars are named <exported-log>_<lcid>.MTA, for example device-management-admin_1033.MTA.
+        The LCID is read back from the name rather than predicted, because the collecting machine's
+        default locale decides it and the exported log's own base name may itself contain
+        underscores.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MetadataFileName
+    )
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($MetadataFileName)
+    $lastSeparatorIndex = $baseName.LastIndexOf('_')
+
+    if ($lastSeparatorIndex -lt 0 -or $lastSeparatorIndex -eq ($baseName.Length - 1)) {
+        return 'unknown'
+    }
+
+    $candidate = $baseName.Substring($lastSeparatorIndex + 1)
+    if ($candidate -notmatch '^\d+$') {
+        return 'unknown'
+    }
+
+    return $candidate
 }
 
 function ConvertTo-PhysicalPath {
@@ -223,6 +279,10 @@ function Get-ObjectPropertyValue {
         [object]$DefaultValue = $null
     )
 
+    # Returns are deliberately left enumerating. Callers such as Assert-CollectorProfileShape
+    # collect this with @(...), which would nest the value one level deep if an array were
+    # returned as a single pipeline item. Callers that must distinguish an array from a scalar
+    # read PSObject.Properties directly instead of going through here.
     if ($null -eq $InputObject) {
         return $DefaultValue
     }
@@ -355,8 +415,15 @@ function Assert-CollectorProfileShape {
             $artifactIds.Add($artifactId, $itemContext)
 
             foreach ($propertyName in @($sectionDefinition.optionalArrays)) {
-                $propertyValue = Get-ObjectPropertyValue -InputObject $item -Name $propertyName
-                if ($null -ne $propertyValue -and -not (Test-ArrayValue -Value $propertyValue)) {
+                # Read the raw property rather than using Get-ObjectPropertyValue: that helper
+                # returns through the pipeline, which enumerates a single-element array such as
+                # arguments: ["/status"] down to a bare string and fails this check spuriously.
+                $property = $item.PSObject.Properties[$propertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    continue
+                }
+
+                if (-not (Test-ArrayValue -Value $property.Value)) {
                     throw ('Collector profile is invalid: {0}. {1}.{2} must be an array when present.' -f $Path, $itemContext, $propertyName)
                 }
             }
@@ -386,7 +453,9 @@ function Read-CollectorProfile {
     }
 
     try {
-        $collectorProfile = $rawProfile | ConvertFrom-Json -Depth 20 -ErrorAction Stop
+        # No -Depth here: Windows PowerShell 5.1's ConvertFrom-Json has no such parameter and
+        # fails parameter binding, which is the host this collector is deployed under.
+        $collectorProfile = $rawProfile | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
         throw ('Collector profile contains invalid JSON: {0}. Error: {1}' -f $Path, $_.Exception.Message)
@@ -706,6 +775,103 @@ function Test-EventChannelExists {
     }
 }
 
+function Export-EventChannelLocaleMetadata {
+    <#
+        .SYNOPSIS
+        Archives an already-exported channel so its message strings travel with the bundle.
+
+        .DESCRIPTION
+        wevtutil.exe export-log emits only the binary records. Rendering an event description
+        then requires the originating provider to be registered on whatever machine opens the
+        file, which is never true for an analyst workstation and is impossible on macOS or Linux.
+        wevtutil.exe archive-log writes a LocaleMetaData\<name>_<lcid>.MTA sidecar carrying the
+        provider's message strings, making the export self-describing.
+
+        The locale is deliberately left to the collecting machine's default so the captured
+        strings match what the operator saw on that endpoint. The emitted LCID is recorded in
+        the artifact notes rather than predicted, because the file name depends on it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EvtxPath,
+        [Parameter(Mandatory = $true)]
+        [string]$EvtxRelativePath,
+        [Parameter(Mandatory = $true)]
+        [string]$Family,
+        [Parameter(Mandatory = $true)]
+        [string]$Channel,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IList]$ObservedGaps
+    )
+
+    $records = New-Object 'System.Collections.Generic.List[object]'
+    $metadataRelativeFolder = Get-LocaleMetadataRelativePath -EvtxRelativePath $EvtxRelativePath
+    $metadataFolder = Join-Path (Split-Path -Parent $EvtxPath) 'LocaleMetaData'
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($EvtxPath)
+
+    # Manifest consumers treat relativePath as a file and test it on disk, so an unresolved
+    # outcome still needs a file-shaped path. Using the LocaleMetaData folder would both look
+    # present-on-disk whenever the folder exists and collide across channels.
+    $unresolvedRelativePath = Join-RelativePath -Left $metadataRelativeFolder -Right ('{0}_unknown-lcid.MTA' -f $baseName)
+
+    # Invoking wevtutil.exe is inside the try for the same reason Test-Path below is:
+    # $ErrorActionPreference is 'Stop' for this script, so the command being absent from PATH, or
+    # failing to launch at all, would abort the entire collection instead of recording one failed
+    # channel. A missing wevtutil.exe is not far-fetched on a locked-down or constrained host, and
+    # losing every other artifact over it is the worst possible outcome.
+    try {
+        & wevtutil.exe al $EvtxPath | Out-Null
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        $notes = 'Could not run wevtutil.exe al: {0}. Event descriptions will not resolve away from this machine.' -f (Protect-SecretText -Text $_.Exception.Message)
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+        return $records
+    }
+
+    if ($exitCode -ne 0) {
+        $notes = 'wevtutil.exe al failed with exit code {0}. Event descriptions will not resolve away from this machine.' -f $exitCode
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+        return $records
+    }
+
+    # Test-Path is inside the try deliberately. $ErrorActionPreference is 'Stop' for this script, so
+    # a provider or I/O fault while probing the folder would otherwise abort the entire collection
+    # rather than recording a failed artifact for this one channel.
+    $metadataFiles = @()
+    try {
+        if (Test-Path -LiteralPath $metadataFolder -ErrorAction Stop) {
+            $metadataFiles = @(Get-ChildItem -LiteralPath $metadataFolder -Filter ('{0}_*.MTA' -f $baseName) -File -ErrorAction Stop)
+        }
+    }
+    catch {
+        # An access or I/O fault here is a failure, not an absence. Reporting it as 'missing' would
+        # claim the sidecar was never produced when it may simply be unreadable.
+        $notes = 'Could not enumerate {0}: {1}' -f $metadataFolder, (Protect-SecretText -Text $_.Exception.Message)
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+        return $records
+    }
+
+    if ($metadataFiles.Count -eq 0) {
+        $notes = 'wevtutil.exe al reported success but produced no .MTA sidecar. Event descriptions will not resolve away from this machine.'
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'missing' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'missing' -Origin $Channel -Reason $notes
+        return $records
+    }
+
+    foreach ($metadataFile in $metadataFiles) {
+        $relativePath = Join-RelativePath -Left $metadataRelativeFolder -Right $metadataFile.Name
+        $localeId = Get-LocaleMetadataLcid -MetadataFileName $metadataFile.Name
+        $notes = 'Locale metadata (LCID {0}) for {1}, enabling offline event description rendering.' -f $localeId, $Channel
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $relativePath -OriginPath $Channel -Status 'collected' -ParseHints @('mta') -FilePath $metadataFile.FullName -Notes $notes))
+    }
+
+    return $records
+}
+
 function Get-RedactedUploadUrl {
     param(
         [AllowEmptyString()]
@@ -934,6 +1100,14 @@ try {
         }
 
         $artifacts.Add($artifact)
+
+        if ($artifact.status -ne 'collected' -or $SkipLocaleMetadata) {
+            continue
+        }
+
+        foreach ($metadataArtifact in (Export-EventChannelLocaleMetadata -EvtxPath $destinationPath -EvtxRelativePath $relativePath -Family $eventItem.family -Channel $eventItem.channel -ObservedGaps $observedGaps)) {
+            $artifacts.Add($metadataArtifact)
+        }
     }
 
     Write-Step 'Collecting exported file artifacts'
