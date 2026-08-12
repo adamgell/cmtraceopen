@@ -428,7 +428,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           coverageGaps: mergeCoverageGaps(s.coverageGaps, checked.errorMessages),
         });
       } catch (e) {
-        console.warn(`[evtx] Refresh failed for ${ch}:`, e);
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn(`[evtx] Refresh failed for ${ch}: ${message}`);
+        // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
+        // here presents a view that is missing a whole channel as complete.
+        set((s) => ({
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${message})`]),
+          loadError: s.loadError ?? `${ch}: ${message}`,
+        }));
       }
     });
 

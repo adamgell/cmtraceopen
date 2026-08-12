@@ -104,6 +104,23 @@ describe("coverage gaps through the store", () => {
 
     expect(useEvtxStore.getState().coverageGaps).toEqual(["Application: fresh gap"]);
   });
+
+  it("records a channel whose refresh failed instead of showing the cleared view as complete", async () => {
+    // The refresh clears coverageGaps with the records it replaced. A channel whose refresh then
+    // fails contributes zero records to the replaced view, so the failure must be recorded or the
+    // view reports full coverage while missing a whole channel.
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    const state = useEvtxStore.getState();
+    expect(
+      state.coverageGaps.some((g) => g.includes("Application") && g.includes("access denied"))
+    ).toBe(true);
+    expect(state.loadError).toContain("Application");
+  });
 });
 
 describe("a multi-channel query is delivered one channel at a time", () => {
