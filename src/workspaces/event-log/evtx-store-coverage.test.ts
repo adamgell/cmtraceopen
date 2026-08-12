@@ -92,6 +92,97 @@ describe("coverage gaps through the store", () => {
   });
 });
 
+describe("a multi-channel query is delivered one channel at a time", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+    });
+  });
+
+  function withRecords(channel: string, count: number) {
+    return {
+      records: Array.from({ length: count }, (_, i) => ({
+        id: i,
+        eventRecordId: i,
+        timestamp: "2026-08-11T12:00:00.000Z",
+        timestampEpoch: 1_000 + i,
+        provider: "P",
+        channel,
+        eventId: 1,
+        level: "information",
+        computer: "C",
+        message: "m",
+        eventData: [],
+        rawXml: "<Event/>",
+        sourceLabel: "Live",
+        mapped: null,
+      })),
+      channels: [{ name: channel, eventCount: count, sourceType: "live" }],
+      totalRecords: count,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+  }
+
+  it("asks for each channel separately rather than all of them at once", async () => {
+    // The backend collects a whole request into one vector before replying, so a single request
+    // naming every channel holds every event of every channel in memory before anything is shown.
+    invoke
+      .mockResolvedValueOnce(withRecords("Application", 1))
+      .mockResolvedValueOnce(withRecords("System", 1));
+
+    await useEvtxStore.getState().queryChannels(["Application", "System"]);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    const requested = invoke.mock.calls.map(
+      (call) => (call[1] as { channels: string[] }).channels
+    );
+    expect(requested).toEqual([["Application"], ["System"]]);
+  });
+
+  it("keeps the channels that succeeded when one of them fails", async () => {
+    // A single request fails as a whole. One unreadable channel used to discard the results of
+    // every channel queried alongside it and leave the view empty.
+    invoke
+      .mockRejectedValueOnce(new Error("access denied"))
+      .mockResolvedValueOnce(withRecords("System", 3));
+
+    await useEvtxStore.getState().queryChannels(["Security", "System"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(3);
+    expect(state.loadedChannels.has("System")).toBe(true);
+    expect(state.loadedChannels.has("Security")).toBe(false);
+  });
+
+  it("records the unreadable channel as a gap, not only as an error string", async () => {
+    // loadError is replaced by the next load. A gap describes the view currently on screen, and
+    // events that never arrived look exactly like evidence that nothing happened.
+    invoke
+      .mockRejectedValueOnce(new Error("access denied"))
+      .mockResolvedValueOnce(withRecords("System", 1));
+
+    await useEvtxStore.getState().queryChannels(["Security", "System"]);
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    expect(gaps.some((g) => g.includes("Security") && g.includes("access denied"))).toBe(true);
+  });
+
+  it("still reports the failure through loadError", async () => {
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+
+    await useEvtxStore.getState().queryChannels(["Security"]);
+
+    expect(useEvtxStore.getState().loadError).toContain("Security");
+    expect(useEvtxStore.getState().isLoading).toBe(false);
+  });
+});
+
 describe("the time window reaches the service", () => {
   beforeEach(() => {
     invoke.mockReset();

@@ -252,16 +252,49 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   queryChannels: async (channels, maxEvents) => {
-    set({ isLoading: true, loadError: null });
-    try {
-      const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-        channels,
-        maxEvents: maxEvents ?? null,
-        filter: buildServerFilter(get().timeWindow),
-      });
-      const checked = assertParseResultShape(result);
+    set({ isLoading: true, loadError: null, selectedRecordId: null });
 
-      // Merge new records with existing ones (for incremental channel loading)
+    // One request per channel rather than one request for all of them. The backend collects a
+    // whole request's records into a single vector before replying, so asking for forty channels
+    // at once held every event of every channel in memory twice, once per channel and once in the
+    // combined vector, before anything reached the screen.
+    //
+    // It also isolates failure. A single request fails as a whole, so one unreadable channel threw
+    // away the results of every channel queried alongside it and left the view empty.
+    let loadError: string | null = null;
+
+    const results = await Promise.all(
+      channels.map(async (ch) => {
+        try {
+          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
+            channels: [ch],
+            maxEvents: maxEvents ?? null,
+            filter: buildServerFilter(get().timeWindow),
+          });
+          return { channel: ch, result, error: null as string | null };
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          console.warn(`[evtx] Failed to query ${ch}: ${message}`);
+          if (!loadError) loadError = `${ch}: ${message}`;
+          return { channel: ch, result: null, error: message };
+        }
+      })
+    );
+
+    for (const { channel, result, error } of results) {
+      if (!result) {
+        // A channel that could not be read is recorded as a gap, not merely as an error banner
+        // that the next successful load replaces. The events it would have contributed are absent
+        // from the view for as long as the view is on screen.
+        set((s) => ({
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+            `${channel}: not read (${error ?? "unknown error"})`,
+          ]),
+        }));
+        continue;
+      }
+
+      const checked = assertParseResultShape(result);
       const state = get();
       const existingChannelNames = new Set(state.records.map((r) => r.channel));
       // Only add records from channels we don't already have
@@ -279,23 +312,19 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       }));
 
       const newLoaded = new Set(state.loadedChannels);
-      for (const ch of channels) newLoaded.add(ch);
+      newLoaded.add(channel);
 
       set({
         records: merged,
         channels: updatedChannels,
         loadedChannels: newLoaded,
-        isLoading: false,
-        loadError: null,
         // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
         // backend reported here would show a complete view of a partly unreadable set.
         coverageGaps: mergeCoverageGaps(state.coverageGaps, checked.errorMessages),
-        selectedRecordId: null,
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message });
     }
+
+    set({ isLoading: false, loadError });
   },
 
   loadSelectedChannels: async () => {
