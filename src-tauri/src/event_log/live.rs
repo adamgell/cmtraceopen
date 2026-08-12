@@ -23,6 +23,26 @@ use windows::Win32::System::EventLog::{
 #[cfg(target_os = "windows")]
 const EVENT_FETCH_BATCH: usize = 256;
 
+/// Smallest batch to fall back to before treating the channel as unreadable.
+///
+/// Some channels reject a 256-handle request with `RPC_S_INVALID_BOUND`. Measuring a full scan
+/// found one doing exactly that, and the loop's response was to stop reading and return what it
+/// already had as a complete result. Halving down to this floor reads the channel instead.
+#[cfg(target_os = "windows")]
+const MIN_FETCH_BATCH: usize = 8;
+
+/// What one channel yielded, including why anything is missing from it.
+///
+/// The records used to be returned on their own, which left no way to say "this channel was read,
+/// but not all of it". A partial read then reported as a complete one: the caller saw `Ok`, counted
+/// the events, and showed a channel that looked fully loaded. Events that were never fetched are
+/// indistinguishable on screen from events that do not exist.
+pub struct ChannelScan {
+    pub records: Vec<EvtxRecord>,
+    /// Operator-facing explanations of what is missing. Empty means the channel was read whole.
+    pub gaps: Vec<String>,
+}
+
 // ── RAII handle wrapper ─────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -130,7 +150,7 @@ pub fn query_channel(
     channel: &str,
     maps: &MapRegistry,
     max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     query_channel_with_progress(channel, maps, max_events, |_, _| {})
 }
 
@@ -144,7 +164,7 @@ pub fn query_channel_filtered(
     filter: &EventQueryFilter,
     maps: &MapRegistry,
     max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     query_channel_inner(channel, filter, maps, max_events, |_, _| {})
 }
 
@@ -155,7 +175,7 @@ pub fn query_channel_with_progress(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     query_channel_inner(
         channel,
         &EventQueryFilter::default(),
@@ -173,7 +193,7 @@ pub fn query_channel_filtered_with_progress(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     query_channel_inner(channel, filter, maps, max_events, on_progress)
 }
 
@@ -184,7 +204,7 @@ fn query_channel_inner(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
     // A filter that cannot be expressed is refused here rather than silently degraded to "*",
@@ -212,21 +232,51 @@ fn query_channel_inner(
     let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
     let mut unparsable = 0usize;
 
+    let mut gaps = Vec::new();
+    let mut batch = EVENT_FETCH_BATCH;
+
     while records.len() < limit {
         let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
-        match unsafe { EvtNext(query_handle.raw(), &mut raw_handles, 0, 0, &mut returned) } {
+        match unsafe {
+            EvtNext(
+                query_handle.raw(),
+                &mut raw_handles[..batch],
+                0,
+                0,
+                &mut returned,
+            )
+        } {
             Ok(()) => {}
+            Err(e) if is_no_more_items(&e) => break,
+            // The service can refuse a batch this large on a particular channel. Halving and
+            // retrying reads it; the previous behaviour was to stop and report what had already
+            // been read as the channel's full contents.
+            Err(e) if is_invalid_bound(&e) && batch > MIN_FETCH_BATCH => {
+                batch = (batch / 2).max(MIN_FETCH_BATCH);
+                log::info!(
+                    "event=evtx_batch_reduced channel=\"{channel}\" batch={batch} \
+                     reason=\"the service rejected the previous batch size\""
+                );
+                continue;
+            }
             Err(e) => {
-                if !is_no_more_items(&e) {
-                    eprintln!(
-                        "[evtx] EvtNext error: code=0x{:08x} w32={} msg=\"{}\"",
-                        e.code().0 as u32,
-                        win32_code(&e),
-                        e.message()
-                    );
-                }
+                // Recorded as a gap, not just logged. The records already read are still returned,
+                // because they are real, but the channel must not be presented as complete.
+                let detail = format!(
+                    "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
+                    records.len(),
+                    e.message().trim(),
+                    e.code().0 as u32
+                );
+                log::warn!(
+                    "event=evtx_next_failed channel=\"{channel}\" batch={batch} \
+                     w32={} code=0x{:08x}",
+                    win32_code(&e),
+                    e.code().0 as u32
+                );
+                gaps.push(detail);
                 break;
             }
         }
@@ -295,12 +345,16 @@ fn query_channel_inner(
         // Counted and reported rather than passed over. Events that never arrived look exactly like
         // evidence that the thing being investigated did not happen.
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
+        gaps.push(format!(
+            "{channel}: {unparsable} events could not be read and are missing from this view"
+        ));
     }
     log::info!(
-        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable}",
-        records.len()
+        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} gaps={}",
+        records.len(),
+        gaps.len()
     );
-    Ok(records)
+    Ok(ChannelScan { records, gaps })
 }
 
 // ── Non-Windows stubs ───────────────────────────────────────────────────────
@@ -316,7 +370,7 @@ pub fn query_channel_with_progress(
     _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -325,7 +379,7 @@ pub fn query_channel(
     _channel: &str,
     _maps: &MapRegistry,
     _max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -335,7 +389,7 @@ pub fn query_channel_filtered(
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
     _max_events: Option<u64>,
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -346,7 +400,7 @@ pub fn query_channel_filtered_with_progress(
     _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -464,6 +518,16 @@ fn is_no_more_items(error: &Error) -> bool {
     win32_code(error) == 259
 }
 
+/// `RPC_S_INVALID_BOUND`: the service refused the size of the request, not its contents.
+///
+/// Observed from `EvtNext` with a 256-handle batch on a real machine, on one channel out of roughly
+/// twelve hundred. It says nothing about the channel's data, so the right response is a smaller
+/// request rather than abandoning the channel.
+#[cfg(target_os = "windows")]
+fn is_invalid_bound(error: &Error) -> bool {
+    win32_code(error) == 1734
+}
+
 #[cfg(target_os = "windows")]
 fn is_not_found(error: &Error) -> bool {
     win32_code(error) == 1168
@@ -486,8 +550,9 @@ mod tests {
         let has_app = channels.iter().any(|c| c.name == "Application");
         println!("Has Application channel: {has_app}");
 
-        let records =
-            query_channel("Application", &MapRegistry::new(), Some(3)).expect("query should work");
+        let records = query_channel("Application", &MapRegistry::new(), Some(3))
+            .expect("query should work")
+            .records;
         println!("Application records: {}", records.len());
         for (i, r) in records.iter().enumerate() {
             println!("--- Record {i} ---");
@@ -534,7 +599,8 @@ mod live_service_tests {
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn an_unfiltered_query_returns_records() {
-        let records = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
+        let scan = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
+        let records = scan.records;
         assert!(
             !records.is_empty(),
             "Application channel should have events"
@@ -564,7 +630,8 @@ mod live_service_tests {
             &no_maps(),
             None,
         )
-        .expect("1 hour query succeeds");
+        .expect("1 hour query succeeds")
+        .records;
 
         let wide = query_channel_filtered(
             CHANNEL,
@@ -577,7 +644,8 @@ mod live_service_tests {
             &no_maps(),
             None,
         )
-        .expect("30 day query succeeds");
+        .expect("30 day query succeeds")
+        .records;
 
         assert!(
             narrow.len() <= wide.len(),
@@ -601,7 +669,8 @@ mod live_service_tests {
             &no_maps(),
             Some(200),
         )
-        .expect("level query succeeds");
+        .expect("level query succeeds")
+        .records;
 
         for record in &records {
             assert_eq!(
@@ -628,7 +697,8 @@ mod live_service_tests {
             &no_maps(),
             Some(50),
         )
-        .expect("query succeeds");
+        .expect("query succeeds")
+        .records;
 
         assert!(
             records.is_empty(),
@@ -642,7 +712,8 @@ mod live_service_tests {
     fn system_fields_are_populated_from_real_events() {
         let records =
             query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), Some(200))
-                .expect("query succeeds");
+                .expect("query succeeds")
+                .records;
 
         assert!(!records.is_empty());
         assert!(

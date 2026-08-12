@@ -73,12 +73,18 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     let mut xml_bytes = 0usize;
     let mut field_bytes = 0usize;
     let mut widest_channel = (String::new(), 0usize);
+    // A channel read only partly is neither a success nor a failure, and counting it as
+    // either hides it. The scan's own truncations are the thing most likely to make a
+    // faster number look like an improvement.
+    let mut gap_reports = 0usize;
 
     let started = Instant::now();
     for channel in &channels {
         let at = Instant::now();
         match live::query_channel_filtered(channel, &filter, &maps, max_events) {
-            Ok(records) => {
+            Ok(scan) => {
+                let records = scan.records;
+                gap_reports += scan.gaps.len();
                 total += records.len();
                 if records.len() > widest_channel.1 {
                     widest_channel = (channel.clone(), records.len());
@@ -113,6 +119,7 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     println!("days={days}");
     println!("channels_scanned={}", channels.len());
     println!("channels_failed={failed}");
+    println!("channels_with_gaps={gap_reports}");
     println!("events={total}");
     println!("enumerate_ms={enumerate_ms}");
     println!("scan_ms={}", elapsed.as_millis());

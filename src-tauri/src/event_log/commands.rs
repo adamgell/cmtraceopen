@@ -73,30 +73,29 @@ pub async fn evtx_query_channels(
             // Event Log service that spends nearly all its time waiting on RPC, so serializing
             // them leaves the machine idle. Results are collected per channel and ordered
             // afterwards, so concurrency cannot affect the output.
-            let per_channel: Vec<(String, Result<Vec<super::models::EvtxRecord>, String>)> =
-                channels
-                    .par_iter()
-                    .map(|channel| {
-                        let app_ref = &app;
-                        let ch_name = channel.clone();
-                        let outcome = super::live::query_channel_filtered_with_progress(
-                            channel,
-                            &query_filter,
-                            &maps,
-                            max_events,
-                            |fetched, _| {
-                                let _ = app_ref.emit(
-                                    "evtx-query-progress",
-                                    EvtxQueryProgress {
-                                        channel: ch_name.clone(),
-                                        fetched,
-                                    },
-                                );
-                            },
-                        );
-                        (channel.clone(), outcome)
-                    })
-                    .collect();
+            let per_channel: Vec<(String, Result<super::live::ChannelScan, String>)> = channels
+                .par_iter()
+                .map(|channel| {
+                    let app_ref = &app;
+                    let ch_name = channel.clone();
+                    let outcome = super::live::query_channel_filtered_with_progress(
+                        channel,
+                        &query_filter,
+                        &maps,
+                        max_events,
+                        |fetched, _| {
+                            let _ = app_ref.emit(
+                                "evtx-query-progress",
+                                EvtxQueryProgress {
+                                    channel: ch_name.clone(),
+                                    fetched,
+                                },
+                            );
+                        },
+                    );
+                    (channel.clone(), outcome)
+                })
+                .collect();
 
             let mut all_records = Vec::new();
             let mut channel_infos = Vec::new();
@@ -105,13 +104,20 @@ pub async fn evtx_query_channels(
 
             for (channel, outcome) in per_channel {
                 match outcome {
-                    Ok(records) => {
+                    Ok(scan) => {
                         channel_infos.push(super::models::EvtxChannelInfo {
                             name: channel.clone(),
-                            event_count: records.len() as u64,
+                            event_count: scan.records.len() as u64,
                             source_type: super::models::ChannelSourceType::Live,
                         });
-                        all_records.extend(records);
+                        // A channel can be read partly. Those gaps travel with the records so a
+                        // truncated channel is not presented as a complete one, which is what
+                        // happened while the query returned records alone.
+                        if !scan.gaps.is_empty() {
+                            parse_errors += scan.gaps.len() as u32;
+                            error_messages.extend(scan.gaps);
+                        }
+                        all_records.extend(scan.records);
                     }
                     Err(e) => {
                         log::warn!(
