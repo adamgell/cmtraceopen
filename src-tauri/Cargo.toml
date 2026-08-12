@@ -136,6 +136,12 @@ tempfile = "3"
 plist = "1"
 tauri = { version = "2", features = ["test"] }
 
+# Timing harness for the live event-log scan. Declared so `--all-targets` does not try to build it
+# without the modules it measures.
+[[example]]
+name = "evtx_scan"
+required-features = ["event-log"]
+
 [[test]]
 name = "esp_diagnostics_sources"
 required-features = ["esp-diagnostics"]
