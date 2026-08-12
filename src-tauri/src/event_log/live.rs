@@ -239,7 +239,7 @@ fn query_channel_inner(
         let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
-        match unsafe {
+        let fetched = unsafe {
             EvtNext(
                 query_handle.raw(),
                 &mut raw_handles[..batch],
@@ -247,37 +247,40 @@ fn query_channel_inner(
                 0,
                 &mut returned,
             )
-        } {
-            Ok(()) => {}
-            Err(e) if is_no_more_items(&e) => break,
-            // The service can refuse a batch this large on a particular channel. Halving and
-            // retrying reads it; the previous behaviour was to stop and report what had already
-            // been read as the channel's full contents.
-            Err(e) if is_invalid_bound(&e) && batch > MIN_FETCH_BATCH => {
-                batch = (batch / 2).max(MIN_FETCH_BATCH);
-                log::info!(
-                    "event=evtx_batch_reduced channel=\"{channel}\" batch={batch} \
-                     reason=\"the service rejected the previous batch size\""
-                );
-                continue;
-            }
-            Err(e) => {
-                // Recorded as a gap, not just logged. The records already read are still returned,
-                // because they are real, but the channel must not be presented as complete.
-                let detail = format!(
-                    "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
-                    records.len(),
-                    e.message().trim(),
-                    e.code().0 as u32
-                );
-                log::warn!(
-                    "event=evtx_next_failed channel=\"{channel}\" batch={batch} \
-                     w32={} code=0x{:08x}",
-                    win32_code(&e),
-                    e.code().0 as u32
-                );
-                gaps.push(detail);
-                break;
+        };
+
+        if let Err(error) = fetched {
+            // How to respond is decided in `super::fetch`, where it is tested on every platform.
+            // Everything else in this loop is Windows-only, so a rule encoded here is a rule CI
+            // cannot check on any runner.
+            match super::fetch::classify_fetch_failure(win32_code(&error), batch, MIN_FETCH_BATCH) {
+                super::fetch::FetchFailure::Exhausted => break,
+                super::fetch::FetchFailure::RetryWith(smaller) => {
+                    batch = smaller;
+                    log::info!(
+                        "event=evtx_batch_reduced channel=\"{channel}\" batch={batch} \
+                         reason=\"the service rejected the previous batch size\""
+                    );
+                    continue;
+                }
+                super::fetch::FetchFailure::Truncated => {
+                    // Recorded as a gap, not only logged. The records already read are still
+                    // returned because they are real, but the channel must not be presented as
+                    // complete when the rest of it was never fetched.
+                    log::warn!(
+                        "event=evtx_next_failed channel=\"{channel}\" batch={batch} \
+                         w32={} code=0x{:08x}",
+                        win32_code(&error),
+                        error.code().0 as u32
+                    );
+                    gaps.push(format!(
+                        "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
+                        records.len(),
+                        error.message().trim(),
+                        error.code().0 as u32
+                    ));
+                    break;
+                }
             }
         }
 
@@ -513,20 +516,8 @@ fn is_insufficient_buffer(error: &Error) -> bool {
     win32_code(error) == 122
 }
 
-#[cfg(target_os = "windows")]
-fn is_no_more_items(error: &Error) -> bool {
-    win32_code(error) == 259
-}
-
-/// `RPC_S_INVALID_BOUND`: the service refused the size of the request, not its contents.
-///
-/// Observed from `EvtNext` with a 256-handle batch on a real machine, on one channel out of roughly
-/// twelve hundred. It says nothing about the channel's data, so the right response is a smaller
-/// request rather than abandoning the channel.
-#[cfg(target_os = "windows")]
-fn is_invalid_bound(error: &Error) -> bool {
-    win32_code(error) == 1734
-}
+// `ERROR_NO_MORE_ITEMS` and `RPC_S_INVALID_BOUND` are recognised in `super::fetch`, which owns the
+// decision they feed and is tested on every platform rather than only on this one.
 
 #[cfg(target_os = "windows")]
 fn is_not_found(error: &Error) -> bool {
