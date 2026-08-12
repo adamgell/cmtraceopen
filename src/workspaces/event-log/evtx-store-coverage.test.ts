@@ -396,4 +396,35 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.records).toHaveLength(1);
     expect(state.records[0].eventRecordId).toBe(5);
   });
+
+  it("finds the highest batch number without spreading every one", async () => {
+    // The highest sequence is found by reduction. Spreading the set into Math.max(...) arguments
+    // throws RangeError once a channel produces more batches than the engine accepts as arguments,
+    // which a reduced fetch batch makes reachable for a channel the size of Security.
+    const batches = 200_000;
+    invoke.mockImplementationOnce(async () => {
+      for (let sequence = 0; sequence < batches; sequence++) {
+        emitBatch("Huge", sequence, []);
+      }
+      return streamedReply("Huge", 0);
+    });
+
+    await useEvtxStore.getState().queryChannels(["Huge"]);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("does not leave the workspace stuck loading when a reply is unreadable", async () => {
+    // assertParseResultShape throws by design on a reply this build cannot read. The processing
+    // loop was unguarded, so the throw rejected queryChannels before isLoading was cleared and the
+    // operator saw an endless spinner with no error.
+    invoke.mockResolvedValueOnce({ records: null, channels: [] });
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.isLoading).toBe(false);
+    expect(state.loadError).toContain("Application");
+    expect(state.coverageGaps.some((g) => g.includes("Application"))).toBe(true);
+  });
 });

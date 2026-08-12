@@ -286,71 +286,83 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     );
 
     for (const { channel, result, error } of results) {
-      if (!result) {
-        // A channel that could not be read is recorded as a gap, not merely as an error banner
-        // that the next successful load replaces. The events it would have contributed are absent
-        // from the view for as long as the view is on screen.
-        set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-            `${channel}: not read (${error ?? "unknown error"})`,
-          ]),
+      try {
+        if (!result) {
+          // A channel that could not be read is recorded as a gap, not merely as an error banner
+          // that the next successful load replaces. The events it would have contributed are absent
+          // from the view for as long as the view is on screen.
+          set((s) => ({
+            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+              `${channel}: not read (${error ?? "unknown error"})`,
+            ]),
+          }));
+          continue;
+        }
+
+        const checked = assertParseResultShape(result);
+
+        // The records travel as batches while the query runs; the reply carries only whatever the
+        // backend did not stream. Both are taken, so this works whether or not streaming happened.
+        const streamed = drainStreamedRecords(channel);
+        const arrived = [...streamed.records, ...result.records];
+
+        // The reply says how many records were sent. Silence is not agreement: if fewer arrived, or a
+        // batch number is missing from the run, those events are absent from the view and must be
+        // said so rather than left to look like events that never happened.
+        const gapsFound: string[] = [];
+        if (streamed.missingSequences.length > 0) {
+          gapsFound.push(
+            `${channel}: ${streamed.missingSequences.length} batches of events were not received`
+          );
+        }
+        const expected = checked.totalRecords;
+        if (typeof expected === "number" && arrived.length < expected) {
+          gapsFound.push(
+            `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
+          );
+        }
+
+        const state = get();
+        const existingChannelNames = new Set(state.records.map((r) => r.channel));
+        // Only add records from channels we don't already have
+        const newRecords = arrived.filter((r) => !existingChannelNames.has(r.channel));
+        const merged = [...state.records, ...newRecords];
+        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        // Reassign IDs
+        for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+        // Update channel event counts
+        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+        const updatedChannels = state.channels.map((c) => ({
+          ...c,
+          eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
-        continue;
+
+        const newLoaded = new Set(state.loadedChannels);
+        newLoaded.add(channel);
+
+        set({
+          records: merged,
+          channels: updatedChannels,
+          loadedChannels: newLoaded,
+          // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
+          // backend reported here would show a complete view of a partly unreadable set.
+          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
+            ...checked.errorMessages,
+            ...gapsFound,
+          ]),
+        });
+      } catch (processingError) {
+        // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
+        // reply is not a reason to leave the workspace stuck on a spinner with no message.
+        const message =
+          processingError instanceof Error ? processingError.message : String(processingError);
+        console.warn(`[evtx] Failed to process ${channel}: ${message}`);
+        if (!loadError) loadError = `${channel}: ${message}`;
+        set((s) => ({
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${channel}: not read (${message})`]),
+        }));
       }
-
-      const checked = assertParseResultShape(result);
-
-      // The records travel as batches while the query runs; the reply carries only whatever the
-      // backend did not stream. Both are taken, so this works whether or not streaming happened.
-      const streamed = drainStreamedRecords(channel);
-      const arrived = [...streamed.records, ...result.records];
-
-      // The reply says how many records were sent. Silence is not agreement: if fewer arrived, or a
-      // batch number is missing from the run, those events are absent from the view and must be
-      // said so rather than left to look like events that never happened.
-      const gapsFound: string[] = [];
-      if (streamed.missingSequences.length > 0) {
-        gapsFound.push(
-          `${channel}: ${streamed.missingSequences.length} batches of events were not received`
-        );
-      }
-      const expected = checked.totalRecords;
-      if (typeof expected === "number" && arrived.length < expected) {
-        gapsFound.push(
-          `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
-        );
-      }
-
-      const state = get();
-      const existingChannelNames = new Set(state.records.map((r) => r.channel));
-      // Only add records from channels we don't already have
-      const newRecords = arrived.filter((r) => !existingChannelNames.has(r.channel));
-      const merged = [...state.records, ...newRecords];
-      merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
-      // Reassign IDs
-      for (let i = 0; i < merged.length; i++) merged[i].id = i;
-
-      // Update channel event counts
-      const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-      const updatedChannels = state.channels.map((c) => ({
-        ...c,
-        eventCount: countMap.get(c.name) ?? c.eventCount,
-      }));
-
-      const newLoaded = new Set(state.loadedChannels);
-      newLoaded.add(channel);
-
-      set({
-        records: merged,
-        channels: updatedChannels,
-        loadedChannels: newLoaded,
-        // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
-        // backend reported here would show a complete view of a partly unreadable set.
-        coverageGaps: mergeCoverageGaps(state.coverageGaps, [
-          ...checked.errorMessages,
-          ...gapsFound,
-        ]),
-      });
     }
 
     set({ isLoading: false, loadError });
@@ -567,8 +579,13 @@ export function drainStreamedRecords(channel: string): {
   if (!pending) return { records: [], missingSequences: [] };
 
   // Batches are numbered from zero, so any number below the highest that never arrived is a batch
-  // whose records are simply absent.
-  const highest = Math.max(...pending.sequences);
+  // whose records are simply absent. Reduced rather than spread: one argument per batch throws
+  // RangeError once a channel produces more batches than the engine accepts as arguments, which a
+  // reduced fetch batch makes reachable.
+  let highest = 0;
+  for (const sequence of pending.sequences) {
+    if (sequence > highest) highest = sequence;
+  }
   const missingSequences: number[] = [];
   for (let i = 0; i < highest; i++) {
     if (!pending.sequences.has(i)) missingSequences.push(i);
