@@ -7,11 +7,20 @@ param(
     [switch]$InstallRepoDependencies,
     [switch]$SkipValidation,
 
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepoRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Resolved here rather than as a param default. Windows PowerShell 5.1 leaves $PSScriptRoot empty
+# while evaluating defaults on an advanced script, which this is because of the CmdletBinding
+# attribute above, so the default threw before the script could run at all. Verified on 5.1: the
+# same default works without CmdletBinding and fails with it. pwsh 7 populates it either way, which
+# is why this survived.
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+}
 
 function Write-Step {
     param(
