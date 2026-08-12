@@ -387,6 +387,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
       isLoading: true,
+      loadError: null,
       loadStartTime: startTime,
       loadElapsedMs: null,
       // Cleared with the records they describe. Keeping them would report gaps from a set that is

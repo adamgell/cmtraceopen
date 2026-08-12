@@ -120,6 +120,8 @@ describe("coverage gaps through the store", () => {
       state.coverageGaps.some((g) => g.includes("Application") && g.includes("access denied"))
     ).toBe(true);
     expect(state.loadError).toContain("Application");
+    expect(state.loadError).toContain("access denied");
+    expect(state.isLoading).toBe(false);
   });
 });
 
