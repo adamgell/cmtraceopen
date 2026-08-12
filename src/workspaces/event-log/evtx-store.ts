@@ -263,6 +263,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     // away the results of every channel queried alongside it and left the view empty.
     let loadError: string | null = null;
 
+    // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
+    // count a previous run's batches towards this one.
+    resetStreamedRecords(channels);
+
     const results = await Promise.all(
       channels.map(async (ch) => {
         try {
@@ -295,10 +299,32 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       }
 
       const checked = assertParseResultShape(result);
+
+      // The records travel as batches while the query runs; the reply carries only whatever the
+      // backend did not stream. Both are taken, so this works whether or not streaming happened.
+      const streamed = drainStreamedRecords(channel);
+      const arrived = [...streamed.records, ...result.records];
+
+      // The reply says how many records were sent. Silence is not agreement: if fewer arrived, or a
+      // batch number is missing from the run, those events are absent from the view and must be
+      // said so rather than left to look like events that never happened.
+      const gapsFound: string[] = [];
+      if (streamed.missingSequences.length > 0) {
+        gapsFound.push(
+          `${channel}: ${streamed.missingSequences.length} batches of events were not received`
+        );
+      }
+      const expected = checked.totalRecords;
+      if (typeof expected === "number" && arrived.length < expected) {
+        gapsFound.push(
+          `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
+        );
+      }
+
       const state = get();
       const existingChannelNames = new Set(state.records.map((r) => r.channel));
       // Only add records from channels we don't already have
-      const newRecords = result.records.filter((r) => !existingChannelNames.has(r.channel));
+      const newRecords = arrived.filter((r) => !existingChannelNames.has(r.channel));
       const merged = [...state.records, ...newRecords];
       merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
       // Reassign IDs
@@ -320,7 +346,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadedChannels: newLoaded,
         // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
         // backend reported here would show a complete view of a partly unreadable set.
-        coverageGaps: mergeCoverageGaps(state.coverageGaps, checked.errorMessages),
+        coverageGaps: mergeCoverageGaps(state.coverageGaps, [
+          ...checked.errorMessages,
+          ...gapsFound,
+        ]),
       });
     }
 
@@ -496,4 +525,59 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
     loadingProgress: event.payload.fetched,
   });
 });
+
+/**
+ * Records arriving in batches while a query is still running.
+ *
+ * A channel can be most of a scan on its own: Security measured 286,401 of 404,769 events and 191.8
+ * seconds of 267, so waiting for the reply meant three minutes of empty list. Batches are collected
+ * here as they arrive and drained by the query that asked for them.
+ *
+ * Keyed by channel, and the sequence numbers are kept rather than discarded. An event channel makes
+ * no delivery promise, so the query checks both the count and the sequence run before treating a
+ * channel as complete. A batch that never arrived would otherwise be indistinguishable from events
+ * that do not exist, which is the failure this workspace exists to avoid.
+ */
+const pendingBatches = new Map<string, { records: EvtxRecord[]; sequences: Set<number> }>();
+
+listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
+  "evtx-record-batch",
+  (event) => {
+    const { channel, sequence, records } = event.payload;
+    let pending = pendingBatches.get(channel);
+    if (!pending) {
+      pending = { records: [], sequences: new Set<number>() };
+      pendingBatches.set(channel, pending);
+    }
+    // A repeated sequence is counted once. Appending it twice would inflate the tally and hide a
+    // batch that really is missing.
+    if (pending.sequences.has(sequence)) return;
+    pending.sequences.add(sequence);
+    pending.records.push(...records);
+  }
+);
+
+/** Takes everything received for `channel` so far, and reports whether it is contiguous. */
+export function drainStreamedRecords(channel: string): {
+  records: EvtxRecord[];
+  missingSequences: number[];
+} {
+  const pending = pendingBatches.get(channel);
+  pendingBatches.delete(channel);
+  if (!pending) return { records: [], missingSequences: [] };
+
+  // Batches are numbered from zero, so any number below the highest that never arrived is a batch
+  // whose records are simply absent.
+  const highest = Math.max(...pending.sequences);
+  const missingSequences: number[] = [];
+  for (let i = 0; i < highest; i++) {
+    if (!pending.sequences.has(i)) missingSequences.push(i);
+  }
+  return { records: pending.records, missingSequences };
+}
+
+/** Discards anything buffered for channels a query is about to start, so a retry cannot double up. */
+export function resetStreamedRecords(channels: string[]) {
+  for (const channel of channels) pendingBatches.delete(channel);
+}
 

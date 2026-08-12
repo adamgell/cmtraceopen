@@ -38,7 +38,14 @@ const MIN_FETCH_BATCH: usize = 8;
 /// the events, and showed a channel that looked fully loaded. Events that were never fetched are
 /// indistinguishable on screen from events that do not exist.
 pub struct ChannelScan {
+    /// Records the caller did not take. Empty for a caller that streamed every batch away.
     pub records: Vec<EvtxRecord>,
+    /// How many records this channel produced in total, whether or not the caller kept them.
+    ///
+    /// Separate from `records.len()` because a streaming caller empties that vector as it goes.
+    /// Reporting the length instead would tell the frontend a fully read channel held no events,
+    /// which is the same wrong answer as a channel that failed.
+    pub delivered: usize,
     /// Operator-facing explanations of what is missing. Empty means the channel was read whole.
     pub gaps: Vec<String>,
 }
@@ -165,7 +172,7 @@ pub fn query_channel_filtered(
     maps: &MapRegistry,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_inner(channel, filter, maps, max_events, |_, _| {})
+    query_channel_inner(channel, filter, maps, max_events, |_, _| {}, |_| {})
 }
 
 /// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
@@ -182,6 +189,7 @@ pub fn query_channel_with_progress(
         maps,
         max_events,
         on_progress,
+        |_| {},
     )
 }
 
@@ -194,9 +202,36 @@ pub fn query_channel_filtered_with_progress(
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
-    query_channel_inner(channel, filter, maps, max_events, on_progress)
+    query_channel_inner(channel, filter, maps, max_events, on_progress, |_| {})
 }
 
+/// Queries a channel, delivering each batch of records as it is read.
+///
+/// `on_batch` is handed every batch and is expected to take the records from it. Whatever it leaves
+/// is returned in the [`ChannelScan`], so a caller that forgets to drain still gets correct results
+/// rather than losing them; it simply holds the channel in memory as before.
+#[cfg(target_os = "windows")]
+pub fn query_channel_streamed(
+    channel: &str,
+    filter: &EventQueryFilter,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+    on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+) -> Result<ChannelScan, String> {
+    query_channel_inner(channel, filter, maps, max_events, on_progress, on_batch)
+}
+
+/// Reads a channel, handing each fetched batch to `on_batch` as it is built.
+///
+/// `on_batch` receives the batch by mutable reference and may take the records out of it. Whatever
+/// it leaves behind is accumulated into the returned [`ChannelScan`]. That is the whole difference
+/// between streaming and collecting: a caller that drains never holds more than one batch, and a
+/// caller that ignores the argument gets the channel in one piece exactly as before.
+///
+/// The distinction matters because one channel dominates a scan. On a measured seven-day scan,
+/// Security was 286,401 of 404,769 events and 191.8 seconds of 267, so a caller waiting for this
+/// function to return waits three minutes with nothing to show.
 #[cfg(target_os = "windows")]
 fn query_channel_inner(
     channel: &str,
@@ -204,6 +239,7 @@ fn query_channel_inner(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
+    mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
 ) -> Result<ChannelScan, String> {
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
@@ -234,8 +270,12 @@ fn query_channel_inner(
 
     let mut gaps = Vec::new();
     let mut batch = EVENT_FETCH_BATCH;
+    // Counted separately from `records`, which a streaming caller empties as it goes. Using the
+    // length of a vector the caller is allowed to drain would restart the limit at zero after every
+    // batch and read the channel forever.
+    let mut produced = 0usize;
 
-    while records.len() < limit {
+    while produced < limit {
         let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
@@ -275,7 +315,7 @@ fn query_channel_inner(
                     );
                     gaps.push(format!(
                         "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
-                        records.len(),
+                        produced,
                         error.message().trim(),
                         error.code().0 as u32
                     ));
@@ -288,8 +328,14 @@ fn query_channel_inner(
             break;
         }
 
+        // Built per fetch rather than appended straight to `records`, so the caller can take each
+        // batch as it is produced. A caller that takes them holds nothing here, which is what keeps
+        // a channel the size of Security from occupying its whole result set before anything is
+        // shown.
+        let mut batch_records: Vec<EvtxRecord> = Vec::new();
+
         for raw_handle in raw_handles.into_iter().take(returned as usize) {
-            if records.len() >= limit {
+            if produced + batch_records.len() >= limit {
                 // Close remaining handles we won't use
                 unsafe {
                     let _ = EvtClose(EVT_HANDLE(raw_handle));
@@ -329,7 +375,7 @@ fn query_channel_inner(
                     .flatten()
             });
 
-            records.push(super::rendered::record_from_parts(
+            batch_records.push(super::rendered::record_from_parts(
                 &parsed,
                 system,
                 &xml,
@@ -337,11 +383,15 @@ fn query_channel_inner(
                 maps,
                 rendered_message.as_deref(),
             ));
-            // Report progress every 100 records
-            if records.len() % 100 == 0 {
-                on_progress(records.len(), None);
-            }
         }
+
+        produced += batch_records.len();
+        on_progress(produced, None);
+
+        // The caller sees the batch before anything else happens to it. Draining it here is what
+        // makes delivery incremental; leaving it collects the channel as before.
+        on_batch(&mut batch_records);
+        records.append(&mut batch_records);
     }
 
     if unparsable > 0 {
@@ -357,7 +407,11 @@ fn query_channel_inner(
         records.len(),
         gaps.len()
     );
-    Ok(ChannelScan { records, gaps })
+    Ok(ChannelScan {
+        records,
+        delivered: produced,
+        gaps,
+    })
 }
 
 // ── Non-Windows stubs ───────────────────────────────────────────────────────

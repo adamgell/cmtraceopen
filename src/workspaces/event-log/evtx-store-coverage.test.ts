@@ -10,10 +10,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
+
+// The store subscribes to backend events at module scope. Capturing the handlers lets a test
+// deliver a batch exactly as the backend would, including delivering none.
+const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return Promise.resolve(() => {});
+  }),
+}));
 
 const { useEvtxStore } = await import("./evtx-store");
+
+/** Delivers a batch the way the backend emits one. */
+function emitBatch(channel: string, sequence: number, records: unknown[]) {
+  listeners.get("evtx-record-batch")?.({ payload: { channel, sequence, records } });
+}
 
 function result(channel: string, gaps: string[]) {
   return {
@@ -247,5 +261,139 @@ describe("the time window reaches the service", () => {
       .then(() => {
         expect(useEvtxStore.getState().coverageGaps).toEqual(["real gap"]);
       });
+  });
+});
+
+describe("records that arrive in batches while the query runs", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+    });
+  });
+
+  function record(channel: string, epoch: number) {
+    return {
+      id: 0,
+      eventRecordId: epoch,
+      timestamp: "2026-08-12T12:00:00.000Z",
+      timestampEpoch: epoch,
+      provider: "P",
+      channel,
+      eventId: 1,
+      level: "information",
+      computer: "C",
+      message: "m",
+      eventData: [],
+      rawXml: "<Event/>",
+      sourceLabel: "Live",
+      mapped: null,
+    };
+  }
+
+  /** A reply that streamed everything: it carries the count but none of the records. */
+  function streamedReply(channel: string, totalRecords: number) {
+    return {
+      records: [],
+      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" }],
+      totalRecords,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+  }
+
+  it("assembles the view from batches the reply did not carry", async () => {
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 1), record("System", 2)]);
+      emitBatch("System", 1, [record("System", 3)]);
+      return streamedReply("System", 3);
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(3);
+    expect(state.coverageGaps).toEqual([]);
+  });
+
+  it("reports a batch that never arrived instead of showing a short list as complete", async () => {
+    // Sequence 1 is skipped. Its events are simply absent, and an absent event is indistinguishable
+    // from an event that never happened unless the gap is stated.
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 1)]);
+      emitBatch("System", 2, [record("System", 3)]);
+      return streamedReply("System", 3);
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    expect(gaps.some((g) => g.includes("System") && g.includes("batches"))).toBe(true);
+  });
+
+  it("reports a shortfall against the count the reader sent", async () => {
+    // Every batch arrived in order, but fewer events than the reader says it sent.
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 1)]);
+      return streamedReply("System", 9);
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    expect(gaps.some((g) => g.includes("8 of 9"))).toBe(true);
+  });
+
+  it("does not invent a shortfall when the reader gave no count", async () => {
+    // An absent count means completeness cannot be checked. Treating it as zero would report every
+    // arriving record as unexpected; treating it as a shortfall would cry wolf on every load.
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 1)]);
+      return { ...streamedReply("System", 0), totalRecords: "unknown" };
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().records).toHaveLength(1);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("still works when the reader returned the records in the reply instead", async () => {
+    // Collecting callers exist, and a backend that did not stream must not look like a total loss.
+    invoke.mockResolvedValueOnce({
+      records: [record("System", 1), record("System", 2)],
+      channels: [{ name: "System", eventCount: 2, sourceType: "live" }],
+      totalRecords: 2,
+      parseErrors: 0,
+      errorMessages: [],
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().records).toHaveLength(2);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("does not count a previous attempt's batches towards a retry", async () => {
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 1)]);
+      throw new Error("interrupted");
+    });
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    useEvtxStore.setState({ records: [], coverageGaps: [], loadedChannels: new Set<string>() });
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("System", 0, [record("System", 5)]);
+      return streamedReply("System", 1);
+    });
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(1);
+    expect(state.records[0].eventRecordId).toBe(5);
   });
 });

@@ -43,8 +43,14 @@ export function assertParseResultShape(value: unknown): {
   records: unknown[];
   channels: unknown[];
   errorMessages: string[];
+  totalRecords: number | null;
 } {
-  const reply = value as { records?: unknown; channels?: unknown; errorMessages?: unknown };
+  const reply = value as {
+    records?: unknown;
+    channels?: unknown;
+    errorMessages?: unknown;
+    totalRecords?: unknown;
+  };
   if (!Array.isArray(reply?.records) || !Array.isArray(reply?.channels)) {
     throw new Error("the event log reader returned a reply this build cannot read");
   }
@@ -55,5 +61,15 @@ export function assertParseResultShape(value: unknown): {
     errorMessages: Array.isArray(reply.errorMessages)
       ? reply.errorMessages.filter((entry): entry is string => typeof entry === "string")
       : [],
+    // How many records the reader says it sent, counting any streamed separately from this reply.
+    // `null` when the reader did not say, which must stay distinguishable from zero: treating an
+    // absent count as zero would turn "I cannot check completeness" into "nothing was missing".
+    // A non-finite or negative count is no answer either, so it is rejected the same way.
+    totalRecords:
+      typeof reply.totalRecords === "number" &&
+      Number.isFinite(reply.totalRecords) &&
+      reply.totalRecords >= 0
+        ? reply.totalRecords
+        : null,
   };
 }
