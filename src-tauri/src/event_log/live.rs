@@ -121,7 +121,10 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 
 /// Query events from a live Windows Event Log channel.
 ///
-/// Returns newest events first, capped at `max_events` (default 1000).
+/// Returns newest events first. `None` means no cap, which is what every caller in the application
+/// passes; there is no default limit, and the comment claiming a default of 1000 described a
+/// behaviour this function has not had. A cap that is documented but absent is worse than either,
+/// because it invites callers to rely on a bound nothing enforces.
 #[cfg(target_os = "windows")]
 pub fn query_channel(
     channel: &str,
