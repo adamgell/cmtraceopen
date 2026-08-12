@@ -22,9 +22,7 @@ fn main() {
             .cloned()
     };
 
-    let days: u64 = value_of("--days")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(7);
+    let days: u64 = value_of("--days").and_then(|v| v.parse().ok()).unwrap_or(7);
     let only_channel = value_of("--channel");
     // Absent means no cap, which is the case the gate cares about: the cap is the thing being
     // replaced, so measuring with it in place would measure the cap rather than the scan.
@@ -69,12 +67,32 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     let mut total = 0usize;
     let mut failed = 0usize;
     let mut slowest = (String::new(), 0u128);
+    // Attributing memory rather than guessing at it. Every record carries the whole rendered XML it
+    // was built from, and that string is then serialized to the frontend and held there too, so if
+    // it dominates the record it dominates three copies rather than one.
+    let mut xml_bytes = 0usize;
+    let mut field_bytes = 0usize;
+    let mut widest_channel = (String::new(), 0usize);
 
     let started = Instant::now();
     for channel in &channels {
         let at = Instant::now();
         match live::query_channel_filtered(channel, &filter, &maps, max_events) {
-            Ok(records) => total += records.len(),
+            Ok(records) => {
+                total += records.len();
+                if records.len() > widest_channel.1 {
+                    widest_channel = (channel.clone(), records.len());
+                }
+                for record in &records {
+                    xml_bytes += record.raw_xml.len();
+                    field_bytes += record.message.len()
+                        + record
+                            .event_data
+                            .iter()
+                            .map(|f| f.name.len() + f.value.len())
+                            .sum::<usize>();
+                }
+            }
             // A channel that cannot be read is counted, not ignored. Treating it as zero events
             // would report a faster scan of a smaller corpus as an improvement.
             Err(_) => failed += 1,
@@ -100,6 +118,19 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     println!("scan_ms={}", elapsed.as_millis());
     println!("per_event_us={per_event_us:.2}");
     println!("slowest_channel={} ({}ms)", slowest.0, slowest.1);
+    println!(
+        "widest_channel={} ({} events)",
+        widest_channel.0, widest_channel.1
+    );
+    println!("raw_xml_mb={:.1}", xml_bytes as f64 / (1024.0 * 1024.0));
+    println!(
+        "message_and_fields_mb={:.1}",
+        field_bytes as f64 / (1024.0 * 1024.0)
+    );
+    if xml_bytes + field_bytes > 0 {
+        let share = xml_bytes as f64 / (xml_bytes + field_bytes) as f64 * 100.0;
+        println!("raw_xml_share_pct={share:.0}");
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
