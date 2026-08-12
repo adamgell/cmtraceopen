@@ -53,10 +53,13 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
         .collect();
     let enumerate_ms = enumerated.elapsed().as_millis();
 
+    let Some(milliseconds) = days.checked_mul(24 * 60 * 60 * 1000) else {
+        eprintln!("--days is too large");
+        std::process::exit(2);
+    };
+
     let filter = EventQueryFilter {
-        time: Some(TimeWindow::Last {
-            milliseconds: days * 24 * 60 * 60 * 1000,
-        }),
+        time: Some(TimeWindow::Last { milliseconds }),
         ..Default::default()
     };
 
