@@ -78,8 +78,11 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     let mut widest_channel = (String::new(), 0usize);
     // A channel read only partly is neither a success nor a failure, and counting it as
     // either hides it. The scan's own truncations are the thing most likely to make a
-    // faster number look like an improvement.
+    // faster number look like an improvement. Gap entries and affected channels are counted
+    // separately: one channel can report several gaps at once, so a count of entries would
+    // overstate the number of channels that came back incomplete.
     let mut gap_reports = 0usize;
+    let mut channels_with_gaps = 0usize;
 
     let started = Instant::now();
     for channel in &channels {
@@ -88,6 +91,9 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
             Ok(scan) => {
                 let records = scan.records;
                 gap_reports += scan.gaps.len();
+                if !scan.gaps.is_empty() {
+                    channels_with_gaps += 1;
+                }
                 total += records.len();
                 if records.len() > widest_channel.1 {
                     widest_channel = (channel.clone(), records.len());
@@ -122,7 +128,8 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     println!("days={days}");
     println!("channels_scanned={}", channels.len());
     println!("channels_failed={failed}");
-    println!("channels_with_gaps={gap_reports}");
+    println!("channels_with_gaps={channels_with_gaps}");
+    println!("gap_entries={gap_reports}");
     println!("events={total}");
     println!("enumerate_ms={enumerate_ms}");
     println!("scan_ms={}", elapsed.as_millis());
