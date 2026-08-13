@@ -38,6 +38,8 @@ const INSTALL_SECRET: &str = "Sup3rSyntheticSecret";
 const BEARER_TOKEN: &str = "eyJzeW50aGV0aWMtdG9rZW4";
 const CLIENT_IPV4: &str = "192.0.2.77";
 const NIC_MAC: &str = "00:1A:2B:3C:4D:5E";
+const DO_TRANSFER_ID: &str = "do-transfer-synth-0001";
+const AUTOPILOT_DEVICE_ID: &str = "autopilot-device-synth-0001";
 
 /// Every planted value that must not reach an exported file.
 const PLANTED_IDENTIFIERS: &[(&str, &str)] = &[
@@ -52,6 +54,8 @@ const PLANTED_IDENTIFIERS: &[(&str, &str)] = &[
     ("bearer token", BEARER_TOKEN),
     ("client IPv4 address", CLIENT_IPV4),
     ("NIC MAC address", NIC_MAC),
+    ("delivery-optimization transfer id", DO_TRANSFER_ID),
+    ("Autopilot device id", AUTOPILOT_DEVICE_ID),
 ];
 
 /// Serialize a session exactly the way the "Export session" button writes it.
@@ -409,7 +413,22 @@ fn snapshot_with_planted_identifiers() -> EspDiagnosticsSnapshot {
             ],
             evidence: vec![evidence_ref("registration")],
         }],
-        delivery_optimization: None,
+        delivery_optimization: Some(EspDeliveryOptimizationEvidence {
+            download_http_bytes: 1024,
+            download_lan_bytes: 0,
+            download_cache_host_bytes: 0,
+            peer_share_percent: None,
+            connected_cache_share_percent: None,
+            transfers: vec![EspDeliveryOptimizationTransfer {
+                transfer_id: DO_TRANSFER_ID.to_string(),
+                kind: EspDeliveryOptimizationEventKind::DownloadStarted,
+                content_id: Some("content-1".to_string()),
+                app_id: Some("app-1".to_string()),
+                timestamp: timestamp("2026-08-11T09:06:30Z"),
+                evidence: vec![evidence_ref("do-transfer")],
+            }],
+            evidence: vec![evidence_ref("delivery-optimization")],
+        }),
         hardware: Some(EspHardwareEvidence {
             // Kept to three parts: a four-part version string is the same shape
             // as a dotted quad and would trip the IPv4 scan on a safe value.
@@ -557,7 +576,20 @@ fn graph_overlay_with_matched_device() -> EspGraphOverlay {
             }),
             error: None,
         },
-        autopilot_identity: skipped_section(),
+        autopilot_identity: GraphSection {
+            status: GraphSectionStatus::Available,
+            required_scope: Some("DeviceManagementServiceConfig.Read.All".to_string()),
+            api_version: GraphApiVersion::V1_0,
+            data: Some(EspGraphAutopilotIdentity {
+                autopilot_device_id: AUTOPILOT_DEVICE_ID.to_string(),
+                entra_device_id: Some("77777777-8888-9999-aaaa-bbbbbbbbbbbb".to_string()),
+                serial_number: Some(sensitive(SERIAL)),
+                deployment_profile_id: Some("profile-1".to_string()),
+                group_tag: Some("synth-group".to_string()),
+                evidence: vec![evidence_ref("graph-autopilot-identity")],
+            }),
+            error: None,
+        },
         deployment_profile: skipped_section(),
         intended_deployment_profile: skipped_section(),
         profile_assignments: skipped_section(),

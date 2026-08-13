@@ -615,8 +615,7 @@ fn mac_address_pattern() -> &'static Regex {
 /// construction.
 pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagnosticsSnapshot {
     let mut safe = snapshot.clone();
-    let mut redaction = collect_export_redaction(&safe);
-    redaction.literals = collect_classified_literals(&mut safe);
+    let redaction = collect_export_redaction(&mut safe);
     pseudonymize_sid_references(&mut safe, &redaction.sids);
     redact_all_evidence_refs(&mut safe, &redaction);
 
@@ -691,6 +690,13 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
     }
     if let Some(graph) = &mut safe.graph {
         redact_graph_overlay(graph, &redaction);
+    }
+    if let Some(delivery) = &mut safe.delivery_optimization {
+        for transfer in &mut delivery.transfers {
+            transfer.transfer_id = REDACTED.to_string();
+            mask_optional_id(&mut transfer.content_id);
+            mask_optional_id(&mut transfer.app_id);
+        }
     }
 
     // Reassembled field by field, never with `..`. A field added to
@@ -977,7 +983,7 @@ impl ClassifiedLiterals {
     }
 }
 
-fn collect_export_redaction(snapshot: &EspDiagnosticsSnapshot) -> ExportRedaction {
+fn collect_export_redaction(snapshot: &mut EspDiagnosticsSnapshot) -> ExportRedaction {
     let mut sids = BTreeSet::new();
     let mut emails = BTreeSet::new();
     let mut profile_users = BTreeSet::new();
@@ -1060,7 +1066,10 @@ fn collect_export_redaction(snapshot: &EspDiagnosticsSnapshot) -> ExportRedactio
         sids: build_pseudonyms(sids, "sid"),
         emails: build_pseudonyms(emails, "email"),
         profile_users: build_pseudonyms(profile_users, "user"),
-        literals: ClassifiedLiterals::default(),
+        // Populated here rather than left to the caller, so an ExportRedaction
+        // cannot be built with an empty literal set that would make the free-text
+        // scrub a silent no-op.
+        literals: collect_classified_literals(snapshot),
     }
 }
 
@@ -1208,6 +1217,17 @@ fn redact_reference(value: &mut String, redaction: &ExportRedaction) {
             .map_or(REDACTED, String::as_str)
             .to_string()
     });
+    // Network identifiers run after the SID pass for the same reason as in
+    // `redact_text_for_context`: a SID is fully masked before the MAC matcher
+    // can pick up decimal sub-authority pairs inside it, and IPv4 before IPv6 so
+    // an IPv4-mapped address cannot leak its dotted tail. Reference ids are
+    // derived from artifact and source names, which routinely carry a host or
+    // address.
+    let redacted =
+        azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = redact_ipv6_addresses(&redacted);
     let redacted = redaction.literals.scrub(&redacted);
     *value = if bounded.len() == value.len() {
         redacted
@@ -2028,6 +2048,7 @@ fn redact_named_value(named: &mut EspNamedValue, redaction: &ExportRedaction) {
 /// because they identify a specific device or user even though they are not
 /// [`EspClassifiedString`] values.
 fn redact_graph_overlay(graph: &mut EspGraphOverlay, redaction: &ExportRedaction) {
+    graph.request_id = REDACTED.to_string();
     redact_graph_error(&mut graph.device_match.error, redaction);
 
     if let Some(device_match) = &mut graph.device_match.data {
@@ -2053,6 +2074,13 @@ fn redact_graph_overlay(graph: &mut EspGraphOverlay, redaction: &ExportRedaction
 
     redact_graph_profile_section(&mut graph.deployment_profile, redaction);
     redact_graph_profile_section(&mut graph.intended_deployment_profile, redaction);
+    if let Some(assignments) = &mut graph.profile_assignments.data {
+        for assignment in assignments {
+            assignment.assignment_id = REDACTED.to_string();
+            mask_optional_id(&mut assignment.target_id);
+            mask_optional_id(&mut assignment.filter_id);
+        }
+    }
     redact_graph_error(&mut graph.profile_assignments.error, redaction);
 
     if let Some(events) = &mut graph.autopilot_events.data {
