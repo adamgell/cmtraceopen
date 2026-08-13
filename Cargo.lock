@@ -589,7 +589,7 @@ dependencies = [
  "evtx",
  "flate2",
  "font-kit",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "glob",
  "libc",
  "log",

@@ -70,7 +70,7 @@ evtx = { version = "=0.12.2", optional = true }
 quick-xml = { version = "0.41", optional = true }
 glob = "0.3"
 sha2 = "0.11"
-getrandom = "0.3"
+getrandom = "0.4"
 tempfile = { version = "3", optional = true }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
