@@ -126,8 +126,27 @@ and `.app.tar.gz`, the Linux `.AppImage` / `.deb` / `.rpm`, both SBOMs, and
 curl -sL https://github.com/adamgell/cmtraceopen/releases/download/vX.Y.Z/latest.json | jq '.platforms | keys'
 ```
 
-A missing `windows-aarch64` or `darwin-aarch64` key means those users get no
-update prompt at all, which is silent and easy to miss.
+Expect all eight targets: `windows-x86_64`, `windows-aarch64`,
+`darwin-aarch64`, `darwin-aarch64-app`, `linux-x86_64`,
+`linux-x86_64-appimage`, `linux-x86_64-deb`, `linux-x86_64-rpm`. A missing key
+means those users get no update prompt at all, which is silent and easy to miss.
+
+Note that the CDN caches release assets, so a `latest.json` fetched by download
+URL right after a release can be stale. Read it through the API when the answer
+matters:
+
+```bash
+gh release view vX.Y.Z --json assets \
+  --jq '.assets[] | select(.name=="latest.json") | .url' \
+  | xargs -I{} gh api -H "Accept: application/octet-stream" {} | jq '.platforms | keys'
+```
+
+`latest.json` is built by `.github/actions/publish-updater-manifest`, which both
+release workflows run once their builds finish. It derives every entry from the
+release's own `.sig` assets rather than from the platform that job built, so the
+workflow that finishes last publishes a complete manifest and an early one only
+ever adds keys. If a target is still missing after both workflows are green,
+that is a real gap rather than a race, and the build that owns it will be red.
 
 ### 7. Confirm with a release summary
 

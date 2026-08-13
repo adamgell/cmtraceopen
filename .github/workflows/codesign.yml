@@ -361,119 +361,34 @@ jobs:
           MSI_PATH: ${{ steps.verify_msi.outputs.msi_path }}
           NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
         run: |
-          gh release upload $env:TAG_NAME $env:FULL_EXE_PATH $env:LITE_EXE_PATH $env:MSI_PATH $env:NSIS_PATH --clobber
+          # The NSIS updater signature ships as a release asset so the manifest
+          # publisher can rebuild the Windows entries from the release itself
+          # rather than from this run's workflow artifacts. macOS and Linux
+          # signatures are already published this way by tauri-action.
+          gh release upload $env:TAG_NAME $env:FULL_EXE_PATH $env:LITE_EXE_PATH $env:MSI_PATH $env:NSIS_PATH "$($env:NSIS_PATH).sig" --clobber
 
-  finalize-updater-manifest:
-    name: Finalize updater manifest
+  publish-updater-manifest:
+    name: Publish updater manifest
     needs:
       - prepare-windows-release
       - windows-signed-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      VERSION: ${{ needs.prepare-windows-release.outputs.version }}
-      TAG_NAME: ${{ needs.prepare-windows-release.outputs.tag_name }}
+    # Shared with cmtrace-release.yml so the two publishers for a tag run one
+    # after the other rather than overlapping. Only publisher jobs are in this
+    # group: a concurrency group keeps a single pending entry and cancels the
+    # rest, which would silently drop a platform if build jobs were grouped, but
+    # is harmless here because a superseded publisher's work is redone by the
+    # one that replaces it.
+    concurrency:
+      group: updater-manifest-${{ needs.prepare-windows-release.outputs.tag_name }}
+      cancel-in-progress: false
 
     steps:
-      - name: Download signed Windows artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Publish updater manifest
+        uses: ./.github/actions/publish-updater-manifest
         with:
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: Merge Windows platform entries into latest.json
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # This job deliberately skips actions/checkout, since it only needs the
-          # build artifacts and the release API. Without a working tree gh has no
-          # git remote to infer the repository from and every call fails with
-          # "not a git repository", so name it explicitly.
-          GH_REPO: ${{ github.repository }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          # The x64 and arm64 jobs each used to download, patch, and re-upload
-          # latest.json. With nothing having seeded the file the two reads raced
-          # and the loser's platform vanished, which is how v1.5.2 shipped with a
-          # windows-x86_64 entry and no windows-aarch64 one. Both arches are now
-          # merged by a single writer once the matrix has finished.
-          # Ask whether the manifest exists before downloading it. Treating any
-          # download failure as "no manifest yet" would turn a transient API
-          # error into a Windows-only manifest that deletes the macOS and Linux
-          # entries, which is the exact failure this job exists to prevent.
-          published_assets="$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name')"
-          if printf '%s\n' "$published_assets" | grep -qx 'latest.json'; then
-            gh release download "$TAG_NAME" --pattern latest.json --dir . --clobber
-          else
-            echo '{}' > latest.json
-          fi
-
-          # macOS and Linux entries arrive from cmtrace-release.yml, so anything
-          # already in platforms is carried across untouched. Merge onto the
-          # existing object rather than rebuilding it so unrecognized top-level
-          # metadata survives too.
-          jq \
-            --arg version "v$VERSION" \
-            --arg notes "CMTrace Open v$VERSION" \
-            --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '. + {
-               version: $version,
-               notes: $notes,
-               pub_date: (.pub_date // $now),
-               platforms: (.platforms // {})
-             }' latest.json > latest.json.next
-          mv latest.json.next latest.json
-
-          for entry in x64:windows-x86_64 arm64:windows-aarch64; do
-            suffix="${entry%%:*}"
-            platform_key="${entry##*:}"
-            installer="CMTrace-Open_${VERSION}_${suffix}-setup.exe"
-            signature_path="release-artifacts/${installer}.sig"
-
-            if [ ! -f "$signature_path" ]; then
-              echo "::error::Updater signature missing for ${installer}."
-              exit 1
-            fi
-
-            # The signature is produced on a Windows runner, so strip CR as well
-            # as LF before it is embedded in JSON.
-            jq \
-              --arg key "$platform_key" \
-              --arg signature "$(tr -d '\r\n' < "$signature_path")" \
-              --arg url "https://github.com/${REPOSITORY}/releases/download/${TAG_NAME}/${installer}" \
-              --arg version "v$VERSION" \
-              '.platforms[$key] = {signature: $signature, url: $url, version: $version}' \
-              latest.json > latest.json.next
-            mv latest.json.next latest.json
-          done
-
-          gh release upload "$TAG_NAME" latest.json --clobber
-
-          # cmtrace-release.yml publishes the macOS and Linux entries from a
-          # separate workflow run, so a write there can still land between the
-          # read above and this upload. tauri-action merges rather than
-          # replaces, so the usual outcome is a complete manifest, but read the
-          # published file back rather than assuming: a Windows entry that lost
-          # the race would otherwise leave those users with no update prompt and
-          # nothing in the logs to say so.
-          gh release download "$TAG_NAME" --pattern latest.json --dir published --clobber
-          missing=""
-          for platform_key in windows-x86_64 windows-aarch64; do
-            if ! jq -e --arg key "$platform_key" '.platforms | has($key)' published/latest.json > /dev/null; then
-              missing="$missing $platform_key"
-            fi
-          done
-
-          {
-            echo "### Updater manifest"
-            echo ""
-            jq -r '.platforms | keys[] | "- `\(.)`"' published/latest.json
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -n "$missing" ]; then
-            echo "::error::Published latest.json is missing:$missing. A concurrent manifest write clobbered it; re-run this job."
-            exit 1
-          fi
+          version: ${{ needs.prepare-windows-release.outputs.version }}
+          tag-name: ${{ needs.prepare-windows-release.outputs.tag_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

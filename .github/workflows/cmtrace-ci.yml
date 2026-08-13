@@ -163,6 +163,11 @@ jobs:
       - name: CI bundle output contract tests
         run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs
 
+      # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
+      # into nothing, so it had never guarded a pull request.
+      - name: Release script tests
+        run: node --test .github/scripts/updater-manifest.test.mjs .github/scripts/nightly-channel.test.mjs
+
       - name: npm security audit
         run: npm audit --audit-level=high
         continue-on-error: true
