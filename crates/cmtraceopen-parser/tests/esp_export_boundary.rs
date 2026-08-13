@@ -231,6 +231,11 @@ fn a_degenerate_firmware_serial_does_not_scrub_unrelated_narrative() {
         exported["snapshot"]["activity"][0]["detail"],
         Value::String("retry 0 of 3 after a 0 second wait".to_string())
     );
+    assert_eq!(
+        exported["snapshot"]["identity"]["serialNumber"]["value"],
+        Value::String("[redacted]".to_string()),
+        "a serial too short to scrub must still be masked as a typed field"
+    );
 }
 
 #[test]

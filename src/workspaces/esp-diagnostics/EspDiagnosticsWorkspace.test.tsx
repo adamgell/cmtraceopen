@@ -2482,25 +2482,25 @@ describe("ESP session export boundary", () => {
     await waitFor(() => expect(vi.mocked(save)).toHaveBeenCalled());
   }
 
-  it("never writes a cleartext session to the chosen file", async () => {
+  it("never writes a cleartext session through the generic file writer", async () => {
     await clickExport();
 
     await waitFor(() =>
       expect(
         vi
           .mocked(invoke)
-          .mock.calls.some(([command]) => command !== "get_esp_elevation_state"),
+          .mock.calls.some(([command]) => command === "export_esp_session"),
       ).toBe(true),
     );
 
-    const writtenText = vi
-      .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "write_text_output_file")
-      .map(([, args]) => String((args as { contents?: unknown })?.contents));
-
-    for (const text of writtenText) {
-      expect(text).not.toContain(EXPORTED_UPN);
-    }
+    // The generic file writer has no redaction boundary, so it must never be
+    // the path a session takes to disk. Serialized-file redaction is proven by
+    // the Rust export-boundary tests rather than re-derived here.
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "write_text_output_file"),
+    ).toBe(false);
   });
 
   it("produces the export through the redacting backend boundary", async () => {
