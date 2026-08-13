@@ -121,22 +121,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.resolve_version.outputs.tag_name }}
+          VERSION: ${{ steps.resolve_version.outputs.version }}
         run: |
           $releaseTitle = "CMTrace Open $env:TAG_NAME"
-          $releaseNotes = @"
-          Stable downloads: https://download.cmtraceopen.com/?source=github-release
-
-          ## CMTrace Open $env:TAG_NAME
-
-          Open-source CMTrace log viewer with built-in Intune diagnostics.
-
-          ### Windows Downloads
-          | File | Description |
-          |------|-------------|
-          | `CMTrace-Open_VERSION_ARCH.msi` | MSI installer (includes Full + Lite) |
-          | `CMTrace-Open_VERSION_ARCH.exe` | Standalone full edition |
-          | `CMTrace-Open-Lite_VERSION_ARCH.exe` | Standalone lite edition |
-          "@
 
           $releaseExists = $false
           for ($attempt = 1; $attempt -le 12; $attempt++) {
@@ -150,7 +137,20 @@ jobs:
           }
 
           if (-not $releaseExists) {
-            gh release create $env:TAG_NAME --draft --title $releaseTitle --notes $releaseNotes *> $null
+            # Shared with cmtrace-release.yml so that whichever half of the
+            # release gets there first seeds the same notes, including the
+            # cmtrace.net download shortlinks.
+            $templatePath = ".github/release-notes/template.md"
+            if (-not (Test-Path $templatePath)) {
+              throw "Release notes template not found at $templatePath."
+            }
+
+            $releaseNotes = Get-Content $templatePath -Raw
+            $releaseNotes = $releaseNotes.Replace("{{TAG}}", $env:TAG_NAME)
+            $releaseNotes = $releaseNotes.Replace("{{VERSION}}", $env:VERSION)
+            Set-Content -Path release-notes.md -Value $releaseNotes -Encoding utf8
+
+            gh release create $env:TAG_NAME --draft --title $releaseTitle --notes-file release-notes.md *> $null
             if ($LASTEXITCODE -ne 0) {
               gh release view $env:TAG_NAME *> $null
               if ($LASTEXITCODE -ne 0) {
@@ -275,7 +275,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Attest signed EXEs
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             release-artifacts/*.exe
@@ -319,7 +319,7 @@ jobs:
           "msi_path=$msiPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Attest MSI
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ steps.verify_msi.outputs.msi_path }}
@@ -349,6 +349,7 @@ jobs:
             ${{ steps.stage_artifacts.outputs.lite_exe_path }}
             ${{ steps.verify_msi.outputs.msi_path }}
             ${{ steps.stage_artifacts.outputs.nsis_path }}
+            ${{ steps.stage_artifacts.outputs.nsis_path }}.sig
           if-no-files-found: error
 
       - name: Publish signed Windows assets to GitHub Release
@@ -362,58 +363,112 @@ jobs:
         run: |
           gh release upload $env:TAG_NAME $env:FULL_EXE_PATH $env:LITE_EXE_PATH $env:MSI_PATH $env:NSIS_PATH --clobber
 
-      - name: Update latest.json with Windows platform entry
-        shell: pwsh
+  finalize-updater-manifest:
+    name: Finalize updater manifest
+    needs:
+      - prepare-windows-release
+      - windows-signed-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare-windows-release.outputs.version }}
+      TAG_NAME: ${{ needs.prepare-windows-release.outputs.tag_name }}
+
+    steps:
+      - name: Download signed Windows artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Merge Windows platform entries into latest.json
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          $nsisFileName = Split-Path $env:NSIS_PATH -Leaf
-          $sigContent = Get-Content "$env:NSIS_PATH.sig" -Raw
-          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/$env:TAG_NAME/$nsisFileName"
+          set -euo pipefail
 
-          # Map artifact suffix to Tauri platform key
-          $platformKey = if ("${{ matrix.artifact_suffix }}" -eq "x64") { "windows-x86_64" } else { "windows-aarch64" }
+          # The x64 and arm64 jobs each used to download, patch, and re-upload
+          # latest.json. With nothing having seeded the file the two reads raced
+          # and the loser's platform vanished, which is how v1.5.2 shipped with a
+          # windows-x86_64 entry and no windows-aarch64 one. Both arches are now
+          # merged by a single writer once the matrix has finished.
+          # Ask whether the manifest exists before downloading it. Treating any
+          # download failure as "no manifest yet" would turn a transient API
+          # error into a Windows-only manifest that deletes the macOS and Linux
+          # entries, which is the exact failure this job exists to prevent.
+          published_assets="$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "$published_assets" | grep -qx 'latest.json'; then
+            gh release download "$TAG_NAME" --pattern latest.json --dir . --clobber
+          else
+            echo '{}' > latest.json
+          fi
 
-          $platformEntry = @{
-            signature = $sigContent.Trim()
-            url       = $downloadUrl
-            version   = "v$env:VERSION"
-          }
+          # macOS and Linux entries arrive from cmtrace-release.yml, so anything
+          # already in platforms is carried across untouched. Merge onto the
+          # existing object rather than rebuilding it so unrecognized top-level
+          # metadata survives too.
+          jq \
+            --arg version "v$VERSION" \
+            --arg notes "CMTrace Open v$VERSION" \
+            --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '. + {
+               version: $version,
+               notes: $notes,
+               pub_date: (.pub_date // $now),
+               platforms: (.platforms // {})
+             }' latest.json > latest.json.next
+          mv latest.json.next latest.json
 
-          # Try to download existing latest.json from the release (may have been uploaded by macOS/Linux workflow)
-          $latestJsonPath = Join-Path $PWD "latest.json"
-          $existing = $null
+          for entry in x64:windows-x86_64 arm64:windows-aarch64; do
+            suffix="${entry%%:*}"
+            platform_key="${entry##*:}"
+            installer="CMTrace-Open_${VERSION}_${suffix}-setup.exe"
+            signature_path="release-artifacts/${installer}.sig"
 
-          for ($attempt = 1; $attempt -le 6; $attempt++) {
-            try {
-              gh release download $env:TAG_NAME --pattern "latest.json" --dir $PWD --clobber 2>$null
-              if (Test-Path $latestJsonPath) {
-                $existing = Get-Content $latestJsonPath -Raw | ConvertFrom-Json
-                break
-              }
-            } catch { }
-            Start-Sleep -Seconds 10
-          }
+            if [ ! -f "$signature_path" ]; then
+              echo "::error::Updater signature missing for ${installer}."
+              exit 1
+            fi
 
-          if (-not $existing) {
-            # Create new latest.json
-            $existing = [PSCustomObject]@{
-              version   = "v$env:VERSION"
-              notes     = "CMTrace Open v$env:VERSION"
-              pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-              platforms = @{}
-            }
-          }
+            # The signature is produced on a Windows runner, so strip CR as well
+            # as LF before it is embedded in JSON.
+            jq \
+              --arg key "$platform_key" \
+              --arg signature "$(tr -d '\r\n' < "$signature_path")" \
+              --arg url "https://github.com/${REPOSITORY}/releases/download/${TAG_NAME}/${installer}" \
+              --arg version "v$VERSION" \
+              '.platforms[$key] = {signature: $signature, url: $url, version: $version}' \
+              latest.json > latest.json.next
+            mv latest.json.next latest.json
+          done
 
-          # Ensure platforms is a hashtable we can add to
-          if ($existing.platforms -is [PSCustomObject]) {
-            $platformsHash = @{}
-            $existing.platforms.PSObject.Properties | ForEach-Object { $platformsHash[$_.Name] = $_.Value }
-            $existing.platforms = $platformsHash
-          }
+          gh release upload "$TAG_NAME" latest.json --clobber
 
-          $existing.platforms[$platformKey] = $platformEntry
-          $existing | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath -Encoding utf8
+          # cmtrace-release.yml publishes the macOS and Linux entries from a
+          # separate workflow run, so a write there can still land between the
+          # read above and this upload. tauri-action merges rather than
+          # replaces, so the usual outcome is a complete manifest, but read the
+          # published file back rather than assuming: a Windows entry that lost
+          # the race would otherwise leave those users with no update prompt and
+          # nothing in the logs to say so.
+          gh release download "$TAG_NAME" --pattern latest.json --dir published --clobber
+          missing=""
+          for platform_key in windows-x86_64 windows-aarch64; do
+            if ! jq -e --arg key "$platform_key" '.platforms | has($key)' published/latest.json > /dev/null; then
+              missing="$missing $platform_key"
+            fi
+          done
 
-          gh release upload $env:TAG_NAME $latestJsonPath --clobber
+          {
+            echo "### Updater manifest"
+            echo ""
+            jq -r '.platforms | keys[] | "- `\(.)`"' published/latest.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$missing" ]; then
+            echo "::error::Published latest.json is missing:$missing. A concurrent manifest write clobbered it; re-run this job."
+            exit 1
+          fi
