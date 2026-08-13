@@ -250,6 +250,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Shared with codesign.yml; see the note there for why grouping publisher
+    # jobs is safe when grouping build jobs would not be.
+    concurrency:
+      group: updater-manifest-${{ needs.release.outputs.tag_name }}
+      cancel-in-progress: false
 
     steps:
       - name: Publish updater manifest

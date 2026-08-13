@@ -375,6 +375,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Shared with cmtrace-release.yml so the two publishers for a tag run one
+    # after the other rather than overlapping. Only publisher jobs are in this
+    # group: a concurrency group keeps a single pending entry and cancels the
+    # rest, which would silently drop a platform if build jobs were grouped, but
+    # is harmless here because a superseded publisher's work is redone by the
+    # one that replaces it.
+    concurrency:
+      group: updater-manifest-${{ needs.prepare-windows-release.outputs.tag_name }}
+      cancel-in-progress: false
 
     steps:
       - name: Publish updater manifest

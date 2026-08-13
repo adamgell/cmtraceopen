@@ -33,39 +33,69 @@ runs:
       run: |
         set -euo pipefail
 
+        # Enumerate the release once per attempt. A download is skipped only
+        # when the asset genuinely is not published yet; anything else, an auth
+        # failure or a network blip, has to fail the job. Treating those as "no
+        # assets" would publish an empty manifest over a valid one.
+        download_release_state() {
+          local assets
+          assets="$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name')"
+
+          rm -rf "$1" && mkdir -p "$1/signatures"
+
+          if printf '%s\n' "$assets" | grep -q '\.sig$'; then
+            gh release download "$TAG_NAME" --pattern '*.sig' --dir "$1/signatures" --clobber
+          fi
+
+          if printf '%s\n' "$assets" | grep -qx 'latest.json'; then
+            gh release download "$TAG_NAME" --pattern latest.json --dir "$1" --clobber
+          fi
+        }
+
         # Both release workflows run this. The manifest is derived from the
         # release's assets rather than from the platform this job happens to
         # have built, so whichever workflow finishes last sees everything and
-        # publishes a complete file. Publishers that overlap compute identical
-        # bytes, and a publisher that runs early carries forward the entries it
-        # cannot see yet, so a concurrent write can only ever add keys.
+        # publishes a complete file.
         for attempt in 1 2 3; do
-          rm -rf signatures published latest.json
-          mkdir -p signatures published
-
-          # No signatures yet is a legitimate state on the very first publisher.
-          gh release download "$TAG_NAME" --pattern '*.sig' --dir signatures --clobber 2>/dev/null || true
-          gh release download "$TAG_NAME" --pattern latest.json --dir published --clobber 2>/dev/null || true
+          download_release_state state
 
           published_manifest=""
-          if [ -f published/latest.json ]; then
-            published_manifest="published/latest.json"
+          if [ -f state/latest.json ]; then
+            published_manifest="state/latest.json"
           fi
 
           PUBLISHED_MANIFEST="$published_manifest" \
-          SIGNATURE_DIR=signatures \
+          SIGNATURE_DIR=state/signatures \
           OUTPUT_PATH=latest.json \
-            node .github/scripts/updater-manifest.mjs | tee build.log
+            node .github/scripts/updater-manifest.mjs
+
+          # Every publisher runs after its own platform's signatures are
+          # uploaded, so an empty result means the release state was misread
+          # rather than that there is nothing to publish.
+          if [ "$(jq '.platforms | length' latest.json)" -eq 0 ]; then
+            echo "::error::Refusing to publish a manifest with no platform entries."
+            exit 1
+          fi
 
           gh release upload "$TAG_NAME" latest.json --clobber
 
-          # Read back what actually landed. Another publisher may have written
-          # between this run's read and its upload, and the loser of that race
-          # is exactly the silent data loss this action exists to prevent.
-          rm -rf verify && mkdir -p verify
-          gh release download "$TAG_NAME" --pattern latest.json --dir verify --clobber
+          # Verify against what the release can support *now*, not against what
+          # this run built. Only one publisher can be blind to the other's
+          # signatures, but that blind one may still upload last and overwrite a
+          # more complete manifest. Comparing against its own build would happily
+          # confirm the truncated file it just wrote.
+          download_release_state verify
 
-          if diff <(jq -S '.platforms | keys' latest.json) <(jq -S '.platforms | keys' verify/latest.json) > /dev/null; then
+          SIGNATURE_DIR=verify/signatures \
+          OUTPUT_PATH=verify/expected.json \
+            node .github/scripts/updater-manifest.mjs > /dev/null
+
+          dropped="$(jq -r -n \
+            --slurpfile expected verify/expected.json \
+            --slurpfile actual verify/latest.json \
+            '(($expected[0].platforms | keys) - ($actual[0].platforms | keys)) | join(", ")')"
+
+          if [ -z "$dropped" ]; then
             {
               echo "### Updater manifest"
               echo ""
@@ -74,7 +104,7 @@ runs:
             exit 0
           fi
 
-          echo "::warning::latest.json changed underneath this publisher on attempt ${attempt}; merging again."
+          echo "::warning::Published manifest is missing ${dropped} that the release's signatures support; merging again (attempt ${attempt})."
         done
 
         echo "::error::Could not publish a stable latest.json after 3 attempts."
