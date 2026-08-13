@@ -138,8 +138,14 @@ pub async fn export_esp_session(
     // Written to a sibling temporary file and renamed into place, so a failed
     // write cannot truncate a prior capture already at `destination`. The
     // temporary file sits beside the destination rather than in a scratch
-    // directory because rename is only atomic within one filesystem.
-    let tmp = format!("{destination}.{}.tmp", std::process::id());
+    // directory because rename is only atomic within one filesystem. The
+    // process id plus a nanosecond timestamp makes the name unique per call, so
+    // two concurrent exports to the same destination cannot share a temporary
+    // file.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let tmp = format!("{destination}.{}.{nonce}.tmp", std::process::id());
     tokio::fs::write(&tmp, &contents)
         .await
         .map_err(|error| EspExportError::Write {
@@ -148,7 +154,7 @@ pub async fn export_esp_session(
     match tokio::fs::rename(&tmp, &destination).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = std::fs::remove_file(&tmp);
+            let _ = tokio::fs::remove_file(&tmp).await;
             Err(EspExportError::Write {
                 message: error.to_string(),
             })
