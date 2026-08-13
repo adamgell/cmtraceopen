@@ -4,6 +4,7 @@ import { useEvtxStore } from "./evtx-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
+import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 
@@ -85,6 +86,7 @@ export function EventLogWorkspace() {
         <ProgressBar style={{ width: "100%", flexShrink: 0 }} />
       )}
       <EvtxFilterBar />
+      <EvtxCoverageBanner />
 
       <div
         style={{

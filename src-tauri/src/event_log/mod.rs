@@ -1,6 +1,13 @@
 pub mod commands;
+pub mod event_node;
+pub mod export;
+pub mod maps;
 pub mod models;
 pub mod parser;
+pub mod fetch;
+pub mod provider_db;
+pub mod rendered;
+pub mod timeline;
 
 #[cfg(target_os = "windows")]
 pub mod live;
@@ -19,9 +26,48 @@ pub(crate) fn sanitize_control_chars(s: &str) -> String {
         .to_string()
 }
 
+/// Parse an event timestamp to epoch milliseconds.
+///
+/// Shared by the live and file paths so that a record sorts to the same place regardless of how it
+/// was opened. Windows usually writes a full RFC 3339 stamp, but some providers omit the zone, in
+/// which case it is read as UTC: the alternative is dropping the event to the epoch, which would
+/// silently reorder the timeline rather than being off by a zone offset.
+pub(crate) fn parse_timestamp_to_epoch_ms(timestamp: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%S%.f")
+                .map(|naive| naive.and_utc().fixed_offset())
+        })
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sanitize_control_chars;
+    use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
+
+    #[test]
+    fn reads_a_full_rfc3339_stamp() {
+        assert_eq!(
+            parse_timestamp_to_epoch_ms("2026-08-09T12:00:00.000Z"),
+            1_786_276_800_000
+        );
+    }
+
+    #[test]
+    fn a_stamp_without_a_zone_is_read_as_utc_rather_than_dropped() {
+        // Dropping it to zero would sort the event to 1970 and silently reorder the timeline.
+        assert_eq!(
+            parse_timestamp_to_epoch_ms("2026-08-09T12:00:00.000"),
+            parse_timestamp_to_epoch_ms("2026-08-09T12:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn an_unreadable_stamp_yields_zero() {
+        assert_eq!(parse_timestamp_to_epoch_ms("not a time"), 0);
+        assert_eq!(parse_timestamp_to_epoch_ms(""), 0);
+    }
 
     #[test]
     fn strips_trailing_carriage_return() {

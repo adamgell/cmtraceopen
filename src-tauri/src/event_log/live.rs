@@ -1,19 +1,54 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::OnceLock;
 
-use regex::Regex;
-
-use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxRecord};
-use super::sanitize_control_chars;
+use super::event_node::{extract_system_fields, parse_event_xml};
+use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxRecord};
+use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
+use cmtraceopen_parser::eventmap::MapRegistry;
 
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HSTRING, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata, EvtQuery,
-    EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender, EvtRenderEventXml, EVT_HANDLE,
+    EvtQueryChannelPath, EvtQueryReverseDirection, EvtQueryTolerateQueryErrors, EvtRender,
+    EvtRenderEventXml, EVT_HANDLE,
 };
+
+/// Event handles fetched per `EvtNext` call.
+///
+/// Each call is a round trip to the Event Log service, so this is the dominant cost of a scan.
+/// FullEventLogView hardcodes 1, paying one round trip per event. The API accepts up to 1024;
+/// 256 keeps the per-call array modest while cutting round trips by that factor.
+#[cfg(target_os = "windows")]
+const EVENT_FETCH_BATCH: usize = 256;
+
+/// Smallest batch to fall back to before treating the channel as unreadable.
+///
+/// Some channels reject a 256-handle request with `RPC_S_INVALID_BOUND`. Measuring a full scan
+/// found one doing exactly that, and the loop's response was to stop reading and return what it
+/// already had as a complete result. Halving down to this floor reads the channel instead.
+#[cfg(target_os = "windows")]
+const MIN_FETCH_BATCH: usize = 8;
+
+/// What one channel yielded, including why anything is missing from it.
+///
+/// The records used to be returned on their own, which left no way to say "this channel was read,
+/// but not all of it". A partial read then reported as a complete one: the caller saw `Ok`, counted
+/// the events, and showed a channel that looked fully loaded. Events that were never fetched are
+/// indistinguishable on screen from events that do not exist.
+pub struct ChannelScan {
+    /// Records the caller did not take. Empty for a caller that streamed every batch away.
+    pub records: Vec<EvtxRecord>,
+    /// How many records this channel produced in total, whether or not the caller kept them.
+    ///
+    /// Separate from `records.len()` because a streaming caller empties that vector as it goes.
+    /// Reporting the length instead would tell the frontend a fully read channel held no events,
+    /// which is the same wrong answer as a channel that failed.
+    pub delivered: usize,
+    /// Operator-facing explanations of what is missing. Empty means the channel was read whole.
+    pub gaps: Vec<String>,
+}
 
 // ── RAII handle wrapper ─────────────────────────────────────────────────────
 
@@ -113,29 +148,116 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 
 /// Query events from a live Windows Event Log channel.
 ///
-/// Returns newest events first, capped at `max_events` (default 1000).
+/// Returns newest events first. `None` means no cap, which is what every caller in the application
+/// passes; there is no default limit, and the comment claiming a default of 1000 described a
+/// behaviour this function has not had. A cap that is documented but absent is worse than either,
+/// because it invites callers to rely on a bound nothing enforces.
 #[cfg(target_os = "windows")]
-pub fn query_channel(channel: &str, max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
-    query_channel_with_progress(channel, max_events, |_, _| {})
+pub fn query_channel(
+    channel: &str,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+) -> Result<ChannelScan, String> {
+    query_channel_with_progress(channel, maps, max_events, |_, _| {})
+}
+
+/// Queries a channel with server-side filtering.
+///
+/// The filter is compiled to XPath and evaluated by the service, so events that do not match are
+/// never fetched, rendered, or transferred.
+#[cfg(target_os = "windows")]
+pub fn query_channel_filtered(
+    channel: &str,
+    filter: &EventQueryFilter,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+) -> Result<ChannelScan, String> {
+    query_channel_inner(channel, filter, maps, max_events, |_, _| {}, |_| {})
 }
 
 /// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
 #[cfg(target_os = "windows")]
 pub fn query_channel_with_progress(
     channel: &str,
+    maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
+    query_channel_inner(
+        channel,
+        &EventQueryFilter::default(),
+        maps,
+        max_events,
+        on_progress,
+        |_| {},
+    )
+}
+
+/// Queries a channel with server-side filtering, reporting progress as events arrive.
+#[cfg(target_os = "windows")]
+pub fn query_channel_filtered_with_progress(
+    channel: &str,
+    filter: &EventQueryFilter,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+) -> Result<ChannelScan, String> {
+    query_channel_inner(channel, filter, maps, max_events, on_progress, |_| {})
+}
+
+/// Queries a channel, delivering each batch of records as it is read.
+///
+/// `on_batch` is handed every batch and is expected to take the records from it. Whatever it leaves
+/// is returned in the [`ChannelScan`], so a caller that forgets to drain still gets correct results
+/// rather than losing them; it simply holds the channel in memory as before.
+#[cfg(target_os = "windows")]
+pub fn query_channel_streamed(
+    channel: &str,
+    filter: &EventQueryFilter,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+    on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+) -> Result<ChannelScan, String> {
+    query_channel_inner(channel, filter, maps, max_events, on_progress, on_batch)
+}
+
+/// Reads a channel, handing each fetched batch to `on_batch` as it is built.
+///
+/// `on_batch` receives the batch by mutable reference and may take the records out of it. Whatever
+/// it leaves behind is accumulated into the returned [`ChannelScan`]. That is the whole difference
+/// between streaming and collecting: a caller that drains never holds more than one batch, and a
+/// caller that ignores the argument gets the channel in one piece exactly as before.
+///
+/// The distinction matters because one channel dominates a scan. On a measured seven-day scan,
+/// Security was 286,401 of 404,769 events and 191.8 seconds of 267, so a caller waiting for this
+/// function to return waits three minutes with nothing to show.
+#[cfg(target_os = "windows")]
+fn query_channel_inner(
+    channel: &str,
+    filter: &EventQueryFilter,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+    mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+) -> Result<ChannelScan, String> {
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
-    let query_string = HSTRING::from("*");
+    // A filter that cannot be expressed is refused here rather than silently degraded to "*",
+    // which would return everything and look like the filter simply matched a lot.
+    let compiled = build_query(filter)
+        .map_err(|error| format!("cannot compile event query for {channel}: {error}"))?;
+    let query_string = HSTRING::from(compiled.as_str());
 
     let query_handle = unsafe {
         EvtQuery(
             None,
             &channel_hstring,
             &query_string,
-            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
+            // TolerateQueryErrors keeps a scan alive when one part of a query cannot be evaluated,
+            // for example a provider that is not registered on this machine. Without it a single
+            // bad element aborts the whole channel and the result silently looks empty.
+            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0 | EvtQueryTolerateQueryErrors.0,
         )
     }
     .map_err(|e| format_error(&format!("EvtQuery({channel})"), &e))?;
@@ -144,23 +266,62 @@ pub fn query_channel_with_progress(
 
     let mut records = Vec::new();
     let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
+    let mut unparsable = 0usize;
+    let mut unrenderable = 0usize;
 
-    while records.len() < limit {
-        let mut raw_handles = [0isize; 16];
+    let mut gaps = Vec::new();
+    let mut batch = EVENT_FETCH_BATCH;
+    // Counted separately from `records`, which a streaming caller empties as it goes. Using the
+    // length of a vector the caller is allowed to drain would restart the limit at zero after every
+    // batch and read the channel forever.
+    let mut produced = 0usize;
+
+    while produced < limit {
+        let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
-        match unsafe { EvtNext(query_handle.raw(), &mut raw_handles, 0, 0, &mut returned) } {
-            Ok(()) => {}
-            Err(e) => {
-                if !is_no_more_items(&e) {
-                    eprintln!(
-                        "[evtx] EvtNext error: code=0x{:08x} w32={} msg=\"{}\"",
-                        e.code().0 as u32,
-                        win32_code(&e),
-                        e.message()
+        let fetched = unsafe {
+            EvtNext(
+                query_handle.raw(),
+                &mut raw_handles[..batch],
+                0,
+                0,
+                &mut returned,
+            )
+        };
+
+        if let Err(error) = fetched {
+            // How to respond is decided in `super::fetch`, where it is tested on every platform.
+            // Everything else in this loop is Windows-only, so a rule encoded here is a rule CI
+            // cannot check on any runner.
+            match super::fetch::classify_fetch_failure(win32_code(&error), batch, MIN_FETCH_BATCH) {
+                super::fetch::FetchFailure::Exhausted => break,
+                super::fetch::FetchFailure::RetryWith(smaller) => {
+                    batch = smaller;
+                    log::info!(
+                        "event=evtx_batch_reduced channel=\"{channel}\" batch={batch} \
+                         reason=\"the service rejected the previous batch size\""
                     );
+                    continue;
                 }
-                break;
+                super::fetch::FetchFailure::Truncated => {
+                    // Recorded as a gap, not only logged. The records already read are still
+                    // returned because they are real, but the channel must not be presented as
+                    // complete when the rest of it was never fetched.
+                    log::warn!(
+                        "event=evtx_next_failed channel=\"{channel}\" batch={batch} \
+                         w32={} code=0x{:08x}",
+                        win32_code(&error),
+                        error.code().0 as u32
+                    );
+                    gaps.push(format!(
+                        "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
+                        produced,
+                        error.message().trim(),
+                        error.code().0 as u32
+                    ));
+                    break;
+                }
             }
         }
 
@@ -168,8 +329,14 @@ pub fn query_channel_with_progress(
             break;
         }
 
+        // Built per fetch rather than appended straight to `records`, so the caller can take each
+        // batch as it is produced. A caller that takes them holds nothing here, which is what keeps
+        // a channel the size of Security from occupying its whole result set before anything is
+        // shown.
+        let mut batch_records: Vec<EvtxRecord> = Vec::new();
+
         for raw_handle in raw_handles.into_iter().take(returned as usize) {
-            if records.len() >= limit {
+            if produced + batch_records.len() >= limit {
                 // Close remaining handles we won't use
                 unsafe {
                     let _ = EvtClose(EVT_HANDLE(raw_handle));
@@ -178,39 +345,97 @@ pub fn query_channel_with_progress(
             }
 
             let event_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
-            let xml =
-                render_event_xml(event_handle.raw()).map_err(|e| format_error("EvtRender", &e))?;
+            // A handle that fails to render is counted, not fatal. Propagating it here returned
+            // Err for the whole channel and threw away every record already read, which the caller
+            // then reported as a channel with no events.
+            let xml = match render_event_xml(event_handle.raw()) {
+                Ok(xml) => xml,
+                Err(error) => {
+                    unrenderable += 1;
+                    if unrenderable == 1 {
+                        log::warn!(
+                            "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
+                            format_error("EvtRender", &error)
+                        );
+                    }
+                    continue;
+                }
+            };
 
-            let provider_name = extract_xml_attr(&xml, "Provider", "Name");
+            // Parsed once here and handed to the record builder. The provider has to be known
+            // before the record exists, because it names the publisher whose message template the
+            // service is asked to render, and parsing a second time to learn the rest would double
+            // the cost of the hottest loop in this view.
+            let parsed = match parse_event_xml(&xml) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    unparsable += 1;
+                    if unparsable == 1 {
+                        // Sliced by character rather than by byte. A byte cut that lands inside a
+                        // multi-byte character panics, and this XML carries account names and paths
+                        // that are routinely not ASCII.
+                        let prefix: String = xml.chars().take(300).collect();
+                        log::warn!(
+                            "event=evtx_parse_failed channel=\"{channel}\" error=\"{error}\" xml_prefix=\"{prefix}\""
+                        );
+                    }
+                    continue;
+                }
+            };
+            let system = extract_system_fields(&parsed);
 
-            // Try to get a formatted message via EvtFormatMessage
-            let rendered_message = provider_name.as_deref().and_then(|provider| {
+            // Only attempted when the event named a provider. Asking the service for the metadata
+            // of a publisher the event never named would fail once per event and cache the failure
+            // under a name no provider has.
+            let rendered_message = system.provider.as_deref().and_then(|provider| {
                 format_event_message(event_handle.raw(), provider, &mut publisher_metadata)
                     .ok()
                     .flatten()
             });
 
-            if let Some(record) = parse_xml_to_record(&xml, channel, rendered_message.as_deref()) {
-                records.push(record);
-                // Report progress every 100 records
-                if records.len() % 100 == 0 {
-                    on_progress(records.len(), None);
-                }
-            } else if records.is_empty() {
-                // Log the first unparseable XML so we can debug the format
-                log::warn!(
-                    "event=evtx_parse_failed channel=\"{channel}\" xml_prefix=\"{}\"",
-                    &xml[..xml.len().min(300)]
-                );
-            }
+            batch_records.push(super::rendered::record_from_parts(
+                &parsed,
+                system,
+                &xml,
+                channel,
+                maps,
+                rendered_message.as_deref(),
+            ));
         }
+
+        produced += batch_records.len();
+        on_progress(produced, None);
+
+        // The caller sees the batch before anything else happens to it. Draining it here is what
+        // makes delivery incremental; leaving it collects the channel as before.
+        on_batch(&mut batch_records);
+        records.append(&mut batch_records);
     }
 
+    if unparsable > 0 {
+        // Counted and reported rather than passed over. Events that never arrived look exactly like
+        // evidence that the thing being investigated did not happen.
+        log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
+        gaps.push(format!(
+            "{channel}: {unparsable} events could not be read and are missing from this view"
+        ));
+    }
+    if unrenderable > 0 {
+        log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
+        gaps.push(format!(
+            "{channel}: {unrenderable} events could not be rendered and are missing from this view"
+        ));
+    }
     log::info!(
-        "event=evtx_live_query_done channel=\"{channel}\" records={}",
-        records.len()
+        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} gaps={}",
+        records.len(),
+        gaps.len()
     );
-    Ok(records)
+    Ok(ChannelScan {
+        records,
+        delivered: produced,
+        gaps,
+    })
 }
 
 // ── Non-Windows stubs ───────────────────────────────────────────────────────
@@ -223,14 +448,40 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 #[cfg(not(target_os = "windows"))]
 pub fn query_channel_with_progress(
     _channel: &str,
+    _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-) -> Result<Vec<EvtxRecord>, String> {
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn query_channel(_channel: &str, _max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
+pub fn query_channel(
+    _channel: &str,
+    _maps: &MapRegistry,
+    _max_events: Option<u64>,
+) -> Result<ChannelScan, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_filtered(
+    _channel: &str,
+    _filter: &EventQueryFilter,
+    _maps: &MapRegistry,
+    _max_events: Option<u64>,
+) -> Result<ChannelScan, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_filtered_with_progress(
+    _channel: &str,
+    _filter: &EventQueryFilter,
+    _maps: &MapRegistry,
+    _max_events: Option<u64>,
+    _on_progress: impl Fn(usize, Option<usize>),
+) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -320,153 +571,6 @@ fn format_event_message(
     }
 }
 
-// ── XML parsing helpers ─────────────────────────────────────────────────────
-
-/// Parse rendered event XML into an EvtxRecord.
-fn parse_xml_to_record(
-    xml: &str,
-    channel: &str,
-    rendered_message: Option<&str>,
-) -> Option<EvtxRecord> {
-    let event_id_str = extract_xml_text(xml, "EventID").unwrap_or_default();
-    let event_id: u32 = event_id_str.parse().unwrap_or(0);
-
-    let level_str = extract_xml_text(xml, "Level").unwrap_or_default();
-    let level_val: u8 = level_str.parse().unwrap_or(4);
-    let level = EvtxLevel::from_level_value(level_val);
-
-    let provider = extract_xml_attr(xml, "Provider", "Name").unwrap_or_default();
-    let computer = extract_xml_text(xml, "Computer").unwrap_or_default();
-    let event_record_id: u64 = extract_xml_text(xml, "EventRecordID")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    let timestamp = extract_xml_attr(xml, "TimeCreated", "SystemTime").unwrap_or_default();
-    let timestamp_epoch = parse_timestamp_to_epoch_ms(&timestamp);
-
-    let event_data = extract_xml_event_data(xml);
-
-    // Use rendered message if available, otherwise build summary from EventData.
-    // Sanitize to strip control characters that would show as unexpected glyphs.
-    let message = rendered_message
-        .map(sanitize_control_chars)
-        .unwrap_or_else(|| build_event_data_summary(&event_data));
-
-    Some(EvtxRecord {
-        id: 0, // assigned by commands.rs after sorting
-        event_record_id,
-        timestamp,
-        timestamp_epoch,
-        provider,
-        channel: channel.to_string(),
-        event_id,
-        level,
-        computer,
-        message,
-        event_data,
-        raw_xml: xml.to_string(),
-        source_label: "Live".to_string(),
-    })
-}
-
-/// Extract an attribute value from an XML tag.
-/// e.g. `extract_xml_attr(xml, "Provider", "Name")` for `<Provider Name='...'>`
-fn extract_xml_attr(xml: &str, tag: &str, attr: &str) -> Option<String> {
-    let tag_start = xml.find(&format!("<{tag}"))?;
-    let tag_end = xml[tag_start..].find('>')? + tag_start;
-    let tag_content = &xml[tag_start..=tag_end];
-
-    // Try both quote styles: Name='value' and Name="value"
-    for quote in ['"', '\''] {
-        let pattern = format!("{attr}={quote}");
-        if let Some(attr_start) = tag_content.find(&pattern) {
-            let value_start = attr_start + pattern.len();
-            if let Some(value_end) = tag_content[value_start..].find(quote) {
-                return Some(tag_content[value_start..value_start + value_end].to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Extract text content between XML tags.
-/// e.g. `extract_xml_text(xml, "EventID")` for `<EventID>123</EventID>`
-fn extract_xml_text(xml: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let open_with_attrs = format!("<{tag} ");
-    let close = format!("</{tag}>");
-
-    // Try simple <Tag>value</Tag>
-    if let Some(start) = xml.find(&open) {
-        let value_start = start + open.len();
-        if let Some(end) = xml[value_start..].find(&close) {
-            return Some(xml[value_start..value_start + end].trim().to_string());
-        }
-    }
-
-    // Try <Tag attr="...">value</Tag>
-    if let Some(start) = xml.find(&open_with_attrs) {
-        let after_tag = &xml[start..];
-        let tag_close = after_tag.find('>')?;
-        let value_start = start + tag_close + 1;
-        if let Some(end) = xml[value_start..].find(&close) {
-            return Some(xml[value_start..value_start + end].trim().to_string());
-        }
-    }
-
-    None
-}
-
-/// Extract `<Data Name='key'>value</Data>` pairs from EventData section.
-///
-/// All values are sanitized to strip control characters (e.g. `\r`, `\0`) that
-/// would render as unexpected glyphs in the UI.
-fn extract_xml_event_data(xml: &str) -> Vec<EvtxField> {
-    fn data_name_re() -> &'static Regex {
-        static CELL: OnceLock<Regex> = OnceLock::new();
-        CELL.get_or_init(|| {
-            Regex::new(r#"<Data Name=['"](.*?)['"]>(.*?)</Data>"#).expect("data regex")
-        })
-    }
-
-    data_name_re()
-        .captures_iter(xml)
-        .map(|cap| EvtxField {
-            name: cap[1].to_string(),
-            value: sanitize_control_chars(&cap[2]),
-        })
-        .collect()
-}
-
-/// Build a summary message from EventData fields (fallback when EvtFormatMessage unavailable).
-fn build_event_data_summary(fields: &[EvtxField]) -> String {
-    fields
-        .iter()
-        .take(5)
-        .map(|f| {
-            let val = if f.value.len() > 80 {
-                format!("{}...", &f.value[..77])
-            } else {
-                f.value.clone()
-            };
-            format!("{}: {val}", f.name)
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-/// Parse an ISO 8601 timestamp to epoch milliseconds.
-fn parse_timestamp_to_epoch_ms(timestamp: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .or_else(|_| {
-            // Windows timestamps may omit timezone, assume UTC
-            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%S%.f")
-                .map(|naive| naive.and_utc().fixed_offset())
-        })
-        .map(|dt| dt.timestamp_millis())
-        .unwrap_or(0)
-}
-
 // ── Error helpers ───────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -490,10 +594,8 @@ fn is_insufficient_buffer(error: &Error) -> bool {
     win32_code(error) == 122
 }
 
-#[cfg(target_os = "windows")]
-fn is_no_more_items(error: &Error) -> bool {
-    win32_code(error) == 259
-}
+// `ERROR_NO_MORE_ITEMS` and `RPC_S_INVALID_BOUND` are recognised in `super::fetch`, which owns the
+// decision they feed and is tested on every platform rather than only on this one.
 
 #[cfg(target_os = "windows")]
 fn is_not_found(error: &Error) -> bool {
@@ -517,7 +619,9 @@ mod tests {
         let has_app = channels.iter().any(|c| c.name == "Application");
         println!("Has Application channel: {has_app}");
 
-        let records = query_channel("Application", Some(3)).expect("query should work");
+        let records = query_channel("Application", &MapRegistry::new(), Some(3))
+            .expect("query should work")
+            .records;
         println!("Application records: {}", records.len());
         for (i, r) in records.iter().enumerate() {
             println!("--- Record {i} ---");
@@ -529,5 +633,165 @@ mod tests {
             println!("  Message: {}", &r.message[..r.message.len().min(100)]);
             println!("  XML prefix: {}", &r.raw_xml[..r.raw_xml.len().min(300)]);
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod live_service_tests {
+    //! Exercises the live path against the machine's own Event Log service.
+    //!
+    //! Ignored by default because it needs a real service with real events, which CI runners and
+    //! developer machines cannot be relied on to have. Run deliberately on a Windows host:
+    //!
+    //! ```text
+    //! cargo test --lib event_log::live::live_service_tests -- --ignored --nocapture
+    //! ```
+    //!
+    //! These exist because every assumption in this file that was checked only by reasoning turned
+    //! out to be wrong at least once. Compilation proves nothing about whether the service accepts
+    //! what we send it.
+
+    use super::*;
+    // Only the assertions need the level type; the query path itself no longer builds records, so
+    // importing it at module scope would warn in a non-test build.
+    use super::super::models::EvtxLevel;
+    use cmtraceopen_parser::event_query::{EventQueryFilter, TimeWindow};
+
+    const CHANNEL: &str = "Application";
+
+    /// A registry local to the call, replacing what used to be an implicit process global. These
+    /// tests are about the query reaching the service, not about mapping.
+    fn no_maps() -> MapRegistry {
+        MapRegistry::new()
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn an_unfiltered_query_returns_records() {
+        let scan = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
+        let records = scan.records;
+        assert!(
+            !records.is_empty(),
+            "Application channel should have events"
+        );
+        let first = &records[0];
+        assert!(!first.provider.is_empty(), "provider should be populated");
+        assert_eq!(first.channel, CHANNEL);
+        assert!(first.event_id > 0);
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn a_time_filter_is_applied_by_the_service_and_narrows_the_result() {
+        // The narrow window is queried first. Running the wide one first leaves a gap in which a
+        // newly written event lands inside the one-hour result and outside the thirty-day one
+        // already collected, failing the assertion for a reason that has nothing to do with
+        // filtering. Querying narrow first makes any new event land in the wide result, which is
+        // the direction the assertion tolerates.
+        let narrow = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 60 * 60 * 1000,
+                }),
+                ..Default::default()
+            },
+            &no_maps(),
+            None,
+        )
+        .expect("1 hour query succeeds")
+        .records;
+
+        let wide = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 30 * 24 * 60 * 60 * 1000,
+                }),
+                ..Default::default()
+            },
+            &no_maps(),
+            None,
+        )
+        .expect("30 day query succeeds")
+        .records;
+
+        assert!(
+            narrow.len() <= wide.len(),
+            "a narrower window cannot return more events: {} vs {}",
+            narrow.len(),
+            wide.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn a_level_filter_returns_only_that_level() {
+        // Level 2 is Error. If the predicate were dropped or malformed the service would either
+        // reject the query or return everything, and both show up here.
+        let records = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                levels: vec![2],
+                ..Default::default()
+            },
+            &no_maps(),
+            Some(200),
+        )
+        .expect("level query succeeds")
+        .records;
+
+        for record in &records {
+            assert_eq!(
+                record.level,
+                EvtxLevel::Error,
+                "level filter must be applied by the service, got {:?}",
+                record.level
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn an_impossible_filter_returns_nothing_rather_than_everything() {
+        // A malformed predicate that the service ignores would show up as a full result set.
+        let records = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                event_ids: vec![cmtraceopen_parser::event_query::EventIdSelector::Single {
+                    id: 999_999,
+                }],
+                ..Default::default()
+            },
+            &no_maps(),
+            Some(50),
+        )
+        .expect("query succeeds")
+        .records;
+
+        assert!(
+            records.is_empty(),
+            "event id 999999 should match nothing, got {}",
+            records.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn system_fields_are_populated_from_real_events() {
+        let records =
+            query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), Some(200))
+                .expect("query succeeds")
+                .records;
+
+        assert!(!records.is_empty());
+        assert!(
+            records.iter().any(|r| r.process_id.is_some()),
+            "at least one real event should carry Execution/@ProcessID"
+        );
+        assert!(
+            records.iter().any(|r| r.keywords.is_some()),
+            "at least one real event should carry Keywords"
+        );
     }
 }

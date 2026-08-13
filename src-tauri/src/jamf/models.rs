@@ -31,8 +31,8 @@ pub struct JamfDirectoryStatus {
     pub jamf_log: bool,
     pub jamf_app_support: bool,
     pub jamf_receipts: bool,
-    pub jamf_user_logs: bool,         // ~/Library/Logs/JAMF
-    pub self_service_log: bool,       // ~/Library/Logs/JAMF/selfservice.log
+    pub jamf_user_logs: bool,   // ~/Library/Logs/JAMF
+    pub self_service_log: bool, // ~/Library/Logs/JAMF/selfservice.log
     pub connect_log: bool,
     pub connect_user_logs: bool,
 }

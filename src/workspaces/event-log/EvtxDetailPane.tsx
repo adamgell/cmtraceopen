@@ -198,7 +198,90 @@ export function EvtxDetailPane() {
         <span>
           <strong>Source:</strong> {record.sourceLabel}
         </span>
+        {/* System-block fields. Rendered only when the provider actually wrote them, so an absent
+            value reads as absent rather than as a zero the provider never claimed. */}
+        {record.task != null && (
+          <span>
+            <strong>Task:</strong> {record.task}
+          </span>
+        )}
+        {record.opcode != null && (
+          <span>
+            <strong>Opcode:</strong> {record.opcode}
+          </span>
+        )}
+        {record.processId != null && (
+          <span>
+            <strong>PID:</strong> {record.processId}
+          </span>
+        )}
+        {record.threadId != null && (
+          <span>
+            <strong>TID:</strong> {record.threadId}
+          </span>
+        )}
+        {record.keywords && (
+          <span>
+            <strong>Keywords:</strong> {record.keywords}
+          </span>
+        )}
+        {record.userSid && (
+          <span title="Raw security identifier; not resolved to an account name">
+            <strong>User SID:</strong> {record.userSid}
+          </span>
+        )}
       </div>
+
+      {/* Map-derived columns. Only present where a map covers this event type, so the section is
+          hidden entirely rather than showing an empty heading. */}
+      {record.mapped && record.mapped.length > 0 && (
+        <div style={{ marginTop: "10px" }}>
+          <div
+            style={{
+              fontSize: `${monoFontSize}px`,
+              fontWeight: 600,
+              marginBottom: "4px",
+              color: tokens.colorNeutralForeground2,
+            }}
+          >
+            Mapped fields
+          </div>
+          {record.mapped.map((column) => (
+            <div
+              key={column.property}
+              style={{
+                display: "flex",
+                gap: "8px",
+                fontSize: `${monoFontSize}px`,
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+              }}
+            >
+              <span
+                style={{
+                  minWidth: "110px",
+                  color: tokens.colorNeutralForeground3,
+                }}
+              >
+                {column.property}
+              </span>
+              <span
+                title={
+                  column.complete
+                    ? undefined
+                    : "The map references a field this event did not carry; the unresolved placeholder is shown as-is"
+                }
+                style={{
+                  color: column.complete
+                    ? tokens.colorNeutralForeground1
+                    : tokens.colorPaletteMarigoldForeground1,
+                }}
+              >
+                {column.text}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Raw XML */}
       <div>

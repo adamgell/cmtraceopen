@@ -29,3 +29,9 @@ base64 = "0.22"
 sha2 = "0.11"
 
 [dev-dependencies]
+# Benchmarks only. A dev-dependency, so it never reaches the wasm32 build of the library.
+criterion = "0.8"
+
+[[bench]]
+name = "eventmap_apply"
+harness = false

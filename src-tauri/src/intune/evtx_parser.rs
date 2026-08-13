@@ -617,8 +617,7 @@ fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> b
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) =
-            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+        let Ok(value) = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
         else {
             return false;
         };
@@ -672,8 +671,7 @@ fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) =
-            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+        let Ok(value) = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
         else {
             return false;
         };
@@ -751,14 +749,22 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
                 if is_direct_system_path(&path) {
                     match name.as_slice() {
                         b"EventID" => {
-                            let value =
-                                reader.read_text(QName(b"EventID")).ok()?.decode().ok()?.into_owned();
+                            let value = reader
+                                .read_text(QName(b"EventID"))
+                                .ok()?
+                                .decode()
+                                .ok()?
+                                .into_owned();
                             fields.event_id.get_or_insert(value);
                             continue;
                         }
                         b"Channel" => {
-                            let value =
-                                reader.read_text(QName(b"Channel")).ok()?.decode().ok()?.into_owned();
+                            let value = reader
+                                .read_text(QName(b"Channel"))
+                                .ok()?
+                                .decode()
+                                .ok()?
+                                .into_owned();
                             fields.channel.get_or_insert(value);
                             continue;
                         }

@@ -228,7 +228,12 @@ fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
         "pub(crate) fn authenticate(",
         "pub(crate) fn request_missing_permissions(",
     );
-    assert_eq!(authenticate.matches("wam::authentication_deadline()").count(), 1);
+    assert_eq!(
+        authenticate
+            .matches("wam::authentication_deadline()")
+            .count(),
+        1
+    );
     assert!(authenticate.contains("match wam::acquire_token(hwnd_raw, deadline, lease)"));
     assert!(authenticate.contains("probe_host_capability_for_authentication(deadline, lease)"));
     assert!(graph_source.contains("std::time::Duration::from_secs(120)"));

@@ -4,6 +4,13 @@ import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
 import type { EvtxRecord, EvtxLevel } from "./types";
+import {
+  columnValue,
+  columnWidth,
+  type EvtxColumnConfig,
+  type EvtxColumnSpec,
+} from "./evtx-columns";
+import type { EvtxTimeZoneMode } from "./evtx-time";
 
 const LEVEL_COLORS: Record<EvtxLevel, string> = {
   Critical: tokens.colorPaletteRedForeground1,
@@ -29,6 +36,11 @@ export interface EvtxTimelineRowProps {
   smallFontSize: number;
   monoFontSize: number;
   lineHeight: string;
+  columnConfig: EvtxColumnConfig;
+  /** Precomputed by the list, since columnConfig is stable and this renders once per row. */
+  columns: EvtxColumnSpec[];
+  /** Passed rather than read from the store, so a memoized row re-renders when the clock changes. */
+  timeZoneMode: EvtxTimeZoneMode;
   onSelect: (id: number | null) => void;
 }
 
@@ -42,6 +54,9 @@ export const EvtxTimelineRow = memo(
       smallFontSize,
       monoFontSize,
       lineHeight,
+      columnConfig,
+      columns,
+      timeZoneMode,
       onSelect,
     },
     ref
@@ -82,105 +97,75 @@ export const EvtxTimelineRow = memo(
           minWidth: 0,
         }}
       >
-        {/* Level badge */}
-        <div
-          style={{
-            fontSize: `${smallFontSize}px`,
-            fontWeight: 700,
-            padding: "2px 6px",
-            borderRadius: "4px",
-            backgroundColor: levelColor,
-            color: tokens.colorNeutralForegroundOnBrand,
-            width: "40px",
-            textAlign: "center",
-            flexShrink: 0,
-            textTransform: "uppercase",
-          }}
-        >
-          {LEVEL_SHORT[record.level]}
-        </div>
+        {columns.map((column) => {
+          const width = columnWidth(columnConfig, column);
+          const value = columnValue(record, column.id, timeZoneMode);
 
-        {/* Timestamp */}
-        <div
-          style={{
-            fontSize: `${monoFontSize}px`,
-            color: tokens.colorNeutralForeground3,
-            flexShrink: 0,
-            width: "165px",
-            fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-          }}
-          title={record.timestamp}
-        >
-          {record.timestamp}
-        </div>
+          if (column.id === "level") {
+            return (
+              <div
+                key={column.id}
+                style={{
+                  fontSize: `${smallFontSize}px`,
+                  fontWeight: 700,
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: levelColor,
+                  color: tokens.colorNeutralForegroundOnBrand,
+                  width: width != null ? `${width}px` : undefined,
+                  textAlign: "center",
+                  flexShrink: 0,
+                  boxSizing: "border-box",
+                }}
+              >
+                {LEVEL_SHORT[record.level]}
+              </div>
+            );
+          }
 
-        {/* Event ID */}
-        <div
-          style={{
-            fontSize: `${monoFontSize}px`,
-            fontFamily: LOG_MONOSPACE_FONT_FAMILY,
-            color: tokens.colorNeutralForeground2,
-            width: "50px",
-            textAlign: "right",
-            flexShrink: 0,
-          }}
-        >
-          {record.eventId}
-        </div>
+          const isDescription = column.id === "message";
+          const isMono = column.id === "timestamp" || column.id === "keywords";
 
-        {/* Channel badge */}
-        <div
-          style={{
-            fontSize: `${smallFontSize}px`,
-            color: tokens.colorNeutralForeground2,
-            backgroundColor: tokens.colorNeutralBackground3,
-            border: `1px solid ${tokens.colorNeutralStroke2}`,
-            borderRadius: tokens.borderRadiusCircular,
-            padding: "2px 6px",
-            maxWidth: "140px",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flexShrink: 1,
-          }}
-          title={record.channel}
-        >
-          {record.channel}
-        </div>
-
-        {/* Provider */}
-        <div
-          style={{
-            fontSize: `${smallFontSize}px`,
-            color: tokens.colorNeutralForeground4,
-            maxWidth: "120px",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flexShrink: 1,
-          }}
-          title={record.provider}
-        >
-          {record.provider}
-        </div>
-
-        {/* Message preview */}
-        <div
-          style={{
-            flex: 1,
-            fontSize: `${fontSize}px`,
-            fontWeight: isSelected ? 600 : 400,
-            color: isSelected
-              ? tokens.colorBrandForeground1
-              : tokens.colorNeutralForeground1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={record.message}
-        >
-          {record.message}
-        </div>
+          return (
+            <div
+              key={column.id}
+              style={
+                isDescription
+                  ? {
+                      // Absorbs the remaining width only while no width has been set for it.
+                      // Ignoring an override meant the Description column could be resized in the
+                      // chooser and never actually change.
+                      ...(width != null
+                        ? { width: `${width}px`, flexShrink: 0 }
+                        : { flex: 1 }),
+                      fontSize: `${fontSize}px`,
+                      fontWeight: isSelected ? 600 : 400,
+                      color: isSelected
+                        ? tokens.colorBrandForeground1
+                        : tokens.colorNeutralForeground1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }
+                  : {
+                      width: width != null ? `${width}px` : undefined,
+                      flexShrink: width != null ? 0 : 1,
+                      fontSize: `${isMono ? monoFontSize : smallFontSize}px`,
+                      fontFamily: isMono ? LOG_MONOSPACE_FONT_FAMILY : undefined,
+                      color: tokens.colorNeutralForeground3,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }
+              }
+              title={value}
+            >
+              {value}
+            </div>
+          );
+        })}
       </div>
     );
   })

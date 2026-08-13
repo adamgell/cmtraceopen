@@ -7,7 +7,13 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
+import {
+  parseEventIdFilter,
+  buildGroupedRows,
+  type EvtxRow,
+} from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
+import { visibleColumns } from "./evtx-columns";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
@@ -45,17 +51,6 @@ function compareRecords(
   return direction === "asc" ? cmp : -cmp;
 }
 
-function parseEventIdFilter(raw: string): Set<number> | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const ids = new Set<number>();
-  for (const part of trimmed.split(",")) {
-    const n = parseInt(part.trim(), 10);
-    if (!isNaN(n)) ids.add(n);
-  }
-  return ids.size > 0 ? ids : null;
-}
-
 export function EvtxTimeline() {
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
@@ -64,6 +59,11 @@ export function EvtxTimeline() {
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
+  const groupBy = useEvtxStore((s) => s.groupBy);
+  const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const toggleGroup = useEvtxStore((s) => s.toggleGroup);
+  const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
 
@@ -103,21 +103,51 @@ export function EvtxTimeline() {
     );
   }, [filteredRecords, sortField, sortDirection]);
 
-  useEffect(() => {
-    if (selectedRecordId == null) return;
-    const stillVisible = sortedRecords.some((r) => r.id === selectedRecordId);
-    if (!stillVisible) {
-      setSelectedRecordId(null);
-    }
-  }, [sortedRecords, setSelectedRecordId, selectedRecordId]);
-
   const parentRef = useRef<HTMLDivElement>(null);
 
+  // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
+  // than records. With no grouping the row list is the record list and nothing changes.
+  // Computed once rather than per row: columnConfig is stable between renders, and the row
+  // renderer was rebuilding the spec array and re-synthesizing every map column spec for each of
+  // potentially a hundred thousand rows.
+  const columns = useMemo(() => visibleColumns(columnConfig), [columnConfig]);
+
+  const rows: EvtxRow[] = useMemo(
+    () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
+    [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
+  );
+
+  // Keyboard navigation moves between records, skipping headers, because a header is not a
+  // selectable event.
+  const recordRowIndexes = useMemo(
+    () =>
+      rows.reduce<number[]>((indexes, row, index) => {
+        if (row.kind === "record") indexes.push(index);
+        return indexes;
+      }, []),
+    [rows]
+  );
+
+  // Checked against the rendered rows, not the filtered records. Filtering already dropped a
+  // hidden selection, but collapsing a group leaves the record in sortedRecords while taking its
+  // row out of the list, so keyboard navigation could not find the current position and the
+  // detail pane showed a record that was not on screen. Rows covers both.
+  useEffect(() => {
+    if (selectedRecordId === null) return;
+    const stillVisible = rows.some(
+      (row) => row.kind === "record" && row.record.id === selectedRecordId
+    );
+    if (!stillVisible) setSelectedRecordId(null);
+  }, [rows, selectedRecordId, setSelectedRecordId]);
+
   const virtualizer = useVirtualizer({
-    count: sortedRecords.length,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowEstimate,
-    getItemKey: (index) => sortedRecords[index]?.id ?? index,
+    getItemKey: (index) => {
+      const row = rows[index];
+      return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
+    },
     overscan: 10,
   });
 
@@ -134,29 +164,37 @@ export function EvtxTimeline() {
       e.preventDefault();
       e.stopPropagation();
 
-      const currentIndex = selectedRecordId != null
-        ? sortedRecords.findIndex((r) => r.id === selectedRecordId)
+      if (recordRowIndexes.length === 0) return;
+
+      const currentPosition = selectedRecordId != null
+        ? recordRowIndexes.findIndex((rowIndex) => {
+            const row = rows[rowIndex];
+            return row.kind === "record" && row.record.id === selectedRecordId;
+          })
         : -1;
 
-      let nextIndex: number;
+      let nextPosition: number;
       if (e.key === "ArrowDown") {
-        nextIndex = currentIndex < sortedRecords.length - 1 ? currentIndex + 1 : currentIndex;
+        nextPosition = currentPosition < recordRowIndexes.length - 1 ? currentPosition + 1 : currentPosition;
       } else if (e.key === "ArrowUp") {
-        nextIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+        nextPosition = currentPosition > 0 ? currentPosition - 1 : 0;
       } else if (e.key === "Home") {
-        nextIndex = 0;
+        nextPosition = 0;
       } else {
-        nextIndex = sortedRecords.length - 1;
+        nextPosition = recordRowIndexes.length - 1;
       }
 
-      if (nextIndex >= 0 && nextIndex < sortedRecords.length) {
-        setSelectedRecordId(sortedRecords[nextIndex].id);
-        virtualizer.scrollToIndex(nextIndex, { align: "auto" });
+      if (nextPosition < 0) nextPosition = 0;
+      const rowIndex = recordRowIndexes[nextPosition];
+      const row = rows[rowIndex];
+      if (row?.kind === "record") {
+        setSelectedRecordId(row.record.id);
+        virtualizer.scrollToIndex(rowIndex, { align: "auto" });
         // Keep focus on the container so subsequent arrow keys work
         parentRef.current?.focus();
       }
     },
-    [selectedRecordId, sortedRecords, setSelectedRecordId, virtualizer]
+    [selectedRecordId, rows, recordRowIndexes, setSelectedRecordId, virtualizer]
   );
 
   if (records.length === 0) {
@@ -194,7 +232,10 @@ export function EvtxTimeline() {
   return (
     <div
       ref={parentRef}
-      role="listbox"
+      // A flat list is a listbox; once grouped it is a tree, because a group header is not an
+      // option and a listbox may only own option and group children. Declaring the wrong one let
+      // assistive technology drop the headers or stop treating the rows as a set.
+      role={groupBy.length > 0 ? "tree" : "listbox"}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
@@ -224,7 +265,56 @@ export function EvtxTimeline() {
           }}
         >
           {virtualRows.map((virtualRow) => {
-            const record = sortedRecords[virtualRow.index];
+            const row = rows[virtualRow.index];
+            if (!row) return null;
+
+            if (row.kind === "group") {
+              return (
+                <div
+                  key={virtualRow.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  role="treeitem"
+                  aria-level={row.depth + 1}
+                  // Focusable and activated by keyboard. It was reachable only by pointer, so a
+                  // keyboard user could not expand or collapse a group at all.
+                  tabIndex={0}
+                  aria-expanded={!row.collapsed}
+                  onClick={() => toggleGroup(row.key)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleGroup(row.key);
+                    }
+                  }}
+                  style={{
+                    // Normal flow, matching the record rows. The wrapper above is already
+                    // translated to the first visible row's offset and its children stack inside
+                    // it, so positioning a header absolutely applied that offset a second time and
+                    // took it out of flow, letting the rows beneath slide up into its place.
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    paddingLeft: `${8 + row.depth * 16}px`,
+                    height: `${metrics.rowHeight}px`,
+                    fontSize: `${smallFontSize}px`,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    backgroundColor: tokens.colorNeutralBackground3,
+                    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+                    color: tokens.colorNeutralForeground2,
+                  }}
+                  title={`${row.count} events`}
+                >
+                  <span style={{ width: "10px" }}>{row.collapsed ? "\u25B8" : "\u25BE"}</span>
+                  <span>{row.label}</span>
+                  <span style={{ color: tokens.colorNeutralForeground4 }}>({row.count})</span>
+                </div>
+              );
+            }
+
+            const record = row.record;
             return (
               <EvtxTimelineRow
                 key={virtualRow.key}
@@ -236,6 +326,9 @@ export function EvtxTimeline() {
                 smallFontSize={smallFontSize}
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
+                columnConfig={columnConfig}
+                columns={columns}
+                timeZoneMode={timeZoneMode}
                 onSelect={setSelectedRecordId}
               />
             );
