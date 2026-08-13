@@ -395,17 +395,26 @@ jobs:
           # and the loser's platform vanished, which is how v1.5.2 shipped with a
           # windows-x86_64 entry and no windows-aarch64 one. Both arches are now
           # merged by a single writer once the matrix has finished.
-          if ! gh release download "$TAG_NAME" --pattern latest.json --dir . --clobber 2>/dev/null; then
+          # Ask whether the manifest exists before downloading it. Treating any
+          # download failure as "no manifest yet" would turn a transient API
+          # error into a Windows-only manifest that deletes the macOS and Linux
+          # entries, which is the exact failure this job exists to prevent.
+          published_assets="$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "$published_assets" | grep -qx 'latest.json'; then
+            gh release download "$TAG_NAME" --pattern latest.json --dir . --clobber
+          else
             echo '{}' > latest.json
           fi
 
           # macOS and Linux entries arrive from cmtrace-release.yml, so anything
-          # already in platforms is carried across untouched.
+          # already in platforms is carried across untouched. Merge onto the
+          # existing object rather than rebuilding it so unrecognized top-level
+          # metadata survives too.
           jq \
             --arg version "v$VERSION" \
             --arg notes "CMTrace Open v$VERSION" \
             --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
+            '. + {
                version: $version,
                notes: $notes,
                pub_date: (.pub_date // $now),

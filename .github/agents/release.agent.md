@@ -101,9 +101,12 @@ instead created by `codesign.yml`'s manual-dispatch path, GitHub suppresses the
 tag push event because the ref was created with `GITHUB_TOKEN`, and only the
 Windows half of the release is built. That is how v1.5.2 shipped Windows-only.
 Whenever `codesign.yml` is dispatched manually, dispatch `cmtrace-release.yml`
-with the same version afterwards:
+with the same version afterwards. Wait for the codesign run to have created the
+tag first, because `cmtrace-release.yml` checks out `refs/tags/vX.Y.Z` and fails
+immediately if the tag does not exist yet:
 
 ```bash
+git fetch --tags && git rev-parse "refs/tags/vX.Y.Z"
 gh workflow run cmtrace-release.yml --ref main -f version=X.Y.Z
 ```
 

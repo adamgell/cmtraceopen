@@ -61,8 +61,11 @@ jobs:
             version="${REF_NAME#v}"
           fi
 
-          if [ -z "$version" ]; then
-            echo "::error::Could not determine a release version."
+          # Without this a tag like v1.6.0-rc.1 would build, publish with
+          # prerelease: false, and overwrite the stable updater manifest that
+          # every installed copy polls.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Expected a stable MAJOR.MINOR.PATCH version, got '$version'. This workflow publishes stable releases only."
             exit 1
           fi
 
@@ -112,9 +115,17 @@ jobs:
           fi
 
           echo "draft=$draft" >> "$GITHUB_OUTPUT"
+
+          # The closing delimiter has to start its own line, but normalizing the
+          # body itself would edit the notes on the way back to the release, so
+          # only add the newline when one is genuinely missing.
+          if [ -n "$(tail -c 1 release-notes.md)" ]; then
+            printf '\n' >> release-notes.md
+          fi
+
           {
             echo "body<<CMTRACE_RELEASE_BODY_EOF"
-            printf '%s\n' "$(cat release-notes.md)"
+            cat release-notes.md
             echo "CMTRACE_RELEASE_BODY_EOF"
           } >> "$GITHUB_OUTPUT"
 
