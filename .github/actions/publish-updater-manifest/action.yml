@@ -1,0 +1,81 @@
+name: Publish updater manifest
+description: >-
+  Rebuild latest.json from the release's own signature assets and publish it.
+  Safe to run from either release workflow, in any order, concurrently.
+
+inputs:
+  version:
+    description: Release version without the leading v, for example 1.5.3
+    required: true
+  tag-name:
+    description: Release tag, for example v1.5.3
+    required: true
+  github-token:
+    description: Token used to read and write release assets
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Publish updater manifest
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        # Composite steps get no working tree of their own, and the checkout
+        # above is the caller's repo, so name the repository explicitly rather
+        # than letting gh infer it from a git remote that may not be there.
+        GH_REPO: ${{ github.repository }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        VERSION: ${{ inputs.version }}
+        TAG_NAME: ${{ inputs.tag-name }}
+      run: |
+        set -euo pipefail
+
+        # Both release workflows run this. The manifest is derived from the
+        # release's assets rather than from the platform this job happens to
+        # have built, so whichever workflow finishes last sees everything and
+        # publishes a complete file. Publishers that overlap compute identical
+        # bytes, and a publisher that runs early carries forward the entries it
+        # cannot see yet, so a concurrent write can only ever add keys.
+        for attempt in 1 2 3; do
+          rm -rf signatures published latest.json
+          mkdir -p signatures published
+
+          # No signatures yet is a legitimate state on the very first publisher.
+          gh release download "$TAG_NAME" --pattern '*.sig' --dir signatures --clobber 2>/dev/null || true
+          gh release download "$TAG_NAME" --pattern latest.json --dir published --clobber 2>/dev/null || true
+
+          published_manifest=""
+          if [ -f published/latest.json ]; then
+            published_manifest="published/latest.json"
+          fi
+
+          PUBLISHED_MANIFEST="$published_manifest" \
+          SIGNATURE_DIR=signatures \
+          OUTPUT_PATH=latest.json \
+            node .github/scripts/updater-manifest.mjs | tee build.log
+
+          gh release upload "$TAG_NAME" latest.json --clobber
+
+          # Read back what actually landed. Another publisher may have written
+          # between this run's read and its upload, and the loser of that race
+          # is exactly the silent data loss this action exists to prevent.
+          rm -rf verify && mkdir -p verify
+          gh release download "$TAG_NAME" --pattern latest.json --dir verify --clobber
+
+          if diff <(jq -S '.platforms | keys' latest.json) <(jq -S '.platforms | keys' verify/latest.json) > /dev/null; then
+            {
+              echo "### Updater manifest"
+              echo ""
+              jq -r '.platforms | keys[] | "- `\(.)`"' verify/latest.json
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::warning::latest.json changed underneath this publisher on attempt ${attempt}; merging again."
+        done
+
+        echo "::error::Could not publish a stable latest.json after 3 attempts."
+        exit 1

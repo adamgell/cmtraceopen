@@ -28,6 +28,11 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+    # Both matrix entries resolve these from the same inputs, so the usual
+    # last-writer-wins caveat on matrix outputs does not apply here.
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -214,6 +219,12 @@ jobs:
           releaseDraft: ${{ steps.notes.outputs.draft }}
           prerelease: false
           args: --target ${{ matrix.target }}
+          # Each matrix entry would otherwise publish its own latest.json from a
+          # read taken minutes earlier. That is what dropped every Linux entry
+          # from v1.5.2 when the macOS upload landed second. The manifest is now
+          # published once per workflow by publish-updater-manifest, which
+          # derives it from the release's own signature assets.
+          uploadUpdaterJson: false
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -232,3 +243,18 @@ jobs:
             sbom-rust.cdx.json \
             sbom-npm.cdx.json \
             --clobber
+
+  publish-updater-manifest:
+    name: Publish updater manifest
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Publish updater manifest
+        uses: ./.github/actions/publish-updater-manifest
+        with:
+          version: ${{ needs.release.outputs.version }}
+          tag-name: ${{ needs.release.outputs.tag_name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
