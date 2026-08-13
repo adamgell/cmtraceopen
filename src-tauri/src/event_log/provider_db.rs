@@ -20,12 +20,14 @@
 //! rows are read on demand and cached rather than loaded eagerly.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
@@ -192,6 +194,96 @@ impl ProviderDb {
             source_os_build: build,
         }))
     }
+}
+
+/// The `ProviderDetails` schema the reader and writer share, observed on a Windows 11 capture and
+/// matching EventLogExpert's database.
+const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDetails" (
+    "ProviderName" TEXT COLLATE NOCASE NOT NULL,
+    "VersionKey" TEXT NOT NULL,
+    "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
+    "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
+    "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
+    PRIMARY KEY ("ProviderName","VersionKey"));"#;
+
+/// Serializes `value` to JSON and gzip-compresses it, the way EventLogExpert stores each section.
+fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    let json = serde_json::to_vec(value)
+        .map_err(|error| format!("cannot serialize provider metadata: {error}"))?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder
+        .write_all(&json)
+        .map_err(|error| format!("cannot compress provider metadata: {error}"))?;
+    encoder
+        .finish()
+        .map_err(|error| format!("cannot finish compressing provider metadata: {error}"))
+}
+
+/// Writes captured provider metadata to a new database in EventLogExpert's schema.
+///
+/// This is the write side of the capture pipeline (issue #539): the Windows capture walk builds
+/// [`ProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the result back.
+/// The round-trip through those two is how a curated database ships. `Maps` and `Parameters` are
+/// written empty because neither the reader nor the capture model consumes them.
+pub fn write_provider_database(
+    path: &Path,
+    providers: &[ProviderMetadata],
+) -> Result<usize, String> {
+    let connection = Connection::open(path).map_err(|error| {
+        format!(
+            "cannot create provider database {}: {error}",
+            path.display()
+        )
+    })?;
+    connection
+        .execute_batch(PROVIDER_DETAILS_SCHEMA)
+        .map_err(|error| format!("cannot create provider database schema: {error}"))?;
+    // Writing a database is a full replacement, not an append: a stale provider row from an earlier
+    // capture at the same path must not survive into the new set.
+    connection
+        .execute("DELETE FROM ProviderDetails", [])
+        .map_err(|error| format!("cannot clear provider database: {error}"))?;
+
+    let empty_object = serde_json::json!({});
+    let empty_array = serde_json::json!([]);
+
+    for metadata in providers {
+        let build = metadata.source_os_build.unwrap_or(0);
+        let events = gzip_json(&metadata.events)?;
+        let keywords = gzip_json(&metadata.keywords)?;
+        let maps = gzip_json(&empty_object)?;
+        let messages = gzip_json(&metadata.messages)?;
+        let opcodes = gzip_json(&metadata.opcodes)?;
+        let parameters = gzip_json(&empty_array)?;
+        let tasks = gzip_json(&metadata.tasks)?;
+
+        connection
+            .execute(
+                r#"INSERT INTO ProviderDetails
+                   (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
+                    Parameters, Tasks, SourceOsBuild)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
+                rusqlite::params![
+                    metadata.provider_name,
+                    format!("vk1:{build}"),
+                    events,
+                    keywords,
+                    maps,
+                    messages,
+                    opcodes,
+                    parameters,
+                    tasks,
+                    metadata.source_os_build,
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "cannot insert provider {}: {error}",
+                    metadata.provider_name
+                )
+            })?;
+    }
+    Ok(providers.len())
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -533,6 +625,60 @@ mod tests {
         assert!(store.provider("B").is_some());
         assert!(store.provider("Nobody").is_none());
         assert_eq!(store.registered().len(), 2);
+    }
+
+    #[test]
+    fn a_written_database_round_trips_through_the_reader() {
+        use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage};
+
+        let dir = temp_dir("roundtrip");
+        let path = dir.join("capture.db");
+
+        let metadata = ProviderMetadata {
+            provider_name: "Round-Trip-Provider".to_string(),
+            events: vec![ProviderEvent {
+                id: 2,
+                version: 0,
+                description: Some("Enroll failed: (%1).".to_string()),
+                log_name: Some(
+                    "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+                        .to_string(),
+                ),
+                level: Some(2),
+                task: Some(1),
+                opcode: Some(11),
+                // The reserved top bit, which .NET writes as a negative long; it must survive the
+                // signed round-trip the way a real keyword mask does.
+                keywords: vec![0x8000_0000_0000_0000],
+                template: None,
+            }],
+            messages: vec![ProviderMessage {
+                raw_id: 0x8000_0002,
+                short_id: 2,
+                text: Some("Enroll failed: (%1).".to_string()),
+            }],
+            tasks: [("1".to_string(), "Enrollment".to_string())]
+                .into_iter()
+                .collect(),
+            keywords: [("1".to_string(), "Error".to_string())]
+                .into_iter()
+                .collect(),
+            opcodes: [("11".to_string(), "Start".to_string())]
+                .into_iter()
+                .collect(),
+            source_os_build: Some(26200),
+        };
+
+        let written = write_provider_database(&path, std::slice::from_ref(&metadata))
+            .expect("write");
+        assert_eq!(written, 1);
+
+        let database = ProviderDb::open(&path).expect("opens");
+        let read = database
+            .provider("Round-Trip-Provider")
+            .expect("query")
+            .expect("present");
+        assert_eq!(read, metadata);
     }
 }
 
