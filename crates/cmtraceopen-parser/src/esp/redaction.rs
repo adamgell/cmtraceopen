@@ -8,6 +8,14 @@ use super::models::*;
 const REDACTED: &str = "[redacted]";
 const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
 const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
+/// Shortest classified value that is scrubbed out of free text.
+///
+/// Firmware routinely reports junk serials ("0", "N/A", "None"). A value that
+/// short cannot be told apart from an ordinary word or number once it sits
+/// unlabelled in narrative, so scrubbing it would mangle readable evidence
+/// without protecting anything. The floor stays below the seven characters of
+/// a Dell service tag, so real serials are still covered.
+const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 const SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:[_-]?id)?|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm(?:[_-]?id)?|serial(?:[_-]?number)?|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
 const JSON_CONTAINER_SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|client[_-]?secret|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant[_-]?id|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm[_-]?id|serial[_-]?number|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
 const QUOTED_OR_BARE_VALUE_PATTERN: &str =
@@ -600,38 +608,44 @@ fn mac_address_pattern() -> &'static Regex {
 /// redacted, reference-bearing identifiers are consistently pseudonymized,
 /// and source records that could contain credentials, raw Graph responses,
 /// or hardware hashes are omitted completely.
+///
+/// This is the implementation of the ESP export boundary, not the boundary
+/// itself: exports go through [`EspSessionCapture`](super::EspSessionCapture),
+/// which is the only exportable shape and applies this projection on
+/// construction.
 pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagnosticsSnapshot {
     let mut safe = snapshot.clone();
-    let reference_pseudonyms = collect_reference_pseudonyms(&safe);
-    pseudonymize_sid_references(&mut safe, &reference_pseudonyms.sids);
-    redact_all_evidence_refs(&mut safe, &reference_pseudonyms);
+    let redaction = collect_export_redaction(&mut safe);
+    pseudonymize_sid_references(&mut safe, &redaction.sids);
+    redact_all_evidence_refs(&mut safe, &redaction);
 
     for source in &mut safe.elevation.restricted_sources {
-        redact_reference(source, &reference_pseudonyms);
+        redact_reference(source, &redaction);
     }
 
-    redact_identity(&mut safe.identity);
+    // The masking half of the walker whose collecting half ran above: a
+    // classified field cannot be masked here without its literal value also
+    // being scrubbed out of every free-text field.
+    for_each_masked_classified_mut(&mut safe, |classified| {
+        classified.value = REDACTED.to_string();
+    });
+
     if let Some(profile) = &mut safe.profile {
-        redact_profile(profile);
-    }
-    for enrollment in &mut safe.enrollments {
-        mask_classified(&mut enrollment.tenant_id);
-        mask_classified(&mut enrollment.user_principal_name);
-        mask_classified(&mut enrollment.entdm_id);
+        redact_optional_text(&mut profile.profile_name, &redaction);
     }
     for session in &mut safe.sessions {
-        pseudonymize_classified_sid(&mut session.user_sid, &reference_pseudonyms.sids);
+        pseudonymize_classified_sid(&mut session.user_sid, &redaction.sids);
     }
     for workload in &mut safe.workloads {
-        redact_optional_text(&mut workload.display_name);
-        redact_status(&mut workload.status);
+        redact_optional_text(&mut workload.display_name, &redaction);
+        redact_status(&mut workload.status, &redaction);
     }
     for correlation in &mut safe.installer_correlations {
-        correlation.reason = redact_narrative_text(&correlation.reason);
+        correlation.reason = redact_narrative_text(&correlation.reason, &redaction);
         for process in &mut correlation.process_observations {
-            redact_optional_text(&mut process.sanitized_command_line);
-            redact_optional_text(&mut process.referenced_log_path);
-            redact_provenance(&mut process.context.provenance, &reference_pseudonyms);
+            redact_optional_text(&mut process.sanitized_command_line, &redaction);
+            redact_optional_text(&mut process.referenced_log_path, &redaction);
+            redact_provenance(&mut process.context.provenance, &redaction);
         }
     }
     for node in &mut safe.node_cache {
@@ -640,31 +654,28 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         }
     }
     for registration in &mut safe.registration_events {
-        registration.message = redact_narrative_text(&registration.message);
-        redact_status(&mut registration.status);
+        registration.message = redact_narrative_text(&registration.message, &redaction);
+        redact_status(&mut registration.status, &redaction);
         for named in &mut registration.named_data {
-            redact_named_value(named);
+            redact_named_value(named, &redaction);
         }
     }
-    if let Some(hardware) = &mut safe.hardware {
-        mask_classified(&mut hardware.serial_number);
-    }
     for activity in &mut safe.activity {
-        activity.title = redact_narrative_text(&activity.title);
-        redact_optional_narrative_text(&mut activity.detail);
+        activity.title = redact_narrative_text(&activity.title, &redaction);
+        redact_optional_narrative_text(&mut activity.detail, &redaction);
         if let Some(status) = &mut activity.status {
-            redact_status(status);
+            redact_status(status, &redaction);
         }
     }
     for finding in &mut safe.findings {
         for coverage_gap_id in &mut finding.coverage_gap_ids {
-            redact_reference(coverage_gap_id, &reference_pseudonyms);
+            redact_reference(coverage_gap_id, &redaction);
         }
     }
     for coverage in &mut safe.coverage {
-        redact_reference(&mut coverage.artifact_id, &reference_pseudonyms);
-        redact_reference(&mut coverage.family, &reference_pseudonyms);
-        redact_optional_narrative_text(&mut coverage.detail);
+        redact_reference(&mut coverage.artifact_id, &redaction);
+        redact_reference(&mut coverage.family, &redaction);
+        redact_optional_narrative_text(&mut coverage.detail, &redaction);
     }
     safe.raw_evidence
         .retain(|record| !raw_record_must_be_removed(record));
@@ -672,59 +683,218 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
         if raw_record_must_be_masked(record) {
             mask_observation_value(&mut record.raw_value);
         } else {
-            redact_observation_value(&mut record.raw_value);
+            redact_observation_value(&mut record.raw_value, &redaction);
         }
-        redact_reference(&mut record.record_id, &reference_pseudonyms);
-        redact_provenance(&mut record.provenance, &reference_pseudonyms);
+        redact_reference(&mut record.record_id, &redaction);
+        redact_provenance(&mut record.provenance, &redaction);
     }
     if let Some(graph) = &mut safe.graph {
-        redact_graph_overlay(graph);
+        redact_graph_overlay(graph, &redaction);
+    }
+    if let Some(delivery) = &mut safe.delivery_optimization {
+        for transfer in &mut delivery.transfers {
+            transfer.transfer_id = REDACTED.to_string();
+            mask_optional_id(&mut transfer.content_id);
+            mask_optional_id(&mut transfer.app_id);
+        }
     }
 
-    safe
-}
+    // Reassembled field by field, never with `..`. A field added to
+    // `EspDiagnosticsSnapshot` stops compiling here until someone decides how
+    // it is exported, instead of riding out through the `clone()` above
+    // unexamined.
+    let EspDiagnosticsSnapshot {
+        schema_version,
+        scenario,
+        phase,
+        generated_at_utc,
+        elevation,
+        identity,
+        profile,
+        enrollments,
+        sessions,
+        workloads,
+        installer_correlations,
+        node_cache,
+        registration_events,
+        delivery_optimization,
+        hardware,
+        activity,
+        findings,
+        coverage,
+        raw_evidence,
+        graph,
+    } = safe;
 
-fn redact_identity(identity: &mut EspIdentityEvidence) {
-    mask_classified(&mut identity.entdm_id);
-    mask_classified(&mut identity.tenant_id);
-    mask_classified(&mut identity.tenant_domain);
-    mask_classified(&mut identity.user_principal_name);
-    mask_classified(&mut identity.serial_number);
-}
-
-fn redact_profile(profile: &mut EspProfileEvidence) {
-    redact_optional_text(&mut profile.profile_name);
-    mask_classified(&mut profile.tenant_domain);
-    mask_classified(&mut profile.tenant_id);
-}
-
-fn mask_classified(value: &mut Option<EspClassifiedString>) {
-    if let Some(value) = value {
-        value.value = REDACTED.to_string();
+    EspDiagnosticsSnapshot {
+        schema_version,
+        scenario,
+        phase,
+        generated_at_utc,
+        elevation,
+        identity,
+        profile,
+        enrollments,
+        sessions,
+        workloads,
+        installer_correlations,
+        node_cache,
+        registration_events,
+        delivery_optimization,
+        hardware,
+        activity,
+        findings,
+        coverage,
+        raw_evidence,
+        graph,
     }
 }
 
-fn redact_status(status: &mut EspStatus) {
-    redact_raw_status(&mut status.raw);
-    status.display = redact_narrative_text(&status.display);
+/// Visit every classified field the export masks outright.
+///
+/// One list of fields, walked twice: [`collect_export_redaction`] reads the
+/// literal values through it and [`redacted_export_projection`] masks them
+/// through it, so a field cannot be masked as a typed value without its
+/// literal also being scrubbed out of free text.
+///
+/// [`EspSession::user_sid`] is deliberately absent: a SID is pseudonymized
+/// rather than masked, so it keeps a stable identity across the export.
+fn for_each_masked_classified_mut(
+    snapshot: &mut EspDiagnosticsSnapshot,
+    mut visit: impl FnMut(&mut EspClassifiedString),
+) {
+    let mut visit_optional = move |value: &mut Option<EspClassifiedString>| {
+        if let Some(value) = value {
+            visit(value);
+        }
+    };
+
+    // Every visited struct is destructured field by field, never with `..`, so
+    // a field added to any of them stops compiling here until someone decides
+    // whether it is classified (and therefore masked) or deliberately not.
+    // Classified fields are routed through `visit_optional`; the `_` bindings
+    // name the fields that stay untouched by this walker.
+    let EspIdentityEvidence {
+        device_name: _,
+        managed_device_id: _,
+        entra_device_id: _,
+        entdm_id,
+        tenant_id,
+        tenant_domain,
+        user_principal_name,
+        serial_number,
+        evidence: _,
+    } = &mut snapshot.identity;
+    visit_optional(entdm_id);
+    visit_optional(tenant_id);
+    visit_optional(tenant_domain);
+    visit_optional(user_principal_name);
+    visit_optional(serial_number);
+
+    if let Some(profile) = &mut snapshot.profile {
+        let EspProfileEvidence {
+            profile_name: _,
+            deployment_profile_id: _,
+            correlation_id: _,
+            tenant_domain,
+            tenant_id,
+            oobe_config: _,
+            profile_download_time: _,
+            join_mode: _,
+            odj_applied: _,
+            skip_domain_connectivity_check: _,
+            device_preparation: _,
+            evidence: _,
+        } = profile;
+        visit_optional(tenant_domain);
+        visit_optional(tenant_id);
+    }
+
+    for enrollment in &mut snapshot.enrollments {
+        let EspEnrollmentEvidence {
+            enrollment_id: _,
+            provider_id: _,
+            tenant_id,
+            user_principal_name,
+            entdm_id,
+            settings: _,
+            evidence: _,
+        } = enrollment;
+        visit_optional(tenant_id);
+        visit_optional(user_principal_name);
+        visit_optional(entdm_id);
+    }
+
+    if let Some(hardware) = &mut snapshot.hardware {
+        let EspHardwareEvidence {
+            os_version: _,
+            os_build: _,
+            manufacturer: _,
+            model: _,
+            serial_number,
+            tpm_version: _,
+            evidence: _,
+        } = hardware;
+        visit_optional(serial_number);
+    }
+
+    if let Some(graph) = &mut snapshot.graph {
+        if let Some(device_match) = &mut graph.device_match.data {
+            for device in device_match
+                .selected
+                .iter_mut()
+                .chain(&mut device_match.candidates)
+            {
+                let EspGraphManagedDevice {
+                    managed_device_id: _,
+                    entra_device_id: _,
+                    serial_number,
+                    device_name: _,
+                    user_id: _,
+                    user_principal_name,
+                    tenant_id,
+                    evidence: _,
+                } = device;
+                visit_optional(serial_number);
+                visit_optional(user_principal_name);
+                visit_optional(tenant_id);
+            }
+        }
+        if let Some(identity) = &mut graph.autopilot_identity.data {
+            let EspGraphAutopilotIdentity {
+                autopilot_device_id: _,
+                entra_device_id: _,
+                serial_number,
+                deployment_profile_id: _,
+                group_tag: _,
+                evidence: _,
+            } = identity;
+            visit_optional(serial_number);
+        }
+    }
+}
+
+fn redact_status(status: &mut EspStatus, redaction: &ExportRedaction) {
+    redact_raw_status(&mut status.raw, redaction);
+    status.display = redact_narrative_text(&status.display, redaction);
     if let Some(detail) = &mut status.detail {
-        redact_raw_status(&mut detail.raw);
-        detail.display = redact_narrative_text(&detail.display);
+        redact_raw_status(&mut detail.raw, redaction);
+        detail.display = redact_narrative_text(&detail.display, redaction);
     }
 }
 
-fn redact_raw_status(status: &mut EspRawStatus) {
+fn redact_raw_status(status: &mut EspRawStatus, redaction: &ExportRedaction) {
     if let EspRawStatus::Text(value) = status {
-        *value = redact_text(value);
+        *value = redact_evidence_text(value, redaction);
     }
 }
 
-fn redact_observation_value(value: &mut EspObservationValue) {
+fn redact_observation_value(value: &mut EspObservationValue, redaction: &ExportRedaction) {
     match value {
-        EspObservationValue::Text(value) => *value = redact_text(value),
+        EspObservationValue::Text(value) => *value = redact_evidence_text(value, redaction),
         EspObservationValue::StringList(values) => {
             for value in values {
-                *value = redact_text(value);
+                *value = redact_evidence_text(value, redaction);
             }
         }
         EspObservationValue::Integer(_)
@@ -737,14 +907,83 @@ fn mask_observation_value(value: &mut EspObservationValue) {
     *value = EspObservationValue::Text(REDACTED.to_string());
 }
 
+/// Everything a single export needs to know about the snapshot it is
+/// projecting: which identifiers get a stable pseudonym, and which literal
+/// values must not survive anywhere in it.
 #[derive(Default)]
-struct ReferencePseudonyms {
+struct ExportRedaction {
     sids: BTreeMap<String, String>,
     emails: BTreeMap<String, String>,
     profile_users: BTreeMap<String, String>,
+    literals: ClassifiedLiterals,
 }
 
-fn collect_reference_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> ReferencePseudonyms {
+/// The exact values the export masks as typed fields.
+///
+/// A bare serial has no distinctive shape and a bare DNS domain has no label,
+/// so no free-text rule can recognize one. What the projection does have is
+/// the value itself, read from the typed field it is about to mask; scrubbing
+/// that exact string out of every free-text field closes the gap by
+/// construction rather than by pattern.
+#[derive(Default)]
+struct ClassifiedLiterals {
+    /// ASCII-lowercased, deduplicated, and ordered longest first.
+    values: Vec<String>,
+}
+
+impl ClassifiedLiterals {
+    fn new(values: BTreeSet<String>) -> Self {
+        let mut values: Vec<String> = values
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| value.len() >= MIN_SCRUBBED_LITERAL_BYTES)
+            .collect();
+        values.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+        values.dedup();
+        Self { values }
+    }
+
+    /// Replace every occurrence of a collected literal, whatever its case.
+    ///
+    /// Runs last in each free-text pipeline. The shaped rules go first so a
+    /// tenant domain scrubbed on its own cannot break the mail-address match
+    /// on a UPN that contains it, which would leak the local part.
+    fn scrub(&self, value: &str) -> String {
+        if self.values.is_empty() {
+            return value.to_string();
+        }
+
+        // ASCII folding only. Case is the only way a serial, GUID, or DNS name
+        // varies between log lines, and unlike `to_lowercase` it cannot shift a
+        // byte offset out from under the slicing below.
+        let haystack = value.to_ascii_lowercase();
+        let mut scrubbed = String::with_capacity(value.len());
+        let mut cursor = 0;
+
+        while let Some((start, end)) = self.leftmost_longest_match(&haystack, cursor) {
+            scrubbed.push_str(&value[cursor..start]);
+            scrubbed.push_str(REDACTED);
+            cursor = end;
+        }
+        scrubbed.push_str(&value[cursor..]);
+        scrubbed
+    }
+
+    /// Leftmost match, longest at that position, so a literal that sits inside
+    /// a longer one can never cut the longer one in half.
+    fn leftmost_longest_match(&self, haystack: &str, cursor: usize) -> Option<(usize, usize)> {
+        self.values
+            .iter()
+            .filter_map(|literal| {
+                haystack[cursor..]
+                    .find(literal.as_str())
+                    .map(|offset| (cursor + offset, cursor + offset + literal.len()))
+            })
+            .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
+    }
+}
+
+fn collect_export_redaction(snapshot: &mut EspDiagnosticsSnapshot) -> ExportRedaction {
     let mut sids = BTreeSet::new();
     let mut emails = BTreeSet::new();
     let mut profile_users = BTreeSet::new();
@@ -823,11 +1062,27 @@ fn collect_reference_pseudonyms(snapshot: &EspDiagnosticsSnapshot) -> ReferenceP
         );
     });
 
-    ReferencePseudonyms {
+    ExportRedaction {
         sids: build_pseudonyms(sids, "sid"),
         emails: build_pseudonyms(emails, "email"),
         profile_users: build_pseudonyms(profile_users, "user"),
+        // Populated here rather than left to the caller, so an ExportRedaction
+        // cannot be built with an empty literal set that would make the free-text
+        // scrub a silent no-op.
+        literals: collect_classified_literals(snapshot),
     }
+}
+
+/// Read the literal value out of every classified field the export masks.
+///
+/// Takes `&mut` only to share one field list with the masking pass in
+/// [`for_each_masked_classified_mut`]; it changes nothing.
+fn collect_classified_literals(snapshot: &mut EspDiagnosticsSnapshot) -> ClassifiedLiterals {
+    let mut values = BTreeSet::new();
+    for_each_masked_classified_mut(snapshot, |classified| {
+        values.insert(classified.value.clone());
+    });
+    ClassifiedLiterals::new(values)
 }
 
 fn collect_reference_tokens(
@@ -918,7 +1173,7 @@ fn pseudonymize_sids(value: &mut String, pseudonyms: &BTreeMap<String, String>) 
         .into_owned();
 }
 
-fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
+fn redact_reference(value: &mut String, redaction: &ExportRedaction) {
     let bounded = bounded_text(value);
     let redacted = redact_plain_json_secret_members(bounded);
     let redacted = redact_escaped_json_secret_members(&redacted);
@@ -942,40 +1197,49 @@ fn redact_reference(value: &mut String, pseudonyms: &ReferencePseudonyms) {
                 .expect("user-profile pattern must capture the user component")
                 .as_str()
                 .to_ascii_lowercase();
-            let pseudonym = pseudonyms
+            let pseudonym = redaction
                 .profile_users
                 .get(&user)
                 .map_or(REDACTED, String::as_str);
             format!("{}{pseudonym}", &captures["prefix"])
         });
     let redacted = email_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
-        pseudonyms
+        redaction
             .emails
             .get(&captures[0].to_ascii_lowercase())
             .map_or(REDACTED, String::as_str)
             .to_string()
     });
     let redacted = sid_pattern().replace_all(&redacted, |captures: &regex::Captures<'_>| {
-        pseudonyms
+        redaction
             .sids
             .get(&captures[0].to_ascii_uppercase())
             .map_or(REDACTED, String::as_str)
             .to_string()
     });
+    // Network identifiers run after the SID pass for the same reason as in
+    // `redact_text_for_context`: a SID is fully masked before the MAC matcher
+    // can pick up decimal sub-authority pairs inside it, and IPv4 before IPv6 so
+    // an IPv4-mapped address cannot leak its dotted tail. Reference ids are
+    // derived from artifact and source names, which routinely carry a host or
+    // address.
+    let redacted =
+        azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = redact_ipv6_addresses(&redacted);
+    let redacted = redaction.literals.scrub(&redacted);
     *value = if bounded.len() == value.len() {
-        redacted.into_owned()
+        redacted
     } else {
         format!("{redacted}\n{REMOVED_OVERSIZE}")
     };
 }
 
-fn redact_all_evidence_refs(
-    snapshot: &mut EspDiagnosticsSnapshot,
-    pseudonyms: &ReferencePseudonyms,
-) {
+fn redact_all_evidence_refs(snapshot: &mut EspDiagnosticsSnapshot, redaction: &ExportRedaction) {
     for_each_evidence_ref_mut(snapshot, |evidence| {
-        redact_reference(&mut evidence.evidence_id, pseudonyms);
-        redact_reference(&mut evidence.source_artifact_id, pseudonyms);
+        redact_reference(&mut evidence.evidence_id, redaction);
+        redact_reference(&mut evidence.source_artifact_id, redaction);
     });
 }
 
@@ -1347,15 +1611,15 @@ fn for_each_evidence_ref_mut(
     }
 }
 
-fn redact_optional_text(value: &mut Option<String>) {
+fn redact_optional_text(value: &mut Option<String>, redaction: &ExportRedaction) {
     if let Some(value) = value {
-        *value = redact_text(value);
+        *value = redact_evidence_text(value, redaction);
     }
 }
 
-fn redact_optional_narrative_text(value: &mut Option<String>) {
+fn redact_optional_narrative_text(value: &mut Option<String>, redaction: &ExportRedaction) {
     if let Some(value) = value {
-        *value = redact_narrative_text(value);
+        *value = redact_narrative_text(value, redaction);
     }
 }
 
@@ -1391,15 +1655,31 @@ fn standalone_digest_match_is_safe_narrative(value: &str, captures: &regex::Capt
 ///
 /// `pub(crate)` so sibling evidence modules reuse this rule table instead of
 /// writing their own; the rules are about text content, not about ESP.
+///
+/// Shaped rules only. A caller outside an ESP export has no snapshot to read
+/// classified literals from, so it gets no literal scrub — inside the export,
+/// [`redact_evidence_text`] is the entry point that does.
 pub(crate) fn redact_text(value: &str) -> String {
-    redact_text_for_context(value, TextRedactionContext::Arbitrary)
+    redact_text_for_context(
+        value,
+        TextRedactionContext::Arbitrary,
+        &ExportRedaction::default(),
+    )
 }
 
-fn redact_narrative_text(value: &str) -> String {
-    redact_text_for_context(value, TextRedactionContext::Narrative)
+fn redact_evidence_text(value: &str, redaction: &ExportRedaction) -> String {
+    redact_text_for_context(value, TextRedactionContext::Arbitrary, redaction)
 }
 
-fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String {
+fn redact_narrative_text(value: &str, redaction: &ExportRedaction) -> String {
+    redact_text_for_context(value, TextRedactionContext::Narrative, redaction)
+}
+
+fn redact_text_for_context(
+    value: &str,
+    context: TextRedactionContext,
+    redaction: &ExportRedaction,
+) -> String {
     let bounded = bounded_text(value);
     let redacted = redact_plain_json_secret_members(bounded);
     let redacted = redact_escaped_json_secret_members(&redacted);
@@ -1426,6 +1706,9 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = redact_ipv6_addresses(&redacted);
+    // Last: the shaped rules above must see the original text, or a scrubbed
+    // tenant domain would break the mail-address match on a UPN containing it.
+    let redacted = redaction.literals.scrub(&redacted);
     if bounded.len() == value.len() {
         redacted
     } else {
@@ -1733,115 +2016,145 @@ fn authorization_scheme_match_starts_narrative_clause(captures: &regex::Captures
             && next_word.eq_ignore_ascii_case("support"))
 }
 
-fn redact_provenance(provenance: &mut EspEvidenceProvenance, pseudonyms: &ReferencePseudonyms) {
-    redact_reference(&mut provenance.source_artifact_id, pseudonyms);
+fn redact_provenance(provenance: &mut EspEvidenceProvenance, redaction: &ExportRedaction) {
+    redact_reference(&mut provenance.source_artifact_id, redaction);
     if let Some(path) = &mut provenance.file_path {
-        *path = redact_text(path);
+        *path = redact_evidence_text(path, redaction);
     }
     if let Some(registry) = &mut provenance.registry {
-        registry.key = redact_text(&registry.key);
+        registry.key = redact_evidence_text(&registry.key, redaction);
         if let Some(value_name) = &mut registry.value_name {
-            redact_reference(value_name, pseudonyms);
+            redact_reference(value_name, redaction);
         }
     }
     if let Some(event) = &mut provenance.event {
         for named in &mut event.named_data {
-            redact_named_value(named);
+            redact_named_value(named, redaction);
         }
     }
 }
 
-fn redact_named_value(named: &mut EspNamedValue) {
+fn redact_named_value(named: &mut EspNamedValue, redaction: &ExportRedaction) {
     named.value = if sensitive_value_label(&named.name) || forbidden_raw_label(&named.name) {
         REDACTED.to_string()
     } else {
-        redact_text(&named.value)
+        redact_evidence_text(&named.value, redaction)
     };
 }
 
-fn redact_graph_overlay(graph: &mut EspGraphOverlay) {
+/// The classified fields on a Graph managed device and Autopilot identity are
+/// masked by [`for_each_masked_classified_mut`], not here. The device, Entra,
+/// user, and profile identifiers those structs also carry are masked here,
+/// because they identify a specific device or user even though they are not
+/// [`EspClassifiedString`] values.
+fn redact_graph_overlay(graph: &mut EspGraphOverlay, redaction: &ExportRedaction) {
+    graph.request_id = REDACTED.to_string();
+    redact_graph_error(&mut graph.device_match.error, redaction);
+
     if let Some(device_match) = &mut graph.device_match.data {
-        if let Some(selected) = &mut device_match.selected {
-            redact_graph_managed_device(selected);
-        }
-        for candidate in &mut device_match.candidates {
-            redact_graph_managed_device(candidate);
+        for device in device_match
+            .selected
+            .iter_mut()
+            .chain(&mut device_match.candidates)
+        {
+            device.managed_device_id = REDACTED.to_string();
+            mask_optional_id(&mut device.entra_device_id);
+            mask_optional_id(&mut device.device_name);
+            mask_optional_id(&mut device.user_id);
         }
     }
-    redact_graph_error(&mut graph.device_match.error);
 
     if let Some(identity) = &mut graph.autopilot_identity.data {
-        mask_classified(&mut identity.serial_number);
-        redact_optional_text(&mut identity.group_tag);
+        identity.autopilot_device_id = REDACTED.to_string();
+        mask_optional_id(&mut identity.entra_device_id);
+        mask_optional_id(&mut identity.deployment_profile_id);
+        redact_optional_text(&mut identity.group_tag, redaction);
     }
-    redact_graph_error(&mut graph.autopilot_identity.error);
+    redact_graph_error(&mut graph.autopilot_identity.error, redaction);
 
-    redact_graph_profile_section(&mut graph.deployment_profile);
-    redact_graph_profile_section(&mut graph.intended_deployment_profile);
-    redact_graph_error(&mut graph.profile_assignments.error);
+    redact_graph_profile_section(&mut graph.deployment_profile, redaction);
+    redact_graph_profile_section(&mut graph.intended_deployment_profile, redaction);
+    if let Some(assignments) = &mut graph.profile_assignments.data {
+        for assignment in assignments {
+            assignment.assignment_id = REDACTED.to_string();
+            mask_optional_id(&mut assignment.target_id);
+            mask_optional_id(&mut assignment.filter_id);
+        }
+    }
+    redact_graph_error(&mut graph.profile_assignments.error, redaction);
 
     if let Some(events) = &mut graph.autopilot_events.data {
         for event in events {
-            redact_status(&mut event.deployment_state);
+            redact_status(&mut event.deployment_state, redaction);
             for detail in &mut event.policy_status_details {
-                redact_optional_text(&mut detail.display_name);
-                redact_status(&mut detail.status);
+                redact_optional_text(&mut detail.display_name, redaction);
+                redact_status(&mut detail.status, redaction);
             }
         }
     }
-    redact_graph_error(&mut graph.autopilot_events.error);
+    redact_graph_error(&mut graph.autopilot_events.error, redaction);
 
     if let Some(configuration) = &mut graph.enrollment_configuration.data {
-        redact_optional_text(&mut configuration.display_name);
+        redact_optional_text(&mut configuration.display_name, redaction);
     }
-    redact_graph_error(&mut graph.enrollment_configuration.error);
+    redact_graph_error(&mut graph.enrollment_configuration.error, redaction);
 
     if let Some(apps) = &mut graph.apps.data {
         for app in apps {
-            redact_optional_text(&mut app.display_name);
+            redact_optional_text(&mut app.display_name, redaction);
             if let Some(status) = &mut app.status {
-                redact_status(status);
+                redact_status(status, redaction);
             }
         }
     }
-    redact_graph_error(&mut graph.apps.error);
+    redact_graph_error(&mut graph.apps.error, redaction);
 
     if let Some(policies) = &mut graph.policies.data {
         for policy in policies {
-            redact_optional_text(&mut policy.display_name);
+            redact_optional_text(&mut policy.display_name, redaction);
             if let Some(status) = &mut policy.status {
-                redact_status(status);
+                redact_status(status, redaction);
             }
         }
     }
-    redact_graph_error(&mut graph.policies.error);
+    redact_graph_error(&mut graph.policies.error, redaction);
 
     if let Some(scripts) = &mut graph.scripts.data {
         for script in scripts {
-            redact_optional_text(&mut script.display_name);
+            redact_optional_text(&mut script.display_name, redaction);
             if let Some(status) = &mut script.status {
-                redact_status(status);
+                redact_status(status, redaction);
             }
         }
     }
-    redact_graph_error(&mut graph.scripts.error);
+    redact_graph_error(&mut graph.scripts.error, redaction);
 }
 
-fn redact_graph_managed_device(device: &mut EspGraphManagedDevice) {
-    mask_classified(&mut device.serial_number);
-    mask_classified(&mut device.user_principal_name);
-    mask_classified(&mut device.tenant_id);
-}
-
-fn redact_graph_profile_section(section: &mut GraphSection<EspGraphDeploymentProfile>) {
+fn redact_graph_profile_section(
+    section: &mut GraphSection<EspGraphDeploymentProfile>,
+    redaction: &ExportRedaction,
+) {
     if let Some(profile) = &mut section.data {
-        redact_optional_text(&mut profile.display_name);
+        redact_optional_text(&mut profile.display_name, redaction);
     }
-    redact_graph_error(&mut section.error);
+    redact_graph_error(&mut section.error, redaction);
 }
 
-fn redact_graph_error(error: &mut Option<GraphSectionError>) {
+/// Masks a sensitive identifier that is not an [`EspClassifiedString`].
+///
+/// Device, Entra, user, and profile identifiers are opaque tokens (GUIDs or
+/// hostnames) that identify a specific device or user. They carry no literal
+/// worth scrubbing out of free text, so the whole value is masked instead.
+fn mask_optional_id(value: &mut Option<String>) {
+    if value.is_some() {
+        *value = Some(REDACTED.to_string());
+    }
+}
+
+fn redact_graph_error(error: &mut Option<GraphSectionError>, redaction: &ExportRedaction) {
     if let Some(error) = error {
-        error.message = redact_narrative_text(&error.message);
+        error.message = redact_narrative_text(&error.message, redaction);
+        mask_optional_id(&mut error.request_id);
+        mask_optional_id(&mut error.blocked_by);
     }
 }

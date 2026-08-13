@@ -7,7 +7,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use cmtraceopen_parser::esp::{EspDiagnosticsSnapshot, EspElevationState};
+use cmtraceopen_parser::esp::{
+    EspDiagnosticsSnapshot, EspElevationState, EspSessionCapture, EspSessionCaptureMeta,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use serde::{Deserialize, Serialize};
@@ -103,6 +105,61 @@ pub async fn analyze_esp_evidence(
     .map_err(|error| BundleError::SourceAccess {
         message: format!("captured ESP analysis task failed: {error}"),
     })?
+}
+
+/// Errors the ESP session export can fail with.
+#[derive(Debug, Clone, Serialize, Error, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EspExportError {
+    #[error("the ESP session capture could not be serialized: {message}")]
+    Serialize { message: String },
+    #[error("the ESP session capture could not be written: {message}")]
+    Write { message: String },
+}
+
+/// Write a redacted ESP session capture to a user-chosen file.
+///
+/// The frontend hands over the session it is displaying and never serializes
+/// one itself: [`EspSessionCapture`] is the only exportable shape and applies
+/// the crate's export projection on construction, so the bytes written here
+/// cannot carry local values (issue #549).
+#[tauri::command]
+pub async fn export_esp_session(
+    destination: String,
+    snapshot: EspDiagnosticsSnapshot,
+    meta: EspSessionCaptureMeta,
+) -> Result<(), EspExportError> {
+    let contents = EspSessionCapture::from_snapshot(&snapshot, meta)
+        .to_json()
+        .map_err(|error| EspExportError::Serialize {
+            message: error.to_string(),
+        })?;
+
+    // Written to a sibling temporary file and renamed into place, so a failed
+    // write cannot truncate a prior capture already at `destination`. The
+    // temporary file sits beside the destination rather than in a scratch
+    // directory because rename is only atomic within one filesystem. The
+    // process id plus a nanosecond timestamp makes the name unique per call, so
+    // two concurrent exports to the same destination cannot share a temporary
+    // file.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let tmp = format!("{destination}.{}.{nonce}.tmp", std::process::id());
+    tokio::fs::write(&tmp, &contents)
+        .await
+        .map_err(|error| EspExportError::Write {
+            message: error.to_string(),
+        })?;
+    match tokio::fs::rename(&tmp, &destination).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(EspExportError::Write {
+                message: error.to_string(),
+            })
+        }
+    }
 }
 
 #[tauri::command]

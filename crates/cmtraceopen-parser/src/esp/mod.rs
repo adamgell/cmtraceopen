@@ -1,4 +1,5 @@
 mod correlation;
+mod export;
 mod models;
 mod normalize;
 mod redaction;
@@ -7,6 +8,7 @@ mod rules;
 mod timeline;
 
 pub use correlation::*;
+pub use export::*;
 pub use models::*;
 pub use normalize::*;
 pub use redaction::*;
