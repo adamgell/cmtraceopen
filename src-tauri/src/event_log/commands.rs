@@ -76,12 +76,16 @@ pub async fn evtx_query_channels(
         // Cloned before the blocking work, so a long channel scan never runs with a state lock
         // held. Channels are then read under one shared guard rather than locking per record.
         let registry = state.event_maps.clone();
+        let providers_registry = state.provider_store.clone();
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
 
             let maps = registry
                 .read()
                 .map_err(|_| "map registry lock was poisoned".to_string())?;
+            let providers = providers_registry
+                .read()
+                .map_err(|_| "provider store lock was poisoned".to_string())?;
 
             // Absent means unfiltered, which keeps the query as "*" and preserves prior behaviour
             // for callers that have not adopted server-side filtering yet.
@@ -102,6 +106,7 @@ pub async fn evtx_query_channels(
                         channel,
                         &query_filter,
                         &maps,
+                        &providers,
                         max_events,
                         |fetched, _| {
                             let _ = app_ref.emit(

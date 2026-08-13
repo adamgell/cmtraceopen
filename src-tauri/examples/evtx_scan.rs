@@ -66,6 +66,9 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     // No maps loaded. The map engine has its own benchmark; mixing it in here would make a change
     // to either one move this number.
     let maps = MapRegistry::new();
+    // No provider database either. The live path falls back to `EvtFormatMessage` when no database
+    // answers, so this harness still measures the current cost rather than the database path.
+    let providers = app_lib::event_log::provider_db::ProviderStore::default();
 
     let mut total = 0usize;
     let mut failed = 0usize;
@@ -87,7 +90,7 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     let started = Instant::now();
     for channel in &channels {
         let at = Instant::now();
-        match live::query_channel_filtered(channel, &filter, &maps, max_events) {
+        match live::query_channel_filtered(channel, &filter, &maps, &providers, max_events) {
             Ok(scan) => {
                 let records = scan.records;
                 gap_reports += scan.gaps.len();

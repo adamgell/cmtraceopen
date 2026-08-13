@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 
-use super::event_node::{extract_system_fields, parse_event_xml};
+use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
 use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxRecord};
+use super::provider_db::ProviderStore;
 use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 use cmtraceopen_parser::eventmap::MapRegistry;
 
@@ -156,9 +157,10 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 pub fn query_channel(
     channel: &str,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_with_progress(channel, maps, max_events, |_, _| {})
+    query_channel_with_progress(channel, maps, providers, max_events, |_, _| {})
 }
 
 /// Queries a channel with server-side filtering.
@@ -170,9 +172,18 @@ pub fn query_channel_filtered(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_inner(channel, filter, maps, max_events, |_, _| {}, |_| {})
+    query_channel_inner(
+        channel,
+        filter,
+        maps,
+        providers,
+        max_events,
+        |_, _| {},
+        |_| {},
+    )
 }
 
 /// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
@@ -180,6 +191,7 @@ pub fn query_channel_filtered(
 pub fn query_channel_with_progress(
     channel: &str,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -187,6 +199,7 @@ pub fn query_channel_with_progress(
         channel,
         &EventQueryFilter::default(),
         maps,
+        providers,
         max_events,
         on_progress,
         |_| {},
@@ -199,10 +212,11 @@ pub fn query_channel_filtered_with_progress(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
-    query_channel_inner(channel, filter, maps, max_events, on_progress, |_| {})
+    query_channel_inner(channel, filter, maps, providers, max_events, on_progress, |_| {})
 }
 
 /// Queries a channel, delivering each batch of records as it is read.
@@ -215,11 +229,20 @@ pub fn query_channel_streamed(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>),
 ) -> Result<ChannelScan, String> {
-    query_channel_inner(channel, filter, maps, max_events, on_progress, on_batch)
+    query_channel_inner(
+        channel,
+        filter,
+        maps,
+        providers,
+        max_events,
+        on_progress,
+        on_batch,
+    )
 }
 
 /// Reads a channel, handing each fetched batch to `on_batch` as it is built.
@@ -237,6 +260,7 @@ fn query_channel_inner(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &ProviderStore,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
     mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
@@ -384,13 +408,22 @@ fn query_channel_inner(
             };
             let system = extract_system_fields(&parsed);
 
-            // Only attempted when the event named a provider. Asking the service for the metadata
-            // of a publisher the event never named would fail once per event and cache the failure
-            // under a name no provider has.
+            // A loaded provider database answers first, because it costs no round trip. When it has
+            // no answer the message is rendered by the service, one RPC per event, which a measured
+            // scan found to be the dominant cost of the whole live path.
             let rendered_message = system.provider.as_deref().and_then(|provider| {
-                format_event_message(event_handle.raw(), provider, &mut publisher_metadata)
-                    .ok()
-                    .flatten()
+                let insertions = extract_event_data(&parsed).insertions;
+                super::parser::describe_event(
+                    providers,
+                    provider,
+                    system.event_id.unwrap_or(0),
+                    &insertions,
+                )
+                .or_else(|| {
+                    format_event_message(event_handle.raw(), provider, &mut publisher_metadata)
+                        .ok()
+                        .flatten()
+                })
             });
 
             batch_records.push(super::rendered::record_from_parts(
@@ -449,6 +482,7 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 pub fn query_channel_with_progress(
     _channel: &str,
     _maps: &MapRegistry,
+    _providers: &ProviderStore,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -459,6 +493,7 @@ pub fn query_channel_with_progress(
 pub fn query_channel(
     _channel: &str,
     _maps: &MapRegistry,
+    _providers: &ProviderStore,
     _max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
@@ -469,6 +504,7 @@ pub fn query_channel_filtered(
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &ProviderStore,
     _max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
@@ -479,6 +515,7 @@ pub fn query_channel_filtered_with_progress(
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &ProviderStore,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -619,7 +656,7 @@ mod tests {
         let has_app = channels.iter().any(|c| c.name == "Application");
         println!("Has Application channel: {has_app}");
 
-        let records = query_channel("Application", &MapRegistry::new(), Some(3))
+        let records = query_channel("Application", &MapRegistry::new(), &ProviderStore::default(), Some(3))
             .expect("query should work")
             .records;
         println!("Application records: {}", records.len());
@@ -665,10 +702,16 @@ mod live_service_tests {
         MapRegistry::new()
     }
 
+    /// An empty provider store, so the query exercises the `EvtFormatMessage` fallback rather than
+    /// a database-backed renderer. These tests are about the service round trip, not about mapping.
+    fn no_providers() -> ProviderStore {
+        ProviderStore::default()
+    }
+
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn an_unfiltered_query_returns_records() {
-        let scan = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
+        let scan = query_channel(CHANNEL, &no_maps(), &no_providers(), Some(50)).expect("query succeeds");
         let records = scan.records;
         assert!(
             !records.is_empty(),
@@ -697,6 +740,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             None,
         )
         .expect("1 hour query succeeds")
@@ -711,6 +755,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             None,
         )
         .expect("30 day query succeeds")
@@ -736,6 +781,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             Some(200),
         )
         .expect("level query succeeds")
@@ -764,6 +810,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             Some(50),
         )
         .expect("query succeeds")
@@ -780,7 +827,7 @@ mod live_service_tests {
     #[ignore = "requires a live Windows Event Log service with events"]
     fn system_fields_are_populated_from_real_events() {
         let records =
-            query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), Some(200))
+            query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), &no_providers(), Some(200))
                 .expect("query succeeds")
                 .records;
 

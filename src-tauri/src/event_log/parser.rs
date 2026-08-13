@@ -289,7 +289,10 @@ fn parse_single_file(
 /// A partially rendered description is rejected rather than shown. If the template references
 /// insertions the event did not supply, the metadata and the event disagree, and a sentence with
 /// `%4` embedded in it is less honest than the field summary it would replace.
-fn describe_event(
+///
+/// Shared by the file path and the live path. The live path calls it before falling back to
+/// `EvtFormatMessage`, so one description renderer serves both ways an event reaches the view.
+pub(crate) fn describe_event(
     store: &ProviderStore,
     provider: &str,
     event_id: u32,
