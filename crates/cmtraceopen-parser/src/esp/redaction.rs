@@ -763,25 +763,73 @@ fn for_each_masked_classified_mut(
         }
     };
 
-    visit_optional(&mut snapshot.identity.entdm_id);
-    visit_optional(&mut snapshot.identity.tenant_id);
-    visit_optional(&mut snapshot.identity.tenant_domain);
-    visit_optional(&mut snapshot.identity.user_principal_name);
-    visit_optional(&mut snapshot.identity.serial_number);
+    // Every visited struct is destructured field by field, never with `..`, so
+    // a field added to any of them stops compiling here until someone decides
+    // whether it is classified (and therefore masked) or deliberately not.
+    // Classified fields are routed through `visit_optional`; the `_` bindings
+    // name the fields that stay untouched by this walker.
+    let EspIdentityEvidence {
+        device_name: _,
+        managed_device_id: _,
+        entra_device_id: _,
+        entdm_id,
+        tenant_id,
+        tenant_domain,
+        user_principal_name,
+        serial_number,
+        evidence: _,
+    } = &mut snapshot.identity;
+    visit_optional(entdm_id);
+    visit_optional(tenant_id);
+    visit_optional(tenant_domain);
+    visit_optional(user_principal_name);
+    visit_optional(serial_number);
 
     if let Some(profile) = &mut snapshot.profile {
-        visit_optional(&mut profile.tenant_domain);
-        visit_optional(&mut profile.tenant_id);
+        let EspProfileEvidence {
+            profile_name: _,
+            deployment_profile_id: _,
+            correlation_id: _,
+            tenant_domain,
+            tenant_id,
+            oobe_config: _,
+            profile_download_time: _,
+            join_mode: _,
+            odj_applied: _,
+            skip_domain_connectivity_check: _,
+            device_preparation: _,
+            evidence: _,
+        } = profile;
+        visit_optional(tenant_domain);
+        visit_optional(tenant_id);
     }
 
     for enrollment in &mut snapshot.enrollments {
-        visit_optional(&mut enrollment.tenant_id);
-        visit_optional(&mut enrollment.user_principal_name);
-        visit_optional(&mut enrollment.entdm_id);
+        let EspEnrollmentEvidence {
+            enrollment_id: _,
+            provider_id: _,
+            tenant_id,
+            user_principal_name,
+            entdm_id,
+            settings: _,
+            evidence: _,
+        } = enrollment;
+        visit_optional(tenant_id);
+        visit_optional(user_principal_name);
+        visit_optional(entdm_id);
     }
 
     if let Some(hardware) = &mut snapshot.hardware {
-        visit_optional(&mut hardware.serial_number);
+        let EspHardwareEvidence {
+            os_version: _,
+            os_build: _,
+            manufacturer: _,
+            model: _,
+            serial_number,
+            tpm_version: _,
+            evidence: _,
+        } = hardware;
+        visit_optional(serial_number);
     }
 
     if let Some(graph) = &mut snapshot.graph {
@@ -791,13 +839,31 @@ fn for_each_masked_classified_mut(
                 .iter_mut()
                 .chain(&mut device_match.candidates)
             {
-                visit_optional(&mut device.serial_number);
-                visit_optional(&mut device.user_principal_name);
-                visit_optional(&mut device.tenant_id);
+                let EspGraphManagedDevice {
+                    managed_device_id: _,
+                    entra_device_id: _,
+                    serial_number,
+                    device_name: _,
+                    user_id: _,
+                    user_principal_name,
+                    tenant_id,
+                    evidence: _,
+                } = device;
+                visit_optional(serial_number);
+                visit_optional(user_principal_name);
+                visit_optional(tenant_id);
             }
         }
         if let Some(identity) = &mut graph.autopilot_identity.data {
-            visit_optional(&mut identity.serial_number);
+            let EspGraphAutopilotIdentity {
+                autopilot_device_id: _,
+                entra_device_id: _,
+                serial_number,
+                deployment_profile_id: _,
+                group_tag: _,
+                evidence: _,
+            } = identity;
+            visit_optional(serial_number);
         }
     }
 }
@@ -1957,11 +2023,30 @@ fn redact_named_value(named: &mut EspNamedValue, redaction: &ExportRedaction) {
 }
 
 /// The classified fields on a Graph managed device and Autopilot identity are
-/// masked by [`for_each_masked_classified_mut`], not here.
+/// masked by [`for_each_masked_classified_mut`], not here. The device, Entra,
+/// user, and profile identifiers those structs also carry are masked here,
+/// because they identify a specific device or user even though they are not
+/// [`EspClassifiedString`] values.
 fn redact_graph_overlay(graph: &mut EspGraphOverlay, redaction: &ExportRedaction) {
     redact_graph_error(&mut graph.device_match.error, redaction);
 
+    if let Some(device_match) = &mut graph.device_match.data {
+        for device in device_match
+            .selected
+            .iter_mut()
+            .chain(&mut device_match.candidates)
+        {
+            device.managed_device_id = REDACTED.to_string();
+            mask_optional_id(&mut device.entra_device_id);
+            mask_optional_id(&mut device.device_name);
+            mask_optional_id(&mut device.user_id);
+        }
+    }
+
     if let Some(identity) = &mut graph.autopilot_identity.data {
+        identity.autopilot_device_id = REDACTED.to_string();
+        mask_optional_id(&mut identity.entra_device_id);
+        mask_optional_id(&mut identity.deployment_profile_id);
         redact_optional_text(&mut identity.group_tag, redaction);
     }
     redact_graph_error(&mut graph.autopilot_identity.error, redaction);
@@ -2027,8 +2112,21 @@ fn redact_graph_profile_section(
     redact_graph_error(&mut section.error, redaction);
 }
 
+/// Masks a sensitive identifier that is not an [`EspClassifiedString`].
+///
+/// Device, Entra, user, and profile identifiers are opaque tokens (GUIDs or
+/// hostnames) that identify a specific device or user. They carry no literal
+/// worth scrubbing out of free text, so the whole value is masked instead.
+fn mask_optional_id(value: &mut Option<String>) {
+    if value.is_some() {
+        *value = Some(REDACTED.to_string());
+    }
+}
+
 fn redact_graph_error(error: &mut Option<GraphSectionError>, redaction: &ExportRedaction) {
     if let Some(error) = error {
         error.message = redact_narrative_text(&error.message, redaction);
+        mask_optional_id(&mut error.request_id);
+        mask_optional_id(&mut error.blocked_by);
     }
 }
