@@ -447,8 +447,28 @@ jobs:
 
           gh release upload "$TAG_NAME" latest.json --clobber
 
+          # cmtrace-release.yml publishes the macOS and Linux entries from a
+          # separate workflow run, so a write there can still land between the
+          # read above and this upload. tauri-action merges rather than
+          # replaces, so the usual outcome is a complete manifest, but read the
+          # published file back rather than assuming: a Windows entry that lost
+          # the race would otherwise leave those users with no update prompt and
+          # nothing in the logs to say so.
+          gh release download "$TAG_NAME" --pattern latest.json --dir published --clobber
+          missing=""
+          for platform_key in windows-x86_64 windows-aarch64; do
+            if ! jq -e --arg key "$platform_key" '.platforms | has($key)' published/latest.json > /dev/null; then
+              missing="$missing $platform_key"
+            fi
+          done
+
           {
             echo "### Updater manifest"
             echo ""
-            jq -r '.platforms | keys[] | "- `\(.)`"' latest.json
+            jq -r '.platforms | keys[] | "- `\(.)`"' published/latest.json
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$missing" ]; then
+            echo "::error::Published latest.json is missing:$missing. A concurrent manifest write clobbered it; re-run this job."
+            exit 1
+          fi
