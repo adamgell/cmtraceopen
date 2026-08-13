@@ -135,14 +135,25 @@ pub async fn export_esp_session(
             message: error.to_string(),
         })?;
 
-    tauri::async_runtime::spawn_blocking(move || std::fs::write(&destination, contents))
+    // Written to a sibling temporary file and renamed into place, so a failed
+    // write cannot truncate a prior capture already at `destination`. The
+    // temporary file sits beside the destination rather than in a scratch
+    // directory because rename is only atomic within one filesystem.
+    let tmp = format!("{destination}.{}.tmp", std::process::id());
+    tokio::fs::write(&tmp, &contents)
         .await
         .map_err(|error| EspExportError::Write {
-            message: format!("ESP export task failed: {error}"),
-        })?
-        .map_err(|error| EspExportError::Write {
             message: error.to_string(),
-        })
+        })?;
+    match tokio::fs::rename(&tmp, &destination).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(EspExportError::Write {
+                message: error.to_string(),
+            })
+        }
+    }
 }
 
 #[tauri::command]
