@@ -2,10 +2,12 @@
 
 - **Status:** ACCEPTED. The eight rulings recorded below are decisions of the
   repository owner, not recommendations. They supersede the provisional parts of
-  `ADR-004-redaction-scope.md`: the token equality scope, the caller-controlled
-  key, and the cross-artifact / cross-session / cross-export behaviour are no
-  longer provisional. Where the two documents disagree, this one governs; every
-  provision of ADR-004 that these rulings do not touch stays in force.
+  `ADR-004-redaction-scope.md`: the token equality scope is resolved to a single
+  analysis, and the caller-owned opaque context is resolved. The token algorithm,
+  the keying and derivation of that context, the encoding, the secret source, and
+  the cross-artifact / cross-session / cross-export behaviour remain provisional.
+  Where the two documents disagree, this one governs; every provision of ADR-004
+  that these rulings do not touch stays in force.
 - **Context:** ADR-004 accepted a redaction *boundary* and deferred the token
   algorithm, the caller-controlled key, the equality scope, and the
   cross-artifact behaviour. Thirteen redaction projections have since been
@@ -328,7 +330,8 @@ Declaring the frontend surfaces out of scope is not a claim that they are safe.
 It is the claim that they are the wrong place to put the guarantee: they are
 numerous, they are added by every new workspace, and a per-lane hygiene rule at
 that layer is what produced issue #549. Under this ruling they need no rule of
-their own, because the value they receive is already projected. What they do need
+their own, because once the crate boundary of Ruling 1 is implemented the value
+they receive is already projected. What they do need
 is the *negative* rule stated below.
 
 The UI display-masking layer
@@ -351,9 +354,10 @@ across the process edge.
 
 ## Ruling 2: token equality is scoped to one analysis
 
-**Decision.** Two masked values are equal exactly when they were equal within
-**one analysis**. Nothing joins two analyses. The security requirement is stated
-as a property:
+**Decision.** Within **one analysis**, equal inputs produce equal tokens
+(equality is preserved), and a token derived for one analysis is not comparable
+with a token derived for another. Nothing joins two analyses. The security
+requirement is stated as a property:
 
 > Keyed, domain-separated, collision-resistant token derivation, with no feasible
 > offline enumeration without the analysis secret.
@@ -612,8 +616,11 @@ in nine separate leaking divergences, at
 `crates/cmtraceopen-parser/src/intune/device/windows/compliance/redaction.rs:25-34`.
 
 **What it obliges.** A lane author writes a projection and nothing else. They do
-not write a `redact_text`, and they do not write a minter. Two lanes still carry a
-private grammar and must converge on the owner: Microsoft Store
+not write a `redact_text`, and they do not write a minter. The one exception is
+the Decision's own: a lane whose evidence has a genuinely different vocabulary
+may own its own grammar rules, but it must say so and own the divergence rather
+than silently forking the shared rules. Two lanes still carry a private grammar
+and must converge on the owner, or claim that exception: Microsoft Store
 (`crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/redaction.rs:55-75`)
 and Autopilot
 (`crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/redaction.rs:135-151`).
@@ -805,8 +812,8 @@ wording and unweakened. Their status changes:
 
 | Invariant | Before | After these rulings |
 |---|---|---|
-| Same-scope redaction preserves intended equality | Executable in Configuration only | Executable everywhere, since Ruling 2 gives every lane a scope and Ruling 3 gives every test a way to name two of them |
-| Different scopes do not accidentally create equality | Not executable: most lanes have no scope | Executable under Rulings 2 and 4. Ruling 4 removes the fallback that made "different scope" silently mean "same timestamp" |
+| Same-scope redaction preserves intended equality | Executable in Configuration only | Executable wherever a caller supplies a context: Ruling 2 gives every context-bearing analysis a scope and Ruling 3 gives every test a way to name two of them. The no-context paths Ruling 4 permits have no scope |
+| Different scopes do not accidentally create equality | Not executable: most lanes have no scope | Executable under Rulings 2 and 4. Ruling 4 removes the fallback that made "different scope" silently mean "same timestamp"; the no-context constant-marker or decline path has no scope, so it cannot accidentally create equality |
 | Export/redaction does not alter non-sensitive reducer conclusions | Executable across lanes | Unchanged |
 | Restricted values are absent from export | Executable in one module, and that module's behaviour does not satisfy it | Executable everywhere under Ruling 6, via the shared differing-inputs assertion |
 
@@ -853,8 +860,10 @@ wording and unweakened. Their status changes:
   which analysis types are meant to reach the UI at all.
 - To specify the derivation: implementation research against Ruling 2's property,
   which is now unblocked.
-- To write a migration: nothing further. Rulings 1 through 8 determine its shape,
-  and it was deliberately excluded from this document rather than blocked by it.
+- To write a migration: the rulings constrain its design but do not determine it.
+  The token algorithm, derivation, secret source, encoding, existing-export
+  behaviour, compatibility window, and convergence order remain unresolved. It
+  was deliberately excluded from this document rather than blocked by it.
 
 ## Open questions that survive
 
@@ -866,8 +875,10 @@ recorded here as resolved rather than dropped:
   the crate does not interpret it, so the question has no answer the crate is
   entitled to give.
 - *"Does anything need cross-export equality within one device?"* is **answered no
-  by Ruling 2**, which scopes equality to one analysis and therefore forbids it.
-  The two ordinal schemes already forbid it in practice
+  for separate analyses by Ruling 2**, which scopes equality to one analysis and
+  therefore forbids it across analyses. Exports that share one caller-supplied
+  context belong to one analysis, per Ruling 3, and may still compare equal. The
+  two ordinal schemes already forbid cross-export equality in practice
   (`crates/cmtraceopen-parser/src/esp/redaction.rs:858-864`;
   `crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/package_state/redaction.rs:36-48`),
   and no test or issue in the repository asserts the capability.
