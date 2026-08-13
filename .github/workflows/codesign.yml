@@ -386,6 +386,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job deliberately skips actions/checkout, since it only needs the
+          # build artifacts and the release API. Without a working tree gh has no
+          # git remote to infer the repository from and every call fails with
+          # "not a git repository", so name it explicitly.
+          GH_REPO: ${{ github.repository }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
