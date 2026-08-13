@@ -142,6 +142,11 @@ tauri = { version = "2", features = ["test"] }
 name = "evtx_scan"
 required-features = ["event-log"]
 
+# Provider-metadata capture for the curated databases (issue #539, Phase 2). Windows only.
+[[example]]
+name = "provider_capture"
+required-features = ["event-log"]
+
 [[test]]
 name = "esp_diagnostics_sources"
 required-features = ["esp-diagnostics"]
