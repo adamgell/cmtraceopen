@@ -6,6 +6,18 @@ on:
       - "v*"
       - "[0-9]*.[0-9]*.[0-9]*"
       - "!*.*.*.*"
+  # codesign.yml can be dispatched manually, and its "Create release tag for
+  # manual dispatch" step pushes the tag with GITHUB_TOKEN. GitHub suppresses
+  # workflow triggers for refs created by GITHUB_TOKEN, so that path publishes
+  # Windows artifacts without ever firing the tag push this workflow listens
+  # for, and the release ships Windows-only (v1.5.2). Dispatch lets the macOS
+  # and Linux half be run against a tag that already exists.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build macOS and Linux artifacts for (for example 1.5.2 or v1.5.2). The tag must already exist.
+        required: true
+        type: string
 
 permissions: {}
 
@@ -29,7 +41,82 @@ jobs:
     runs-on: ${{ matrix.os }}
     environment: codesigning
     steps:
+      - name: Resolve release tag
+        id: resolve
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="${INPUT_VERSION#v}"
+            tag_name="v$version"
+          else
+            # The tag filters accept both "v1.5.2" and "1.5.2", so the pushed tag
+            # is authoritative and only the version string gets normalized.
+            tag_name="$REF_NAME"
+            version="${REF_NAME#v}"
+          fi
+
+          if [ -z "$version" ]; then
+            echo "::error::Could not determine a release version."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On a dispatch the workflow ref is a branch, so the tag has to be
+          # named explicitly or the build would package the wrong commit.
+          ref: refs/tags/${{ steps.resolve.outputs.tag_name }}
+
+      - name: Resolve release notes
+        id: notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # tauri-action calls updateRelease on a published release with whatever
+          # body it is handed, so a re-run against an existing release would
+          # replace hand-written notes with the template. Read the published body
+          # back and feed it straight through instead.
+          draft=""
+          if gh release view "$TAG_NAME" --json body,isDraft > release-state.json 2>/dev/null; then
+            jq -r '.body // ""' release-state.json > release-notes.md
+            draft="$(jq -r '.isDraft' release-state.json)"
+          fi
+
+          if [ ! -s release-notes.md ]; then
+            template=".github/release-notes/template.md"
+            if [ ! -f "$template" ]; then
+              echo "::error::No release notes exist for $TAG_NAME and $template is missing from that tag."
+              exit 1
+            fi
+            sed -e "s|{{TAG}}|$TAG_NAME|g" -e "s|{{VERSION}}|$VERSION|g" "$template" > release-notes.md
+          fi
+
+          # tauri-action finds a draft by scanning the release list but a published
+          # one by tag lookup. The wrong flag sends it down the create path for a
+          # tag that already exists, which the API rejects.
+          if [ -z "$draft" ]; then
+            draft="true"
+          fi
+
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<CMTRACE_RELEASE_BODY_EOF"
+            printf '%s\n' "$(cat release-notes.md)"
+            echo "CMTRACE_RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Import Apple Developer Certificate
         if: runner.os == 'macOS'
@@ -110,22 +197,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: .
-          tagName: ${{ github.ref_name }}
-          releaseName: "CMTrace Open ${{ github.ref_name }}"
-          releaseBody: |
-            Stable downloads: https://download.cmtraceopen.com/?source=github-release
-
-            ## CMTrace Open ${{ github.ref_name }}
-
-            Open-source CMTrace log viewer with built-in Intune diagnostics.
-
-            ### Downloads
-            | Platform | File |
-            |----------|------|
-            | Windows (x64 / arm64) | signed `.msi` / signed `.exe` |
-            | macOS (ARM) | signed + notarized `.dmg` disk image |
-            | Linux (x64) | `.deb` / `.AppImage` |
-          releaseDraft: true
+          tagName: ${{ steps.resolve.outputs.tag_name }}
+          releaseName: "CMTrace Open ${{ steps.resolve.outputs.tag_name }}"
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: ${{ steps.notes.outputs.draft }}
           prerelease: false
           args: --target ${{ matrix.target }}
 
@@ -140,8 +215,9 @@ jobs:
       - name: Upload SBOMs to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
+          gh release upload "$TAG_NAME" \
             sbom-rust.cdx.json \
             sbom-npm.cdx.json \
             --clobber

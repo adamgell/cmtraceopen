@@ -96,6 +96,36 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 This triggers `.github/workflows/cmtrace-release.yml` for macOS and Linux artifacts and `.github/workflows/codesign.yml` for signed Windows x64 and arm64 artifacts.
 
+Pushing the tag from a workstation is what fires both workflows. If the tag is
+instead created by `codesign.yml`'s manual-dispatch path, GitHub suppresses the
+tag push event because the ref was created with `GITHUB_TOKEN`, and only the
+Windows half of the release is built. That is how v1.5.2 shipped Windows-only.
+Whenever `codesign.yml` is dispatched manually, dispatch `cmtrace-release.yml`
+with the same version afterwards:
+
+```bash
+gh workflow run cmtrace-release.yml --ref main -f version=X.Y.Z
+```
+
+### 6a. Confirm the release is complete
+
+Before announcing the release, verify every platform actually landed:
+
+```bash
+gh release view vX.Y.Z --json assets --jq '[.assets[].name]'
+```
+
+Expect Windows `.msi` / `.exe` / `-setup.exe` for both arches, the macOS `.dmg`
+and `.app.tar.gz`, the Linux `.AppImage` / `.deb` / `.rpm`, both SBOMs, and
+`latest.json`. Then confirm `latest.json` carries every updater target:
+
+```bash
+curl -sL https://github.com/adamgell/cmtraceopen/releases/download/vX.Y.Z/latest.json | jq '.platforms | keys'
+```
+
+A missing `windows-aarch64` or `darwin-aarch64` key means those users get no
+update prompt at all, which is silent and easy to miss.
+
 ### 7. Confirm with a release summary
 
 After the push and tag succeed, print a concise formatted summary that includes:
@@ -126,6 +156,20 @@ Release: https://github.com/adamgell/cmtraceopen/releases/tag/vX.Y.Z
 ```
 
 Omit any empty changelog section from the summary.
+
+## Release Notes
+
+Both release workflows seed the GitHub release body from
+`.github/release-notes/template.md`, so a release created by either half starts
+with the same notes. Whenever the notes are rewritten by hand afterwards, keep
+the `### Download shortlinks` table. Those `*.cmtrace.net` hosts resolve to the
+current stable release rather than to a pinned version, so they keep working in
+tickets and runbooks after the release scrolls out of view, and they are the
+links the project hands out. Every release note must carry them.
+
+Re-running `cmtrace-release.yml` against an existing release reads the published
+body back and hands it to `tauri-action` unchanged, so hand-written notes survive
+a rebuild. Edit the release body, not the workflow, to correct published notes.
 
 ## Important Notes
 
