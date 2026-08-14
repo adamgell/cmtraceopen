@@ -5,6 +5,7 @@ import io
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import sys
 import unittest
@@ -64,6 +65,12 @@ class SkillsetTests(unittest.TestCase):
             (source / "SKILL.md").write_text(f"# {name}\n")
         return sources
 
+    def _snapshot_links(self, target: Path) -> dict[str, tuple[int, str]]:
+        return {
+            entry.name: (entry.lstat().st_ino, os.readlink(entry))
+            for entry in target.iterdir()
+        }
+
     def test_creates_only_approved_directory_symlinks(self) -> None:
         result = setup_skillset.reconcile(self.target, self.sources, check=False)
 
@@ -88,11 +95,18 @@ class SkillsetTests(unittest.TestCase):
                     missing.rmdir()
                 target = case_root / "target"
                 target.mkdir()
+                decoy = case_root / "decoy"
+                decoy.mkdir()
+                wrong_link = target / "alpha"
+                wrong_link.symlink_to(decoy, target_is_directory=True)
+                before = self._snapshot_links(target)
 
                 with self.assertRaisesRegex(ValueError, "beta"):
                     setup_skillset.reconcile(target, sources, check=False)
 
-                self.assertEqual([], list(target.iterdir()))
+                self.assertEqual(before, self._snapshot_links(target))
+                self.assertFalse((target / "beta").exists())
+                self.assertFalse((target / "gamma").exists())
 
     def test_unexpected_target_entry_blocks_without_deleting_it(self) -> None:
         for kind in ("file", "directory"):
@@ -166,6 +180,165 @@ class SkillsetTests(unittest.TestCase):
         self.assertEqual(["beta", "gamma"], result["created"])
         self.assertEqual([], result["missing"])
         self.assertEqual([], result["wrong"])
+
+    def test_reconcile_preserves_state_when_link_staging_fails(self) -> None:
+        for failure in (OSError("link failed"), KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__):
+                case_root = self.root / type(failure).__name__
+                sources = self._create_sources(case_root)
+                target = case_root / "target"
+                target.mkdir()
+                decoy = case_root / "decoy"
+                decoy.mkdir()
+                for name in ("alpha", "beta"):
+                    (target / name).symlink_to(decoy, target_is_directory=True)
+                before = self._snapshot_links(target)
+                original_symlink_to = Path.symlink_to
+
+                def fail_for_beta(
+                    path: Path,
+                    destination: Path,
+                    target_is_directory: bool = False,
+                ) -> None:
+                    if path.name == "beta":
+                        raise failure
+                    original_symlink_to(
+                        path,
+                        destination,
+                        target_is_directory=target_is_directory,
+                    )
+
+                with patch.object(Path, "symlink_to", fail_for_beta), self.assertRaises(
+                    type(failure)
+                ):
+                    setup_skillset.reconcile(target, sources, check=False)
+
+                self.assertEqual(before, self._snapshot_links(target))
+                self.assertFalse((target / "gamma").exists())
+
+    def test_reconcile_rolls_back_every_commit_boundary(self) -> None:
+        cases = (("existing", 6), ("absent", 4))
+        for target_state, replace_count in cases:
+            for fail_at in range(1, replace_count + 1):
+                for timing in ("before", "after"):
+                    for failure_type in (OSError, KeyboardInterrupt):
+                        label = f"{target_state}-{fail_at}-{timing}-{failure_type.__name__}"
+                        with self.subTest(label=label):
+                            case_root = self.root / label
+                            sources = self._create_sources(case_root)
+                            delta = case_root / "sources" / "delta"
+                            delta.mkdir()
+                            (delta / "SKILL.md").write_text("# delta\n")
+                            sources["delta"] = delta
+                            target = case_root / "target"
+                            if target_state == "existing":
+                                target.mkdir()
+                                decoy = case_root / "decoy"
+                                decoy.mkdir()
+                                for name in ("alpha", "beta"):
+                                    (target / name).symlink_to(
+                                        decoy, target_is_directory=True
+                                    )
+                                before = self._snapshot_links(target)
+                            original_replace = os.replace
+                            calls = 0
+
+                            def interrupt_replace(
+                                source: Path, destination: Path
+                            ) -> None:
+                                nonlocal calls
+                                calls += 1
+                                should_fail = calls == fail_at
+                                if should_fail and timing == "before":
+                                    raise failure_type("replace interrupted")
+                                original_replace(source, destination)
+                                if should_fail:
+                                    raise failure_type("replace interrupted")
+
+                            with patch.object(
+                                os, "replace", interrupt_replace
+                            ), self.assertRaises(failure_type):
+                                setup_skillset.reconcile(target, sources, check=False)
+
+                            if target_state == "existing":
+                                self.assertEqual(before, self._snapshot_links(target))
+                                self.assertEqual(
+                                    {"alpha", "beta"},
+                                    {entry.name for entry in target.iterdir()},
+                                )
+                            else:
+                                self.assertFalse(target.exists())
+
+    def test_reconcile_removes_new_target_parents_when_mkdir_is_interrupted(
+        self,
+    ) -> None:
+        for failure in (OSError("mkdir failed"), KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__):
+                case_root = self.root / f"mkdir-{type(failure).__name__}"
+                sources = self._create_sources(case_root)
+                created_root = case_root / "new-parent"
+                target = created_root / "nested" / "target"
+                original_mkdir = Path.mkdir
+                failed = False
+
+                def interrupt_target_mkdir(
+                    path: Path,
+                    mode: int = 0o777,
+                    parents: bool = False,
+                    exist_ok: bool = False,
+                ) -> None:
+                    nonlocal failed
+                    original_mkdir(
+                        path, mode=mode, parents=parents, exist_ok=exist_ok
+                    )
+                    if path == target and not failed:
+                        failed = True
+                        raise failure
+
+                with patch.object(
+                    Path, "mkdir", interrupt_target_mkdir
+                ), self.assertRaises(type(failure)):
+                    setup_skillset.reconcile(target, sources, check=False)
+
+                self.assertFalse(created_root.exists())
+
+    def test_workspace_cleanup_failure_is_nonfatal_after_commit(self) -> None:
+        for target_state in ("existing", "absent"):
+            for failure in (OSError("cleanup failed"), KeyboardInterrupt()):
+                label = f"{target_state}-{type(failure).__name__}"
+                with self.subTest(label=label):
+                    case_root = self.root / f"cleanup-{label}"
+                    sources = self._create_sources(case_root)
+                    target = case_root / "target"
+                    if target_state == "existing":
+                        target.mkdir()
+                        decoy = case_root / "decoy"
+                        decoy.mkdir()
+                        (target / "alpha").symlink_to(
+                            decoy, target_is_directory=True
+                        )
+                    original_rmtree = shutil.rmtree
+                    interrupted = False
+
+                    def cleanup_then_interrupt(
+                        path: Path, *args: object, **kwargs: object
+                    ) -> None:
+                        nonlocal interrupted
+                        original_rmtree(path, *args, **kwargs)
+                        if not interrupted:
+                            interrupted = True
+                            raise failure
+
+                    with patch.object(shutil, "rmtree", cleanup_then_interrupt):
+                        result = setup_skillset.reconcile(
+                            target, sources, check=False
+                        )
+
+                    self.assertEqual(set(sources), set(self._snapshot_links(target)))
+                    if target_state == "existing":
+                        self.assertEqual(["alpha"], result["replaced"])
+                    else:
+                        self.assertEqual(sorted(sources), result["created"])
 
     def test_check_mode_reports_clean_without_mutation(self) -> None:
         home = self.root / "home"
@@ -244,6 +417,42 @@ class SkillsetTests(unittest.TestCase):
                         for entry in target.iterdir()
                     }
                     self.assertEqual(before, after)
+
+    def test_main_rejects_target_symlink_without_following_it(self) -> None:
+        for destination_exists in (True, False):
+            with self.subTest(destination_exists=destination_exists):
+                case_root = self.root / f"target-link-{destination_exists}"
+                home = case_root / "home"
+                repo = case_root / "repo"
+                repo.mkdir(parents=True)
+                self._create_approved_sources(home)
+                destination = case_root / "destination"
+                if destination_exists:
+                    destination.mkdir()
+                target = case_root / "target"
+                target.symlink_to(destination, target_is_directory=True)
+                original_destination = os.readlink(target)
+                arguments = [
+                    "setup_skillset.py",
+                    "--home",
+                    str(home),
+                    "--repo",
+                    str(repo),
+                    "--target",
+                    str(target),
+                ]
+
+                with patch.object(sys, "argv", arguments), self.assertRaisesRegex(
+                    SystemExit, "target must be a directory"
+                ):
+                    setup_skillset.main()
+
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(original_destination, os.readlink(target))
+                if destination_exists:
+                    self.assertEqual([], list(destination.iterdir()))
+                else:
+                    self.assertFalse(destination.exists())
 
     def test_resolves_exact_approved_skill_sources(self) -> None:
         home = self.root / "home"
