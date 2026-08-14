@@ -548,7 +548,14 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
     environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
         result = subprocess.run(
-            ["git", "-C", str(repository), *args],
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-C",
+                str(repository),
+                *args,
+            ],
             check=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

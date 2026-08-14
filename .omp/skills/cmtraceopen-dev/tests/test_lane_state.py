@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import stat
 import subprocess
@@ -1095,6 +1096,42 @@ class GitHelperTests(unittest.TestCase):
                 },
                 git_environment,
             )
+
+    def test_git_commands_disable_repository_fsmonitor_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, _ = create_git_repo(root)
+            marker = root / "fsmonitor-ran"
+            hook = root / "hostile-fsmonitor"
+            hook.write_text(
+                "#!/bin/sh\n"
+                f"printf touched > {shlex.quote(str(marker))}\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o700)
+            run_git(repo, "config", "core.fsmonitor", str(hook))
+            real_run = subprocess.run
+
+            with mock.patch.object(
+                lane_state.subprocess,
+                "run",
+                side_effect=real_run,
+            ) as run:
+                self.assertEqual(b"", lane_state._git_bytes(repo, "status", "--short"))
+
+            self.assertEqual(
+                [
+                    "git",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-C",
+                    str(repo.resolve()),
+                    "status",
+                    "--short",
+                ],
+                run.call_args.args[0],
+            )
+            self.assertFalse(marker.exists())
 
 
 class PathOwnershipTests(unittest.TestCase):
