@@ -18,6 +18,7 @@ import time
 from typing import Callable, Iterator, NoReturn, Sequence
 from urllib.parse import unquote, urlparse
 
+FEATURE_OWNER_STATES = ("active", "blocked", "released")
 
 SCHEMA_VERSION = 1
 LANE_STATES = {
@@ -205,7 +206,11 @@ def _require_int(value: object, label: str, *, minimum: int = 0) -> int:
         _fail(f"{label} must be an integer greater than or equal to {minimum}")
     return value
 
-def _require_enum(value: object, choices: set[str], label: str) -> str:
+def _require_enum(
+    value: object,
+    choices: Sequence[str] | set[str],
+    label: str,
+) -> str:
     if not isinstance(value, str) or value not in choices:
         _fail(f"{label} is invalid")
     return value
@@ -534,7 +539,11 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
         raise ValueError(f"cannot resolve repository {repo}: {error}") from error
     if not repository.is_dir():
         _fail(f"repository is not a directory: {repo}")
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
     environment["GIT_OPTIONAL_LOCKS"] = "0"
     environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
@@ -780,7 +789,7 @@ def root_snapshot(repo: Path) -> dict[str, object]:
                             "untracked path changed while hashing: "
                             + relative_path
                         )
-                    while chunk := os.read(file_fd, 1024 * 1024):
+                    while chunk := os.read(file_fd, ARTIFACT_HASH_CHUNK_SIZE):
                         digest.update(chunk)
                 finally:
                     os.close(file_fd)
@@ -1601,7 +1610,7 @@ def _validate_feature_owner(owner: dict[str, object]) -> None:
         _fail("feature owner.allowedPaths must match the exact Stage 1 ownership set")
     _require_enum(
         owner["state"],
-        {"active", "blocked", "released"},
+        FEATURE_OWNER_STATES,
         "feature owner.state",
     )
     _require_utc(owner["assignedAt"], "feature owner.assignedAt")
@@ -1626,12 +1635,12 @@ def record_feature_owner(path: Path, owner: dict[str, object]) -> None:
 
 
 def set_feature_owner_state(path: Path, state: str) -> None:
-    _require_enum(
-        state,
-        {"active", "blocked", "released"},
-        "feature owner state",
-    )
+    _require_enum(state, FEATURE_OWNER_STATES, "feature owner state")
     owner = _load_feature_owner(path)
+    if owner["state"] == state:
+        return
+    if owner["state"] == "released":
+        _fail("released feature owner state is terminal")
     owner["state"] = state
     _validate_feature_owner(owner)
     _atomic_json_write(path, owner)
@@ -1814,7 +1823,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     feature_state_parser.add_argument(
         "--state",
-        choices=("active", "blocked", "released"),
+        choices=FEATURE_OWNER_STATES,
         required=True,
     )
 

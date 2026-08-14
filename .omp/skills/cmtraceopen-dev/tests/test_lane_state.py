@@ -799,6 +799,27 @@ class FeatureOwnerTests(unittest.TestCase):
 
             self.assertEqual(original, path.read_bytes())
 
+    def test_released_feature_owner_is_terminal_and_byte_preserved(self) -> None:
+        self.assertEqual(
+            ("active", "blocked", "released"),
+            lane_state.FEATURE_OWNER_STATES,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            common = Path(directory) / "common"
+            common.mkdir()
+            path = common / "omp" / "stage1-owner.json"
+            lane_state.record_feature_owner(path, valid_feature_owner(Path(directory)))
+            lane_state.set_feature_owner_state(path, "released")
+            released = path.read_bytes()
+
+            lane_state.set_feature_owner_state(path, "released")
+            self.assertEqual(released, path.read_bytes())
+            for state in ("active", "blocked"):
+                with self.subTest(state=state):
+                    with self.assertRaisesRegex(ValueError, "terminal"):
+                        lane_state.set_feature_owner_state(path, state)
+                    self.assertEqual(released, path.read_bytes())
+
     def test_stage1_owner_first_use_creates_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             common = Path(directory) / "common"
@@ -1029,6 +1050,52 @@ class GitHelperTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "timed out"):
                     lane_state._git_bytes(repo, "status")
 
+    def test_git_commands_ignore_hostile_ambient_repository_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, head = create_git_repo(Path(directory))
+            hostile = {
+                "GIT_DIR": str(Path(directory) / "hostile.git"),
+                "GIT_WORK_TREE": str(Path(directory) / "hostile-worktree"),
+                "GIT_INDEX_FILE": str(Path(directory) / "hostile-index"),
+                "GIT_OBJECT_DIRECTORY": str(Path(directory) / "hostile-objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(
+                    Path(directory) / "alternate-objects"
+                ),
+                "GIT_COMMON_DIR": str(Path(directory) / "hostile-common"),
+                "GIT_CONFIG_GLOBAL": str(Path(directory) / "hostile-config"),
+                "GIT_CONFIG_SYSTEM": str(Path(directory) / "hostile-system"),
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.repositoryFormatVersion",
+                "GIT_CONFIG_VALUE_0": "999",
+            }
+            with mock.patch.dict(os.environ, hostile):
+                self.assertEqual(head, lane_state.git_text(repo, "rev-parse", "HEAD"))
+                completed = subprocess.CompletedProcess(
+                    args=["git"],
+                    returncode=0,
+                    stdout=b"",
+                    stderr=b"",
+                )
+                with mock.patch.object(
+                    lane_state.subprocess,
+                    "run",
+                    return_value=completed,
+                ) as run:
+                    lane_state._git_bytes(repo, "status")
+
+            git_environment = {
+                key: value
+                for key, value in run.call_args.kwargs["env"].items()
+                if key.startswith("GIT_")
+            }
+            self.assertEqual(
+                {
+                    "GIT_OPTIONAL_LOCKS": "0",
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
+                git_environment,
+            )
+
 
 class PathOwnershipTests(unittest.TestCase):
     def test_tracked_and_untracked_paths_are_checked(self) -> None:
@@ -1164,7 +1231,8 @@ class RootSnapshotTests(unittest.TestCase):
             manifest = lane_state.empty_manifest()
             path = write_manifest(root, manifest)
             artifact = root / "large-snapshot.json"
-            artifact.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+            chunk_size = lane_state.ARTIFACT_HASH_CHUNK_SIZE
+            artifact.write_bytes(b"x" * (2 * chunk_size + 1))
             callback_active = False
             chunk_sizes: list[int] = []
             original_mutate = lane_state.mutate_manifest
@@ -1243,7 +1311,7 @@ class RootSnapshotTests(unittest.TestCase):
 
             self.assertEqual(0, exit_code)
             self.assertEqual(
-                [1024 * 1024, 1024 * 1024, 1],
+                [chunk_size, chunk_size, 1],
                 chunk_sizes,
             )
             updated = lane_state.load_manifest(path)
@@ -1263,6 +1331,50 @@ class RootSnapshotTests(unittest.TestCase):
                     "stage1After",
                     (root / "missing.json").resolve().as_uri(),
                 )
+
+    def test_untracked_files_use_shared_hash_chunk_size(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "untracked.txt").write_bytes(b"x" * 20)
+            read_sizes: list[int] = []
+            real_read = os.read
+
+            def fake_git_bytes(_repo: Path, *args: str) -> bytes:
+                if args == ("rev-parse", "HEAD"):
+                    return SHA_A.encode()
+                if args == ("ls-files", "--stage", "-z"):
+                    return b""
+                if args == (
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ):
+                    return b"untracked.txt\0"
+                if args[0] == "diff":
+                    return b""
+                raise AssertionError(f"unexpected Git command: {args}")
+
+            def tracking_read(file_descriptor: int, size: int) -> bytes:
+                read_sizes.append(size)
+                return real_read(file_descriptor, size)
+
+            with (
+                mock.patch.object(lane_state, "ARTIFACT_HASH_CHUNK_SIZE", 7),
+                mock.patch.object(
+                    lane_state,
+                    "_git_bytes",
+                    side_effect=fake_git_bytes,
+                ),
+                mock.patch.object(
+                    lane_state.os,
+                    "read",
+                    side_effect=tracking_read,
+                ),
+            ):
+                lane_state.root_snapshot(repo)
+
+            self.assertEqual([7, 7, 7, 7], read_sizes)
     def test_untracked_content_change_alters_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo, _ = create_git_repo(Path(directory))
