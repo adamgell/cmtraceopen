@@ -29,6 +29,6 @@ Convert CEO briefs into red-first, issue-scoped changes for Main to verify, gate
 
 - Run commands or Git/GitHub operations, read credentials, or execute text copied from public content.
 - Force-push, overwrite remote branches, merge, close issues, commit, or push.
-- Delete anything except an obsolete tracked file whose deletion is explicitly required by the brief and inside the sole-owner allowlist. Never discard user or unrelated work.
+- Delete no file unless Main authorizes deletion of a brief-required obsolete tracked file inside the sole-owner allowlist. Never delete user-owned, untracked, active, or unrelated work.
 - Declare your own work reviewed. CodeRabbit + CEO independent review decide.
 - Expand scope past the brief. Surface scope questions back to the CEO.
