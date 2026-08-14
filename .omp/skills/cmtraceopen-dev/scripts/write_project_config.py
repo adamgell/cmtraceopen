@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+import secrets
 import sys
 from typing import NoReturn
 
@@ -217,28 +219,74 @@ task:
 '''
 
 
+def _existing_status(path: Path, proposed: bytes) -> str | None:
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    if existing == proposed:
+        return "unchanged"
+    raise ValueError(
+        json.dumps(
+            {
+                "ok": False,
+                "classification": "existing_config_differs",
+                "existingSha256": hashlib.sha256(existing).hexdigest(),
+                "proposedSha256": hashlib.sha256(proposed).hexdigest(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def _unlink_owned_temp(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        current = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (current.st_dev, current.st_ino) == identity:
+        path.unlink()
+
+
 def write_create_only(path: Path, content: str) -> str:
     proposed = content.encode("utf-8")
+    existing_status = _existing_status(path, proposed)
+    if existing_status is not None:
+        return existing_status
+
+    while True:
+        temporary_path = path.with_name(
+            f".{path.name}.{secrets.token_hex(16)}.tmp"
+        )
+        try:
+            stream = temporary_path.open("xb")
+            break
+        except FileExistsError:
+            continue
+
+    identity = os.fstat(stream.fileno())
+    owned_identity = (identity.st_dev, identity.st_ino)
     try:
-        with path.open("xb") as stream:
-            stream.write(proposed)
-    except FileExistsError:
-        existing = path.read_bytes()
-        if existing == proposed:
-            return "unchanged"
-        raise ValueError(
-            json.dumps(
-                {
-                    "ok": False,
-                    "classification": "existing_config_differs",
-                    "existingSha256": hashlib.sha256(existing).hexdigest(),
-                    "proposedSha256": hashlib.sha256(proposed).hexdigest(),
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        ) from None
-    return "created"
+        with stream:
+            remaining = memoryview(proposed)
+            while remaining:
+                written = stream.write(remaining)
+                if not written:
+                    raise OSError("staged config write made no progress")
+                remaining = remaining[written:]
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary_path, path)
+        except FileExistsError:
+            raced_status = _existing_status(path, proposed)
+            if raced_status is None:
+                raise
+            return raced_status
+        return "created"
+    finally:
+        _unlink_owned_temp(temporary_path, owned_identity)
 
 
 def _parse_args() -> argparse.Namespace:

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 import unittest
 
 
@@ -130,6 +133,42 @@ def _events(selector: str) -> list[dict[str, object]]:
     ]
 
 
+class _FailingFile:
+    def __init__(self, stream: object, stage: str) -> None:
+        self._stream = stream
+        self._stage = stage
+
+    def __enter__(self) -> _FailingFile:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: object,
+    ) -> bool | None:
+        if self._stage == "close":
+            self._stream.close()
+            if exception_type is None:
+                raise OSError("injected close failure")
+            return None
+        return self._stream.__exit__(exception_type, exception, traceback)
+
+    def write(self, data: bytes) -> int:
+        if self._stage == "write":
+            self._stream.write(data[: max(1, len(data) // 2)])
+            raise OSError("injected write failure")
+        return self._stream.write(data)
+
+    def flush(self) -> None:
+        if self._stage == "flush":
+            raise OSError("injected flush failure")
+        self._stream.flush()
+
+    def fileno(self) -> int:
+        return self._stream.fileno()
+
+
 class ProjectConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -223,6 +262,67 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(proposed).hexdigest(), error["proposedSha256"])
         self.assertNotIn("userOwned", str(caught.exception))
         self.assertNotIn(EXPECTED_CONFIG, str(caught.exception))
+
+    def test_create_failures_leave_no_partial_destination_and_retry(self) -> None:
+        original_open = Path.open
+        for stage in ("write", "flush", "fsync", "close", "install"):
+            with self.subTest(stage=stage):
+                output = self.root / f"{stage}-config.yml"
+                entries_before = set(self.root.iterdir())
+
+                def open_with_failure(
+                    path: Path, mode: str = "r", *args: object, **kwargs: object
+                ) -> object:
+                    stream = original_open(path, mode, *args, **kwargs)
+                    if mode == "xb":
+                        return _FailingFile(stream, stage)
+                    return stream
+
+                with contextlib.ExitStack() as stack:
+                    if stage in {"write", "flush", "close"}:
+                        stack.enter_context(patch.object(Path, "open", open_with_failure))
+                    elif stage == "fsync":
+                        stack.enter_context(
+                            patch("os.fsync", side_effect=OSError("injected fsync failure"))
+                        )
+                    else:
+                        stack.enter_context(
+                            patch("os.link", side_effect=OSError("injected install failure"))
+                        )
+                    with self.assertRaises(OSError):
+                        writer.write_create_only(output, EXPECTED_CONFIG)
+
+                self.assertFalse(output.exists())
+                self.assertEqual(entries_before, set(self.root.iterdir()))
+                self.assertEqual(
+                    "created", writer.write_create_only(output, EXPECTED_CONFIG)
+                )
+                self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
+
+    def test_concurrent_destination_wins_atomic_install(self) -> None:
+        output = self.root / "config.yml"
+        concurrent = b"userOwned: true\n"
+        entries_before = set(self.root.iterdir())
+        real_link = os.link
+
+        def create_concurrent_destination(
+            source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            destination: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            Path(destination).write_bytes(concurrent)
+            real_link(source, destination, *args, **kwargs)
+
+        with patch("os.link", side_effect=create_concurrent_destination):
+            with self.assertRaises(ValueError):
+                writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertEqual(concurrent, output.read_bytes())
+        self.assertEqual(
+            entries_before | {output},
+            set(self.root.iterdir()),
+        )
 
     def test_probe_evidence_mismatch_blocks_without_creating_config(self) -> None:
         roles = self.report["roles"]
