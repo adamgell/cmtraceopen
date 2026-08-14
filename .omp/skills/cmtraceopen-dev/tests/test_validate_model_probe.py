@@ -212,11 +212,45 @@ class ProbeValidationTests(unittest.TestCase):
     def test_empty_or_malformed_jsonl_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             artifact_path = Path(directory) / "artifact.jsonl"
-            for content in ("", '{"type":"message_end"}\nnot-json\n'):
+            for content in (
+                "",
+                '{"type":"message_end"}\nnot-json\n',
+                '{"type":"message_end","value":NaN}\n',
+                '{"type":"message_end","value":Infinity}\n',
+                '{"type":"message_end","value":-Infinity}\n',
+            ):
                 with self.subTest(content=content):
                     artifact_path.write_text(content, encoding="utf-8")
                     with self.assertRaises(ValueError):
                         validator.read_jsonl(artifact_path)
+
+        malformed_messages = (
+            {
+                "type": "message_end",
+                "timestamp": "2026-08-14T12:00:03+00:00",
+            },
+            {
+                "type": "message_end",
+                "message": "not-an-object",
+                "timestamp": "2026-08-14T12:00:03+00:00",
+            },
+            {
+                "type": "message_end",
+                "message": {},
+                "timestamp": "2026-08-14T12:00:03+00:00",
+            },
+            {
+                "type": "message_end",
+                "message": {"role": 1},
+                "timestamp": "2026-08-14T12:00:03+00:00",
+            },
+        )
+        for malformed_message in malformed_messages:
+            with self.subTest(malformed_message=malformed_message):
+                events = valid_events()
+                events.append(malformed_message)
+                with self.assertRaises(ValueError):
+                    validator.validate_trace(events, SELECTOR)
 
     def test_role_threshold_failure_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -243,6 +277,27 @@ class ProbeValidationTests(unittest.TestCase):
                     SELECTOR,
                     "reasoning",
                 )
+
+            discovery_path.write_text(
+                json.dumps(valid_discovery()),
+                encoding="utf-8",
+            )
+            for invalid_fixture_version in (True, 1.0):
+                with self.subTest(fixtureVersion=invalid_fixture_version):
+                    invalid_thresholds = thresholds()
+                    invalid_thresholds["schemaVersion"] = invalid_fixture_version
+                    thresholds_path.write_text(
+                        json.dumps(invalid_thresholds),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        validator.validate_probe(
+                            discovery_path,
+                            artifact_path,
+                            thresholds_path,
+                            SELECTOR,
+                            "reasoning",
+                        )
 
     def test_selector_must_match_observed_provider_and_model(self) -> None:
         events = valid_events()

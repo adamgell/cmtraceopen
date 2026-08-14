@@ -37,10 +37,17 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result[key] = value
     return result
 
+def _reject_non_json_number(value: str) -> NoReturn:
+    _fail(f"invalid JSON number: {value}")
+
 
 def _parse_json(text: str, source: str) -> object:
     try:
-        return json.loads(text, object_pairs_hook=_unique_object)
+        return json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_non_json_number,
+        )
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(f"malformed JSON in {source}: {error}") from error
 
@@ -206,7 +213,10 @@ def validate_trace(
         if event["type"] != "message_end":
             continue
         message = event.get("message")
-        if isinstance(message, dict) and message.get("role") == "assistant":
+        if not isinstance(message, dict):
+            _fail("message_end event must contain a message object")
+        role = _required_string(message.get("role"), "message_end role")
+        if role == "assistant":
             assistant_messages.append((index, message))
     if not assistant_messages:
         _fail("trace has no final assistant message")
@@ -267,8 +277,8 @@ def validate_probe(
     model = find_discovered_model(discovery, selector)
 
     fixture_version = thresholds.get("schemaVersion")
-    if fixture_version != 1:
-        _fail("threshold fixture schemaVersion must be 1")
+    if type(fixture_version) is not int or fixture_version != 1:
+        _fail("threshold fixture schemaVersion must be integer 1")
     roles = thresholds.get("roles")
     if not isinstance(roles, dict):
         _fail("threshold fixture roles must be an object")
