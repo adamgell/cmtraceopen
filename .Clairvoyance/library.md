@@ -28,7 +28,7 @@ If no route matches, note the missing topic, write the doc when you learn it, an
 
 ## Authority and evidence
 
-Adam's instructions, checked-in specs, ADRs, and charters are normative. Live GitHub state, exact SHAs, and command artifacts are evidence. Manifests and memory never override either.
+Adam's current direct instruction is highest authority. Root `AGENTS.md` contains mandatory repository operating rules subordinate only to it; approved specs and ADRs, and each role's charter, are normative within their scope. `.omp/skills/cmtraceopen-dev/SKILL.md` is the operational workflow and cannot override those sources; any conflict blocks work and is reported. Live GitHub state, exact SHAs, and command artifacts are evidence. Manifests and memory never override authority or evidence.
 
 ## Quick Reference
 
