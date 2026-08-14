@@ -78,6 +78,7 @@ DOWNSTREAM_BOUND = {
 GIT_TIMEOUT_SECONDS = 30.0
 ARTIFACT_HASH_CHUNK_SIZE = 1024 * 1024
 LOCK_TIMEOUT_SECONDS = 2.0
+PR_URL_PREFIX = "https://github.com/adamgell/cmtraceopen/pull/"
 
 
 class RetriableConflict(RuntimeError):
@@ -445,6 +446,26 @@ def _validate_lane(lane_key: str, lane: object) -> None:
         f"lane {lane_key}.nativeLabRequirement.state",
     )
     _require_nonempty_string(requirement["reason"], f"lane {lane_key}.nativeLabRequirement.reason")
+    native_state = gates["native_lab"]["state"]
+    if requirement["state"] == "required" and native_state == "not_required":
+        _fail(f"lane {lane_key} required native lab cannot be not_required")
+    if requirement["state"] == "not_required" and native_state != "not_required":
+        _fail(f"lane {lane_key} native lab must remain not_required")
+
+    for gate_name, successful_state in (
+        ("coderabbit", "passed"),
+        ("independent_review", "passed"),
+        ("mergeability", "mergeable"),
+    ):
+        if gates[gate_name]["state"] != successful_state:
+            continue
+        if pr["number"] is None:
+            _fail(f"lane {lane_key} successful {gate_name} requires a PR")
+        if lane["remoteSha"] != head_sha:
+            _fail(
+                f"lane {lane_key} successful {gate_name} requires remoteSha "
+                "to match headSha"
+            )
 
 
 def validate_manifest(data: dict[str, object]) -> None:
@@ -726,6 +747,8 @@ def _index_tree_sha(repo: Path) -> str:
             _fail("Git index contains duplicate paths")
         node[name] = (mode, object_id)
 
+
+
     def tree_digest(node: dict[bytes, object]) -> bytes:
         entries: list[tuple[bytes, bytes]] = []
         for name, value in node.items():
@@ -744,6 +767,134 @@ def _index_tree_sha(repo: Path) -> str:
         return hashlib.sha1(header + payload, usedforsecurity=False).digest()
 
     return tree_digest(index).hex()
+def _digest_field(digest: object, value: bytes) -> None:
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
+def _regular_file_sha256(path: Path, expected: os.stat_result) -> bytes:
+    digest = hashlib.sha256()
+    file_descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (expected.st_dev, expected.st_ino)
+            != (opened.st_dev, opened.st_ino)
+        ):
+            _fail(f"filesystem entry changed while hashing: {path}")
+        while chunk := os.read(file_descriptor, ARTIFACT_HASH_CHUNK_SIZE):
+            digest.update(chunk)
+    finally:
+        os.close(file_descriptor)
+    return digest.digest()
+
+
+def _hash_filesystem_node(
+    digest: object,
+    path: Path,
+    label: bytes,
+    *,
+    exclude_root_git: bool = False,
+) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise ValueError(f"cannot inspect filesystem entry {path}: {error}") from error
+    _digest_field(digest, label)
+    _digest_field(digest, stat.S_IMODE(info.st_mode).to_bytes(4, "big"))
+    if stat.S_ISREG(info.st_mode):
+        _digest_field(digest, b"regular")
+        try:
+            content_sha = _regular_file_sha256(path, info)
+        except OSError as error:
+            raise ValueError(f"cannot hash filesystem entry {path}: {error}") from error
+        _digest_field(digest, content_sha)
+        return
+    if stat.S_ISLNK(info.st_mode):
+        _digest_field(digest, b"symlink")
+        try:
+            target = os.readlink(os.fsencode(path))
+        except OSError as error:
+            raise ValueError(f"cannot read filesystem symlink {path}: {error}") from error
+        _digest_field(digest, target)
+        return
+    if not stat.S_ISDIR(info.st_mode):
+        _fail(f"filesystem entry has unsupported kind: {path}")
+    _digest_field(digest, b"directory")
+    try:
+        children = sorted(path.iterdir(), key=lambda child: os.fsencode(child.name))
+    except OSError as error:
+        raise ValueError(f"cannot list filesystem directory {path}: {error}") from error
+    for child in children:
+        if exclude_root_git and child.name == ".git":
+            continue
+        child_label = (
+            os.fsencode(child.name)
+            if not label
+            else label + b"/" + os.fsencode(child.name)
+        )
+        _hash_filesystem_node(digest, child, child_label)
+
+
+def _filesystem_sha256(repository: Path) -> str:
+    digest = hashlib.sha256()
+    _hash_filesystem_node(
+        digest,
+        repository,
+        b"",
+        exclude_root_git=True,
+    )
+    return digest.hexdigest()
+
+
+def _git_path(repo: Path, logical_path: str) -> Path:
+    value = git_text(
+        repo,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-path",
+        logical_path,
+    )
+    return Path(value)
+
+
+def _git_controls_sha256(repo: Path) -> str:
+    git_dir = Path(git_text(repo, "rev-parse", "--absolute-git-dir"))
+    common_dir = Path(
+        git_text(
+            repo,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        )
+    )
+    controls: list[tuple[bytes, Path]] = [
+        (b"HEAD", git_dir / "HEAD"),
+        (b"index", _git_path(repo, "index")),
+        (b"config", common_dir / "config"),
+        (b"worktree-config", git_dir / "config.worktree"),
+        (b"hooks", _git_path(repo, "hooks")),
+        (b"info-attributes", _git_path(repo, "info/attributes")),
+        (b"info-exclude", _git_path(repo, "info/exclude")),
+    ]
+    try:
+        branch_ref = git_text(repo, "symbolic-ref", "-q", "HEAD")
+    except ValueError:
+        branch_ref = None
+    if branch_ref is not None:
+        controls.append((b"branch-ref", _git_path(repo, branch_ref)))
+
+    digest = hashlib.sha256()
+    for label, path in controls:
+        try:
+            _hash_filesystem_node(digest, path, label)
+        except ValueError:
+            if path.exists() or path.is_symlink():
+                raise
+            _digest_field(digest, label)
+            _digest_field(digest, b"missing")
+    return digest.hexdigest()
 
 
 def root_snapshot(repo: Path) -> dict[str, object]:
@@ -814,6 +965,8 @@ def root_snapshot(repo: Path) -> dict[str, object]:
         "indexTreeSha": index_tree_sha,
         "trackedDiffSha256": hashlib.sha256(tracked_diff).hexdigest(),
         "untracked": untracked,
+        "filesystemSha256": _filesystem_sha256(repository),
+        "gitControlsSha256": _git_controls_sha256(repository),
     }
 
 
@@ -1060,6 +1213,47 @@ def allocate_lane(data: dict[str, object], lane: dict[str, object]) -> None:
     _commit_candidate(data, candidate)
 
 
+def _require_ready_for_adam(
+    data: dict[str, object],
+    lane: dict[str, object],
+) -> None:
+    if lane["pr"]["number"] is None:
+        _fail("ready_for_adam requires a pull request")
+    if lane["remoteSha"] != lane["headSha"]:
+        _fail("ready_for_adam requires local head and remote SHA identity")
+    if lane["implementationState"] != "green":
+        _fail("ready_for_adam requires green implementation state")
+    if lane["mergeabilityState"] != "mergeable":
+        _fail("ready_for_adam requires mergeable state")
+    if lane["blocker"] is not None:
+        _fail("ready_for_adam requires no blocker")
+    required_gates = {
+        "focused": "passed",
+        "aggregate": "passed",
+        "conformance": "passed",
+        "coderabbit": "passed",
+        "independent_review": "passed",
+        "mergeability": "mergeable",
+    }
+    for gate_name, required_state in required_gates.items():
+        if lane["gates"][gate_name]["state"] != required_state:
+            _fail(
+                f"ready_for_adam requires current {gate_name} "
+                f"state {required_state}"
+            )
+    native_required = lane["nativeLabRequirement"]["state"] == "required"
+    native_state = lane["gates"]["native_lab"]["state"]
+    expected_native = "passed" if native_required else "not_required"
+    if native_state != expected_native:
+        _fail(f"ready_for_adam requires native_lab state {expected_native}")
+    for dependency in lane["dependsOn"]:
+        dependency_lane = data["lanes"][str(dependency)]
+        if dependency_lane["laneState"] not in {"ready_for_adam", "merged"}:
+            _fail(
+                f"ready_for_adam requires dependency {dependency} delivered"
+            )
+
+
 def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
     validate_manifest(data)
     _require_enum(state, LANE_STATES, "lane state")
@@ -1068,6 +1262,8 @@ def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
     current = lane["laneState"]
     if state not in TRANSITIONS[current]:
         _fail(f"invalid lane transition: {current} -> {state}")
+    if state == "ready_for_adam":
+        _require_ready_for_adam(candidate, lane)
     lane["laneState"] = state
     _touch(candidate)
     _commit_candidate(data, candidate)
@@ -1671,10 +1867,10 @@ def transfer_feature_owner(path: Path, owner: str, role: str, assigned_at: str) 
 
 
 def _validate_pr(number: object, url: object) -> None:
-    _require_int(number, "PR number", minimum=1)
-    parsed = urlparse(_require_nonempty_string(url, "PR URL"))
-    if parsed.scheme != "https" or not parsed.netloc or not parsed.path:
-        _fail("PR URL must be an absolute HTTPS URL")
+    validated_number = _require_int(number, "PR number", minimum=1)
+    expected = f"{PR_URL_PREFIX}{validated_number}"
+    if _require_nonempty_string(url, "PR URL") != expected:
+        _fail(f"PR URL must be exactly {expected}")
 
 
 def record_pr(data: dict[str, object], issue: str, number: int, url: str) -> None:
@@ -1685,8 +1881,9 @@ def record_pr(data: dict[str, object], issue: str, number: int, url: str) -> Non
     changed = lane["pr"] != {"number": number, "url": url}
     lane["pr"] = {"number": number, "url": url}
     if changed:
-        for gate in ("coderabbit", "independent_review"):
+        for gate in ("coderabbit", "independent_review", "mergeability"):
             _stale_observation(lane["gates"][gate])
+        lane["mergeabilityState"] = "stale"
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1695,7 +1892,13 @@ def record_remote(data: dict[str, object], issue: str, remote_sha: str) -> None:
     validate_manifest(data)
     _require_sha(remote_sha, "remote SHA")
     candidate = deepcopy(data)
-    _lane(candidate, issue)["remoteSha"] = remote_sha
+    lane = _lane(candidate, issue)
+    changed = lane["remoteSha"] != remote_sha
+    lane["remoteSha"] = remote_sha
+    if changed:
+        for gate in ("coderabbit", "independent_review", "mergeability"):
+            _stale_observation(lane["gates"][gate])
+        lane["mergeabilityState"] = "stale"
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1905,9 +2108,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     release_parser.add_argument("--issue", required=True)
 
     check_parser = subparsers.add_parser("check-paths")
-    check_parser.add_argument("--repo", type=Path, required=True)
-    check_parser.add_argument("--allocation-base", required=True)
-    check_parser.add_argument("--allow", action="append", required=True)
+    check_parser.add_argument("--manifest", type=Path, required=True)
+    check_parser.add_argument("--issue", required=True)
 
     snapshot_parser = subparsers.add_parser("snapshot-root")
     snapshot_parser.add_argument("--repo", type=Path, required=True)
@@ -1927,8 +2129,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_json(load_manifest_readonly(args.manifest))
             return 0
         if args.command == "check-paths":
-            paths = changed_paths(args.repo, args.allocation_base)
-            disallowed = check_allowed_paths(paths, args.allow)
+            manifest = load_manifest_readonly(args.manifest)
+            lane = _lane(manifest, args.issue)
+            paths = changed_paths(
+                Path(lane["worktree"]),
+                lane["allocationBaseSha"],
+            )
+            disallowed = check_allowed_paths(paths, lane["allowedPaths"])
             if disallowed:
                 raise TerminalRejection(
                     "disallowed paths: " + ", ".join(disallowed)
