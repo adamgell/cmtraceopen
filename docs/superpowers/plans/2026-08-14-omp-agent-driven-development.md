@@ -1144,7 +1144,7 @@ Both profiles contain `spawns: []`, `advisor: true`, a frontmatter `output` JSON
 
 - [ ] **Step 4: Create adversary and integration profiles**
 
-`reducer-adversary.md` uses `model: "@reasoning"`, tools `[read, grep, glob]`, and autoloads `semantic-reducer-framework`, `semantic-reducer-development`. After its frontmatter it has one top-level `# Reducer Adversary` heading. Its JSON output requires `adversarial_contracts`, `fixture_proposals`, `failure_scenarios`, and `blockers` arrays. Each adversarial-contract object requires nonempty `invariant`, structured `fixture_proposal` (`path` and exact `content`), exact `proposed_red_command`, and `expected_failure`; every standalone fixture-proposal object likewise requires nonempty `path` and `content`. It is strictly read-only with no alternate mutable mode and returns proposals only. Main independently approves and applies the proposal by dispatching `coder` with sole lane ownership and the allowlist to materialize the proposed RED artifact; Main independently runs the proposed command, observes RED, and only then authorizes that same Coder to implement the fix.
+`reducer-adversary.md` uses `model: "@reasoning"`, tools `[read, grep, glob]`, and autoloads `semantic-reducer-framework`, `semantic-reducer-development`. After its frontmatter it has one top-level `# Reducer Adversary` heading. Its JSON output requires `adversarial_contracts`, `fixture_proposals`, `failure_scenarios`, and `blockers` arrays. Each adversarial-contract object requires nonempty `invariant`, structured `fixture_proposal` (`path` and exact `content`), exact `proposed_red_command`, and `expected_failure`; every standalone fixture-proposal object likewise requires nonempty `path` and `content`. The path schema accepts only nonblank, whitespace-free relative paths and rejects absolute/URI/tilde forms, `.`/`..` traversal segments, control/NUL characters, and common NUL-like escapes. It is strictly read-only with no alternate mutable mode and returns proposals only. Main independently approves the proposal, resolves every existing parent and the canonical target against the assigned absolute worktree, rejects symlink escape or any path outside that worktree, and requires the repository-relative path to match the lane's persisted manifest allowlist. Only then does Main apply it through a separately dispatched `coder`; Main independently runs the proposed command and the post-write manifest-bound `check-paths`, observes RED, and only then authorizes that same Coder to implement the fix.
 
 `reducer-integration.md` uses `model: "@mid"`, tools `[read, grep, glob]`, and autoloads `branch-lane-verification`, `semantic-reducer-framework`. Its JSON output requires `heads` and `gate_states` objects plus a `blockers` array. It inspects Main-supplied exact-head and gate artifacts and reports separate implementation/conformance/review/native/mergeability states; it runs no command and does not resolve semantic conflicts opportunistically.
 
@@ -1217,7 +1217,7 @@ The skill must state:
 
 The skill must require:
 
-- Coder writes the smallest failing test/fixture only. Reducer Adversary remains strictly read-only, returns only RED contract/fixture text, and has no mutable mode; after Main approves that proposal and grants sole lane ownership, Coder materializes it, Main observes RED, and that same Coder later fixes;
+- Coder writes the smallest failing test/fixture only. Reducer Adversary remains strictly read-only, returns only RED contract/fixture text, and has no mutable mode. Before dispatching Coder, Main rejects non-relative, whitespace, traversal, absolute/URI, NUL/control, or NUL-like proposed paths; resolves existing parents and canonical targets inside the assigned worktree without symlink escape; and requires the persisted allowlist to match. The separately dispatched sole-owner Coder materializes the approved proposal, Main runs the mandatory manifest-bound post-write path check and observes RED, and that same Coder later fixes;
 - UI/Design first prepares the approved UI change and proposed browser checks without claiming observed evidence; Tech Writer first prepares the approved documentation change and proposed source/link/render checks without claiming they ran;
 - Main inspects every change, runs `lane_state.py check-paths --manifest PATH --issue N`, and performs the role-appropriate focused verification;
 - Main independently inspects the GREEN or role-specific change, repeats the manifest-bound allowlist check, and runs focused/aggregate/conformance gates;
@@ -1483,7 +1483,11 @@ Refresh `origin/main`, create `.worktrees/omp-control` detached at the exact ref
 COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 PRIMARY_ROOT="$(dirname "$COMMON")"
 CONTROL="$PRIMARY_ROOT/.worktrees/omp-control"
-git -C "$PRIMARY_ROOT" fetch origin main
+if ! git -C "$PRIMARY_ROOT" fetch origin main; then
+  printf '%s\n' \
+    "Failed to refresh origin/main; preserve all worktrees and stop before control-worktree validation." >&2
+  exit 2
+fi
 EXPECTED_CONTROL_HEAD="$(git -C "$PRIMARY_ROOT" rev-parse origin/main)"
 WORKTREE_LIST="$(git -C "$PRIMARY_ROOT" worktree list --porcelain)"
 REGISTERED_CONTROL="$(
