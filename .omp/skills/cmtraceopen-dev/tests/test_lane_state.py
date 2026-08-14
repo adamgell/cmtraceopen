@@ -1306,6 +1306,119 @@ class PathOwnershipTests(unittest.TestCase):
                 blocked["nextAction"],
             )
 
+    def test_changed_symlink_to_outside_blocks_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, allocation_base = create_git_repo(root)
+            outside = root / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            (repo / "escape.txt").symlink_to(outside)
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["escape.txt"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            disallowed = lane_state.enforce_lane_paths(manifest, "317")
+
+            self.assertEqual(["escape.txt"], disallowed)
+            self.assertEqual("blocked", manifest["lanes"]["317"]["laneState"])
+
+    def test_changed_path_through_parent_symlink_escape_blocks_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, _ = create_git_repo(root)
+            tracked = repo / "linked" / "changed.txt"
+            tracked.parent.mkdir()
+            tracked.write_text("inside\n", encoding="utf-8")
+            run_git(repo, "add", "linked/changed.txt")
+            run_git(repo, "commit", "--quiet", "-m", "add linked path")
+            allocation_base = run_git(repo, "rev-parse", "HEAD")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "changed.txt").write_text("outside\n", encoding="utf-8")
+            tracked.unlink()
+            tracked.parent.rmdir()
+            tracked.parent.symlink_to(outside, target_is_directory=True)
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["linked", "linked/**"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            disallowed = lane_state.enforce_lane_paths(manifest, "317")
+
+            self.assertIn("linked/changed.txt", disallowed)
+            self.assertEqual("blocked", manifest["lanes"]["317"]["laneState"])
+
+    def test_ordinary_and_deleted_allowed_paths_pass_canonical_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            deleted = repo / "deleted.txt"
+            deleted.write_text("delete me\n", encoding="utf-8")
+            run_git(repo, "add", "deleted.txt")
+            run_git(repo, "commit", "--quiet", "-m", "add deleted fixture")
+            allocation_base = run_git(repo, "rev-parse", "HEAD")
+            (repo / "owned.txt").write_text("changed\n", encoding="utf-8")
+            deleted.unlink()
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["owned.txt", "deleted.txt"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            self.assertEqual(
+                [],
+                lane_state.enforce_lane_paths(manifest, "317"),
+            )
+            self.assertEqual("allocated", manifest["lanes"]["317"]["laneState"])
+
+    def test_contained_changed_symlink_passes_when_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            target = repo / "target.txt"
+
+            target.write_text("target\n", encoding="utf-8")
+            run_git(repo, "add", "target.txt")
+            run_git(repo, "commit", "--quiet", "-m", "add symlink target")
+            allocation_base = run_git(repo, "rev-parse", "HEAD")
+            (repo / "link.txt").symlink_to("target.txt")
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["link.txt"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            self.assertEqual(
+                [],
+                lane_state.enforce_lane_paths(manifest, "317"),
+            )
+            self.assertEqual("allocated", manifest["lanes"]["317"]["laneState"])
+
+    def test_missing_untracked_candidate_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, allocation_base = create_git_repo(Path(directory))
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["vanished.txt"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            with mock.patch.object(
+                lane_state,
+                "changed_paths",
+                return_value=["vanished.txt"],
+            ):
+                disallowed = lane_state.enforce_lane_paths(manifest, "317")
+
+            self.assertEqual(["vanished.txt"], disallowed)
+            self.assertEqual("blocked", manifest["lanes"]["317"]["laneState"])
+
     def test_glob_allowlist_does_not_escape_worktree(self) -> None:
         self.assertEqual(
             ["../outside", "/tmp/outside", "src/../../outside"],
@@ -2963,6 +3076,29 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 {"ok": True, "paths": ["owned.txt"], "disallowed": []},
                 json.loads(output.getvalue()),
+            )
+
+            outside = root / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            (repo / "owned.txt").unlink()
+            (repo / "owned.txt").symlink_to(outside)
+            escape_output = io.StringIO()
+            with mock.patch("sys.stdout", escape_output):
+                self.assertEqual(
+                    2,
+                    lane_state.main(
+                        [
+                            "check-paths",
+                            "--manifest",
+                            str(path),
+                            "--issue",
+                            "317",
+                        ]
+                    ),
+                )
+            self.assertIn(
+                "owned.txt",
+                json.loads(escape_output.getvalue())["reason"],
             )
 
             legacy_output = io.StringIO()

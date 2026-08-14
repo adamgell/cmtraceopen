@@ -685,6 +685,83 @@ def changed_paths(repo: Path, allocation_base: str) -> list[str]:
     }
     return sorted(paths)
 
+def _base_tracked_paths(repo: Path, allocation_base: str) -> set[str]:
+    _require_sha(allocation_base, "allocation base")
+    try:
+        output = _git_bytes(
+            repo,
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            allocation_base,
+            "--",
+        ).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Git tree path output is not valid UTF-8") from error
+    return {
+        _require_repo_relative(path, "base tracked path")
+        for path in output.split("\0")
+        if path
+    }
+
+
+def _canonical_path_violations(
+    repo: Path,
+    allocation_base: str,
+    paths: list[str],
+) -> list[str]:
+    try:
+        worktree = repo.resolve(strict=True)
+        worktree_info = worktree.stat()
+    except OSError as error:
+        raise ValueError(f"cannot resolve lane worktree {repo}: {error}") from error
+    if not stat.S_ISDIR(worktree_info.st_mode):
+        _fail(f"lane worktree is not a directory: {repo}")
+
+    base_paths: set[str] | None = None
+    violations: list[str] = []
+    for relative_path in _require_string_list(paths, "changed paths"):
+        _require_repo_relative(relative_path, "changed path")
+        candidate = worktree
+        components = relative_path.split("/")
+        for index, component in enumerate(components):
+            candidate /= component
+            try:
+                candidate_info = candidate.lstat()
+            except FileNotFoundError:
+                if base_paths is None:
+                    base_paths = _base_tracked_paths(repo, allocation_base)
+                if relative_path not in base_paths:
+                    violations.append(relative_path)
+                break
+            except OSError:
+                violations.append(relative_path)
+                break
+            try:
+                canonical = candidate.resolve(strict=True)
+                canonical_info = canonical.stat()
+                canonical.relative_to(worktree)
+            except (OSError, ValueError):
+                violations.append(relative_path)
+                break
+
+            is_final = index == len(components) - 1
+            if not is_final:
+                if not stat.S_ISDIR(canonical_info.st_mode):
+                    violations.append(relative_path)
+                    break
+                continue
+            if stat.S_ISREG(candidate_info.st_mode):
+                continue
+            if stat.S_ISLNK(candidate_info.st_mode) and (
+                stat.S_ISREG(canonical_info.st_mode)
+                or stat.S_ISDIR(canonical_info.st_mode)
+            ):
+                continue
+            violations.append(relative_path)
+    return sorted(set(violations))
+
 
 def check_allowed_paths(paths: list[str], allowlist: list[str]) -> list[str]:
     candidate_paths = _require_string_list(paths, "changed paths")
@@ -700,15 +777,32 @@ def check_allowed_paths(paths: list[str], allowlist: list[str]) -> list[str]:
     )
 
 
+def _disallowed_changed_paths(
+    repo: Path,
+    allocation_base: str,
+    paths: list[str],
+    allowlist: list[str],
+) -> list[str]:
+    unsafe = _canonical_path_violations(repo, allocation_base, paths)
+    outside_allowlist = check_allowed_paths(paths, allowlist)
+    return sorted(set(unsafe).union(outside_allowlist))
+
+
 def enforce_lane_paths(data: dict[str, object], issue: str) -> list[str]:
     validate_manifest(data)
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
+    worktree = Path(lane["worktree"])
     paths = changed_paths(
-        Path(lane["worktree"]),
+        worktree,
         lane["allocationBaseSha"],
     )
-    disallowed = check_allowed_paths(paths, lane["allowedPaths"])
+    disallowed = _disallowed_changed_paths(
+        worktree,
+        lane["allocationBaseSha"],
+        paths,
+        lane["allowedPaths"],
+    )
     if not disallowed:
         return []
     if lane["laneState"] in {"merged", "abandoned"}:
@@ -2151,11 +2245,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "check-paths":
             manifest = load_manifest_readonly(args.manifest)
             lane = _lane(manifest, args.issue)
+            worktree = Path(lane["worktree"])
             paths = changed_paths(
-                Path(lane["worktree"]),
+                worktree,
                 lane["allocationBaseSha"],
             )
-            disallowed = check_allowed_paths(paths, lane["allowedPaths"])
+            disallowed = _disallowed_changed_paths(
+                worktree,
+                lane["allocationBaseSha"],
+                paths,
+                lane["allowedPaths"],
+            )
             if disallowed:
                 raise TerminalRejection(
                     "disallowed paths: " + ", ".join(disallowed)
