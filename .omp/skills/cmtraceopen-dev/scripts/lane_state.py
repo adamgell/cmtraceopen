@@ -162,6 +162,11 @@ _BASE_ARTIFACT_KEYS = {
     "rawEvidenceUri",
     "observedAt",
 }
+_GITHUB_REVIEW_ARTIFACT_KEYS = _BASE_ARTIFACT_KEYS | {
+    "prNumber",
+    "prUrl",
+    "reviewGate",
+}
 
 
 def _fail(message: str) -> NoReturn:
@@ -920,13 +925,12 @@ def record_red(data: dict[str, object], issue: str, observation: dict[str, objec
     _commit_candidate(data, candidate)
 
 
-def validate_base_evidence(
+def _validate_base_evidence(
     data: dict[str, object],
     issue: str,
     gate: str,
     observation: dict[str, object],
 ) -> None:
-    validate_manifest(data)
     if gate not in BASE_BOUND and gate != "native_lab":
         _fail(f"gate {gate} does not accept base integration evidence")
     lane = _lane(data, issue)
@@ -960,20 +964,47 @@ def validate_base_evidence(
     except (OSError, UnicodeError) as error:
         raise ValueError(f"cannot read base evidence artifact: {error}") from error
 
-    _require_exact_keys(artifact, _BASE_ARTIFACT_KEYS, "base evidence artifact")
-    _require_schema_version(
-        artifact["schemaVersion"],
-        "base evidence artifact.schemaVersion",
-    )
     expected_kind = (
         "github_review"
         if gate in {"coderabbit", "independent_review"}
         else "synthetic_merge"
     )
+    artifact_keys = (
+        _GITHUB_REVIEW_ARTIFACT_KEYS
+        if expected_kind == "github_review"
+        else _BASE_ARTIFACT_KEYS
+    )
+    _require_exact_keys(artifact, artifact_keys, "base evidence artifact")
+    _require_schema_version(
+        artifact["schemaVersion"],
+        "base evidence artifact.schemaVersion",
+    )
     if artifact["kind"] != expected_kind:
         _fail(f"gate {gate} requires {expected_kind} base evidence")
-    if expected_kind == "github_review" and lane["pr"]["number"] is None:
-        _fail(f"gate {gate} requires a recorded pull request")
+    if expected_kind == "github_review":
+        pr = lane["pr"]
+        if pr["number"] is None:
+            _fail(f"gate {gate} requires a recorded pull request")
+        _require_enum(
+            artifact["reviewGate"],
+            {"coderabbit", "independent_review"},
+            "base evidence artifact.reviewGate",
+        )
+        _require_int(
+            artifact["prNumber"],
+            "base evidence artifact.prNumber",
+            minimum=1,
+        )
+        _require_nonempty_string(
+            artifact["prUrl"],
+            "base evidence artifact.prUrl",
+        )
+        if artifact["reviewGate"] != gate:
+            _fail("base evidence artifact.reviewGate does not match the gate")
+        if artifact["prNumber"] != pr["number"]:
+            _fail("base evidence artifact.prNumber does not match the lane PR")
+        if artifact["prUrl"] != pr["url"]:
+            _fail("base evidence artifact.prUrl does not match the lane PR")
     if artifact["headSha"] != lane["headSha"]:
         _fail("base evidence artifact headSha does not match the lane head")
     if artifact["currentBaseSha"] != lane["currentBaseSha"]:
@@ -1002,6 +1033,16 @@ def validate_base_evidence(
     if not urlparse(raw_uri).scheme:
         _fail("base evidence artifact.rawEvidenceUri must be a URI")
     _require_utc(artifact["observedAt"], "base evidence artifact.observedAt")
+
+
+def validate_base_evidence(
+    data: dict[str, object],
+    issue: str,
+    gate: str,
+    observation: dict[str, object],
+) -> None:
+    validate_manifest(data)
+    _validate_base_evidence(data, issue, gate, observation)
 
 
 def record_observation(
@@ -1154,6 +1195,25 @@ def _persist_mutation(
     _atomic_json_write_at(directory_fd, name, data)
 
 
+def _revalidate_passed_base_evidence(data: dict[str, object]) -> None:
+    for issue, lane in data["lanes"].items():
+        for gate in BASE_BOUND:
+            observation = lane["gates"][gate]
+            if observation["state"] in {"passed", "mergeable"}:
+                _validate_base_evidence(data, issue, gate, observation)
+        native_observation = lane["gates"]["native_lab"]
+        if (
+            native_observation["state"] == "passed"
+            and native_observation["baseSensitive"]
+        ):
+            _validate_base_evidence(
+                data,
+                issue,
+                "native_lab",
+                native_observation,
+            )
+
+
 def _mutate_manifest(
     path: Path,
     expected_updated_at: str,
@@ -1167,6 +1227,7 @@ def _mutate_manifest(
                 current = _load_manifest_at(directory_fd, path.name, str(path))
                 if current["updatedAt"] != expected_updated_at:
                     raise RetriableConflict("manifest updatedAt is stale")
+                _revalidate_passed_base_evidence(current)
                 candidate = deepcopy(current)
                 try:
                     mutation(candidate)
@@ -1283,7 +1344,12 @@ def record_pr(data: dict[str, object], issue: str, number: int, url: str) -> Non
     validate_manifest(data)
     _validate_pr(number, url)
     candidate = deepcopy(data)
-    _lane(candidate, issue)["pr"] = {"number": number, "url": url}
+    lane = _lane(candidate, issue)
+    changed = lane["pr"] != {"number": number, "url": url}
+    lane["pr"] = {"number": number, "url": url}
+    if changed:
+        for gate in ("coderabbit", "independent_review"):
+            _stale_observation(lane["gates"][gate])
     _touch(candidate)
     _commit_candidate(data, candidate)
 

@@ -123,25 +123,32 @@ def write_base_artifact(
     head_sha: str = SHA_A,
     current_base_sha: str = SHA_B,
     name: str = "base-evidence",
+    pr_number: int = 42,
+    pr_url: str = "https://github.com/example/repo/pull/42",
+    review_gate: str | None = None,
 ) -> str:
     path = root / f"{name}.json"
-    path.write_text(
-        json.dumps(
+    artifact: dict[str, object] = {
+        "schemaVersion": 1,
+        "kind": kind,
+        "headSha": head_sha,
+        "currentBaseSha": current_base_sha,
+        "integrationCommand": "git merge-tree base head",
+        "integrationExitCode": 0,
+        "gateCommand": "python3.14 focused-test.py -v",
+        "gateExitCode": 0,
+        "rawEvidenceUri": "file:///tmp/raw-evidence.txt",
+        "observedAt": NOW,
+    }
+    if kind == "github_review":
+        artifact.update(
             {
-                "schemaVersion": 1,
-                "kind": kind,
-                "headSha": head_sha,
-                "currentBaseSha": current_base_sha,
-                "integrationCommand": "git merge-tree base head",
-                "integrationExitCode": 0,
-                "gateCommand": "python3.14 focused-test.py -v",
-                "gateExitCode": 0,
-                "rawEvidenceUri": "file:///tmp/raw-evidence.txt",
-                "observedAt": NOW,
+                "prNumber": pr_number,
+                "prUrl": pr_url,
+                "reviewGate": review_gate,
             }
-        ),
-        encoding="utf-8",
-    )
+        )
+    path.write_text(json.dumps(artifact), encoding="utf-8")
     return path.resolve().as_uri()
 
 
@@ -170,6 +177,7 @@ def base_observation(
         head_sha=head_sha,
         current_base_sha=base_sha,
         name=f"{gate_name}-{kind}-{head_sha[0]}-{base_sha[0]}",
+        review_gate=gate_name if kind == "github_review" else None,
     )
     return observation
 
@@ -1053,6 +1061,128 @@ class BaseEvidenceTests(unittest.TestCase):
                         observation,
                     )
 
+    def test_github_review_artifact_binds_exact_pr_and_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for gate_name in ("coderabbit", "independent_review"):
+                with self.subTest(gate=gate_name):
+                    manifest = lane_state.empty_manifest()
+                    allocate_issue(manifest, root, 317)
+                    lane_state.record_pr(
+                        manifest,
+                        "317",
+                        42,
+                        "https://github.com/example/repo/pull/42",
+                    )
+                    observation = base_observation(root, gate_name)
+                    artifact_path = Path(str(observation["artifact"])[7:])
+                    original = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+                    lane_state.validate_base_evidence(
+                        manifest,
+                        "317",
+                        gate_name,
+                        observation,
+                    )
+
+                    for field, wrong_value in (
+                        ("prNumber", 43),
+                        ("prUrl", "https://github.com/example/repo/pull/43"),
+                        (
+                            "reviewGate",
+                            "independent_review"
+                            if gate_name == "coderabbit"
+                            else "coderabbit",
+                        ),
+                    ):
+                        with self.subTest(gate=gate_name, field=field):
+                            invalid = deepcopy(original)
+                            invalid[field] = wrong_value
+                            artifact_path.write_text(
+                                json.dumps(invalid),
+                                encoding="utf-8",
+                            )
+                            with self.assertRaises(ValueError):
+                                lane_state.validate_base_evidence(
+                                    manifest,
+                                    "317",
+                                    gate_name,
+                                    observation,
+                                )
+                            artifact_path.write_text(
+                                json.dumps(original),
+                                encoding="utf-8",
+                            )
+                    for missing_field in ("prNumber", "prUrl", "reviewGate"):
+                        with self.subTest(
+                            gate=gate_name,
+                            missing=missing_field,
+                        ):
+                            invalid = deepcopy(original)
+                            invalid.pop(missing_field)
+                            artifact_path.write_text(
+                                json.dumps(invalid),
+                                encoding="utf-8",
+                            )
+                            with self.assertRaises(ValueError):
+                                lane_state.validate_base_evidence(
+                                    manifest,
+                                    "317",
+                                    gate_name,
+                                    observation,
+                                )
+                    invalid = deepcopy(original)
+                    invalid["unexpected"] = True
+                    artifact_path.write_text(
+                        json.dumps(invalid),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        lane_state.validate_base_evidence(
+                            manifest,
+                            "317",
+                            gate_name,
+                            observation,
+                        )
+
+    def test_pr_change_stales_both_review_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replacements = (
+                (43, "https://github.com/example/repo/pull/42"),
+                (42, "https://github.com/example/repo/pull/43"),
+            )
+            for number, url in replacements:
+                with self.subTest(number=number, url=url):
+                    manifest = lane_state.empty_manifest()
+                    allocate_issue(manifest, root, 317)
+                    lane_state.record_pr(
+                        manifest,
+                        "317",
+                        42,
+                        "https://github.com/example/repo/pull/42",
+                    )
+                    for gate_name in ("coderabbit", "independent_review"):
+                        lane_state.record_observation(
+                            manifest,
+                            "317",
+                            gate_name,
+                            base_observation(root, gate_name),
+                        )
+
+                    lane_state.record_pr(manifest, "317", number, url)
+
+                    self.assertEqual(
+                        "stale",
+                        manifest["lanes"]["317"]["gates"]["coderabbit"]["state"],
+                    )
+                    self.assertEqual(
+                        "stale",
+                        manifest["lanes"]["317"]["gates"]["independent_review"][
+                            "state"
+                        ],
+                    )
+
     def test_base_artifact_with_relabelled_current_base_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1231,6 +1361,69 @@ class MutationRetryTests(unittest.TestCase):
             self.assertEqual("317", persisted["aggregateGate"]["holder"])
             self.assertEqual(["318"], persisted["aggregateGate"]["queue"])
             self.assertNotEqual(manifest["updatedAt"], persisted["updatedAt"])
+
+    def test_reload_revalidates_base_artifacts_before_mutation(self) -> None:
+        variants = (
+            ("deleted", "aggregate"),
+            ("changed", "aggregate"),
+            ("relabelled", "aggregate"),
+            ("nonzero", "aggregate"),
+            ("wrong-head", "aggregate"),
+            ("wrong-base", "aggregate"),
+            ("deleted-native", "native_lab"),
+        )
+        for variant, gate_name in variants:
+            with self.subTest(variant=variant):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    manifest = lane_state.empty_manifest()
+                    allocate_issue(manifest, root, 317)
+                    observation = base_observation(root, gate_name)
+                    lane_state.record_observation(
+                        manifest,
+                        "317",
+                        gate_name,
+                        observation,
+                    )
+                    path = write_manifest(root, manifest)
+                    original = path.read_bytes()
+                    artifact_path = Path(str(observation["artifact"])[7:])
+                    if variant in {"deleted", "deleted-native"}:
+                        artifact_path.unlink()
+                    else:
+                        artifact = json.loads(
+                            artifact_path.read_text(encoding="utf-8")
+                        )
+                        if variant == "changed":
+                            artifact["unexpected"] = True
+                        elif variant == "relabelled":
+                            artifact["kind"] = "github_review"
+                        elif variant == "nonzero":
+                            artifact["gateExitCode"] = 1
+                        elif variant == "wrong-head":
+                            artifact["headSha"] = SHA_C
+                        elif variant == "wrong-base":
+                            artifact["currentBaseSha"] = SHA_C
+                        artifact_path.write_text(
+                            json.dumps(artifact),
+                            encoding="utf-8",
+                        )
+                    called = False
+
+                    def mutation(data: dict[str, object]) -> None:
+                        nonlocal called
+                        called = True
+                        lane_state.transition_lane(data, "317", "running")
+
+                    with self.assertRaises(lane_state.TerminalRejection):
+                        lane_state.mutate_manifest(
+                            path,
+                            manifest["updatedAt"],
+                            mutation,
+                        )
+
+                    self.assertFalse(called)
+                    self.assertEqual(original, path.read_bytes())
 
     def test_owner_conflict_is_terminal_and_not_retried(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
