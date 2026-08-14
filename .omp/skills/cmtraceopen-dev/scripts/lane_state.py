@@ -6,7 +6,6 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -75,6 +74,8 @@ DOWNSTREAM_BOUND = {
     "independent_review",
     "mergeability",
 }
+GIT_TIMEOUT_SECONDS = 30.0
+ARTIFACT_HASH_CHUNK_SIZE = 1024 * 1024
 LOCK_TIMEOUT_SECONDS = 2.0
 
 
@@ -535,14 +536,21 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
         _fail(f"repository is not a directory: {repo}")
     environment = os.environ.copy()
     environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
         result = subprocess.run(
             ["git", "-C", str(repository), *args],
             check=True,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
+            timeout=GIT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(
+            f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS:g} seconds"
+        ) from error
     except (OSError, subprocess.CalledProcessError) as error:
         stderr = getattr(error, "stderr", b"")
         detail = stderr.decode("utf-8", errors="replace").strip()
@@ -573,6 +581,40 @@ def _require_repo_relative(value: str, label: str) -> str:
     if not _is_repo_relative(value):
         _fail(f"{label} escapes the worktree")
     return value
+
+def _compile_path_glob(pattern: str) -> re.Pattern[str]:
+    expression: list[str] = []
+    index = 0
+    while index < len(pattern):
+        if pattern == "**":
+            expression.append(r"[^/]+(?:/[^/]+)*")
+            index = 2
+        elif pattern.startswith("**/", index):
+            expression.append(r"(?:[^/]+/)*")
+            index += 3
+        elif pattern.startswith("/**/", index):
+            expression.append(r"/(?:[^/]+/)*")
+            index += 4
+        elif pattern.startswith("/**", index) and index + 3 == len(pattern):
+            expression.append(r"(?:/[^/]+)*")
+            index += 3
+        elif pattern.startswith("**", index):
+            expression.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            expression.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            expression.append("[^/]")
+            index += 1
+        else:
+            expression.append(re.escape(pattern[index]))
+            index += 1
+    return re.compile("".join(expression))
+
+
+def _path_glob_matches(path: str, pattern: re.Pattern[str]) -> bool:
+    return pattern.fullmatch(path) is not None
 
 
 def changed_paths(repo: Path, allocation_base: str) -> list[str]:
@@ -607,14 +649,14 @@ def changed_paths(repo: Path, allocation_base: str) -> list[str]:
 def check_allowed_paths(paths: list[str], allowlist: list[str]) -> list[str]:
     candidate_paths = _require_string_list(paths, "changed paths")
     patterns = [
-        _require_repo_relative(pattern, "allowed path")
+        _compile_path_glob(_require_repo_relative(pattern, "allowed path"))
         for pattern in _require_string_list(allowlist, "allowed paths")
     ]
     return sorted(
         path
         for path in candidate_paths
         if not _is_repo_relative(path)
-        or not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+        or not any(_path_glob_matches(path, pattern) for pattern in patterns)
     )
 
 
@@ -1100,10 +1142,14 @@ def invalidate_dependents(
                 continue
             visited.add(int(issue))
             pending.append(int(issue))
-            if not any(
-                fnmatch.fnmatchcase(changed_path, pattern)
-                for changed_path in paths
+            patterns = [
+                _compile_path_glob(pattern)
                 for pattern in lane["sharedContractPaths"]
+            ]
+            if not any(
+                _path_glob_matches(changed_path, pattern)
+                for changed_path in paths
+                for pattern in patterns
             ):
                 continue
             for gate_name in DOWNSTREAM_BOUND:
@@ -1638,14 +1684,7 @@ def record_remote(data: dict[str, object], issue: str, remote_sha: str) -> None:
     _commit_candidate(data, candidate)
 
 
-def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> None:
-    validate_manifest(data)
-    if slot not in _ROOT_SLOTS:
-        _fail(f"invalid root snapshot slot: {slot}")
-    artifact_uri = _require_nonempty_string(
-        artifact,
-        "root snapshot artifact",
-    )
+def _sha256_local_artifact(artifact_uri: str) -> str:
     parsed = urlparse(artifact_uri)
     if (
         parsed.scheme != "file"
@@ -1656,13 +1695,28 @@ def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> N
         _fail("root snapshot artifact must be a local file:// URI")
     try:
         artifact_path = Path(unquote(parsed.path)).resolve(strict=True)
-        artifact_bytes = artifact_path.read_bytes()
+        digest = hashlib.sha256()
+        with artifact_path.open("rb") as artifact_file:
+            while chunk := artifact_file.read(ARTIFACT_HASH_CHUNK_SIZE):
+                digest.update(chunk)
     except OSError as error:
         raise ValueError(f"cannot read root snapshot artifact: {error}") from error
+    return digest.hexdigest()
+
+
+def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> None:
+    validate_manifest(data)
+    if slot not in _ROOT_SLOTS:
+        _fail(f"invalid root snapshot slot: {slot}")
+    artifact_uri = _require_nonempty_string(
+        artifact,
+        "root snapshot artifact",
+    )
+    artifact_sha256 = _sha256_local_artifact(artifact_uri)
     candidate = deepcopy(data)
     candidate["rootSafety"][slot] = {
         "artifact": artifact_uri,
-        "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "sha256": artifact_sha256,
     }
     _touch(candidate)
     _commit_candidate(data, candidate)
