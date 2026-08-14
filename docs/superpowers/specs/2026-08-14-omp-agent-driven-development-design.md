@@ -1,7 +1,7 @@
 # OMP Agent-Driven Development Design
 
 **Date:** 2026-08-14
-**Status:** Approved design; implementation planning pending
+**Status:** Approved design; implementation plan ready
 **Owner:** Adam Gell
 **Execution manager:** Main OMP session
 
@@ -98,7 +98,7 @@ Stage 0 blocks unless authenticated discovery and inference both succeed. Every 
 
 The probe report records the selected transport, discovered model ID, exact fixture version, raw evidence artifact URI, timestamp, observed JSON/tool/file-read result, and advertised context/output limits. A model is assignable only when every fixture required by that role passes. `~/.omp/agent/models.yml` registers the provider and model metadata; validated exact selectors are stored under `modelRoles.reasoning`, `modelRoles.mid`, `modelRoles.scaffold`, and `modelRoles.advisor` in `.omp/config.yml`. If authenticated discovery is unsupported or a required fixture fails, Stage 0 remains blocked rather than accepting an unverified static candidate.
 
-`openai-codex/gpt-5.6-sol` remains an explicit safety promotion for coordination, contract decisions, and review when a gateway model is unavailable or fails a probe. The system never silently downgrades a writing role to an unproven model.
+`openai-codex/gpt-5.6-sol` remains an explicit safety promotion for coordination, contract decisions, and review when a gateway model is unavailable or fails a probe. Project config sets `retry.modelFallback: false`, so inherited global fallback chains cannot silently route a writing role to an unproven model; promotion is a validated manual role-map decision.
 
 ### Project-level OMP overlay
 
@@ -179,7 +179,7 @@ Project agent definitions map one-to-one to the tracked charters:
 
 Each definition requires the agent to read its `.Clairvoyance/staff/*-charter.md` before acting. It also sets model-role preference, tools, output shape, denied child spawning, and `advisor: true`.
 
-`.omp/config.yml` enables the advisor subsystem and binds `modelRoles.advisor` to the validated reasoning role. The `cmtraceopen-dev` skill preflight requires `/advisor status` to show an active advisor before any write or GitHub mutation; if a session-scoped override disabled it, the operator runs `/advisor on`. Every custom staff agent starts its own read-only advisor through `advisor: true`. Advisor output is advisory evidence and never replaces formal independent review.
+`.omp/config.yml` enables the advisor subsystem and binds `modelRoles.advisor` to the validated reasoning role. The `cmtraceopen-dev` skill preflight requires the host session to have started with `--advisor` in print mode or the operator to have enabled `/advisor on` before the first interactive prompt. Models never issue session slash commands. Every custom staff agent starts its own read-only advisor through `advisor: true`. Advisor output is advisory evidence and never replaces formal independent review.
 
 For Stages 1 and 2, only Main may spawn staff. Every staff profile denies child spawning and returns specialist handoff requests to Main. OMP recursion depth is one. A later approved design must name any additional parent-to-child edge before enabling it.
 
@@ -223,6 +223,8 @@ Each lane record contains:
 - allowed write paths;
 - dependency and integration order;
 - local head SHA;
+- immutable allocation-base SHA for complete changed-path ownership checks;
+- mutable current-base SHA for base-sensitive gates, review, and mergeability;
 - remote head SHA;
 - PR number and URL when created;
 - lane lifecycle state;
