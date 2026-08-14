@@ -1629,6 +1629,47 @@ class RootSnapshotTests(unittest.TestCase):
                 relinked["filesystemSha256"],
             )
 
+    def test_snapshot_excludes_only_root_managed_worktrees(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            (repo / ".gitignore").write_text(
+                "/.worktrees/\n/ignored-outside\n",
+                encoding="utf-8",
+            )
+            run_git(repo, "add", ".gitignore")
+            run_git(repo, "commit", "--quiet", "-m", "ignore managed fixtures")
+
+            managed = repo / ".worktrees" / "lane" / "state"
+            managed.parent.mkdir(parents=True)
+            managed.write_text("one\n", encoding="utf-8")
+            nested = repo / "user" / ".worktrees" / "state"
+            nested.parent.mkdir(parents=True)
+            nested.write_text("one\n", encoding="utf-8")
+            ignored = repo / "ignored-outside"
+            ignored.write_text("one\n", encoding="utf-8")
+            baseline = lane_state.root_snapshot(repo)
+
+            managed.write_text("two\n", encoding="utf-8")
+            managed_changed = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                baseline["filesystemSha256"],
+                managed_changed["filesystemSha256"],
+            )
+
+            nested.write_text("two\n", encoding="utf-8")
+            nested_changed = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                managed_changed["filesystemSha256"],
+                nested_changed["filesystemSha256"],
+            )
+
+            ignored.write_text("two\n", encoding="utf-8")
+            ignored_changed = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                nested_changed["filesystemSha256"],
+                ignored_changed["filesystemSha256"],
+            )
+
     def test_snapshot_covers_primary_git_control_files_and_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo, head = create_git_repo(Path(directory))

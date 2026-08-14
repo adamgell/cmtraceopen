@@ -798,11 +798,11 @@ def _hash_filesystem_node(
     path: Path,
     label: bytes,
     *,
-    exclude_root_git: bool = False,
+    exclude_managed_roots: bool = False,
 ) -> None:
-    pending = [(path, label, exclude_root_git)]
+    pending = [(path, label, exclude_managed_roots)]
     while pending:
-        current, current_label, exclude_git = pending.pop()
+        current, current_label, exclude_roots = pending.pop()
         try:
             info = current.lstat()
         except OSError as error:
@@ -845,7 +845,7 @@ def _hash_filesystem_node(
                 f"cannot list filesystem directory {current}: {error}"
             ) from error
         for child in children:
-            if exclude_git and child.name == ".git":
+            if exclude_roots and child.name in (".git", ".worktrees"):
                 continue
             child_label = (
                 os.fsencode(child.name)
@@ -861,7 +861,7 @@ def _filesystem_sha256(repository: Path) -> str:
         digest,
         repository,
         b"",
-        exclude_root_git=True,
+        exclude_managed_roots=True,
     )
     return digest.hexdigest()
 
