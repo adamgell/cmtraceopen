@@ -166,8 +166,28 @@ class _FailingFile:
         self._stream.flush()
 
     def fileno(self) -> int:
+        if self._stage == "fileno":
+            raise OSError("injected fileno failure")
         return self._stream.fileno()
 
+
+
+def _replace_entry(
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    content: bytes,
+    directory_fd: int | None,
+) -> None:
+    os.unlink(path, dir_fd=directory_fd)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        os.write(descriptor, content)
+    finally:
+        os.close(descriptor)
 
 class ProjectConfigTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -230,6 +250,13 @@ class ProjectConfigTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def _non_lock_entries(self) -> set[Path]:
+        return {
+            entry
+            for entry in self.root.iterdir()
+            if not entry.name.endswith(".lock")
+        }
+
     def test_validated_role_report_renders_exact_project_config(self) -> None:
         selectors = writer.validate_role_report(self.report_path, REPO_ROOT)
 
@@ -264,23 +291,23 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertNotIn(EXPECTED_CONFIG, str(caught.exception))
 
     def test_create_failures_leave_no_partial_destination_and_retry(self) -> None:
-        original_open = Path.open
+        original_fdopen = os.fdopen
         for stage in ("write", "flush", "fsync", "close", "install"):
             with self.subTest(stage=stage):
                 output = self.root / f"{stage}-config.yml"
-                entries_before = set(self.root.iterdir())
+                entries_before = self._non_lock_entries()
 
-                def open_with_failure(
-                    path: Path, mode: str = "r", *args: object, **kwargs: object
+                def fdopen_with_failure(
+                    descriptor: int, mode: str, *args: object, **kwargs: object
                 ) -> object:
-                    stream = original_open(path, mode, *args, **kwargs)
-                    if mode == "xb":
-                        return _FailingFile(stream, stage)
-                    return stream
+                    stream = original_fdopen(descriptor, mode, *args, **kwargs)
+                    return _FailingFile(stream, stage)
 
                 with contextlib.ExitStack() as stack:
                     if stage in {"write", "flush", "close"}:
-                        stack.enter_context(patch.object(Path, "open", open_with_failure))
+                        stack.enter_context(
+                            patch("os.fdopen", side_effect=fdopen_with_failure)
+                        )
                     elif stage == "fsync":
                         stack.enter_context(
                             patch("os.fsync", side_effect=OSError("injected fsync failure"))
@@ -293,7 +320,7 @@ class ProjectConfigTests(unittest.TestCase):
                         writer.write_create_only(output, EXPECTED_CONFIG)
 
                 self.assertFalse(output.exists())
-                self.assertEqual(entries_before, set(self.root.iterdir()))
+                self.assertEqual(entries_before, self._non_lock_entries())
                 self.assertEqual(
                     "created", writer.write_create_only(output, EXPECTED_CONFIG)
                 )
@@ -302,7 +329,7 @@ class ProjectConfigTests(unittest.TestCase):
     def test_concurrent_destination_wins_atomic_install(self) -> None:
         output = self.root / "config.yml"
         concurrent = b"userOwned: true\n"
-        entries_before = set(self.root.iterdir())
+        entries_before = self._non_lock_entries()
         real_link = os.link
 
         def create_concurrent_destination(
@@ -311,7 +338,16 @@ class ProjectConfigTests(unittest.TestCase):
             *args: object,
             **kwargs: object,
         ) -> None:
-            Path(destination).write_bytes(concurrent)
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=kwargs.get("dst_dir_fd"),
+            )
+            try:
+                os.write(descriptor, concurrent)
+            finally:
+                os.close(descriptor)
             real_link(source, destination, *args, **kwargs)
 
         with patch("os.link", side_effect=create_concurrent_destination):
@@ -321,8 +357,108 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertEqual(concurrent, output.read_bytes())
         self.assertEqual(
             entries_before | {output},
-            set(self.root.iterdir()),
+            self._non_lock_entries(),
         )
+
+    def test_source_name_substitution_cannot_report_success(self) -> None:
+        output = self.root / "substituted-config.yml"
+        substituted = b"attackerControlled: true\n"
+        real_link = os.link
+
+        def substitute_before_link(
+            source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            destination: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            _replace_entry(source, substituted, kwargs.get("src_dir_fd"))
+            real_link(source, destination, *args, **kwargs)
+
+        with patch("os.link", side_effect=substitute_before_link):
+            with self.assertRaises(OSError):
+                writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertEqual(substituted, output.read_bytes())
+        with self.assertRaises(ValueError):
+            writer.write_create_only(output, EXPECTED_CONFIG)
+        self.assertEqual(substituted, output.read_bytes())
+
+    def test_cleanup_claim_never_deletes_a_substituted_entry(self) -> None:
+        output = self.root / "cleanup-race-config.yml"
+        substituted = b"do-not-delete\n"
+        real_rename = os.rename
+        claim_observed = False
+
+        def substitute_during_claim(
+            source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            destination: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal claim_observed
+            claim_observed = True
+            _replace_entry(source, substituted, kwargs.get("src_dir_fd"))
+            real_rename(source, destination, *args, **kwargs)
+
+        with (
+            patch("os.link", side_effect=OSError("injected install failure")),
+            patch("os.rename", side_effect=substitute_during_claim),
+        ):
+            with self.assertRaises(OSError):
+                writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertTrue(claim_observed)
+        self.assertFalse(output.exists())
+        preserved = [
+            entry
+            for entry in self.root.iterdir()
+            if entry.is_file() and entry.read_bytes() == substituted
+        ]
+        self.assertEqual(1, len(preserved))
+        self.assertEqual("created", writer.write_create_only(output, EXPECTED_CONFIG))
+        self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
+
+    def test_setup_failures_enter_owned_temp_cleanup_guard(self) -> None:
+        original_fstat = os.fstat
+        original_fdopen = os.fdopen
+        for stage in ("fstat", "fileno"):
+            with self.subTest(stage=stage):
+                output = self.root / f"{stage}-setup-config.yml"
+                entries_before = self._non_lock_entries()
+
+                if stage == "fstat":
+                    failed = False
+
+                    def fail_first_fstat(descriptor: int) -> os.stat_result:
+                        nonlocal failed
+                        if not failed:
+                            failed = True
+                            raise OSError("injected fstat failure")
+                        return original_fstat(descriptor)
+
+                    failure = patch("os.fstat", side_effect=fail_first_fstat)
+                else:
+
+                    def fdopen_with_failing_fileno(
+                        descriptor: int, mode: str, *args: object, **kwargs: object
+                    ) -> object:
+                        stream = original_fdopen(descriptor, mode, *args, **kwargs)
+                        return _FailingFile(stream, "fileno")
+
+                    failure = patch(
+                        "os.fdopen", side_effect=fdopen_with_failing_fileno
+                    )
+
+                with failure:
+                    with self.assertRaises(OSError):
+                        writer.write_create_only(output, EXPECTED_CONFIG)
+
+                self.assertFalse(output.exists())
+                self.assertEqual(entries_before, self._non_lock_entries())
+                self.assertEqual(
+                    "created", writer.write_create_only(output, EXPECTED_CONFIG)
+                )
+                self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
 
     def test_probe_evidence_mismatch_blocks_without_creating_config(self) -> None:
         roles = self.report["roles"]
