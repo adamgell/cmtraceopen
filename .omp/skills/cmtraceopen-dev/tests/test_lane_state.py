@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -31,6 +33,28 @@ STAGE1_ALLOWED_PATHS = [
     "docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md",
     "docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md",
 ]
+
+def run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def create_git_repo(root: Path) -> tuple[Path, str]:
+    repo = root / "repo"
+    repo.mkdir()
+    run_git(repo, "init", "--quiet")
+    run_git(repo, "config", "user.name", "Lane State Tests")
+    run_git(repo, "config", "user.email", "lane-state@example.invalid")
+    (repo / "owned.txt").write_text("baseline\n", encoding="utf-8")
+    run_git(repo, "add", "owned.txt")
+    run_git(repo, "commit", "--quiet", "-m", "baseline")
+    return repo, run_git(repo, "rev-parse", "HEAD")
 
 
 def gate(state: str = "not_run", *, base_sensitive: bool = False) -> dict[str, object]:
@@ -573,7 +597,12 @@ class LifecycleTests(unittest.TestCase):
                 base_observation(Path(directory), "aggregate"),
             )
 
-            lane_state.record_status(manifest, "317", {"currentBaseSha": SHA_C})
+            lane_state.update_heads(
+                manifest,
+                "317",
+                head_sha=SHA_A,
+                current_base_sha=SHA_C,
+            )
 
             lane = manifest["lanes"]["317"]
             self.assertEqual(SHA_B, lane["allocationBaseSha"])
@@ -808,6 +837,10 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manifest = lane_state.empty_manifest()
             lane_state.allocate_lane(manifest, valid_lane(Path(directory)))
+            artifact = Path(directory) / "root-stage1-before.json"
+            artifact_bytes = b'{"snapshot":true}\n'
+            artifact.write_bytes(artifact_bytes)
+            artifact_uri = artifact.resolve().as_uri()
 
             lane_state.record_pr(manifest, "317", 42, "https://github.com/example/repo/pull/42")
             lane_state.record_remote(manifest, "317", SHA_C)
@@ -824,7 +857,7 @@ class EvidenceTests(unittest.TestCase):
             lane_state.record_root_snapshot(
                 manifest,
                 "stage1Before",
-                ".superpowers/evidence/root-stage1-before.txt",
+                artifact_uri,
             )
 
             lane = manifest["lanes"]["317"]
@@ -836,7 +869,10 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual("green", lane["implementationState"])
             self.assertEqual("mergeable", lane["mergeabilityState"])
             self.assertEqual(
-                ".superpowers/evidence/root-stage1-before.txt",
+                {
+                    "artifact": artifact_uri,
+                    "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+                },
                 manifest["rootSafety"]["stage1Before"],
             )
 
@@ -850,6 +886,130 @@ class EvidenceTests(unittest.TestCase):
                 with self.subTest(call=call):
                     with self.assertRaises(ValueError):
                         call()
+
+
+class PathOwnershipTests(unittest.TestCase):
+    def test_tracked_and_untracked_paths_are_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, allocation_base = create_git_repo(Path(directory))
+            (repo / "owned.txt").write_text("modified\n", encoding="utf-8")
+            (repo / "untracked.txt").write_text("new\n", encoding="utf-8")
+
+            self.assertEqual(
+                ["owned.txt", "untracked.txt"],
+                lane_state.changed_paths(repo, allocation_base),
+            )
+            self.assertEqual(
+                ["untracked.txt"],
+                lane_state.check_allowed_paths(
+                    lane_state.changed_paths(repo, allocation_base),
+                    ["owned.txt"],
+                ),
+            )
+
+    def test_out_of_scope_path_blocks_lane_without_deleting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, allocation_base = create_git_repo(Path(directory))
+            (repo / "outside.txt").write_text("out of scope\n", encoding="utf-8")
+            manifest = lane_state.empty_manifest()
+            lane = valid_lane(repo)
+            lane["allowedPaths"] = ["owned.txt"]
+            lane["allocationBaseSha"] = allocation_base
+            lane["currentBaseSha"] = allocation_base
+            lane_state.allocate_lane(manifest, lane)
+
+            disallowed = lane_state.enforce_lane_paths(manifest, "317")
+
+            self.assertEqual(["outside.txt"], disallowed)
+            self.assertIn("317", manifest["lanes"])
+            blocked = manifest["lanes"]["317"]
+            self.assertEqual("blocked", blocked["laneState"])
+            self.assertIn("outside.txt", blocked["blocker"])
+            self.assertEqual(
+                "restore path ownership before continuing",
+                blocked["nextAction"],
+            )
+
+    def test_glob_allowlist_does_not_escape_worktree(self) -> None:
+        self.assertEqual(
+            ["../outside", "/tmp/outside", "src/../../outside"],
+            lane_state.check_allowed_paths(
+                ["src/main.py", "../outside", "/tmp/outside", "src/../../outside"],
+                ["**"],
+            ),
+        )
+        with self.assertRaises(ValueError):
+            lane_state.check_allowed_paths(["src/main.py"], ["../**"])
+        with self.assertRaises(ValueError):
+            lane_state.check_allowed_paths(["src/main.py"], ["/tmp/**"])
+
+
+class RootSnapshotTests(unittest.TestCase):
+    def test_existing_modified_file_change_alters_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            before = lane_state.root_snapshot(repo)
+            (repo / "owned.txt").write_text("modified\n", encoding="utf-8")
+            after = lane_state.root_snapshot(repo)
+
+            self.assertEqual(before["headSha"], after["headSha"])
+            self.assertEqual(before["indexTreeSha"], after["indexTreeSha"])
+            self.assertNotEqual(
+                before["trackedDiffSha256"],
+                after["trackedDiffSha256"],
+            )
+
+    def test_untracked_content_change_alters_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            path = repo / "untracked.txt"
+            path.write_bytes(b"first")
+            before = lane_state.root_snapshot(repo)
+            path.write_bytes(b"second")
+            after = lane_state.root_snapshot(repo)
+
+            self.assertNotEqual(before["untracked"], after["untracked"])
+
+    def test_untracked_symlink_target_change_alters_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            (repo / "target-one").write_text("one", encoding="utf-8")
+            (repo / "target-two").write_text("two", encoding="utf-8")
+            link = repo / "untracked-link"
+            link.symlink_to("target-one")
+            before = lane_state.root_snapshot(repo)
+            link.unlink()
+            link.symlink_to("target-two")
+            after = lane_state.root_snapshot(repo)
+
+            before_link = next(
+                item
+                for item in before["untracked"]
+                if item["path"] == "untracked-link"
+            )
+            after_link = next(
+                item
+                for item in after["untracked"]
+                if item["path"] == "untracked-link"
+            )
+            self.assertNotEqual(before_link["sha256"], after_link["sha256"])
+
+    def test_identical_checkout_produces_identical_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, _ = create_git_repo(root)
+            clone = root / "clone"
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-hardlinks", str(repo), str(clone)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(
+                lane_state.root_snapshot(repo),
+                lane_state.root_snapshot(clone),
+            )
 
 
 class InvalidationTests(unittest.TestCase):
@@ -1490,7 +1650,10 @@ class CliTests(unittest.TestCase):
             output = io.StringIO()
 
             with mock.patch("sys.stdout", output):
-                self.assertEqual(0, lane_state.main(["init", str(path)]))
+                self.assertEqual(
+                    0,
+                    lane_state.main(["init", "--git-common-dir", str(common)]),
+                )
             created_output = json.loads(output.getvalue())
             self.assertTrue(created_output.pop("created"))
             lane_state.validate_manifest(created_output)
@@ -1498,7 +1661,10 @@ class CliTests(unittest.TestCase):
 
             output = io.StringIO()
             with mock.patch("sys.stdout", output):
-                self.assertEqual(0, lane_state.main(["init", str(path)]))
+                self.assertEqual(
+                    0,
+                    lane_state.main(["init", "--git-common-dir", str(common)]),
+                )
             existing_output = json.loads(output.getvalue())
 
             self.assertFalse(existing_output.pop("created"))
@@ -1517,11 +1683,13 @@ class CliTests(unittest.TestCase):
                 exit_code = lane_state.main(
                     [
                         "update-heads",
+                        "--manifest",
                         str(path),
+                        "--issue",
                         "317",
-                        "--head-sha",
+                        "--head",
                         SHA_C,
-                        "--current-base-sha",
+                        "--current-base",
                         SHA_B,
                         "--expected-updated-at",
                         manifest["updatedAt"],
@@ -1549,11 +1717,13 @@ class CliTests(unittest.TestCase):
                 retriable_exit = lane_state.main(
                     [
                         "update-heads",
+                        "--manifest",
                         str(path),
+                        "--issue",
                         "317",
-                        "--head-sha",
+                        "--head",
                         SHA_C,
-                        "--current-base-sha",
+                        "--current-base",
                         SHA_B,
                         "--expected-updated-at",
                         "2020-01-01T00:00:00+00:00",
@@ -1568,9 +1738,13 @@ class CliTests(unittest.TestCase):
                 terminal_exit = lane_state.main(
                     [
                         "transfer-owner",
+                        "--manifest",
                         str(path),
+                        "--issue",
                         "317",
+                        "--owner",
                         "Replacement",
+                        "--role",
                         "coder",
                         "--expected-updated-at",
                         manifest["updatedAt"],
@@ -1580,6 +1754,371 @@ class CliTests(unittest.TestCase):
             self.assertEqual(2, terminal_exit)
             self.assertEqual("terminal_rejection", terminal["classification"])
 
+    def test_every_manifest_mutation_is_atomic_and_schema_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = lane_state.empty_manifest()
+            allocate_issue(manifest, root, 317)
+            path = write_manifest(root, manifest)
+            lane_json = root / "lane.json"
+            lane_json.write_text(
+                json.dumps(valid_lane(root, issue=318)),
+                encoding="utf-8",
+            )
+            observation_json = root / "observation.json"
+            observation_json.write_text(
+                json.dumps(valid_observation(state="failed")),
+                encoding="utf-8",
+            )
+            status_json = root / "status.json"
+            status_json.write_text(
+                json.dumps({"nextAction": "continue"}),
+                encoding="utf-8",
+            )
+            snapshot_artifact = root / "snapshot.json"
+            snapshot_artifact.write_text("{}", encoding="utf-8")
+            common = [
+                "--manifest",
+                str(path),
+                "--expected-updated-at",
+                manifest["updatedAt"],
+            ]
+            commands = (
+                ["allocate", *common, "--lane-json", str(lane_json)],
+                ["transition", *common, "--issue", "317", "--state", "running"],
+                [
+                    "transfer-owner",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--owner",
+                    "Replacement",
+                    "--role",
+                    "coder",
+                ],
+                [
+                    "invalidate-dependents",
+                    *common,
+                    "--upstream",
+                    "317",
+                    "--changed-path",
+                    "contracts/api.py",
+                ],
+                [
+                    "heartbeat",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--owner",
+                    "Task",
+                    "--at",
+                    LATER,
+                    "--expires-at",
+                    "2026-08-14T12:10:00+00:00",
+                ],
+                [
+                    "update-heads",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--head",
+                    SHA_C,
+                    "--current-base",
+                    SHA_B,
+                ],
+                [
+                    "record-red",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--observation-json",
+                    str(observation_json),
+                ],
+                [
+                    "record-observation",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--gate",
+                    "focused",
+                    "--observation-json",
+                    str(observation_json),
+                ],
+                [
+                    "record-status",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--status-json",
+                    str(status_json),
+                ],
+                [
+                    "record-pr",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--number",
+                    "42",
+                    "--url",
+                    "https://github.com/example/repo/pull/42",
+                ],
+                [
+                    "record-remote",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--sha",
+                    SHA_C,
+                ],
+                [
+                    "record-root-snapshot",
+                    *common,
+                    "--slot",
+                    "stage1Before",
+                    "--artifact",
+                    snapshot_artifact.resolve().as_uri(),
+                ],
+                [
+                    "acquire-gate",
+                    *common,
+                    "--issue",
+                    "317",
+                    "--at",
+                    LATER,
+                ],
+                ["release-gate", *common, "--issue", "317"],
+            )
+            for command in commands:
+                with self.subTest(command=command[0]):
+                    output = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            lane_state,
+                            "mutate_manifest",
+                            return_value={
+                                "updatedAt": LATER,
+                                "aggregateGate": {
+                                    "holder": None,
+                                    "queue": [],
+                                    "acquiredAt": None,
+                                },
+                            },
+                        ) as mutate,
+                        mock.patch("sys.stdout", output),
+                    ):
+                        self.assertEqual(0, lane_state.main(command))
+                    mutate.assert_called_once()
+                    self.assertTrue(json.loads(output.getvalue())["ok"])
+
+            repo, allocation_base = create_git_repo(root)
+            with mock.patch.object(lane_state, "mutate_manifest") as mutate:
+                read_only_commands = (
+                    ["show", "--manifest", str(path)],
+                    [
+                        "check-paths",
+                        "--repo",
+                        str(repo),
+                        "--allocation-base",
+                        allocation_base,
+                        "--allow",
+                        "owned.txt",
+                    ],
+                    ["snapshot-root", "--repo", str(repo)],
+                )
+                for command in read_only_commands:
+                    with self.subTest(read_only=command[0]):
+                        output = io.StringIO()
+                        with mock.patch("sys.stdout", output):
+                            self.assertEqual(0, lane_state.main(command))
+                        json.loads(output.getvalue())
+                mutate.assert_not_called()
+
+            invalid = b'{"schemaVersion":99}\n'
+
+            absent_common = root / "absent-common"
+            absent_common.mkdir()
+            absent_state_dir = absent_common / "omp"
+            output = io.StringIO()
+            with mock.patch("sys.stdout", output):
+                self.assertEqual(
+                    2,
+                    lane_state.main(
+                        [
+                            "show",
+                            "--manifest",
+                            str(absent_state_dir / "lanes.json"),
+                        ]
+                    ),
+                )
+            self.assertFalse(absent_state_dir.exists())
+            self.assertEqual(
+                "terminal_rejection",
+                json.loads(output.getvalue())["classification"],
+            )
+            path.write_bytes(invalid)
+            output = io.StringIO()
+            with mock.patch("sys.stdout", output):
+                exit_code = lane_state.main(
+                    [
+                        "transition",
+                        "--manifest",
+                        str(path),
+                        "--expected-updated-at",
+                        manifest["updatedAt"],
+                        "--issue",
+                        "317",
+                        "--state",
+                        "running",
+                    ]
+                )
+            self.assertEqual(2, exit_code)
+            self.assertEqual(invalid, path.read_bytes())
+
+    def test_record_commands_reject_stale_heads_and_wrong_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = lane_state.empty_manifest()
+            allocate_issue(manifest, root, 317)
+            path = write_manifest(root, manifest)
+            original = path.read_bytes()
+            stale_red_json = root / "stale-red.json"
+            stale_red_json.write_text(
+                json.dumps(valid_observation(state="failed", head_sha=SHA_C)),
+                encoding="utf-8",
+            )
+            stale_gate_json = root / "stale-gate.json"
+            stale_gate_json.write_text(
+                json.dumps(valid_observation(base_sha=SHA_C)),
+                encoding="utf-8",
+            )
+            common = [
+                "--manifest",
+                str(path),
+                "--expected-updated-at",
+                manifest["updatedAt"],
+                "--issue",
+                "317",
+            ]
+            commands = (
+                [
+                    "record-red",
+                    *common,
+                    "--observation-json",
+                    str(stale_red_json),
+                ],
+                [
+                    "record-observation",
+                    *common,
+                    "--gate",
+                    "focused",
+                    "--observation-json",
+                    str(stale_gate_json),
+                ],
+                [
+                    "heartbeat",
+                    *common,
+                    "--owner",
+                    "Other",
+                    "--at",
+                    LATER,
+                    "--expires-at",
+                    "2026-08-14T12:10:00+00:00",
+                ],
+            )
+            for command in commands:
+                with self.subTest(command=command[0]):
+                    output = io.StringIO()
+                    with mock.patch("sys.stdout", output):
+                        self.assertEqual(2, lane_state.main(command))
+                    self.assertEqual(
+                        "terminal_rejection",
+                        json.loads(output.getvalue())["classification"],
+                    )
+                    self.assertEqual(original, path.read_bytes())
+
+    def test_feature_owner_commands_cover_the_complete_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            common = Path(directory) / "common"
+            common.mkdir()
+            record_command = [
+                "record-feature-owner",
+                "--git-common-dir",
+                str(common),
+                "--owner",
+                "OmpOverlayOwner",
+                "--role",
+                "coder",
+                "--worktree",
+                str(Path(directory).resolve()),
+                "--assigned-at",
+                NOW,
+            ]
+            for allowed in STAGE1_ALLOWED_PATHS:
+                record_command.extend(["--allow", allowed])
+            commands = (
+                record_command,
+                [
+                    "feature-owner-state",
+                    "--git-common-dir",
+                    str(common),
+                    "--state",
+                    "blocked",
+                ],
+                [
+                    "transfer-feature-owner",
+                    "--git-common-dir",
+                    str(common),
+                    "--owner",
+                    "Replacement",
+                    "--role",
+                    "coder",
+                    "--assigned-at",
+                    LATER,
+                ],
+                [
+                    "feature-owner-state",
+                    "--git-common-dir",
+                    str(common),
+                    "--state",
+                    "released",
+                ],
+            )
+            for command in commands:
+                output = io.StringIO()
+                with mock.patch("sys.stdout", output):
+                    self.assertEqual(0, lane_state.main(command))
+                self.assertTrue(json.loads(output.getvalue())["ok"])
+
+            owner_path = common / "omp" / "stage1-owner.json"
+            owner = json.loads(owner_path.read_text(encoding="utf-8"))
+            self.assertEqual("Replacement", owner["owner"])
+            self.assertEqual("released", owner["state"])
+
+
+    def test_cli_parse_rejections_are_classified_json(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch("sys.stdout", output),
+            mock.patch("sys.stderr", io.StringIO()),
+        ):
+            self.assertEqual(
+                2,
+                lane_state.main(
+                    [
+                        "transition",
+                        "--manifest",
+                        "/tmp/lanes.json",
+                        "--issue",
+                        "317",
+                        "--state",
+                        "running",
+                    ]
+                ),
+            )
+        self.assertEqual(
+            "terminal_rejection",
+            json.loads(output.getvalue())["classification"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

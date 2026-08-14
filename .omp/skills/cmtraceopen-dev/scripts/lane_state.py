@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import fcntl
+import hashlib
 import fnmatch
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import time
 from typing import Callable, Iterator, NoReturn, Sequence
@@ -143,6 +145,7 @@ _FEATURE_OWNER_KEYS = {
 }
 _ROOT_SLOTS = {"stage1Before", "stage1After", "stage2Before", "stage2After"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _STAGE1_ALLOWED_PATHS = [
     ".omp/**",
     ".Clairvoyance/library.md",
@@ -231,6 +234,11 @@ def _require_issue_list(value: object, label: str) -> list[int]:
 def _require_sha(value: object, label: str) -> str:
     if not isinstance(value, str) or _SHA_PATTERN.fullmatch(value) is None:
         _fail(f"{label} must be a 40-hex SHA")
+    return value
+
+def _require_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or _SHA256_PATTERN.fullmatch(value) is None:
+        _fail(f"{label} must be a lowercase SHA-256 digest")
     return value
 
 
@@ -475,8 +483,29 @@ def validate_manifest(data: dict[str, object]) -> None:
     if not isinstance(root_safety, dict):
         _fail("rootSafety must be an object")
     _require_exact_keys(root_safety, _ROOT_SLOTS, "rootSafety")
-    for slot, artifact in root_safety.items():
-        _require_optional_string(artifact, f"rootSafety.{slot}")
+    for slot, snapshot in root_safety.items():
+        if snapshot is None:
+            continue
+        if not isinstance(snapshot, dict):
+            _fail(f"rootSafety.{slot} must be an object or null")
+        _require_exact_keys(
+            snapshot,
+            {"artifact", "sha256"},
+            f"rootSafety.{slot}",
+        )
+        artifact = _require_nonempty_string(
+            snapshot["artifact"],
+            f"rootSafety.{slot}.artifact",
+        )
+        parsed = urlparse(artifact)
+        if (
+            parsed.scheme != "file"
+            or parsed.netloc not in {"", "localhost"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            _fail(f"rootSafety.{slot}.artifact must be a local file:// URI")
+        _require_sha256(snapshot["sha256"], f"rootSafety.{slot}.sha256")
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -496,6 +525,240 @@ def _decode_json_object(text: str, source: str) -> dict[str, object]:
     if not isinstance(value, dict):
         _fail(f"{source} must contain one JSON object")
     return value
+
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    try:
+        repository = repo.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"cannot resolve repository {repo}: {error}") from error
+    if not repository.is_dir():
+        _fail(f"repository is not a directory: {repo}")
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repository), *args],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        stderr = getattr(error, "stderr", b"")
+        detail = stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(
+            f"git {' '.join(args)} failed"
+            + (f": {detail}" if detail else "")
+        ) from error
+    return result.stdout
+
+
+def git_text(repo: Path, *args: str) -> str:
+    try:
+        return _git_bytes(repo, *args).decode("utf-8").rstrip("\n")
+    except UnicodeDecodeError as error:
+        raise ValueError("git output is not valid UTF-8") from error
+
+
+def _is_repo_relative(value: object) -> bool:
+    if not isinstance(value, str) or not value or "\0" in value:
+        return False
+    parts = value.split("/")
+    return not value.startswith("/") and all(
+        part not in {"", ".", ".."} for part in parts
+    )
+
+
+def _require_repo_relative(value: str, label: str) -> str:
+    if not _is_repo_relative(value):
+        _fail(f"{label} escapes the worktree")
+    return value
+
+
+def changed_paths(repo: Path, allocation_base: str) -> list[str]:
+    _require_sha(allocation_base, "allocation base")
+    try:
+        tracked_output = _git_bytes(
+            repo,
+            "diff",
+            "--name-only",
+            "--no-ext-diff",
+            "-z",
+            allocation_base,
+            "--",
+        ).decode("utf-8")
+        untracked_output = _git_bytes(
+            repo,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Git path output is not valid UTF-8") from error
+    paths = {
+        _require_repo_relative(path, "changed path")
+        for path in (*tracked_output.split("\0"), *untracked_output.split("\0"))
+        if path
+    }
+    return sorted(paths)
+
+
+def check_allowed_paths(paths: list[str], allowlist: list[str]) -> list[str]:
+    candidate_paths = _require_string_list(paths, "changed paths")
+    patterns = [
+        _require_repo_relative(pattern, "allowed path")
+        for pattern in _require_string_list(allowlist, "allowed paths")
+    ]
+    return sorted(
+        path
+        for path in candidate_paths
+        if not _is_repo_relative(path)
+        or not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+    )
+
+
+def enforce_lane_paths(data: dict[str, object], issue: str) -> list[str]:
+    validate_manifest(data)
+    candidate = deepcopy(data)
+    lane = _lane(candidate, issue)
+    paths = changed_paths(
+        Path(lane["worktree"]),
+        lane["allocationBaseSha"],
+    )
+    disallowed = check_allowed_paths(paths, lane["allowedPaths"])
+    if not disallowed:
+        return []
+    if lane["laneState"] in {"merged", "abandoned"}:
+        _fail("cannot block a terminal lane for a path ownership violation")
+    lane["laneState"] = "blocked"
+    lane["blocker"] = "disallowed paths: " + ", ".join(disallowed)
+    lane["nextAction"] = "restore path ownership before continuing"
+    _touch(candidate)
+    _commit_candidate(data, candidate)
+    return disallowed
+
+
+def _index_tree_sha(repo: Path) -> str:
+    index: dict[bytes, object] = {}
+    for record in _git_bytes(repo, "ls-files", "--stage", "-z").split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, path = record.split(b"\t", 1)
+            mode, object_hex, stage = metadata.split(b" ")
+            object_id = bytes.fromhex(object_hex.decode("ascii"))
+        except (ValueError, UnicodeError) as error:
+            raise ValueError("Git index entry is malformed") from error
+        if stage != b"0":
+            _fail("cannot snapshot an index with unmerged entries")
+        if len(object_id) != 20:
+            _fail("Git index entry has an invalid object ID")
+        components = path.split(b"/")
+        if any(not component for component in components):
+            _fail("Git index entry has an invalid path")
+        node = index
+        for component in components[:-1]:
+            child = node.setdefault(component, {})
+            if not isinstance(child, dict):
+                _fail("Git index contains a file/directory collision")
+            node = child
+        name = components[-1]
+        if name in node:
+            _fail("Git index contains duplicate paths")
+        node[name] = (mode, object_id)
+
+    def tree_digest(node: dict[bytes, object]) -> bytes:
+        entries: list[tuple[bytes, bytes]] = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                mode = b"40000"
+                object_id = tree_digest(value)
+                sort_key = name + b"/"
+            else:
+                mode, object_id = value
+                sort_key = name
+            entries.append(
+                (sort_key, mode + b" " + name + b"\0" + object_id)
+            )
+        payload = b"".join(entry for _, entry in sorted(entries))
+        header = b"tree " + str(len(payload)).encode("ascii") + b"\0"
+        return hashlib.sha1(header + payload, usedforsecurity=False).digest()
+
+    return tree_digest(index).hex()
+
+
+def root_snapshot(repo: Path) -> dict[str, object]:
+    head_sha = git_text(repo, "rev-parse", "HEAD")
+    index_tree_sha = _index_tree_sha(repo)
+    _require_sha(head_sha, "root snapshot headSha")
+    _require_sha(index_tree_sha, "root snapshot indexTreeSha")
+    tracked_diff = _git_bytes(
+        repo,
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "HEAD",
+        "--",
+    )
+    try:
+        untracked_paths = _git_bytes(
+            repo,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ).decode("utf-8").split("\0")
+    except UnicodeDecodeError as error:
+        raise ValueError("Git path output is not valid UTF-8") from error
+    untracked: list[dict[str, str]] = []
+    repository = repo.resolve(strict=True)
+    for relative_path in sorted(path for path in untracked_paths if path):
+        _require_repo_relative(relative_path, "untracked path")
+        path = repository / relative_path
+        try:
+            info = path.lstat()
+            digest = hashlib.sha256()
+            digest.update(relative_path.encode("utf-8"))
+            digest.update(b"\0")
+            if stat.S_ISLNK(info.st_mode):
+                digest.update(b"symlink\0")
+                digest.update(os.readlink(os.fsencode(path)))
+            elif stat.S_ISREG(info.st_mode):
+                digest.update(b"regular\0")
+                file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    opened = os.fstat(file_fd)
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or (info.st_dev, info.st_ino)
+                        != (opened.st_dev, opened.st_ino)
+                    ):
+                        _fail(
+                            "untracked path changed while hashing: "
+                            + relative_path
+                        )
+                    while chunk := os.read(file_fd, 1024 * 1024):
+                        digest.update(chunk)
+                finally:
+                    os.close(file_fd)
+            else:
+                _fail(f"untracked path has unsupported file kind: {relative_path}")
+        except OSError as error:
+            raise ValueError(
+                f"cannot hash untracked path {relative_path}: {error}"
+            ) from error
+        untracked.append(
+            {"path": relative_path, "sha256": digest.hexdigest()}
+        )
+    return {
+        "headSha": head_sha,
+        "indexTreeSha": index_tree_sha,
+        "trackedDiffSha256": hashlib.sha256(tracked_diff).hexdigest(),
+        "untracked": untracked,
+    }
+
+
 
 
 def ensure_state_dir(path: Path) -> None:
@@ -546,9 +809,15 @@ def ensure_state_dir(path: Path) -> None:
 
 
 @contextmanager
-def _open_state_dir(path: Path) -> Iterator[int]:
-    ensure_state_dir(path)
-    before = path.lstat()
+def _open_state_dir(path: Path, *, create: bool = True) -> Iterator[int]:
+    if create:
+        ensure_state_dir(path)
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise ValueError(
+            f"cannot inspect state directory {path}: {error}"
+        ) from error
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         directory_fd = os.open(path, flags)
@@ -594,11 +863,17 @@ def load_manifest(path: Path) -> dict[str, object]:
     with _open_state_dir(path.parent) as directory_fd:
         return _load_manifest_at(directory_fd, path.name, str(path))
 
+def load_manifest_readonly(path: Path) -> dict[str, object]:
+    with _open_state_dir(path.parent, create=False) as directory_fd:
+        return _load_manifest_at(directory_fd, path.name, str(path))
+
+
 
 def _write_temporary_json(directory_fd: int, data: dict[str, object]) -> str:
     for _ in range(128):
         temporary_name = f".lane-state-{secrets.token_hex(16)}.tmp"
         try:
+
             temporary_fd = os.open(
                 temporary_name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -1080,8 +1355,6 @@ def record_status(data: dict[str, object], issue: str, status: dict[str, object]
     if not isinstance(status, dict) or not status:
         _fail("status must be a non-empty object")
     allowed = {
-        "headSha",
-        "currentBaseSha",
         "implementationState",
         "mergeabilityState",
         "blocker",
@@ -1093,13 +1366,7 @@ def record_status(data: dict[str, object], issue: str, status: dict[str, object]
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
     for key, value in status.items():
-        if key not in {"headSha", "currentBaseSha"}:
-            lane[key] = deepcopy(value)
-    _apply_heads(
-        lane,
-        head_sha=status.get("headSha", lane["headSha"]),
-        current_base_sha=status.get("currentBaseSha", lane["currentBaseSha"]),
-    )
+        lane[key] = deepcopy(value)
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1286,7 +1553,11 @@ def _validate_feature_owner(owner: dict[str, object]) -> None:
     _require_string_list(owner["allowedPaths"], "feature owner.allowedPaths")
     if owner["allowedPaths"] != _STAGE1_ALLOWED_PATHS:
         _fail("feature owner.allowedPaths must match the exact Stage 1 ownership set")
-    _require_enum(owner["state"], {"active", "blocked"}, "feature owner.state")
+    _require_enum(
+        owner["state"],
+        {"active", "blocked", "released"},
+        "feature owner.state",
+    )
     _require_utc(owner["assignedAt"], "feature owner.assignedAt")
     _require_int(owner["transferCount"], "feature owner.transferCount")
     _require_optional_utc(owner["evidenceInvalidatedAt"], "feature owner.evidenceInvalidatedAt")
@@ -1309,7 +1580,11 @@ def record_feature_owner(path: Path, owner: dict[str, object]) -> None:
 
 
 def set_feature_owner_state(path: Path, state: str) -> None:
-    _require_enum(state, {"active", "blocked"}, "feature owner state")
+    _require_enum(
+        state,
+        {"active", "blocked", "released"},
+        "feature owner state",
+    )
     owner = _load_feature_owner(path)
     owner["state"] = state
     _validate_feature_owner(owner)
@@ -1367,38 +1642,109 @@ def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> N
     validate_manifest(data)
     if slot not in _ROOT_SLOTS:
         _fail(f"invalid root snapshot slot: {slot}")
-    _require_nonempty_string(artifact, "root snapshot artifact")
+    artifact_uri = _require_nonempty_string(
+        artifact,
+        "root snapshot artifact",
+    )
+    parsed = urlparse(artifact_uri)
+    if (
+        parsed.scheme != "file"
+        or parsed.netloc not in {"", "localhost"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        _fail("root snapshot artifact must be a local file:// URI")
+    try:
+        artifact_path = Path(unquote(parsed.path)).resolve(strict=True)
+        artifact_bytes = artifact_path.read_bytes()
+    except OSError as error:
+        raise ValueError(f"cannot read root snapshot artifact: {error}") from error
     candidate = deepcopy(data)
-    candidate["rootSafety"][slot] = artifact
+    candidate["rootSafety"][slot] = {
+        "artifact": artifact_uri,
+        "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+    }
     _touch(candidate)
     _commit_candidate(data, candidate)
 
 
+class _ClassifiedArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise TerminalRejection(message)
+
+
 def _add_manifest_mutation_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("path", type=Path)
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-updated-at", required=True)
+
+
+def _read_cli_json(path: Path) -> dict[str, object]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read JSON from {path}: {error}") from error
+    return _decode_json_object(text, str(path))
 
 
 def _print_json(value: dict[str, object]) -> None:
     print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def _print_terminal(error: BaseException) -> int:
+    _print_json(
+        {
+            "ok": False,
+            "classification": "terminal_rejection",
+            "reason": str(error),
+        }
+    )
+    return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser()
+    parser = _ClassifiedArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init")
-    init_parser.add_argument("path", type=Path)
+    init_parser.add_argument("--git-common-dir", type=Path, required=True)
 
-    update_parser = subparsers.add_parser("update-heads")
-    _add_manifest_mutation_arguments(update_parser)
-    update_parser.add_argument("issue")
-    update_parser.add_argument("--head-sha", required=True)
-    update_parser.add_argument("--current-base-sha", required=True)
+    show_parser = subparsers.add_parser("show")
+    show_parser.add_argument("--manifest", type=Path, required=True)
+
+    allocate_parser = subparsers.add_parser("allocate")
+    _add_manifest_mutation_arguments(allocate_parser)
+    allocate_parser.add_argument("--lane-json", type=Path, required=True)
+
+    transition_parser = subparsers.add_parser("transition")
+    _add_manifest_mutation_arguments(transition_parser)
+    transition_parser.add_argument("--issue", required=True)
+    transition_parser.add_argument("--state", required=True)
+
+    transfer_parser = subparsers.add_parser("transfer-owner")
+    _add_manifest_mutation_arguments(transfer_parser)
+    transfer_parser.add_argument("--issue", required=True)
+    transfer_parser.add_argument("--owner", required=True)
+    transfer_parser.add_argument("--role", required=True)
+
+    feature_record_parser = subparsers.add_parser("record-feature-owner")
+    feature_record_parser.add_argument(
+        "--git-common-dir",
+        type=Path,
+        required=True,
+    )
+    feature_record_parser.add_argument("--owner", required=True)
+    feature_record_parser.add_argument("--role", required=True)
+    feature_record_parser.add_argument("--worktree", required=True)
+    feature_record_parser.add_argument("--assigned-at", required=True)
+    feature_record_parser.add_argument(
+        "--allow",
+        action="append",
+        required=True,
+    )
 
     invalidate_parser = subparsers.add_parser("invalidate-dependents")
     _add_manifest_mutation_arguments(invalidate_parser)
-    invalidate_parser.add_argument("upstream_issue")
+    invalidate_parser.add_argument("--upstream", required=True)
     invalidate_parser.add_argument(
         "--changed-path",
         action="append",
@@ -1406,59 +1752,226 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="changed_paths",
     )
 
-    acquire_parser = subparsers.add_parser("acquire-aggregate-gate")
+    feature_state_parser = subparsers.add_parser("feature-owner-state")
+    feature_state_parser.add_argument(
+        "--git-common-dir",
+        type=Path,
+        required=True,
+    )
+    feature_state_parser.add_argument(
+        "--state",
+        choices=("active", "blocked", "released"),
+        required=True,
+    )
+
+    feature_transfer_parser = subparsers.add_parser(
+        "transfer-feature-owner"
+    )
+    feature_transfer_parser.add_argument(
+        "--git-common-dir",
+        type=Path,
+        required=True,
+    )
+    feature_transfer_parser.add_argument("--owner", required=True)
+    feature_transfer_parser.add_argument("--role", required=True)
+    feature_transfer_parser.add_argument("--assigned-at", required=True)
+
+    heartbeat_parser = subparsers.add_parser("heartbeat")
+    _add_manifest_mutation_arguments(heartbeat_parser)
+    heartbeat_parser.add_argument("--issue", required=True)
+    heartbeat_parser.add_argument("--owner", required=True)
+    heartbeat_parser.add_argument("--at", required=True)
+    heartbeat_parser.add_argument("--expires-at", required=True)
+
+    update_parser = subparsers.add_parser("update-heads")
+    _add_manifest_mutation_arguments(update_parser)
+    update_parser.add_argument("--issue", required=True)
+    update_parser.add_argument("--head", required=True)
+    update_parser.add_argument("--current-base", required=True)
+
+    red_parser = subparsers.add_parser("record-red")
+    _add_manifest_mutation_arguments(red_parser)
+    red_parser.add_argument("--issue", required=True)
+    red_parser.add_argument("--observation-json", type=Path, required=True)
+
+    observation_parser = subparsers.add_parser("record-observation")
+    _add_manifest_mutation_arguments(observation_parser)
+    observation_parser.add_argument("--issue", required=True)
+    observation_parser.add_argument("--gate", required=True)
+    observation_parser.add_argument(
+        "--observation-json",
+        type=Path,
+        required=True,
+    )
+
+    status_parser = subparsers.add_parser("record-status")
+    _add_manifest_mutation_arguments(status_parser)
+    status_parser.add_argument("--issue", required=True)
+    status_parser.add_argument("--status-json", type=Path, required=True)
+
+    pr_parser = subparsers.add_parser("record-pr")
+    _add_manifest_mutation_arguments(pr_parser)
+    pr_parser.add_argument("--issue", required=True)
+    pr_parser.add_argument("--number", type=int, required=True)
+    pr_parser.add_argument("--url", required=True)
+
+    remote_parser = subparsers.add_parser("record-remote")
+    _add_manifest_mutation_arguments(remote_parser)
+    remote_parser.add_argument("--issue", required=True)
+    remote_parser.add_argument("--sha", required=True)
+
+    root_parser = subparsers.add_parser("record-root-snapshot")
+    _add_manifest_mutation_arguments(root_parser)
+    root_parser.add_argument("--slot", required=True)
+    root_parser.add_argument("--artifact", required=True)
+
+    acquire_parser = subparsers.add_parser("acquire-gate")
     _add_manifest_mutation_arguments(acquire_parser)
-    acquire_parser.add_argument("issue")
-    acquire_parser.add_argument("--acquired-at", required=True)
+    acquire_parser.add_argument("--issue", required=True)
+    acquire_parser.add_argument("--at", required=True)
 
-    release_parser = subparsers.add_parser("release-aggregate-gate")
+    release_parser = subparsers.add_parser("release-gate")
     _add_manifest_mutation_arguments(release_parser)
-    release_parser.add_argument("issue")
+    release_parser.add_argument("--issue", required=True)
 
-    transfer_parser = subparsers.add_parser("transfer-owner")
-    _add_manifest_mutation_arguments(transfer_parser)
-    transfer_parser.add_argument("issue")
-    transfer_parser.add_argument("owner")
-    transfer_parser.add_argument("role")
+    check_parser = subparsers.add_parser("check-paths")
+    check_parser.add_argument("--repo", type=Path, required=True)
+    check_parser.add_argument("--allocation-base", required=True)
+    check_parser.add_argument("--allow", action="append", required=True)
 
-    args = parser.parse_args(argv)
-    if args.command == "init":
-        try:
-            manifest, created = initialize_manifest(args.path)
-        except (OSError, ValueError) as error:
-            print(str(error), file=sys.stderr)
-            return 1
-        _print_json({**manifest, "created": created})
-        return 0
-
-    command_fields: dict[str, object] = {}
-
-    def mutation(data: dict[str, object]) -> None:
-        if args.command == "update-heads":
-            update_heads(
-                data,
-                args.issue,
-                head_sha=args.head_sha,
-                current_base_sha=args.current_base_sha,
-            )
-        elif args.command == "invalidate-dependents":
-            command_fields["invalidated"] = invalidate_dependents(
-                data,
-                args.upstream_issue,
-                args.changed_paths,
-            )
-        elif args.command == "acquire-aggregate-gate":
-            acquire_aggregate_gate(data, args.issue, args.acquired_at)
-        elif args.command == "release-aggregate-gate":
-            release_aggregate_gate(data, args.issue)
-        elif args.command == "transfer-owner":
-            transfer_owner(data, args.issue, args.owner, args.role)
-        else:
-            _fail(f"unknown command: {args.command}")
+    snapshot_parser = subparsers.add_parser("snapshot-root")
+    snapshot_parser.add_argument("--repo", type=Path, required=True)
 
     try:
+        args = parser.parse_args(argv)
+    except TerminalRejection as error:
+        return _print_terminal(error)
+
+    try:
+        if args.command == "init":
+            path = args.git_common_dir / "omp" / "lanes.json"
+            manifest, created = initialize_manifest(path)
+            _print_json({**manifest, "created": created})
+            return 0
+        if args.command == "show":
+            _print_json(load_manifest_readonly(args.manifest))
+            return 0
+        if args.command == "check-paths":
+            paths = changed_paths(args.repo, args.allocation_base)
+            disallowed = check_allowed_paths(paths, args.allow)
+            if disallowed:
+                raise TerminalRejection(
+                    "disallowed paths: " + ", ".join(disallowed)
+                )
+            _print_json({"ok": True, "paths": paths, "disallowed": []})
+            return 0
+        if args.command == "snapshot-root":
+            _print_json(root_snapshot(args.repo))
+            return 0
+
+        feature_owner_path = (
+            args.git_common_dir / "omp" / "stage1-owner.json"
+            if hasattr(args, "git_common_dir")
+            else None
+        )
+        if args.command == "record-feature-owner":
+            record_feature_owner(
+                feature_owner_path,
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "owner": args.owner,
+                    "role": args.role,
+                    "worktree": args.worktree,
+                    "allowedPaths": args.allow,
+                    "state": "active",
+                    "assignedAt": args.assigned_at,
+                    "transferCount": 0,
+                    "evidenceInvalidatedAt": None,
+                },
+            )
+            _print_json({"ok": True, "state": "active"})
+            return 0
+        if args.command == "feature-owner-state":
+            set_feature_owner_state(
+                feature_owner_path,
+                args.state,
+            )
+            _print_json({"ok": True, "state": args.state})
+            return 0
+        if args.command == "transfer-feature-owner":
+            transfer_feature_owner(
+                feature_owner_path,
+                args.owner,
+                args.role,
+                args.assigned_at,
+            )
+            _print_json({"ok": True, "state": "active"})
+            return 0
+
+        command_fields: dict[str, object] = {}
+
+        def mutation(data: dict[str, object]) -> None:
+            if args.command == "allocate":
+                allocate_lane(data, _read_cli_json(args.lane_json))
+            elif args.command == "transition":
+                transition_lane(data, args.issue, args.state)
+            elif args.command == "transfer-owner":
+                transfer_owner(data, args.issue, args.owner, args.role)
+            elif args.command == "invalidate-dependents":
+                command_fields["invalidated"] = invalidate_dependents(
+                    data,
+                    args.upstream,
+                    args.changed_paths,
+                )
+            elif args.command == "heartbeat":
+                heartbeat_lane(
+                    data,
+                    args.issue,
+                    args.owner,
+                    args.at,
+                    args.expires_at,
+                )
+            elif args.command == "update-heads":
+                update_heads(
+                    data,
+                    args.issue,
+                    head_sha=args.head,
+                    current_base_sha=args.current_base,
+                )
+            elif args.command == "record-red":
+                record_red(
+                    data,
+                    args.issue,
+                    _read_cli_json(args.observation_json),
+                )
+            elif args.command == "record-observation":
+                record_observation(
+                    data,
+                    args.issue,
+                    args.gate,
+                    _read_cli_json(args.observation_json),
+                )
+            elif args.command == "record-status":
+                record_status(
+                    data,
+                    args.issue,
+                    _read_cli_json(args.status_json),
+                )
+            elif args.command == "record-pr":
+                record_pr(data, args.issue, args.number, args.url)
+            elif args.command == "record-remote":
+                record_remote(data, args.issue, args.sha)
+            elif args.command == "record-root-snapshot":
+                record_root_snapshot(data, args.slot, args.artifact)
+            elif args.command == "acquire-gate":
+                acquire_aggregate_gate(data, args.issue, args.at)
+            elif args.command == "release-gate":
+                release_aggregate_gate(data, args.issue)
+            else:
+                _fail(f"unknown command: {args.command}")
+
         updated = mutate_manifest(
-            args.path,
+            args.manifest,
             args.expected_updated_at,
             mutation,
         )
@@ -1472,16 +1985,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 75
     except (TerminalRejection, OSError, ValueError) as error:
-        _print_json(
-            {
-                "ok": False,
-                "classification": "terminal_rejection",
-                "reason": str(error),
-            }
-        )
-        return 2
+        return _print_terminal(error)
 
-    if args.command in {"acquire-aggregate-gate", "release-aggregate-gate"}:
+    if args.command in {"acquire-gate", "release-gate"}:
         command_fields["aggregateGate"] = updated["aggregateGate"]
     _print_json(
         {
