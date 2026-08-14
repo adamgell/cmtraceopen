@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "scaffold": { "minContextWindow": 32768, "minMaxTokens": 8192 },
+    "mid": { "minContextWindow": 65536, "minMaxTokens": 16384 },
+    "reasoning": { "minContextWindow": 131072, "minMaxTokens": 32768 },
+    "advisor": { "minContextWindow": 131072, "minMaxTokens": 16384 }
+  }
+}
