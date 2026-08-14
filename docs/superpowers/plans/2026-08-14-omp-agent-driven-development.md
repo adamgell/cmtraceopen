@@ -1144,7 +1144,7 @@ Both profiles contain `spawns: []`, `advisor: true`, a frontmatter `output` JSON
 
 - [ ] **Step 4: Create adversary and integration profiles**
 
-`reducer-adversary.md` uses `model: "@reasoning"`, tools `[read, grep, glob]`, and autoloads `semantic-reducer-framework`, `semantic-reducer-development`. Its JSON output requires `adversarial_contracts`, `fixture_proposals`, `failure_scenarios`, and `blockers` arrays. It is strictly read-only with no alternate mutable mode: it returns the RED contract, proposed fixture/test text, expected failure, and inert command. Main independently approves the proposal, then dispatches `coder` with sole lane ownership and the allowlist to materialize the RED artifact and, after Main observes RED, implement the fix.
+`reducer-adversary.md` uses `model: "@reasoning"`, tools `[read, grep, glob]`, and autoloads `semantic-reducer-framework`, `semantic-reducer-development`. After its frontmatter it has one top-level `# Reducer Adversary` heading. Its JSON output requires `adversarial_contracts`, `fixture_proposals`, `failure_scenarios`, and `blockers` arrays. Each adversarial-contract object requires nonempty `invariant`, structured `fixture_proposal` (`path` and exact `content`), exact `proposed_red_command`, and `expected_failure`; every standalone fixture-proposal object likewise requires nonempty `path` and `content`. It is strictly read-only with no alternate mutable mode and returns proposals only. Main independently approves and applies the proposal by dispatching `coder` with sole lane ownership and the allowlist to materialize the proposed RED artifact; Main independently runs the proposed command, observes RED, and only then authorizes that same Coder to implement the fix.
 
 `reducer-integration.md` uses `model: "@mid"`, tools `[read, grep, glob]`, and autoloads `branch-lane-verification`, `semantic-reducer-framework`. Its JSON output requires `heads` and `gate_states` objects plus a `blockers` array. It inspects Main-supplied exact-head and gate artifacts and reports separate implementation/conformance/review/native/mergeability states; it runs no command and does not resolve semantic conflicts opportunistically.
 
@@ -1482,10 +1482,33 @@ Refresh `origin/main`, create `.worktrees/omp-control` detached at the exact ref
 ```bash
 COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 PRIMARY_ROOT="$(dirname "$COMMON")"
-git -C "$PRIMARY_ROOT" fetch origin main
-git -C "$PRIMARY_ROOT" worktree add --detach \
-  "$PRIMARY_ROOT/.worktrees/omp-control" origin/main
 CONTROL="$PRIMARY_ROOT/.worktrees/omp-control"
+git -C "$PRIMARY_ROOT" fetch origin main
+EXPECTED_CONTROL_HEAD="$(git -C "$PRIMARY_ROOT" rev-parse origin/main)"
+WORKTREE_LIST="$(git -C "$PRIMARY_ROOT" worktree list --porcelain)"
+REGISTERED_CONTROL="$(
+  printf '%s\n' "$WORKTREE_LIST" |
+    awk -v target="$CONTROL" \
+      '$1 == "worktree" && substr($0, 10) == target { print "registered" }'
+)"
+if [ -n "$REGISTERED_CONTROL" ]; then
+  if [ ! -d "$CONTROL" ] ||
+    [ "$(git -C "$CONTROL" rev-parse --show-toplevel)" != "$CONTROL" ] ||
+    git -C "$CONTROL" symbolic-ref -q HEAD >/dev/null ||
+    [ "$(git -C "$CONTROL" rev-parse HEAD)" != "$EXPECTED_CONTROL_HEAD" ] ||
+    [ -n "$(git -C "$CONTROL" status --porcelain=v1 --untracked-files=all)" ]; then
+    printf '%s\n' \
+      "Registered control worktree has conflicting path, branch/head, or dirty state; preserve it and report the conflict." >&2
+    exit 2
+  fi
+elif [ -e "$CONTROL" ] || [ -L "$CONTROL" ]; then
+  printf '%s\n' \
+    "Control target exists but is not registered; preserve it and report the conflict." >&2
+  exit 2
+else
+  git -C "$PRIMARY_ROOT" worktree add --detach \
+    "$CONTROL" "$EXPECTED_CONTROL_HEAD"
+fi
 LANE_STATE="$CONTROL/.omp/skills/cmtraceopen-dev/scripts/lane_state.py"
 COMMON="$(git -C "$CONTROL" rev-parse --path-format=absolute --git-common-dir)"
 MANIFEST="$COMMON/omp/lanes.json"
@@ -1504,7 +1527,7 @@ python3 "$LANE_STATE" record-root-snapshot --manifest "$MANIFEST" \
   --slot stage2Before --artifact file:///tmp/cmtraceopen-pilot-primary-before.json
 ```
 
-If `.worktrees/omp-control` already exists, do not recreate it; verify it is clean and detach/reset it only when it contains no user work. Start the Stage 2 Main OMP session from this coordinator worktree with `--advisor` in print mode or enable `/advisor on` before the first interactive prompt. The model does not issue the slash command. The coordinator owns orchestration state but no issue implementation files.
+The setup inspects `git worktree list --porcelain` before any add. An exact registered target is reused only when it is the clean detached worktree at the refreshed `origin/main` head. A conflicting registration, dirty worktree, missing registered directory, or existing unregistered target blocks and is reported without remove, reset, clean, or other normalization. `git worktree add` runs only when the target is both absent and unregistered. Start the Stage 2 Main OMP session from this coordinator worktree with `--advisor` in print mode or enable `/advisor on` before the first interactive prompt. The model does not issue the slash command. The coordinator owns orchestration state but no issue implementation files.
 
 An existing valid manifest is not reset or retried as a new pilot. Main inspects `/tmp/cmtraceopen-existing-pilot-manifest.json`: resume its nonterminal lanes from their recorded state/next action, or report its terminal/ready lanes to Adam and stop. Starting a different pilot requires Adam to approve archiving the old coordination state.
 
