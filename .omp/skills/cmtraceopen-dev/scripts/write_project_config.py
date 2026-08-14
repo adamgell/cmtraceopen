@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -240,50 +239,6 @@ def _existing_status(path: Path, proposed: bytes) -> str | None:
         )
     )
 
-
-def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
-    return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
-
-
-def _cleanup_staged_entry(
-    directory_fd: int,
-    temporary_name: str,
-    staged_fd: int,
-    output_name: str,
-) -> None:
-    quarantine_name = (
-        f".{output_name}.cleanup.{secrets.token_hex(16)}.tmp"
-    )
-    try:
-        os.rename(
-            temporary_name,
-            quarantine_name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
-    except FileNotFoundError:
-        return
-
-    try:
-        claimed_fd = os.open(
-            quarantine_name,
-            os.O_RDONLY | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
-        )
-    except OSError:
-        return
-    try:
-        try:
-            claimed_identity = os.fstat(claimed_fd)
-            staged_identity = os.fstat(staged_fd)
-        except OSError:
-            return
-        if _same_inode(claimed_identity, staged_identity):
-            os.unlink(quarantine_name, dir_fd=directory_fd)
-    finally:
-        os.close(claimed_fd)
-
-
 def _write_staged(stream: object, proposed: bytes) -> None:
     remaining = memoryview(proposed)
     while remaining:
@@ -301,83 +256,39 @@ def write_create_only(path: Path, content: str) -> str:
     if existing_status is not None:
         return existing_status
 
-    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    lock_fd: int | None = None
-    try:
-        lock_fd = os.open(
-            f".{path.name}.lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-            dir_fd=directory_fd,
+    while True:
+        temporary_path = path.with_name(
+            f".{path.name}.{secrets.token_hex(16)}.tmp"
         )
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        locked_status = _existing_status(path, proposed)
-        if locked_status is not None:
-            return locked_status
-
-        while True:
-            temporary_name = (
-                f".{path.name}.{secrets.token_hex(16)}.tmp"
-            )
-            try:
-                staged_fd = os.open(
-                    temporary_name,
-                    os.O_WRONLY
-                    | os.O_CREAT
-                    | os.O_EXCL
-                    | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=directory_fd,
-                )
-                break
-            except FileExistsError:
-                continue
-
         try:
-            staged_identity = os.fstat(staged_fd)
-            stream = os.fdopen(staged_fd, "wb", closefd=False)
-            with stream:
-                _write_staged(stream, proposed)
-            try:
-                os.link(
-                    temporary_name,
-                    path.name,
-                    src_dir_fd=directory_fd,
-                    dst_dir_fd=directory_fd,
-                    follow_symlinks=False,
-                )
-            except FileExistsError:
-                raced_status = _existing_status(path, proposed)
-                if raced_status is None:
-                    raise
-                return raced_status
-
-            installed_fd = os.open(
-                path.name,
-                os.O_RDONLY | os.O_NOFOLLOW,
-                dir_fd=directory_fd,
+            descriptor = os.open(
+                temporary_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
             )
-            try:
-                installed_identity = os.fstat(installed_fd)
-            finally:
-                os.close(installed_fd)
-            if not _same_inode(staged_identity, installed_identity):
-                raise OSError("installed config does not match the staged inode")
-            return "created"
-        finally:
-            try:
-                _cleanup_staged_entry(
-                    directory_fd,
-                    temporary_name,
-                    staged_fd,
-                    path.name,
-                )
-            finally:
-                os.close(staged_fd)
+            break
+        except FileExistsError:
+            continue
+
+    try:
+        stream = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with stream:
+            _write_staged(stream, proposed)
+        try:
+            # Atomic no-overwrite publication covers cooperating creators.
+            # Same-user mutation of another creator's temp name is out of scope.
+            os.link(temporary_path, path)
+        except FileExistsError:
+            raced_status = _existing_status(path, proposed)
+            if raced_status is None:
+                raise
+            return raced_status
+        return "created"
     finally:
-        if lock_fd is not None:
-            os.close(lock_fd)
-        os.close(directory_fd)
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
 
 
 def _parse_args() -> argparse.Namespace:
