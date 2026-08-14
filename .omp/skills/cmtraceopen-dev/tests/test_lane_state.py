@@ -10,6 +10,7 @@ import shlex
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -754,15 +755,30 @@ class LifecycleTests(unittest.TestCase):
                 valid["lanes"]["317"]["laneState"],
             )
 
+            readiness_rejections = {
+                "missing PR": (
+                    lambda lane: lane.__setitem__(
+                        "pr",
+                        {"number": None, "url": None},
+                    ),
+                    "ready_for_adam requires a pull request",
+                ),
+                "remote mismatch": (
+                    lambda lane: lane.__setitem__("remoteSha", SHA_C),
+                    "ready_for_adam requires local head and remote SHA identity",
+                ),
+            }
+            for label, (mutate, reason) in readiness_rejections.items():
+                with self.subTest(label=label):
+                    manifest = prepared()
+                    lane = manifest["lanes"]["317"]
+                    mutate(lane)
+                    original = deepcopy(manifest)
+                    with self.assertRaisesRegex(ValueError, reason):
+                        lane_state._require_ready_for_adam(manifest, lane)
+                    self.assertEqual(original, manifest)
+
             mutations = {
-                "missing PR": lambda lane: lane.__setitem__(
-                    "pr",
-                    {"number": None, "url": None},
-                ),
-                "remote mismatch": lambda lane: lane.__setitem__(
-                    "remoteSha",
-                    SHA_C,
-                ),
                 "incomplete gate": lambda lane: lane["gates"].__setitem__(
                     "focused",
                     gate(),
@@ -1677,6 +1693,54 @@ class RootSnapshotTests(unittest.TestCase):
                 branch_changed["gitControlsSha256"],
             )
 
+            before_packing = branch_changed
+            run_git(repo, "pack-refs", "--all", "--prune")
+            packed_refs = git_dir / "packed-refs"
+            self.assertTrue(packed_refs.is_file())
+            self.assertFalse((git_dir / "refs" / "heads" / branch).exists())
+            packed = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                before_packing["gitControlsSha256"],
+                packed["gitControlsSha256"],
+            )
+            packed_refs.chmod(
+                stat.S_IMODE(packed_refs.stat().st_mode) | stat.S_IXUSR
+            )
+            packed_mutated = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                packed["gitControlsSha256"],
+                packed_mutated["gitControlsSha256"],
+            )
+
+            sparse_checkout = info / "sparse-checkout"
+            sparse_checkout.write_text("/*\n", encoding="utf-8")
+            sparse_first = lane_state.root_snapshot(repo)
+            sparse_checkout.write_text("!/private\n", encoding="utf-8")
+            sparse_second = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                sparse_first["gitControlsSha256"],
+                sparse_second["gitControlsSha256"],
+            )
+
+    def test_snapshot_handles_deep_directory_chain_without_recursion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, _ = create_git_repo(Path(directory))
+            deepest = repo
+            for depth in range(100):
+                deepest /= f"d{depth:03}"
+                deepest.mkdir()
+            (deepest / "leaf.txt").write_text("leaf\n", encoding="utf-8")
+
+            original_limit = sys.getrecursionlimit()
+            try:
+                sys.setrecursionlimit(80)
+                snapshot = lane_state.root_snapshot(repo)
+            finally:
+                sys.setrecursionlimit(original_limit)
+
+            self.assertRegex(snapshot["filesystemSha256"], r"\A[0-9a-f]{64}\Z")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires os.mkfifo")
     def test_snapshot_rejects_unsupported_primary_filesystem_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo, _ = create_git_repo(Path(directory))
@@ -2101,7 +2165,7 @@ class BaseEvidenceTests(unittest.TestCase):
     def test_pr_url_is_exact_repository_identity(self) -> None:
         invalid_urls = (
             "https://github.com/example/repo/pull/42",
-            "https://github.com/adamgell/cmtraceopen/pull/43",
+            PR_43_URL,
             "https://github.com/adamgell/cmtraceopen/pull/42/",
             "https://github.com/adamgell/cmtraceopen/pull/42?diff=split",
         )

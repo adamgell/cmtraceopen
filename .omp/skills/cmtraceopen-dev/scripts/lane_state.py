@@ -15,7 +15,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Callable, Iterator, NoReturn, Sequence
+from typing import Callable, Iterator, NoReturn, Protocol, Sequence
 from urllib.parse import unquote, urlparse
 
 FEATURE_OWNER_STATES = ("active", "blocked", "released")
@@ -87,6 +87,9 @@ class RetriableConflict(RuntimeError):
 
 class TerminalRejection(RuntimeError):
     pass
+
+class UpdateDigest(Protocol):
+    def update(self, data: bytes, /) -> object: ...
 
 _GATE_BASE_SENSITIVITY = {
     "focused": False,
@@ -767,7 +770,7 @@ def _index_tree_sha(repo: Path) -> str:
         return hashlib.sha1(header + payload, usedforsecurity=False).digest()
 
     return tree_digest(index).hex()
-def _digest_field(digest: object, value: bytes) -> None:
+def _digest_field(digest: UpdateDigest, value: bytes) -> None:
     digest.update(len(value).to_bytes(8, "big"))
     digest.update(value)
 
@@ -791,50 +794,65 @@ def _regular_file_sha256(path: Path, expected: os.stat_result) -> bytes:
 
 
 def _hash_filesystem_node(
-    digest: object,
+    digest: UpdateDigest,
     path: Path,
     label: bytes,
     *,
     exclude_root_git: bool = False,
 ) -> None:
-    try:
-        info = path.lstat()
-    except OSError as error:
-        raise ValueError(f"cannot inspect filesystem entry {path}: {error}") from error
-    _digest_field(digest, label)
-    _digest_field(digest, stat.S_IMODE(info.st_mode).to_bytes(4, "big"))
-    if stat.S_ISREG(info.st_mode):
-        _digest_field(digest, b"regular")
+    pending = [(path, label, exclude_root_git)]
+    while pending:
+        current, current_label, exclude_git = pending.pop()
         try:
-            content_sha = _regular_file_sha256(path, info)
+            info = current.lstat()
         except OSError as error:
-            raise ValueError(f"cannot hash filesystem entry {path}: {error}") from error
-        _digest_field(digest, content_sha)
-        return
-    if stat.S_ISLNK(info.st_mode):
-        _digest_field(digest, b"symlink")
-        try:
-            target = os.readlink(os.fsencode(path))
-        except OSError as error:
-            raise ValueError(f"cannot read filesystem symlink {path}: {error}") from error
-        _digest_field(digest, target)
-        return
-    if not stat.S_ISDIR(info.st_mode):
-        _fail(f"filesystem entry has unsupported kind: {path}")
-    _digest_field(digest, b"directory")
-    try:
-        children = sorted(path.iterdir(), key=lambda child: os.fsencode(child.name))
-    except OSError as error:
-        raise ValueError(f"cannot list filesystem directory {path}: {error}") from error
-    for child in children:
-        if exclude_root_git and child.name == ".git":
+            raise ValueError(
+                f"cannot inspect filesystem entry {current}: {error}"
+            ) from error
+        _digest_field(digest, current_label)
+        _digest_field(digest, stat.S_IMODE(info.st_mode).to_bytes(4, "big"))
+        if stat.S_ISREG(info.st_mode):
+            _digest_field(digest, b"regular")
+            try:
+                content_sha = _regular_file_sha256(current, info)
+            except OSError as error:
+                raise ValueError(
+                    f"cannot hash filesystem entry {current}: {error}"
+                ) from error
+            _digest_field(digest, content_sha)
             continue
-        child_label = (
-            os.fsencode(child.name)
-            if not label
-            else label + b"/" + os.fsencode(child.name)
-        )
-        _hash_filesystem_node(digest, child, child_label)
+        if stat.S_ISLNK(info.st_mode):
+            _digest_field(digest, b"symlink")
+            try:
+                target = os.readlink(os.fsencode(current))
+            except OSError as error:
+                raise ValueError(
+                    f"cannot read filesystem symlink {current}: {error}"
+                ) from error
+            _digest_field(digest, target)
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            _fail(f"filesystem entry has unsupported kind: {current}")
+        _digest_field(digest, b"directory")
+        try:
+            children = sorted(
+                current.iterdir(),
+                key=lambda child: os.fsencode(child.name),
+                reverse=True,
+            )
+        except OSError as error:
+            raise ValueError(
+                f"cannot list filesystem directory {current}: {error}"
+            ) from error
+        for child in children:
+            if exclude_git and child.name == ".git":
+                continue
+            child_label = (
+                os.fsencode(child.name)
+                if not current_label
+                else current_label + b"/" + os.fsencode(child.name)
+            )
+            pending.append((child, child_label, False))
 
 
 def _filesystem_sha256(repository: Path) -> str:
@@ -872,11 +890,13 @@ def _git_controls_sha256(repo: Path) -> str:
     controls: list[tuple[bytes, Path]] = [
         (b"HEAD", git_dir / "HEAD"),
         (b"index", _git_path(repo, "index")),
+        (b"packed-refs", common_dir / "packed-refs"),
         (b"config", common_dir / "config"),
         (b"worktree-config", git_dir / "config.worktree"),
         (b"hooks", _git_path(repo, "hooks")),
         (b"info-attributes", _git_path(repo, "info/attributes")),
         (b"info-exclude", _git_path(repo, "info/exclude")),
+        (b"info-sparse-checkout", _git_path(repo, "info/sparse-checkout")),
     ]
     try:
         branch_ref = git_text(repo, "symbolic-ref", "-q", "HEAD")
