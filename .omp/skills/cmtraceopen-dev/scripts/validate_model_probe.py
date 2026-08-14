@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -115,7 +115,6 @@ def find_discovered_model(
 
     model = matches[0]
     provider = _required_string(model.get("provider"), "discovery provider")
-    _required_string(model.get("api"), "discovery api")
     model_id = _required_string(model.get("id"), "discovery model id")
     _required_positive_integer(model.get("contextWindow"), "contextWindow")
     _required_positive_integer(model.get("maxTokens"), "maxTokens")
@@ -158,15 +157,16 @@ def _assistant_text(message: dict[str, object]) -> str:
     return "".join(parts)
 
 
-def _validated_timestamp(event: dict[str, object]) -> str:
-    timestamp = _required_string(event.get("timestamp"), "final event timestamp")
+def _validated_timestamp(message: dict[str, object]) -> str:
+    timestamp = message.get("timestamp")
+    if type(timestamp) is not int or timestamp <= 0:
+        _fail("message timestamp must be a positive epoch-millisecond integer")
+    seconds, milliseconds = divmod(timestamp, 1000)
     try:
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise ValueError("final event timestamp is malformed") from error
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        _fail("final event timestamp must include a timezone")
-    return parsed.isoformat()
+        parsed = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as error:
+        raise ValueError("message timestamp is outside the supported range") from error
+    return parsed.replace(microsecond=milliseconds * 1000).isoformat()
 
 
 def validate_trace(
@@ -208,7 +208,7 @@ def validate_trace(
     if not read_result or any(marker not in read_result for marker in _REQUIRED_CHARTER_MARKERS):
         _fail("read result is empty or lacks required charter markers")
 
-    assistant_messages: list[tuple[int, dict[str, object]]] = []
+    assistant_messages: list[tuple[int, dict[str, object], str]] = []
     for index, event in enumerate(events):
         if event["type"] != "message_end":
             continue
@@ -216,12 +216,13 @@ def validate_trace(
         if not isinstance(message, dict):
             _fail("message_end event must contain a message object")
         role = _required_string(message.get("role"), "message_end role")
+        validated_at = _validated_timestamp(message)
         if role == "assistant":
-            assistant_messages.append((index, message))
+            assistant_messages.append((index, message, validated_at))
     if not assistant_messages:
         _fail("trace has no final assistant message")
 
-    final_message_index, final_message = assistant_messages[-1]
+    final_message_index, final_message, validated_at = assistant_messages[-1]
     if not start_index < end_index < final_message_index:
         _fail("successful read must complete before the final assistant message")
     provider = _required_string(final_message.get("provider"), "observed provider")
@@ -254,7 +255,7 @@ def validate_trace(
         "readPath": EXPECTED_READ_PATH,
         "readResultSha256": hashlib.sha256(read_result.encode("utf-8")).hexdigest(),
         "finalObjectSha256": hashlib.sha256(canonical_final).hexdigest(),
-        "validatedAt": _validated_timestamp(events[-1]),
+        "validatedAt": validated_at,
     }
 
 
@@ -298,8 +299,8 @@ def validate_probe(
     max_tokens = _required_positive_integer(model.get("maxTokens"), "maxTokens")
     if context_window < min_context or max_tokens < min_max_tokens:
         _fail(f"discovered model does not meet the {role} role threshold")
-    if model.get("provider") != trace["provider"] or model.get("api") != trace["api"]:
-        _fail("discovery metadata does not match observed provider and api")
+    if model.get("provider") != trace["provider"]:
+        _fail("discovery provider does not match the observed provider")
 
     return {
         "fixtureVersion": fixture_version,

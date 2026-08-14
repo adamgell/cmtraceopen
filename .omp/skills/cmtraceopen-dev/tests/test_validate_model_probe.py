@@ -16,6 +16,7 @@ validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
 SELECTOR = "test-provider/test-model"
+FINAL_TIMESTAMP_MS = 1786708802123
 CHARTER_RESULT = """# Coder charter
 
 **Role:** Implementation engineer (Coder)
@@ -40,7 +41,6 @@ def valid_events() -> list[dict[str, object]]:
             "toolCallId": "read-1",
             "toolName": "read",
             "args": {"path": ".Clairvoyance/staff/coder-charter.md"},
-            "timestamp": "2026-08-14T12:00:00+00:00",
         },
         {
             "type": "tool_execution_end",
@@ -48,7 +48,6 @@ def valid_events() -> list[dict[str, object]]:
             "toolName": "read",
             "isError": False,
             "result": CHARTER_RESULT,
-            "timestamp": "2026-08-14T12:00:01+00:00",
         },
         {
             "type": "message_end",
@@ -57,6 +56,7 @@ def valid_events() -> list[dict[str, object]]:
                 "provider": "test-provider",
                 "api": "openai-completions",
                 "model": "test-model",
+                "timestamp": FINAL_TIMESTAMP_MS,
                 "content": [
                     {
                         "type": "text",
@@ -64,7 +64,6 @@ def valid_events() -> list[dict[str, object]]:
                     }
                 ],
             },
-            "timestamp": "2026-08-14T12:00:02+00:00",
         },
     ]
 
@@ -75,7 +74,6 @@ def valid_discovery() -> dict[str, object]:
             {
                 "selector": SELECTOR,
                 "provider": "test-provider",
-                "api": "openai-completions",
                 "id": "test-model",
                 "contextWindow": 131072,
                 "maxTokens": 32768,
@@ -140,7 +138,7 @@ class ProbeValidationTests(unittest.TestCase):
                 ).hexdigest(),
                 "finalObjectSha256": hashlib.sha256(canonical_final).hexdigest(),
                 "artifactSha256": hashlib.sha256(artifact_bytes).hexdigest(),
-                "validatedAt": "2026-08-14T12:00:02+00:00",
+                "validatedAt": "2026-08-14T12:00:02.123000+00:00",
             },
         )
 
@@ -225,30 +223,43 @@ class ProbeValidationTests(unittest.TestCase):
                         validator.read_jsonl(artifact_path)
 
         malformed_messages = (
-            {
-                "type": "message_end",
-                "timestamp": "2026-08-14T12:00:03+00:00",
-            },
+            {"type": "message_end"},
             {
                 "type": "message_end",
                 "message": "not-an-object",
-                "timestamp": "2026-08-14T12:00:03+00:00",
             },
             {
                 "type": "message_end",
                 "message": {},
-                "timestamp": "2026-08-14T12:00:03+00:00",
             },
             {
                 "type": "message_end",
-                "message": {"role": 1},
-                "timestamp": "2026-08-14T12:00:03+00:00",
+                "message": {"role": 1, "timestamp": FINAL_TIMESTAMP_MS},
+            },
+            {
+                "type": "message_end",
+                "message": {"role": "user"},
             },
         )
         for malformed_message in malformed_messages:
             with self.subTest(malformed_message=malformed_message):
                 events = valid_events()
                 events.append(malformed_message)
+                with self.assertRaises(ValueError):
+                    validator.validate_trace(events, SELECTOR)
+
+        for invalid_timestamp in (None, True, 0, -1, 1.0, "1786708802123"):
+            with self.subTest(timestamp=invalid_timestamp):
+                events = valid_events()
+                events.append(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "user",
+                            "timestamp": invalid_timestamp,
+                        },
+                    }
+                )
                 with self.assertRaises(ValueError):
                     validator.validate_trace(events, SELECTOR)
 
