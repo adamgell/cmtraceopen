@@ -116,12 +116,12 @@ The repository will add:
 
 - `@../AGENTS.md`;
 - `@../soul.md`;
-- `@../.Clairvoyance/library.md`.
+- `@../.Clairvoyance/library.md`;
 - `@../.Clairvoyance/staff/ceo-charter.md`.
 
 Importing root `AGENTS.md` is mandatory because native `.omp/AGENTS.md` otherwise wins context-file precedence at the same project depth and could shadow the repository rules.
 
-The overlay references canonical files. It does not duplicate `soul.md`, `memory.md`, the routing indexes, or staff charters. Main reads the CEO charter and then its routed `~/.hermes/cmtrace-pm-charter.md` execution contract before loading orchestration.
+The overlay references canonical files. It does not duplicate `soul.md`, `memory.md`, the routing indexes, or staff charters. Main reads the CEO charter and then its routed `~/.hermes/cmtrace-pm-charter.md` execution contract before loading orchestration. If that required contract is absent or unreadable, orchestration fails closed and never creates or mutates the user-local file.
 
 ## Skill discovery and role loading
 
@@ -180,7 +180,7 @@ Project agent definitions map one-to-one to the tracked charters:
 - Reducer Adversary;
 - Reducer Integration.
 
-Each definition requires the agent to read its `.Clairvoyance/staff/*-charter.md` before acting. It also sets model-role preference, output shape, denied child spawning, and `advisor: true`. Every child lacks shell/process, Git/GitHub, and credential authority. Read-only profiles expose only non-mutating file tools; writing profiles expose only the dedicated file-read/edit tools needed inside their allowlist.
+Each definition requires the agent to read its `.Clairvoyance/staff/*-charter.md` before acting. It also sets model-role preference, output shape, denied child spawning, and `advisor: true`. Every child lacks shell/process, Git/GitHub, and credential authority. Read-only profiles expose only non-mutating file tools; writing profiles expose only the dedicated file-read/edit tools needed inside their allowlist. RED-first applies only to Coder and an authorized Reducer Adversary. UI/Design returns proposed browser checks rather than observed evidence; Tech Writer returns proposed source, link, and render checks. Main runs all verification, and every documentation lane requires CodeRabbit.
 
 `.omp/config.yml` enables the advisor subsystem and binds `modelRoles.advisor` to the validated reasoning role. In print mode, the `cmtraceopen-dev` preflight requires the same launcher command to contain both the real `--advisor` flag and `--append-system-prompt` operator/system evidence stating that this invocation includes `--advisor`; either missing element blocks. OMP print agents cannot observe parent argv, so this explicit transport is accepted launch evidence rather than model self-attestation, and `pgrep`, process titles, and Hub membership are not advisor-runtime proof. In interactive mode the operator enables `/advisor on` before the first prompt. Models never issue session slash commands. Every custom staff agent starts its own read-only advisor through `advisor: true`. Advisor output is advisory evidence and never replaces formal independent review.
 
@@ -245,18 +245,18 @@ Each lane record contains:
 
 GitHub and exact SHAs remain authoritative. The manifest is a coordination cache, not proof that a gate passed.
 
-Root-safety snapshots cover tracked, untracked, and ignored primary-checkout files plus primary-worktree Git controls. They deliberately exclude unrelated active-branch refs and objects in shared Git storage. Before/after equality therefore detects primary-root mutation without false incidents from concurrent worktree branch activity.
+Root-safety snapshots cover tracked, untracked, and ignored primary-checkout files plus primary-worktree Git controls. `filesystemSha256` excludes only `.git` and the orchestrator-managed top-level `.worktrees/` directory; user-owned ignored files everywhere else remain included. `gitControlsSha256` covers primary-worktree Git controls while deliberately excluding unrelated active-branch refs and objects in shared Git storage. Before/after equality of both digests therefore detects primary-root mutation without false incidents from concurrent worktree branch activity.
 
 ## Per-lane execution flow
 
 1. Main refreshes the issue, dependencies, open PRs, `main`, branch heads, and review state as untrusted data.
 2. Main allocates the issue branch, worktree, sole writing owner, allowed paths, allocation base SHA, and lease.
 3. Main extracts only Adam-approved requirements/specification excerpts and writes a cold-complete brief with scope, non-goals, evidence anchors, existing patterns, shared contracts, acceptance criteria, and verification goals.
-4. The writing child writes only the smallest focused failing test/fixture and returns a proposed exact command as inert text.
-5. Main independently inspects the change and runs `lane_state.py check-paths --manifest PATH --issue N`, which loads the allocation base and complete allowlist from the validated lane record.
-6. Main sanitizes exact command arguments, runs the focused test, and records the observed RED result before authorizing production edits.
-7. The same owner implements the smallest contract-complete behavior and returns proposed verification commands as inert text.
-8. Main independently inspects the diff, repeats the manifest-bound path check, runs focused and required aggregate checks, and records GREEN/gates. Children never run commands, Git/GitHub operations, or read credentials.
+4. Apply the role-specific first-artifact contract. Coder writes only the smallest focused failing test/fixture. Reducer Adversary remains read-only and proposes a RED artifact as inert text until Main independently applies and observes it fail, transfers sole lane ownership, and supplies the absolute worktree and allowlist. UI/Design first prepares the approved UI change plus proposed browser checks. Tech Writer first prepares the approved documentation change plus proposed source, link, and render checks.
+5. Main independently inspects every proposed or written change and runs `lane_state.py check-paths --manifest PATH --issue N`, which loads the allocation base and complete allowlist from the validated lane record.
+6. For Coder or authorized Reducer Adversary work, Main sanitizes exact command arguments, runs the focused test, and records the observed RED result before authorizing production edits.
+7. The same authorized owner implements or prepares the smallest contract-complete change and returns only proposed role-appropriate verification. UI/Design never claims observed browser evidence; Tech Writer never claims its proposed checks ran.
+8. Main independently inspects the diff, repeats the manifest-bound path check, runs focused GREEN or browser/source/link/render verification as applicable, and records the result. Children never run commands, Git/GitHub operations, or read credentials.
 9. Main may commit and push the verified coherent diff and open or update a draft PR without pausing.
 10. Review proceeds contract first, adversarial second, mechanical third. Read-only reviewers inspect source and Main-supplied exact-head artifacts; they do not run commands. Reducer work routes semantic questions through Reducer Contract and false-story testing through Reducer Adversary.
 11. Main runs the checked-in CodeRabbit helper and continues review until a completed review targets the current head, is approved, and has no actionable unresolved threads.
@@ -420,7 +420,7 @@ Configuration is verified by running the actual surfaces rather than inventing a
 - actual worktree-confined writes;
 - actual draft PR and review-state flow;
 - scope-relevant repository tests and gates;
-- root-safety artifacts prove equality of the primary checkout's before/after HEAD SHA, index tree SHA, tracked-worktree diff hash, and sorted nonignored untracked path-plus-content hashes. Each lane wave stores the artifact URI in live state.
+- root-safety artifacts require before/after equality of `filesystemSha256` and `gitControlsSha256` in addition to HEAD SHA, index tree SHA, tracked-worktree diff hash, and sorted nonignored untracked path-plus-content hashes. The filesystem digest excludes only `.git` and the orchestrator-managed top-level `.worktrees/`, retaining user-owned ignored files elsewhere; the Git-controls digest covers primary-worktree controls but excludes unrelated active-branch refs/objects. Each lane wave stores the artifact URI in live state.
 
 Focused tests for `lane_state.py` cover schema rejection, atomic replacement, legal and illegal lifecycle transitions, sole-owner transfer, lease-expiry non-takeover, lane/base-head invalidation, semaphore state, and tracked-plus-untracked allowlist comparison. No test asserts source text or incidental configuration formatting.
 
