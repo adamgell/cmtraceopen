@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import fcntl
+import fnmatch
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import sys
-import tempfile
-from typing import NoReturn, Sequence
-from urllib.parse import urlparse
+import time
+from typing import Callable, Iterator, NoReturn, Sequence
+from urllib.parse import unquote, urlparse
 
 
 SCHEMA_VERSION = 1
@@ -45,6 +49,39 @@ TRANSITIONS = {
     "merged": set(),
     "abandoned": set(),
 }
+
+HEAD_BOUND = {
+    "focused",
+    "aggregate",
+    "conformance",
+    "coderabbit",
+    "independent_review",
+    "native_lab",
+    "mergeability",
+}
+BASE_BOUND = {
+    "aggregate",
+    "conformance",
+    "coderabbit",
+    "independent_review",
+    "mergeability",
+}
+DOWNSTREAM_BOUND = {
+    "aggregate",
+    "conformance",
+    "coderabbit",
+    "independent_review",
+    "mergeability",
+}
+LOCK_TIMEOUT_SECONDS = 2.0
+
+
+class RetriableConflict(RuntimeError):
+    pass
+
+
+class TerminalRejection(RuntimeError):
+    pass
 
 _GATE_BASE_SENSITIVITY = {
     "focused": False,
@@ -106,6 +143,25 @@ _FEATURE_OWNER_KEYS = {
 }
 _ROOT_SLOTS = {"stage1Before", "stage1After", "stage2Before", "stage2After"}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
+_STAGE1_ALLOWED_PATHS = [
+    ".omp/**",
+    ".Clairvoyance/library.md",
+    ".Clairvoyance/kickoff-prompt.md",
+    "docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md",
+    "docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md",
+]
+_BASE_ARTIFACT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "headSha",
+    "currentBaseSha",
+    "integrationCommand",
+    "integrationExitCode",
+    "gateCommand",
+    "gateExitCode",
+    "rawEvidenceUri",
+    "observedAt",
+}
 
 
 def _fail(message: str) -> NoReturn:
@@ -157,6 +213,14 @@ def _require_string_list(value: object, label: str) -> list[str]:
     if len(value) != len(set(value)):
         _fail(f"{label} must not contain duplicates")
     return value
+
+def _require_issue_list(value: object, label: str) -> list[int]:
+    if not isinstance(value, list):
+        _fail(f"{label} must be a list of positive issue numbers")
+    issues = [_require_int(item, label, minimum=1) for item in value]
+    if len(issues) != len(set(issues)):
+        _fail(f"{label} must not contain duplicates")
+    return issues
 
 
 def _require_sha(value: object, label: str) -> str:
@@ -271,7 +335,7 @@ def _validate_lane(lane_key: str, lane: object) -> None:
         _fail(f"lane {lane_key}.worktree must be absolute")
     _require_nonempty_string(lane["branch"], f"lane {lane_key}.branch")
     _require_string_list(lane["allowedPaths"], f"lane {lane_key}.allowedPaths")
-    _require_string_list(lane["dependsOn"], f"lane {lane_key}.dependsOn")
+    _require_issue_list(lane["dependsOn"], f"lane {lane_key}.dependsOn")
     _require_string_list(lane["sharedContractPaths"], f"lane {lane_key}.sharedContractPaths")
     _require_int(lane["integrationOrder"], f"lane {lane_key}.integrationOrder", minimum=1)
     head_sha = _require_sha(lane["headSha"], f"lane {lane_key}.headSha")
@@ -343,11 +407,11 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             states,
             lane_head=head_sha,
             current_base=current_base,
-            require_matching_head=observation.get("state") != "stale",
-            require_matching_base=(
-                observation.get("state") != "stale"
-                and observation.get("baseSensitive") is True
+            require_matching_head=(
+                isinstance(observation, dict)
+                and observation.get("state") != "stale"
             ),
+            require_matching_base=True,
         )
         if gate_name != "native_lab" and validated["baseSensitive"] != _GATE_BASE_SENSITIVITY[gate_name]:
             _fail(f"lane {lane_key}.gates.{gate_name}.baseSensitive is invalid")
@@ -378,6 +442,11 @@ def validate_manifest(data: dict[str, object]) -> None:
         if not isinstance(lane_key, str):
             _fail("lane keys must be strings")
         _validate_lane(lane_key, lane)
+    for lane_key, lane in lanes.items():
+        for upstream_issue in lane["dependsOn"]:
+            upstream_key = str(upstream_issue)
+            if upstream_key == lane_key or upstream_key not in lanes:
+                _fail(f"lane {lane_key}.dependsOn references an invalid upstream issue")
 
     aggregate_gate = data["aggregateGate"]
     if not isinstance(aggregate_gate, dict):
@@ -388,6 +457,14 @@ def validate_manifest(data: dict[str, object]) -> None:
     _require_optional_utc(aggregate_gate["acquiredAt"], "aggregateGate.acquiredAt")
     if (aggregate_gate["holder"] is None) != (aggregate_gate["acquiredAt"] is None):
         _fail("aggregateGate holder and acquiredAt must both be set or both be null")
+    holder = aggregate_gate["holder"]
+    queue = aggregate_gate["queue"]
+    if holder is not None and holder not in lanes:
+        _fail("aggregateGate holder must name an existing lane")
+    if any(issue not in lanes for issue in queue):
+        _fail("aggregateGate queue must contain existing lanes")
+    if holder in queue:
+        _fail("aggregateGate holder must not also be queued")
 
     root_safety = data["rootSafety"]
     if not isinstance(root_safety, dict):
@@ -406,21 +483,14 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _load_json_object(path: Path) -> dict[str, object]:
+def _decode_json_object(text: str, source: str) -> dict[str, object]:
     try:
-        text = path.read_text(encoding="utf-8")
         value = json.loads(text, object_pairs_hook=_unique_object)
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"cannot load JSON from {path}: {error}") from error
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot load JSON from {source}: {error}") from error
     if not isinstance(value, dict):
-        _fail(f"{path} must contain one JSON object")
+        _fail(f"{source} must contain one JSON object")
     return value
-
-
-def load_manifest(path: Path) -> dict[str, object]:
-    data = _load_json_object(path)
-    validate_manifest(data)
-    return data
 
 
 def ensure_state_dir(path: Path) -> None:
@@ -432,11 +502,13 @@ def ensure_state_dir(path: Path) -> None:
     if not stat.S_ISDIR(parent_info.st_mode):
         _fail(f"Git common directory parent is not a directory: {parent}")
 
+    created = False
     try:
         info = path.lstat()
     except FileNotFoundError:
         try:
             path.mkdir(mode=0o700)
+            created = True
         except FileExistsError:
             pass
         except OSError as error:
@@ -448,44 +520,150 @@ def ensure_state_dir(path: Path) -> None:
     except OSError as error:
         raise ValueError(f"cannot inspect state directory {path}: {error}") from error
 
+    if created:
+        directory_fd = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        try:
+            opened = os.fstat(directory_fd)
+            if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+                _fail(f"new state directory changed before mode verification: {path}")
+            os.fchmod(directory_fd, 0o700)
+            info = os.fstat(directory_fd)
+        finally:
+            os.close(directory_fd)
+
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         _fail(f"state directory must be a real directory: {path}")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        _fail(f"state directory must have mode 0700: {path}")
 
 
-def _write_temporary_json(path: Path, data: dict[str, object]) -> Path:
-    ensure_state_dir(path.parent)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        delete=False,
-        dir=path.parent,
-    ) as temporary:
-        temporary_path = Path(temporary.name)
-        json.dump(data, temporary, sort_keys=True, separators=(",", ":"))
-        temporary.write("\n")
-        temporary.flush()
-        os.fsync(temporary.fileno())
-    return temporary_path
-
-
-def _atomic_json_write(path: Path, data: dict[str, object]) -> None:
-    temporary_path = _write_temporary_json(path, data)
+@contextmanager
+def _open_state_dir(path: Path) -> Iterator[int]:
+    ensure_state_dir(path)
+    before = path.lstat()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
-        os.replace(temporary_path, path)
+        directory_fd = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"cannot securely open state directory {path}: {error}") from error
+    try:
+        opened = os.fstat(directory_fd)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            _fail(f"state directory changed while opening: {path}")
+        if not stat.S_ISDIR(opened.st_mode) or stat.S_IMODE(opened.st_mode) != 0o700:
+            _fail(f"opened state directory must be a mode 0700 directory: {path}")
+        yield directory_fd
     finally:
-        temporary_path.unlink(missing_ok=True)
+        os.close(directory_fd)
 
 
-def _atomic_json_create(path: Path, data: dict[str, object]) -> bool:
-    temporary_path = _write_temporary_json(path, data)
+def _load_json_object_at(
+    directory_fd: int,
+    name: str,
+    source: str,
+) -> dict[str, object]:
+    try:
+        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        with os.fdopen(file_fd, encoding="utf-8") as source_file:
+            text = source_file.read()
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot load JSON from {source}: {error}") from error
+    return _decode_json_object(text, source)
+
+
+def _load_json_object(path: Path) -> dict[str, object]:
+    with _open_state_dir(path.parent) as directory_fd:
+        return _load_json_object_at(directory_fd, path.name, str(path))
+
+
+def _load_manifest_at(directory_fd: int, name: str, source: str) -> dict[str, object]:
+    data = _load_json_object_at(directory_fd, name, source)
+    validate_manifest(data)
+    return data
+
+
+def load_manifest(path: Path) -> dict[str, object]:
+    with _open_state_dir(path.parent) as directory_fd:
+        return _load_manifest_at(directory_fd, path.name, str(path))
+
+
+def _write_temporary_json(directory_fd: int, data: dict[str, object]) -> str:
+    for _ in range(128):
+        temporary_name = f".lane-state-{secrets.token_hex(16)}.tmp"
+        try:
+            temporary_fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(temporary_fd, mode="w", encoding="utf-8") as temporary:
+                json.dump(data, temporary, sort_keys=True, separators=(",", ":"))
+                temporary.write("\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+        except BaseException:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+            raise
+        return temporary_name
+    raise OSError("cannot allocate a unique state-directory temporary file")
+
+
+def _atomic_json_write_at(
+    directory_fd: int,
+    name: str,
+    data: dict[str, object],
+) -> None:
+    temporary_name = _write_temporary_json(directory_fd, data)
+    try:
+        os.replace(
+            temporary_name,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+    finally:
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_json_create_at(
+    directory_fd: int,
+    name: str,
+    data: dict[str, object],
+) -> bool:
+    temporary_name = _write_temporary_json(directory_fd, data)
     try:
         try:
-            os.link(temporary_path, path)
+            os.link(
+                temporary_name,
+                name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
         except FileExistsError:
             return False
         return True
     finally:
-        temporary_path.unlink(missing_ok=True)
+        os.unlink(temporary_name, dir_fd=directory_fd)
+
+
+def _atomic_json_write(path: Path, data: dict[str, object]) -> None:
+    with _open_state_dir(path.parent) as directory_fd:
+        _atomic_json_write_at(directory_fd, path.name, data)
+
+def _atomic_json_create(path: Path, data: dict[str, object]) -> bool:
+    with _open_state_dir(path.parent) as directory_fd:
+        return _atomic_json_create_at(directory_fd, path.name, data)
 
 
 def atomic_write(path: Path, data: dict[str, object]) -> None:
@@ -496,9 +674,10 @@ def atomic_write(path: Path, data: dict[str, object]) -> None:
 def initialize_manifest(path: Path) -> tuple[dict[str, object], bool]:
     data = empty_manifest()
     validate_manifest(data)
-    if _atomic_json_create(path, data):
-        return data, True
-    return load_manifest(path), False
+    with _open_state_dir(path.parent) as directory_fd:
+        if _atomic_json_create_at(directory_fd, path.name, data):
+            return data, True
+        return _load_manifest_at(directory_fd, path.name, str(path)), False
 
 
 def _touch(data: dict[str, object]) -> None:
@@ -559,6 +738,107 @@ def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
 def _stale_observation(observation: dict[str, object]) -> None:
     if observation["state"] not in {"not_run", "not_required"}:
         observation["state"] = "stale"
+
+def _rebind_observation_base(
+    observation: dict[str, object],
+    current_base_sha: str,
+) -> None:
+    if observation["baseSha"] is not None:
+        observation["baseSha"] = current_base_sha
+
+
+def _apply_heads(
+    lane: dict[str, object],
+    *,
+    head_sha: str,
+    current_base_sha: str,
+) -> None:
+    _require_sha(head_sha, "lane head SHA")
+    _require_sha(current_base_sha, "lane current base SHA")
+    head_changed = head_sha != lane["headSha"]
+    base_changed = current_base_sha != lane["currentBaseSha"]
+    if not head_changed and not base_changed:
+        return
+
+    lane["headSha"] = head_sha
+    lane["currentBaseSha"] = current_base_sha
+    if base_changed:
+        for observation in lane["gates"].values():
+            _rebind_observation_base(observation, current_base_sha)
+        for gate_name in BASE_BOUND:
+            _stale_observation(lane["gates"][gate_name])
+        native = lane["gates"]["native_lab"]
+        if native["baseSensitive"]:
+            _stale_observation(native)
+    if head_changed:
+        for gate_name in HEAD_BOUND:
+            _stale_observation(lane["gates"][gate_name])
+        lane["implementationState"] = "stale"
+    lane["mergeabilityState"] = "stale"
+
+
+def update_heads(
+    data: dict[str, object],
+    issue: str,
+    *,
+    head_sha: str,
+    current_base_sha: str,
+) -> None:
+    validate_manifest(data)
+    candidate = deepcopy(data)
+    _apply_heads(
+        _lane(candidate, issue),
+        head_sha=head_sha,
+        current_base_sha=current_base_sha,
+    )
+    _touch(candidate)
+    _commit_candidate(data, candidate)
+
+
+def invalidate_dependents(
+    data: dict[str, object],
+    upstream_issue: str,
+    changed_paths: list[str],
+) -> list[str]:
+    validate_manifest(data)
+    if upstream_issue not in data["lanes"]:
+        _fail(f"unknown upstream lane: {upstream_issue}")
+    paths = _require_string_list(changed_paths, "changed paths")
+    candidate = deepcopy(data)
+    lanes = candidate["lanes"]
+    pending = [int(upstream_issue)]
+    visited = {int(upstream_issue)}
+    invalidated: list[str] = []
+    ordered_lanes = sorted(
+        lanes.items(),
+        key=lambda item: (item[1]["integrationOrder"], int(item[0])),
+    )
+    while pending:
+        current = pending.pop(0)
+        for issue, lane in ordered_lanes:
+            if int(issue) in visited or current not in lane["dependsOn"]:
+                continue
+            visited.add(int(issue))
+            pending.append(int(issue))
+            if not any(
+                fnmatch.fnmatchcase(changed_path, pattern)
+                for changed_path in paths
+                for pattern in lane["sharedContractPaths"]
+            ):
+                continue
+            for gate_name in DOWNSTREAM_BOUND:
+                _stale_observation(lane["gates"][gate_name])
+            lane["mergeabilityState"] = "stale"
+            if lane["laneState"] == "ready_for_adam":
+                lane["laneState"] = "reviewing"
+            lane["nextAction"] = (
+                f"revalidate shared contract after issue {upstream_issue}"
+            )
+            invalidated.append(issue)
+    if invalidated:
+        _touch(candidate)
+        _commit_candidate(data, candidate)
+    return invalidated
 
 
 def transfer_owner(data: dict[str, object], issue: str, owner: str, role: str) -> None:
@@ -640,6 +920,90 @@ def record_red(data: dict[str, object], issue: str, observation: dict[str, objec
     _commit_candidate(data, candidate)
 
 
+def validate_base_evidence(
+    data: dict[str, object],
+    issue: str,
+    gate: str,
+    observation: dict[str, object],
+) -> None:
+    validate_manifest(data)
+    if gate not in BASE_BOUND and gate != "native_lab":
+        _fail(f"gate {gate} does not accept base integration evidence")
+    lane = _lane(data, issue)
+    _validate_new_observation(
+        lane,
+        observation,
+        f"gate {gate}",
+        _states_for_gate(gate),
+    )
+    if gate == "native_lab" and not observation["baseSensitive"]:
+        _fail("native_lab base evidence must declare baseSensitive")
+
+    artifact_uri = _require_nonempty_string(
+        observation["artifact"],
+        f"gate {gate}.artifact",
+    )
+    parsed = urlparse(artifact_uri)
+    if (
+        parsed.scheme != "file"
+        or parsed.netloc not in {"", "localhost"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        _fail(f"gate {gate}.artifact must be a local file:// URI")
+    try:
+        artifact_path = Path(unquote(parsed.path)).resolve(strict=True)
+        artifact = _decode_json_object(
+            artifact_path.read_text(encoding="utf-8"),
+            str(artifact_path),
+        )
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read base evidence artifact: {error}") from error
+
+    _require_exact_keys(artifact, _BASE_ARTIFACT_KEYS, "base evidence artifact")
+    _require_schema_version(
+        artifact["schemaVersion"],
+        "base evidence artifact.schemaVersion",
+    )
+    expected_kind = (
+        "github_review"
+        if gate in {"coderabbit", "independent_review"}
+        else "synthetic_merge"
+    )
+    if artifact["kind"] != expected_kind:
+        _fail(f"gate {gate} requires {expected_kind} base evidence")
+    if expected_kind == "github_review" and lane["pr"]["number"] is None:
+        _fail(f"gate {gate} requires a recorded pull request")
+    if artifact["headSha"] != lane["headSha"]:
+        _fail("base evidence artifact headSha does not match the lane head")
+    if artifact["currentBaseSha"] != lane["currentBaseSha"]:
+        _fail("base evidence artifact currentBaseSha does not match the lane base")
+    _require_sha(artifact["headSha"], "base evidence artifact.headSha")
+    _require_sha(
+        artifact["currentBaseSha"],
+        "base evidence artifact.currentBaseSha",
+    )
+    _require_nonempty_string(
+        artifact["integrationCommand"],
+        "base evidence artifact.integrationCommand",
+    )
+    _require_nonempty_string(
+        artifact["gateCommand"],
+        "base evidence artifact.gateCommand",
+    )
+    if type(artifact["integrationExitCode"]) is not int or artifact["integrationExitCode"] != 0:
+        _fail("base evidence artifact.integrationExitCode must be 0")
+    if type(artifact["gateExitCode"]) is not int or artifact["gateExitCode"] != 0:
+        _fail("base evidence artifact.gateExitCode must be 0")
+    raw_uri = _require_nonempty_string(
+        artifact["rawEvidenceUri"],
+        "base evidence artifact.rawEvidenceUri",
+    )
+    if not urlparse(raw_uri).scheme:
+        _fail("base evidence artifact.rawEvidenceUri must be a URI")
+    _require_utc(artifact["observedAt"], "base evidence artifact.observedAt")
+
+
 def record_observation(
     data: dict[str, object],
     issue: str,
@@ -656,22 +1020,18 @@ def record_observation(
     validated = _validate_new_observation(lane, observation_copy, f"gate {gate}", states)
     if gate != "native_lab" and validated["baseSensitive"] != _GATE_BASE_SENSITIVITY[gate]:
         _fail(f"gate {gate}.baseSensitive is invalid")
+    successful = validated["state"] in {"passed", "mergeable"}
+    requires_base_evidence = (
+        gate in BASE_BOUND
+        or gate == "native_lab" and validated["baseSensitive"] is True
+    )
+    if successful and requires_base_evidence:
+        validate_base_evidence(candidate, issue, gate, observation_copy)
     lane["gates"][gate] = observation_copy
     if gate == "mergeability":
         lane["mergeabilityState"] = observation_copy["state"]
     _touch(candidate)
     _commit_candidate(data, candidate)
-
-
-def _stale_for_revision_change(lane: dict[str, object], *, head_changed: bool) -> None:
-    for observation in lane["gates"].values():
-        if observation["state"] in {"not_run", "not_required"}:
-            continue
-        if head_changed or observation["baseSensitive"]:
-            observation["state"] = "stale"
-    mergeability = lane["gates"]["mergeability"]
-    if mergeability["state"] == "stale" and lane["mergeabilityState"] != "not_run":
-        lane["mergeabilityState"] = "stale"
 
 
 def record_status(data: dict[str, object], issue: str, status: dict[str, object]) -> None:
@@ -691,14 +1051,165 @@ def record_status(data: dict[str, object], issue: str, status: dict[str, object]
         _fail(f"unknown status fields: {sorted(unknown)}")
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
-    head_changed = "headSha" in status and status["headSha"] != lane["headSha"]
-    base_changed = "currentBaseSha" in status and status["currentBaseSha"] != lane["currentBaseSha"]
     for key, value in status.items():
-        lane[key] = deepcopy(value)
-    if head_changed or base_changed:
-        _stale_for_revision_change(lane, head_changed=head_changed)
+        if key not in {"headSha", "currentBaseSha"}:
+            lane[key] = deepcopy(value)
+    _apply_heads(
+        lane,
+        head_sha=status.get("headSha", lane["headSha"]),
+        current_base_sha=status.get("currentBaseSha", lane["currentBaseSha"]),
+    )
     _touch(candidate)
     _commit_candidate(data, candidate)
+
+
+def acquire_aggregate_gate(
+    data: dict[str, object],
+    issue: str,
+    acquired_at: str,
+) -> None:
+    validate_manifest(data)
+    _require_utc(acquired_at, "aggregate gate acquisition time")
+    candidate = deepcopy(data)
+    _lane(candidate, issue)
+    gate = candidate["aggregateGate"]
+    holder = gate["holder"]
+    queue = gate["queue"]
+    if holder == issue:
+        raise TerminalRejection(f"lane {issue} already holds the aggregate gate")
+    if holder is not None:
+        if issue not in queue:
+            queue.append(issue)
+            _touch(candidate)
+            _commit_candidate(data, candidate)
+        raise RetriableConflict(f"aggregate gate is held by lane {holder}")
+    if queue and queue[0] != issue:
+        raise TerminalRejection(
+            f"lane {issue} cannot acquire before queued lane {queue[0]}"
+        )
+    if queue:
+        queue.pop(0)
+    gate["holder"] = issue
+    gate["acquiredAt"] = acquired_at
+    _touch(candidate)
+    _commit_candidate(data, candidate)
+
+
+def release_aggregate_gate(data: dict[str, object], issue: str) -> None:
+    validate_manifest(data)
+    candidate = deepcopy(data)
+    _lane(candidate, issue)
+    gate = candidate["aggregateGate"]
+    if gate["holder"] != issue:
+        raise TerminalRejection(f"lane {issue} does not hold the aggregate gate")
+    gate["holder"] = None
+    gate["acquiredAt"] = None
+    _touch(candidate)
+    _commit_candidate(data, candidate)
+
+
+def _strictly_new_updated_at(previous: str) -> str:
+    previous_time = datetime.fromisoformat(_require_utc(previous, "updatedAt"))
+    current_time = datetime.now(timezone.utc)
+    if current_time <= previous_time:
+        current_time = previous_time + timedelta(microseconds=1)
+    return current_time.isoformat()
+
+
+def _acquire_lock(directory_fd: int, lock_name: str) -> int:
+    try:
+        lock_fd = os.open(
+            lock_name,
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_fd,
+        )
+    except OSError as error:
+        raise TerminalRejection(f"cannot open manifest lock: {error}") from error
+    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_fd
+        except BlockingIOError as error:
+            if time.monotonic() >= deadline:
+                os.close(lock_fd)
+                raise RetriableConflict(
+                    "manifest lock remained contended for two seconds"
+                ) from error
+            time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+        except OSError as error:
+            os.close(lock_fd)
+            raise TerminalRejection(f"cannot lock manifest: {error}") from error
+
+
+def _persist_mutation(
+    directory_fd: int,
+    name: str,
+    data: dict[str, object],
+    previous_updated_at: str,
+) -> None:
+    data["updatedAt"] = _strictly_new_updated_at(previous_updated_at)
+    validate_manifest(data)
+    _atomic_json_write_at(directory_fd, name, data)
+
+
+def _mutate_manifest(
+    path: Path,
+    expected_updated_at: str,
+    mutation: Callable[[dict[str, object]], None],
+) -> dict[str, object]:
+    _require_utc(expected_updated_at, "expected updatedAt")
+    with _open_state_dir(path.parent) as directory_fd:
+        lock_fd = _acquire_lock(directory_fd, f"{path.name}.lock")
+        try:
+            try:
+                current = _load_manifest_at(directory_fd, path.name, str(path))
+                if current["updatedAt"] != expected_updated_at:
+                    raise RetriableConflict("manifest updatedAt is stale")
+                candidate = deepcopy(current)
+                try:
+                    mutation(candidate)
+                except RetriableConflict:
+                    if candidate != current:
+                        _persist_mutation(
+                            directory_fd,
+                            path.name,
+                            candidate,
+                            current["updatedAt"],
+                        )
+                    raise
+                except TerminalRejection:
+                    raise
+                except (OSError, ValueError) as error:
+                    raise TerminalRejection(str(error)) from error
+                _persist_mutation(
+                    directory_fd,
+                    path.name,
+                    candidate,
+                    current["updatedAt"],
+                )
+                return candidate
+            except (RetriableConflict, TerminalRejection):
+                raise
+            except (OSError, ValueError) as error:
+                raise TerminalRejection(str(error)) from error
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+
+def mutate_manifest(
+    path: Path,
+    expected_updated_at: str,
+    mutation: Callable[[dict[str, object]], None],
+) -> dict[str, object]:
+    try:
+        return _mutate_manifest(path, expected_updated_at, mutation)
+    except (RetriableConflict, TerminalRejection):
+        raise
+    except (OSError, ValueError) as error:
+        raise TerminalRejection(str(error)) from error
 
 
 def _validate_feature_owner(owner: dict[str, object]) -> None:
@@ -712,6 +1223,8 @@ def _validate_feature_owner(owner: dict[str, object]) -> None:
     if not Path(worktree).is_absolute():
         _fail("feature owner.worktree must be absolute")
     _require_string_list(owner["allowedPaths"], "feature owner.allowedPaths")
+    if owner["allowedPaths"] != _STAGE1_ALLOWED_PATHS:
+        _fail("feature owner.allowedPaths must match the exact Stage 1 ownership set")
     _require_enum(owner["state"], {"active", "blocked"}, "feature owner.state")
     _require_utc(owner["assignedAt"], "feature owner.assignedAt")
     _require_int(owner["transferCount"], "feature owner.transferCount")
@@ -795,22 +1308,123 @@ def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> N
     _commit_candidate(data, candidate)
 
 
+def _add_manifest_mutation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("path", type=Path)
+    parser.add_argument("--expected-updated-at", required=True)
+
+
+def _print_json(value: dict[str, object]) -> None:
+    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("path", type=Path)
+
+    update_parser = subparsers.add_parser("update-heads")
+    _add_manifest_mutation_arguments(update_parser)
+    update_parser.add_argument("issue")
+    update_parser.add_argument("--head-sha", required=True)
+    update_parser.add_argument("--current-base-sha", required=True)
+
+    invalidate_parser = subparsers.add_parser("invalidate-dependents")
+    _add_manifest_mutation_arguments(invalidate_parser)
+    invalidate_parser.add_argument("upstream_issue")
+    invalidate_parser.add_argument(
+        "--changed-path",
+        action="append",
+        required=True,
+        dest="changed_paths",
+    )
+
+    acquire_parser = subparsers.add_parser("acquire-aggregate-gate")
+    _add_manifest_mutation_arguments(acquire_parser)
+    acquire_parser.add_argument("issue")
+    acquire_parser.add_argument("--acquired-at", required=True)
+
+    release_parser = subparsers.add_parser("release-aggregate-gate")
+    _add_manifest_mutation_arguments(release_parser)
+    release_parser.add_argument("issue")
+
+    transfer_parser = subparsers.add_parser("transfer-owner")
+    _add_manifest_mutation_arguments(transfer_parser)
+    transfer_parser.add_argument("issue")
+    transfer_parser.add_argument("owner")
+    transfer_parser.add_argument("role")
+
     args = parser.parse_args(argv)
-    try:
-        if args.command == "init":
+    if args.command == "init":
+        try:
             manifest, created = initialize_manifest(args.path)
-            output = {**manifest, "created": created}
-            print(json.dumps(output, sort_keys=True, separators=(",", ":")))
-            return 0
-    except (OSError, ValueError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-    _fail(f"unknown command: {args.command}")
+        except (OSError, ValueError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        _print_json({**manifest, "created": created})
+        return 0
+
+    command_fields: dict[str, object] = {}
+
+    def mutation(data: dict[str, object]) -> None:
+        if args.command == "update-heads":
+            update_heads(
+                data,
+                args.issue,
+                head_sha=args.head_sha,
+                current_base_sha=args.current_base_sha,
+            )
+        elif args.command == "invalidate-dependents":
+            command_fields["invalidated"] = invalidate_dependents(
+                data,
+                args.upstream_issue,
+                args.changed_paths,
+            )
+        elif args.command == "acquire-aggregate-gate":
+            acquire_aggregate_gate(data, args.issue, args.acquired_at)
+        elif args.command == "release-aggregate-gate":
+            release_aggregate_gate(data, args.issue)
+        elif args.command == "transfer-owner":
+            transfer_owner(data, args.issue, args.owner, args.role)
+        else:
+            _fail(f"unknown command: {args.command}")
+
+    try:
+        updated = mutate_manifest(
+            args.path,
+            args.expected_updated_at,
+            mutation,
+        )
+    except RetriableConflict as error:
+        _print_json(
+            {
+                "ok": False,
+                "classification": "retriable_conflict",
+                "reason": str(error),
+            }
+        )
+        return 75
+    except (TerminalRejection, OSError, ValueError) as error:
+        _print_json(
+            {
+                "ok": False,
+                "classification": "terminal_rejection",
+                "reason": str(error),
+            }
+        )
+        return 2
+
+    if args.command in {"acquire-aggregate-gate", "release-aggregate-gate"}:
+        command_fields["aggregateGate"] = updated["aggregateGate"]
+    _print_json(
+        {
+            "ok": True,
+            "updatedAt": updated["updatedAt"],
+            **command_fields,
+        }
+    )
+    return 0
 
 
 if __name__ == "__main__":
