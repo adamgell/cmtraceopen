@@ -1240,7 +1240,7 @@ Before any write or GitHub mutation:
 
 1. Read `AGENTS.md`, `soul.md`, `.Clairvoyance/library.md`, and the matching route.
 2. Read `skill://cmtraceopen`, `skill://batch-issue-prs`, and `skill://branch-lane-verification`; verify each resolves from the source path approved by the role table.
-3. Require the host session to have started with `--advisor` (print) or operator-enabled `/advisor on` (interactive). Models do not invoke session slash commands.
+3. For print mode, require the launcher command to contain both the real `--advisor` flag and `--append-system-prompt` operator/system evidence stating that the same invocation includes `--advisor`; OMP does not expose parent argv to print agents, and `pgrep` is not proof. Either launch element missing blocks. For interactive mode, require operator-enabled `/advisor on` before the first prompt. Models do not invoke session slash commands.
 4. Run `python3 .omp/skills/cmtraceopen-dev/scripts/setup_skillset.py --check`; missing/drifted skills block dispatch.
 5. Read `~/.omp/agent/cmtraceopen/model-probe-report.json`; rerun `python3 .omp/skills/cmtraceopen-dev/scripts/validate_model_probe.py` with every role's recorded discovery/artifact/threshold/selector arguments and require exact evidence equality.
 6. Snapshot the primary checkout with `python3 .omp/skills/cmtraceopen-dev/scripts/lane_state.py snapshot-root --repo /Users/Adam.Gell/repo/cmtraceopen`.
@@ -1277,10 +1277,12 @@ The skill must require:
 
 ```bash
 OMP_SKIP_SETUP=1 omp --cwd "$PWD" -p --no-session --advisor --auto-approve \
+  --append-system-prompt \
+  "Runtime launch evidence for this read-only smoke: the operator invoked this exact print process with --advisor. This is the print-mode proof required by cmtraceopen-dev; do not infer advisor state from process titles or Hub." \
   "Read skill://cmtraceopen-dev, then follow it for preflight only. Do not write or call GitHub mutations."
 ```
 
-Expected: advisor active, curated skill check clean, model-role report found, live-state refresh described or performed read-only, and no writes.
+Expected: preflight `PASS`; the same launcher carries both the real `--advisor` flag and the operator/system launch-proof statement; curated skill check clean; model-role report found and exactly revalidated; live-state refresh described or performed read-only; and no writes or GitHub mutations.
 
 - [ ] **Step 5: Commit the skill**
 
