@@ -1070,6 +1070,105 @@ def _hash_protected_control(
     if before != after:
         _fail(f"protected control path changed while hashing: {path}")
 
+def _normalized_worktree_registrations(
+    output: bytes,
+) -> tuple[tuple[bytes, ...], ...]:
+    if not output or not output.endswith(b"\0\0"):
+        _fail("malformed Git worktree registration output")
+    identities: list[tuple[bytes, ...]] = []
+    canonical_paths: set[bytes] = set()
+    for record in output[:-2].split(b"\0\0"):
+        if not record:
+            _fail("malformed empty Git worktree registration")
+        fields: dict[bytes, bytes] = {}
+        for field in record.split(b"\0"):
+            key, separator, value = field.partition(b" ")
+            if key not in {
+                b"worktree",
+                b"HEAD",
+                b"branch",
+                b"detached",
+                b"bare",
+                b"locked",
+                b"prunable",
+            }:
+                _fail("unknown Git worktree registration field")
+            if key in fields:
+                _fail("duplicate Git worktree registration field")
+            if key in {b"worktree", b"HEAD", b"branch"}:
+                if not separator or not value:
+                    _fail("malformed Git worktree registration field")
+            elif key in {b"detached", b"bare"}:
+                if separator:
+                    _fail("malformed Git worktree registration marker")
+            elif separator and not value:
+                _fail("malformed Git worktree registration state")
+            fields[key] = value
+        if b"worktree" not in fields:
+            _fail("Git worktree registration is missing its path")
+        path = Path(os.fsdecode(fields[b"worktree"]))
+        if not path.is_absolute():
+            _fail("Git worktree registration path must be absolute")
+        try:
+            canonical_path = os.fsencode(path.resolve(strict=False))
+        except (OSError, RuntimeError) as error:
+            raise ValueError(
+                f"cannot canonicalize Git worktree registration path: {error}"
+            ) from error
+        if canonical_path in canonical_paths:
+            _fail("duplicate Git worktree registration path")
+        canonical_paths.add(canonical_path)
+
+        bare = b"bare" in fields
+        identity_fields = {
+            key
+            for key in (b"branch", b"detached", b"bare")
+            if key in fields
+        }
+        if len(identity_fields) != 1:
+            _fail("Git worktree registration must have one identity")
+        if bare:
+            if b"HEAD" in fields:
+                _fail("bare Git worktree registration must not contain HEAD")
+            identity_kind = b"bare"
+            identity = b""
+        else:
+            head = fields.get(b"HEAD")
+            if (
+                head is None
+                or re.fullmatch(rb"[0-9a-fA-F]{40}", head) is None
+            ):
+                _fail("Git worktree registration HEAD must be a 40-hex SHA")
+            if b"branch" in fields:
+                identity = fields[b"branch"]
+                if (
+                    not identity.startswith(b"refs/")
+                    or any(
+                        byte <= 0x20
+                        or byte in b"~^:?*[\\"
+                        for byte in identity
+                    )
+                ):
+                    _fail("Git worktree registration branch is invalid")
+                identity_kind = b"branch"
+            else:
+                identity_kind = b"detached"
+                identity = b""
+        identities.append(
+            (
+                canonical_path,
+                identity_kind,
+                identity,
+                b"locked" if b"locked" in fields else b"unlocked",
+                fields.get(b"locked", b""),
+                b"prunable" if b"prunable" in fields else b"registered",
+                fields.get(b"prunable", b""),
+            )
+        )
+    return tuple(sorted(identities))
+
+
+
 
 def _managed_worktrees_sha256(repository: Path) -> str:
     digest = hashlib.sha256()
@@ -1141,7 +1240,10 @@ def _managed_worktrees_sha256(repository: Path) -> str:
         "-z",
     )
     _digest_field(digest, b"registrations")
-    _digest_field(digest, registrations)
+    for registration in _normalized_worktree_registrations(registrations):
+        _digest_field(digest, b"registration")
+        for value in registration:
+            _digest_field(digest, value)
     try:
         current_managed_info = managed.lstat()
     except FileNotFoundError:

@@ -2010,6 +2010,24 @@ class RootSnapshotTests(unittest.TestCase):
                 lane_written["managedWorktreesSha256"],
             )
 
+            (lane / "owned.txt").write_text(
+                "linked worktree commit\n",
+                encoding="utf-8",
+            )
+            run_git(lane, "commit", "--quiet", "-am", "linked advance")
+            head_advanced = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                registered["managedWorktreesSha256"],
+                head_advanced["managedWorktreesSha256"],
+            )
+
+            run_git(lane, "switch", "--quiet", "-c", "issue-317")
+            branch_changed = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                head_advanced["managedWorktreesSha256"],
+                branch_changed["managedWorktreesSha256"],
+            )
+
             run_git(repo, "worktree", "remove", "--force", str(lane))
             removed = lane_state.root_snapshot(repo)
             self.assertEqual(
@@ -2071,6 +2089,49 @@ class RootSnapshotTests(unittest.TestCase):
                 baseline["managedWorktreesSha256"],
                 pruned["managedWorktreesSha256"],
             )
+
+    def test_worktree_registration_parser_rejects_malformed_records(self) -> None:
+        path = b"/tmp/cmtraceopen-lane"
+        valid = (
+            b"worktree "
+            + path
+            + b"\0HEAD "
+            + SHA_A.encode("ascii")
+            + b"\0detached\0\0"
+        )
+        same_identity_new_head = valid.replace(
+            SHA_A.encode("ascii"),
+            SHA_B.encode("ascii"),
+        )
+        self.assertEqual(
+            lane_state._normalized_worktree_registrations(valid),
+            lane_state._normalized_worktree_registrations(
+                same_identity_new_head
+            ),
+        )
+
+        invalid_records = {
+            "empty": b"",
+            "relative path": valid.replace(path, b"relative/lane"),
+            "missing identity": valid.replace(b"detached\0", b""),
+            "malformed head": valid.replace(
+                SHA_A.encode("ascii"),
+                b"short",
+            ),
+            "duplicate field": valid.replace(
+                b"detached\0",
+                b"detached\0detached\0",
+            ),
+            "unknown field": valid.replace(
+                b"detached\0",
+                b"detached\0unknown value\0",
+            ),
+            "duplicate record": valid + valid,
+        }
+        for label, raw in invalid_records.items():
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    lane_state._normalized_worktree_registrations(raw)
 
     def test_git_controls_reject_symlinked_controls_and_parents(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
