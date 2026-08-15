@@ -186,6 +186,18 @@ class ProbeValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validator.validate_trace(events, SELECTOR)
 
+    def test_required_markers_match_the_checked_in_coder_charter(self) -> None:
+        charter = (
+            Path(__file__).resolve().parents[4]
+            / ".Clairvoyance"
+            / "staff"
+            / "coder-charter.md"
+        ).read_text(encoding="utf-8")
+
+        for marker in validator._REQUIRED_CHARTER_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, charter)
+
 
     def test_duplicate_or_extra_tool_call_fails(self) -> None:
         duplicate = valid_events()

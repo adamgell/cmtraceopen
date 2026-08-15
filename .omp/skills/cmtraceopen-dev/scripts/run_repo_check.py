@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime, timezone
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -361,8 +362,8 @@ def run(
     base_sha: str,
 ) -> dict[str, object]:
     command = _validate_check_command(command)
-    if timeout <= 0:
-        raise ValueError("repository check timeout must be positive")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("repository check timeout must be finite and positive")
     if os.name != "posix":
         return _artifact(
             command,

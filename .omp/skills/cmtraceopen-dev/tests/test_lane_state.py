@@ -37,6 +37,8 @@ STAGE1_ALLOWED_PATHS = [
     ".omp/**",
     ".Clairvoyance/library.md",
     ".Clairvoyance/kickoff-prompt.md",
+    ".Clairvoyance/staff/**",
+    ".claude/skills/coderabbit-review-loop/**",
     "docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md",
     "docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md",
 ]
@@ -1917,10 +1919,16 @@ class EvidenceTests(unittest.TestCase):
                     observation["artifact"] = artifact_ref(path)
                     rejects(observation)
 
-    def test_runner_infrastructure_artifacts_cannot_record_red(self) -> None:
+    def test_runner_infrastructure_artifacts_cannot_be_recorded_as_evidence(self) -> None:
+        message = "runner infrastructure failures are never RED, GREEN, or gate evidence"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for outcome in ("timed_out", "spawn_failed", "setup_failed"):
+            for outcome in (
+                "timed_out",
+                "spawn_failed",
+                "setup_failed",
+                "containment_failed",
+            ):
                 with self.subTest(outcome=outcome):
                     manifest = lane_state.empty_manifest()
                     allocate_test_lane(manifest, valid_lane(root))
@@ -1931,8 +1939,48 @@ class EvidenceTests(unittest.TestCase):
                         outcome=outcome,
                         name=f"infra-{outcome}",
                     )
-                    with self.assertRaises(ValueError):
+                    path = artifact_path(observation["artifact"])
+                    artifact = json.loads(path.read_text(encoding="utf-8"))
+                    artifact["exitCode"] = None
+                    path.write_text(json.dumps(artifact), encoding="utf-8")
+                    observation["artifact"] = artifact_ref(path)
+
+                    with self.assertRaisesRegex(ValueError, message):
                         record_test_red(manifest, "317", observation)
+                    with self.assertRaisesRegex(ValueError, message):
+                        record_test_observation(manifest, "317", "focused", observation)
+
+    def test_unbound_setup_failure_cannot_be_recorded_as_evidence(self) -> None:
+        message = "runner infrastructure failures are never RED, GREEN, or gate evidence"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = lane_state.empty_manifest()
+            allocate_test_lane(manifest, valid_lane(root))
+            observation = valid_observation(
+                root,
+                state="failed",
+                classification="runner_failure",
+                outcome="setup_failed",
+                name="unbound-setup-failure",
+            )
+            path = artifact_path(observation["artifact"])
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+            for field in (
+                "worktree",
+                "worktreeIdentity",
+                "gitCommonDir",
+                "branch",
+                "headSha",
+                "exitCode",
+            ):
+                artifact[field] = None
+            path.write_text(json.dumps(artifact), encoding="utf-8")
+            observation["artifact"] = artifact_ref(path)
+
+            with self.assertRaisesRegex(ValueError, message):
+                record_test_red(manifest, "317", observation)
+            with self.assertRaisesRegex(ValueError, message):
+                record_test_observation(manifest, "317", "focused", observation)
 
 
     def test_coder_green_requires_red_evidence(self) -> None:

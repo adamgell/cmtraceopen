@@ -47,28 +47,62 @@ def _validate_python(argv: tuple[str, ...]) -> None:
     if len(argv) < 4 or argv[1:3] != ("-m", "unittest"):
         _reject("python3 is limited to unittest module or discover invocations")
     unittest_arguments = argv[3:]
-    if unittest_arguments[0] == "discover":
-        for index, argument in enumerate(unittest_arguments[1:]):
-            if argument in {"-s", "--start-directory", "-t", "--top-level-directory"}:
-                value_index = index + 2
-                if value_index >= len(unittest_arguments) or not _is_repo_relative_path(
-                    unittest_arguments[value_index]
-                ):
-                    _reject("unittest discovery roots must be repository-relative")
-            for prefix in (
-                "--start-directory=",
-                "--top-level-directory=",
-            ):
-                if argument.startswith(prefix) and not _is_repo_relative_path(
-                    argument[len(prefix) :]
-                ):
-                    _reject("unittest discovery roots must be repository-relative")
+    if unittest_arguments[0] != "discover":
+        if not any(not argument.startswith("-") for argument in unittest_arguments):
+            _reject("unittest module invocation must name a test module or path")
+        for argument in unittest_arguments:
+            if argument.startswith(("/", "\\")) or ".." in argument.split("/"):
+                _reject("unittest targets must be repository-relative")
         return
-    if not any(not argument.startswith("-") for argument in unittest_arguments):
-        _reject("unittest module invocation must name a test module or path")
-    for argument in unittest_arguments:
-        if argument.startswith(("/", "\\")) or ".." in argument.split("/"):
-            _reject("unittest targets must be repository-relative")
+
+    positional: list[str] = []
+    index = 1
+    while index < len(unittest_arguments):
+        argument = unittest_arguments[index]
+        if argument in {"-s", "--start-directory", "-t", "--top-level-directory"}:
+            index += 1
+            if index >= len(unittest_arguments) or not _is_repo_relative_path(
+                unittest_arguments[index]
+            ):
+                _reject("unittest discovery roots must be repository-relative")
+        elif argument.startswith(("--start-directory=", "--top-level-directory=")):
+            _, value = argument.split("=", 1)
+            if not _is_repo_relative_path(value):
+                _reject("unittest discovery roots must be repository-relative")
+        elif argument in {"-p", "--pattern", "-k", "--durations"}:
+            index += 1
+            if index >= len(unittest_arguments):
+                _reject("unittest discovery option requires a value")
+        elif argument.startswith(("--pattern=", "-k=", "--durations=")):
+            if not argument.split("=", 1)[1]:
+                _reject("unittest discovery option requires a value")
+        elif argument in {
+            "-b",
+            "--buffer",
+            "-c",
+            "--catch",
+            "-f",
+            "--failfast",
+            "--locals",
+            "-q",
+            "--quiet",
+            "-v",
+            "--verbose",
+        }:
+            pass
+        elif argument.startswith("-"):
+            _reject("unittest discovery contains an unsupported option")
+        else:
+            positional.append(argument)
+        index += 1
+
+    if len(positional) > 3:
+        _reject("unittest discover accepts at most three positional arguments")
+    for root_index in (0, 2):
+        if root_index < len(positional) and not _is_repo_relative_path(
+            positional[root_index]
+        ):
+            _reject("unittest discovery roots must be repository-relative")
 
 
 def _validate_cargo(argv: tuple[str, ...]) -> None:

@@ -22,7 +22,7 @@ output:
         additionalProperties: false
         required: [file_line, mechanism, failure_scenario, severity]
         properties:
-          file_line: { type: string, minLength: 1 }
+          file_line: { type: string, minLength: 3, pattern: '^[^:]+:[1-9][0-9]*$' }
           mechanism: { type: string, minLength: 1 }
           failure_scenario: { type: string, minLength: 1 }
           severity: { type: string, minLength: 1 }

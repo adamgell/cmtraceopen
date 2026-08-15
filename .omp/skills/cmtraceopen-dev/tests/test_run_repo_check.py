@@ -456,6 +456,15 @@ class RepositoryCheckTests(unittest.TestCase):
                 "-p",
                 "test_*.py",
             ),
+            (
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "tests",
+                "test_*.py",
+                ".",
+            ),
             ("cargo", "test", "--package", "cmtraceopen-parser"),
             ("cargo", "check", "--workspace", "--all-targets"),
             ("cargo", "clippy", "--workspace", "--", "-D", "warnings"),
@@ -543,6 +552,17 @@ class RepositoryCheckTests(unittest.TestCase):
             ("npm", "run", "test:watch"),
             ("npm", "exec", "vitest"),
             ("mdbook", "serve"),
+            ("python3", "-m", "unittest", "discover", "/etc"),
+            ("python3", "-m", "unittest", "discover", ".."),
+            (
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "tests",
+                "test_*.py",
+                "/etc",
+            ),
         )
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             run_repo_check.subprocess,
@@ -558,6 +578,23 @@ class RepositoryCheckTests(unittest.TestCase):
                     timeout=30,
                     head_sha="a" * 40,
                     base_sha="b" * 40,)
+        process.assert_not_called()
+
+    def test_runner_rejects_non_finite_timeouts_before_popen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            run_repo_check.subprocess,
+            "Popen",
+        ) as process:
+            for timeout in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(timeout=timeout), self.assertRaisesRegex(
+                    ValueError,
+                    "finite and positive",
+                ):
+                    run_check(
+                        ["cargo", "test"],
+                        cwd=Path(directory),
+                        timeout=timeout,
+                    )
         process.assert_not_called()
 
     def test_runner_rejects_empty_commands_and_non_directories(self) -> None:

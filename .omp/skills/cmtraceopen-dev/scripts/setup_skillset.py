@@ -61,6 +61,54 @@ APPROVED_SKILLS: dict[str, tuple[str, str]] = {
     ),
 }
 
+APPROVED_SKILL_TREE_SHA256: dict[str, str] = {
+    "branch-lane-verification": (
+        "4164efcd967e208ad5c8eb913c3bc72ad44feb4e5bc102058d0a7ceb3557552c"
+    ),
+    "cmtrace-scaffold-pipeline": (
+        "bea4fa1d2cb8d556c6fb51c85dde6122bfbacb8721bd17aa01b81e9c2bb1fcd9"
+    ),
+    "cmtraceopen": (
+        "4b4b3276dcfc008da21e709e3edac08681074bcd1756bc0b75cc8061a63e72d8"
+    ),
+    "cmtraceopen-code-review": (
+        "ba70993c4b5b8bff2fd523b9b93c1797cb14e77bebf79ff21a7a4e412a37487f"
+    ),
+    "contract-scoped-review": (
+        "30564a296fd4690fdc63af624eed1a56bf65074bae0fecf750daa9a539f16e61"
+    ),
+    "github-code-review": (
+        "54ef8907a100ef2bc3c28b55e5d4e3c0a787fcd17094e8aed0842a7eefef1b07"
+    ),
+    "github-issues": (
+        "c730e657eef749266b1ea6cade8d1cc799f7e5ef9825574ddd744bc73a5211fe"
+    ),
+    "github-pr-workflow": (
+        "fe49304baf77f3f3f3c9f2b160265a6eeeb65b8e5baa20de5074c55214b16fab"
+    ),
+    "mdbook-docs": (
+        "017a84030b9f041858a723dce9a4ffb5b3d09d361f888fd0b3ca1e9974877b96"
+    ),
+    "semantic-reducer-development": (
+        "8229bec1629a1b3707ddb914113ec07461737a3b06162ef55bf02f8be5d1b01e"
+    ),
+    "semantic-reducer-framework": (
+        "ea5551854616e9348bc05fcce171afeaca6c20228a993c3710f73b135c1ac6eb"
+    ),
+    "systematic-debugging": (
+        "899fb826d982e6deb2d78ff18a472338eec9ee29370960505d6990f2910e84d3"
+    ),
+    "test-driven-development": (
+        "8edf89c2b79e5bdcee42b10be580f1e60e50a1a53f31f3cf2486625dd67fe096"
+    ),
+    "windows-lab-workers": (
+        "f7feb5e803dd03f5222bba44b088e3f76aa531a532f6ec9610f053e7fe16b466"
+    ),
+    "windows-remote-validation": (
+        "933460289f050de080b859546e8f12a5af0c0f4ebdf353b860bc40a745037ad4"
+    ),
+}
+
 
 def resolve_sources(home: Path, repo: Path) -> dict[str, Path]:
     roots = {"home": home, "repo": repo}
@@ -86,6 +134,7 @@ class SourceIdentity(NamedTuple):
     resolved_skill: Path
     skill: StatIdentity
     skill_sha256: str
+    tree_sha256: str
 
 
 def _stat_identity(info: os.stat_result) -> StatIdentity:
@@ -176,6 +225,77 @@ def _capture_file_content(
         raise ValueError(f"{label} changed during inspection: {path}")
     return digest.hexdigest()
 
+def _require_trusted_source_entry(identity: StatIdentity, path: Path) -> None:
+    if hasattr(os, "geteuid") and identity[4] != os.geteuid():
+        raise ValueError(f"skill source entry is not owned by the current user: {path}")
+    if identity[2] & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError(f"skill source entry is group/world writable: {path}")
+
+
+def _capture_source_tree(root: Path) -> str:
+    digest = hashlib.sha256()
+
+    def add(kind: bytes, relative: Path, content_sha256: str = "") -> None:
+        encoded = os.fsencode(relative.as_posix())
+        digest.update(kind)
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        if content_sha256:
+            digest.update(bytes.fromhex(content_sha256))
+
+    def visit(directory: Path, relative: Path) -> None:
+        directory_identity, directory_link = _stable_lstat(
+            directory,
+            "skill source tree directory",
+        )
+        if directory_link is not None or not stat.S_ISDIR(directory_identity[2]):
+            raise ValueError(f"skill source tree entry must be a directory: {directory}")
+        _require_trusted_source_entry(directory_identity, directory)
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(
+                    iterator,
+                    key=lambda entry: os.fsencode(entry.name),
+                )
+        except OSError as error:
+            raise ValueError(f"cannot read skill source tree: {directory}") from error
+        for entry in entries:
+            path = directory / entry.name
+            child_relative = relative / entry.name
+            identity, link_target = _stable_lstat(
+                path,
+                "skill source tree entry",
+            )
+            if link_target is not None:
+                raise ValueError(f"skill source tree must not contain symlinks: {path}")
+            _require_trusted_source_entry(identity, path)
+            if stat.S_ISDIR(identity[2]):
+                add(b"D", child_relative)
+                visit(path, child_relative)
+            elif stat.S_ISREG(identity[2]):
+                add(
+                    b"F",
+                    child_relative,
+                    _capture_file_content(
+                        path,
+                        identity,
+                        "skill source tree file",
+                    ),
+                )
+            else:
+                raise ValueError(
+                    f"skill source tree entry must be a file or directory: {path}"
+                )
+        final_identity, final_link = _stable_lstat(
+            directory,
+            "skill source tree directory",
+        )
+        if final_link is not None or final_identity != directory_identity:
+            raise ValueError(f"skill source tree changed during inspection: {directory}")
+
+    visit(root, Path())
+    return digest.hexdigest()
+
 
 def _capture_skill_identity(
     descriptor: int,
@@ -255,6 +375,7 @@ def _capture_source_identity(source: Path) -> SourceIdentity:
             skill_identity,
             skill_sha256,
         ) = _capture_skill_identity(descriptor, source, resolved)
+        tree_sha256 = _capture_source_tree(resolved)
         final_entry, final_link = _stable_lstat(
             source,
             "source directory",
@@ -279,6 +400,7 @@ def _capture_source_identity(source: Path) -> SourceIdentity:
         resolved_skill=resolved_skill,
         skill=skill_identity,
         skill_sha256=skill_sha256,
+        tree_sha256=tree_sha256,
     )
 
 
@@ -295,6 +417,23 @@ def validate_sources(
     if errors:
         raise ValueError("invalid skill sources:\n" + "\n".join(errors))
     return identities
+
+def _require_approved_tree_digests(
+    identities: dict[str, SourceIdentity],
+    approved_tree_sha256: dict[str, str],
+) -> None:
+    if set(identities) != set(approved_tree_sha256):
+        raise ValueError("approved skill names must match the resolved source names")
+    for name, identity in identities.items():
+        expected = approved_tree_sha256[name]
+        if (
+            len(expected) != 64
+            or expected.lower() != expected
+            or any(character not in "0123456789abcdef" for character in expected)
+        ):
+            raise ValueError(f"{name}: approved tree digest must be lowercase SHA-256")
+        if identity.tree_sha256 != expected:
+            raise ValueError(f"{name}: source does not match its approved tree digest")
 
 
 def _require_source_identities(
@@ -959,9 +1098,15 @@ def _quarantine_installed_entry(
 
 
 def reconcile(
-    target: Path, sources: dict[str, Path], *, check: bool
+    target: Path,
+    sources: dict[str, Path],
+    *,
+    check: bool,
+    approved_tree_sha256: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
     source_identities = validate_sources(sources)
+    if approved_tree_sha256 is not None:
+        _require_approved_tree_digests(source_identities, approved_tree_sha256)
     if check:
         return _reconcile_locked(
             target,
@@ -1137,11 +1282,9 @@ def _reconcile_locked(
             protected_directories,
             "target ancestor",
         )
-        staged = workspace / "staged"
         backups = workspace / "backups"
         rollback = workspace / "rollback"
         created_directory_backups = workspace / "created-directories"
-        staged.mkdir()
         backups.mkdir()
         rollback.mkdir()
         created_directory_backups.mkdir()
@@ -1153,11 +1296,6 @@ def _reconcile_locked(
             rollback,
             "rollback directory",
         )
-        for name in wrong + missing:
-            (staged / name).symlink_to(
-                desired[name],
-                target_is_directory=True,
-            )
 
         try:
             for created_parent in reversed(created_parents):
@@ -1467,7 +1605,12 @@ def main() -> None:
     sources = resolve_sources(home, repo)
 
     try:
-        result = reconcile(target, sources, check=args.check)
+        result = reconcile(
+            target,
+            sources,
+            check=args.check,
+            approved_tree_sha256=APPROVED_SKILL_TREE_SHA256,
+        )
     except ValueError as error:
         raise SystemExit(f"error: {error}") from error
 

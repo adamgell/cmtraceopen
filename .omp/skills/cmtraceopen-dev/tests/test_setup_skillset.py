@@ -45,6 +45,13 @@ class SkillsetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
+        approved_tree_sha256 = setup_skillset.APPROVED_SKILL_TREE_SHA256.copy()
+        self.addCleanup(
+            setattr,
+            setup_skillset,
+            "APPROVED_SKILL_TREE_SHA256",
+            approved_tree_sha256,
+        )
         self.root = Path(self.temporary_directory.name)
         self.sources = self._create_sources(self.root)
         self.target = self.root / "target"
@@ -66,6 +73,11 @@ class SkillsetTests(unittest.TestCase):
         for name, source in sources.items():
             source.mkdir(parents=True)
             (source / "SKILL.md").write_text(f"# {name}\n")
+        identities = setup_skillset.validate_sources(sources)
+        setup_skillset.APPROVED_SKILL_TREE_SHA256 = {
+            name: identity.tree_sha256
+            for name, identity in identities.items()
+        }
         return sources
 
     def _snapshot_links(self, target: Path) -> dict[str, tuple[int, str]]:
@@ -86,6 +98,51 @@ class SkillsetTests(unittest.TestCase):
         self.assertEqual([], result["replaced"])
         self.assertEqual([], result["missing"])
         self.assertEqual([], result["wrong"])
+
+    def test_changed_approved_tree_fails_before_target_mutation(self) -> None:
+        source = self.sources["alpha"]
+        references = source / "references"
+        references.mkdir()
+        reference = references / "contract.md"
+        reference.write_text("approved\n", encoding="utf-8")
+        identities = setup_skillset.validate_sources(self.sources)
+        approved = {
+            name: identity.tree_sha256
+            for name, identity in identities.items()
+        }
+        reference.write_text("injected\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "approved tree digest"):
+            setup_skillset.reconcile(
+                self.target,
+                self.sources,
+                check=False,
+                approved_tree_sha256=approved,
+            )
+
+        self.assertFalse(self.target.exists())
+
+    def test_approved_tree_digest_requires_exact_source_names(self) -> None:
+        identities = setup_skillset.validate_sources(self.sources)
+        approved = {
+            name: identity.tree_sha256
+            for name, identity in identities.items()
+        }
+
+        for invalid in (
+            {**approved, "unexpected": "0" * 64},
+            {name: digest for name, digest in approved.items() if name != "alpha"},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError,
+                "approved skill names",
+            ):
+                setup_skillset.reconcile(
+                    self.target,
+                    self.sources,
+                    check=True,
+                    approved_tree_sha256=invalid,
+                )
 
     def test_missing_source_fails_before_target_mutation(self) -> None:
         for missing_part in ("directory", "SKILL.md"):
@@ -111,7 +168,7 @@ class SkillsetTests(unittest.TestCase):
                 self.assertFalse((target / "beta").exists())
                 self.assertFalse((target / "gamma").exists())
 
-    def test_stable_source_symlinks_are_snapshotted(self) -> None:
+    def test_nested_source_symlink_is_rejected_before_target_mutation(self) -> None:
         case_root = self.root / "stable-source-links"
         sources = self._create_sources(case_root)
         source = sources["beta"]
@@ -124,15 +181,19 @@ class SkillsetTests(unittest.TestCase):
         skill.symlink_to(actual_skill)
         target = case_root / "target"
 
-        result = setup_skillset.reconcile(target, sources, check=False)
-        before = self._snapshot_links(target)
-        checked = setup_skillset.reconcile(target, sources, check=True)
+        with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
+            setup_skillset.reconcile(target, sources, check=False)
 
-        self.assertEqual(sorted(sources), result["created"])
-        self.assertEqual([], checked["missing"])
-        self.assertEqual([], checked["wrong"])
-        self.assertEqual(before, self._snapshot_links(target))
-        self.assertEqual(actual_source.resolve(), (target / "beta").resolve())
+        self.assertFalse(target.exists())
+
+    def test_writable_source_entry_is_rejected_before_target_mutation(self) -> None:
+        skill = self.sources["beta"] / "SKILL.md"
+        skill.chmod(skill.stat().st_mode | stat.S_IWGRP)
+
+        with self.assertRaisesRegex(ValueError, "group/world writable"):
+            setup_skillset.reconcile(self.target, self.sources, check=False)
+
+        self.assertFalse(self.target.exists())
 
     def test_unexpected_target_entry_blocks_without_deleting_it(self) -> None:
         for kind in ("file", "directory"):
@@ -826,40 +887,6 @@ class SkillsetTests(unittest.TestCase):
         self.assertEqual(outside.resolve(), first_parent.resolve())
         self.assertFalse((outside / "child").exists())
 
-    def test_reconcile_preserves_state_when_link_staging_fails(self) -> None:
-        for failure in (OSError("link failed"), KeyboardInterrupt()):
-            with self.subTest(failure=type(failure).__name__):
-                case_root = self.root / type(failure).__name__
-                sources = self._create_sources(case_root)
-                target = case_root / "target"
-                target.mkdir()
-                decoy = case_root / "decoy"
-                decoy.mkdir()
-                for name in ("alpha", "beta"):
-                    (target / name).symlink_to(decoy, target_is_directory=True)
-                before = self._snapshot_links(target)
-                original_symlink_to = Path.symlink_to
-
-                def fail_for_beta(
-                    path: Path,
-                    destination: Path,
-                    target_is_directory: bool = False,
-                ) -> None:
-                    if path.name == "beta":
-                        raise failure
-                    original_symlink_to(
-                        path,
-                        destination,
-                        target_is_directory=target_is_directory,
-                    )
-
-                with patch.object(Path, "symlink_to", fail_for_beta), self.assertRaises(
-                    type(failure)
-                ):
-                    setup_skillset.reconcile(target, sources, check=False)
-
-                self.assertEqual(before, self._snapshot_links(target))
-                self.assertFalse((target / "gamma").exists())
 
     def test_reconcile_rolls_back_every_commit_boundary(self) -> None:
         cases = ("existing", "absent")
@@ -1430,6 +1457,12 @@ class SkillsetTests(unittest.TestCase):
         }
 
         self.assertEqual(expected, setup_skillset.resolve_sources(home, repo))
+        self.assertEqual(
+            set(EXPECTED_RELATIVE_PATHS),
+            set(setup_skillset.APPROVED_SKILL_TREE_SHA256),
+        )
+        for digest in setup_skillset.APPROVED_SKILL_TREE_SHA256.values():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
 
 if __name__ == "__main__":

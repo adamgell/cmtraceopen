@@ -175,9 +175,9 @@ class AgentOutputValidationTests(unittest.TestCase):
             "reducer-contract": {
                 "role": "reducer-contract",
                 "phase": "contract_report",
-                "decisions": [{"contract": "identity", "evidence": "fixture", "consequence": "stable key", "test": "focused"}],
+                "decisions": [{"contract": "identity", "evidence": "fixture", "consequence": "stable key", "test": command("cargo", "test", "--package", "cmtraceopen-parser")}],
                 "evidence": ["contract"],
-                "tests": ["focused"],
+                "tests": [command("python3", "-m", "unittest", "tests.focused")],
                 "blockers": [],
             },
             "reducer-integration": {
@@ -284,6 +284,81 @@ class AgentOutputValidationTests(unittest.TestCase):
             with self.subTest(gate_states=gate_states), self.assertRaises(ValueError):
                 report["gate_states"] = gate_states
                 validator.validate_output("code-review", report)
+
+    def test_code_review_findings_require_portable_file_line_citations(
+        self,
+    ) -> None:
+        report = {
+            "role": "code-review",
+            "phase": "review_report",
+            "head_sha": "a" * 40,
+            "base_sha": "b" * 40,
+            "findings": [{
+                "file_line": "src/change.ts:42",
+                "mechanism": "validated location",
+                "failure_scenario": "the cited branch fails",
+                "severity": "major",
+            }],
+            "gate_states": clean_review_gate_states(),
+            "coverage": ["reviewed source and contracts"],
+            "blockers": [],
+        }
+        validator.validate_output("code-review", report)
+
+        for file_line in (
+            "not-a-location",
+            "src/change.ts:0",
+            "src/change.ts:abc",
+            "../change.ts:1",
+            "/tmp/change.ts:1",
+            "src\\change.ts:1",
+        ):
+            with self.subTest(file_line=file_line), self.assertRaises(ValueError):
+                report["findings"][0]["file_line"] = file_line
+                validator.validate_output("code-review", report)
+
+    def test_reducer_contract_tests_require_policy_checked_commands(
+        self,
+    ) -> None:
+        payload = {
+            "role": "reducer-contract",
+            "phase": "contract_report",
+            "decisions": [{
+                "contract": "identity",
+                "evidence": "fixture",
+                "consequence": "stable key",
+                "test": command("cargo", "test", "--package", "cmtraceopen-parser"),
+            }],
+            "evidence": ["contract"],
+            "tests": [command("python3", "-m", "unittest", "tests.focused")],
+            "blockers": [],
+        }
+        validator.validate_output("reducer-contract", payload)
+
+        invalid_commands = (
+            "cargo test",
+            {"argv": ["sh", "-c", "cargo test"], "timeout_seconds": 120},
+            {"argv": [], "timeout_seconds": 120},
+            {"argv": ["cargo", "test"], "timeout_seconds": 0},
+            {"argv": ["cargo", ""], "timeout_seconds": 120},
+            {"argv": ["cargo"] * 129, "timeout_seconds": 120},
+            {"argv": ["cargo", "test"], "timeout_seconds": True},
+            {"argv": ["cargo", "test"], "timeout_seconds": 3601},
+        )
+        for field in ("decision", "tests"):
+            for invalid in invalid_commands:
+                with self.subTest(field=field, invalid=invalid):
+                    candidate = {
+                        **payload,
+                        "decisions": [dict(payload["decisions"][0])],
+                        "tests": list(payload["tests"]),
+                    }
+                    if field == "decision":
+                        candidate["decisions"][0]["test"] = invalid
+                    else:
+                        candidate["tests"] = [invalid]
+                    with self.assertRaises(ValueError):
+                        validator.validate_output("reducer-contract", candidate)
 
     def test_accepts_explicit_blocked_payload_and_rejects_mixed_blocked_payload(self) -> None:
         blocked = {
@@ -674,7 +749,7 @@ class AgentOutputValidationTests(unittest.TestCase):
                     "test": "",
                 }],
                 "evidence": ["contract"],
-                "tests": ["focused"],
+                "tests": [command("python3", "-m", "unittest", "tests.focused")],
                 "blockers": [],
             },
         }

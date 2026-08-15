@@ -253,6 +253,8 @@ _STAGE1_ALLOWED_PATHS = [
     ".omp/**",
     ".Clairvoyance/library.md",
     ".Clairvoyance/kickoff-prompt.md",
+    ".Clairvoyance/staff/**",
+    ".claude/skills/coderabbit-review-loop/**",
     "docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md",
     "docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md",
 ]
@@ -469,6 +471,16 @@ def _validate_repo_check_artifact(
         },
         f"{label}.outcome",
     )
+    classification = _require_enum(
+        artifact["failureClassification"],
+        {"success", "command_failure", "runner_failure"},
+        f"{label}.failureClassification",
+    )
+    if classification == "runner_failure":
+        _fail(
+            f"{label} runner infrastructure failures are never RED, GREEN, "
+            "or gate evidence"
+        )
     command = _require_command(artifact["command"], f"{label}.command")
     worktree = _require_nonempty_string(
         artifact["worktree"],
@@ -499,11 +511,6 @@ def _validate_repo_check_artifact(
     stderr = artifact["stderr"]
     if not isinstance(stdout, str) or not isinstance(stderr, str):
         _fail(f"{label} output must be strings")
-    classification = _require_enum(
-        artifact["failureClassification"],
-        {"success", "command_failure", "runner_failure"},
-        f"{label}.failureClassification",
-    )
     _require_optional_string(artifact["error"], f"{label}.error")
 
     if command != observation["command"]:
@@ -525,10 +532,6 @@ def _validate_repo_check_artifact(
     elif classification == "command_failure":
         if outcome != "completed" or exit_code in {None, 0} or error is not None:
             _fail(f"{label} command failure classification is inconsistent")
-    elif outcome == "completed" or error is None:
-        _fail(f"{label} runner failure classification is inconsistent")
-    if outcome in {"timed_out", "setup_failed", "spawn_failed"} and exit_code is not None:
-        _fail(f"{label} {outcome} outcome must not contain an exit code")
 
 
 def _require_repo_check_lane_binding(

@@ -72,7 +72,7 @@ TEXT_LIST_KEYS = {
     "code-review": ("coverage", "blockers"),
     "coder": ("blockers",),
     "reducer-adversary": ("failure_scenarios", "blockers"),
-    "reducer-contract": ("evidence", "tests", "blockers"),
+    "reducer-contract": ("evidence", "blockers"),
     "reducer-integration": ("blockers",),
     "tech-writer": ("evidence_sources", "blockers"),
     "ui-design": ("blockers",),
@@ -147,6 +147,35 @@ def _validate_object_list(
 ) -> None:
     for index, value in enumerate(_list(payload, key)):
         _validate_nonempty_fields(value, fields, f"{key}[{index}]")
+
+def _validate_review_findings(payload: dict[str, object]) -> None:
+    for index, value in enumerate(_list(payload, "findings")):
+        label = f"findings[{index}]"
+        item = _validate_nonempty_fields(
+            value,
+            ("file_line", "mechanism", "failure_scenario", "severity"),
+            label,
+        )
+        file_path, separator, line = item["file_line"].rpartition(":")
+        if (
+            not separator
+            or not _is_portable_repo_relative(file_path)
+            or not line.isascii()
+            or not line.isdigit()
+            or line.startswith("0")
+        ):
+            _fail(f"{label}.file_line must be a portable path and positive line")
+
+
+def _validate_reducer_contract_decisions(payload: dict[str, object]) -> None:
+    for index, value in enumerate(_list(payload, "decisions")):
+        label = f"decisions[{index}]"
+        item = _validate_nonempty_fields(
+            value,
+            ("contract", "evidence", "consequence"),
+            label,
+        )
+        _validate_command(item.get("test"), f"{label}.test")
 
 
 def _require_nonempty(payload: dict[str, object], *keys: str) -> None:
@@ -344,17 +373,10 @@ def validate_output(role: str, payload: object) -> None:
     elif role == "code-review":
         _require_sha(payload.get("head_sha"), "code-review.head_sha")
         _require_sha(payload.get("base_sha"), "code-review.base_sha")
-        _validate_object_list(
-            payload,
-            "findings",
-            ("file_line", "mechanism", "failure_scenario", "severity"),
-        )
+        _validate_review_findings(payload)
     elif role == "reducer-contract":
-        _validate_object_list(
-            payload,
-            "decisions",
-            ("contract", "evidence", "consequence", "test"),
-        )
+        _validate_reducer_contract_decisions(payload)
+        _validate_command_list(payload, "tests")
 
     if role == "coder":
         _validate_coder(payload, phase)

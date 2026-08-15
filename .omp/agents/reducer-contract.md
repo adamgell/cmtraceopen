@@ -23,9 +23,31 @@ output:
           contract: { type: string, minLength: 1 }
           evidence: { type: string, minLength: 1 }
           consequence: { type: string, minLength: 1 }
-          test: { type: string, minLength: 1 }
+          test:
+            type: object
+            additionalProperties: false
+            required: [argv, timeout_seconds]
+            properties:
+              argv:
+                type: array
+                minItems: 1
+                maxItems: 128
+                items: { type: string, minLength: 1, maxLength: 4096 }
+              timeout_seconds: { type: integer, minimum: 1, maximum: 3600 }
     evidence: { type: array, items: { type: string, minLength: 1 } }
-    tests: { type: array, items: { type: string, minLength: 1 } }
+    tests:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [argv, timeout_seconds]
+        properties:
+          argv:
+            type: array
+            minItems: 1
+            maxItems: 128
+            items: { type: string, minLength: 1, maxLength: 4096 }
+          timeout_seconds: { type: integer, minimum: 1, maximum: 3600 }
     blockers: { type: array, items: { type: string, minLength: 1 } }
 ---
 
