@@ -32,15 +32,47 @@ def _is_control_free(argument: str) -> bool:
 
 
 def _is_repo_relative_path(argument: str) -> bool:
-    if not argument or argument.startswith(("/", "\\")) or "\\" in argument:
+    drive_qualified = (
+        len(argument) >= 2
+        and argument[0].isalpha()
+        and argument[1] == ":"
+    )
+    if (
+        not argument
+        or argument.startswith(("/", "\\"))
+        or "\\" in argument
+        or drive_qualified
+    ):
         return False
     parts = argument.split("/")
     return all(part not in {"", ".."} for part in parts)
 
 
 def _contains_external_path(argument: str) -> bool:
-    candidate = argument.split("=", 1)[-1]
-    return candidate.startswith(("/", "\\")) or ".." in candidate.split("/")
+    normalized = argument.replace("\\", "/")
+    for segment in normalized.split("="):
+        candidates = (
+            segment.replace(";", " ")
+            .replace(",", " ")
+            .replace("'", " ")
+            .replace('"', " ")
+            .split()
+        )
+        for candidate in candidates:
+            drive_qualified = (
+                len(candidate) >= 2
+                and candidate[0].isalpha()
+                and candidate[1] == ":"
+            )
+            if drive_qualified:
+                return True
+            for path_value in candidate.split(":"):
+                if (
+                    path_value.startswith("/")
+                    or ".." in path_value.split("/")
+                ):
+                    return True
+    return False
 
 
 def _validate_python(argv: tuple[str, ...]) -> None:
@@ -51,7 +83,7 @@ def _validate_python(argv: tuple[str, ...]) -> None:
         if not any(not argument.startswith("-") for argument in unittest_arguments):
             _reject("unittest module invocation must name a test module or path")
         for argument in unittest_arguments:
-            if argument.startswith(("/", "\\")) or ".." in argument.split("/"):
+            if not _is_repo_relative_path(argument):
                 _reject("unittest targets must be repository-relative")
         return
 

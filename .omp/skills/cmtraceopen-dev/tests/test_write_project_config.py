@@ -300,6 +300,18 @@ class ProjectConfigTests(unittest.TestCase):
                 finally:
                     artifact_path.write_bytes(original)
 
+    def test_artifact_snapshot_rejects_non_regular_file_before_open(self) -> None:
+        artifact = self.root / "artifact-directory"
+        artifact.mkdir()
+
+        with patch.object(Path, "open") as open_file, self.assertRaisesRegex(
+            ValueError,
+            "probe artifact must be a regular file",
+        ):
+            writer._artifact_snapshot(artifact)
+
+        open_file.assert_not_called()
+
     def test_identical_existing_config_is_idempotent(self) -> None:
         path = self.root / "config.yml"
         path.write_bytes(EXPECTED_CONFIG.encode("utf-8"))
@@ -521,6 +533,46 @@ class ProjectConfigTests(unittest.TestCase):
                 )
                 self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
 
+    def test_platform_link_limitation_fails_closed_and_retries(self) -> None:
+        output = self.root / "config.yml"
+        entries_before = set(self.root.iterdir())
+        unsupported = NotImplementedError(
+            "link: src_dir_fd and dst_dir_fd unavailable on this platform"
+        )
+
+        with patch("os.link", side_effect=unsupported), self.assertRaisesRegex(
+            ValueError,
+            "platform cannot atomically publish config",
+        ):
+            writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertFalse(output.exists())
+        self.assertEqual(entries_before, set(self.root.iterdir()))
+        self.assertEqual("created", writer.write_create_only(output, EXPECTED_CONFIG))
+
+    def test_link_errno_detection_tolerates_missing_platform_constants(
+        self,
+    ) -> None:
+        class LimitedErrno:
+            ENOSYS = 38
+
+        output = self.root / "config.yml"
+        entries_before = set(self.root.iterdir())
+        unsupported = OSError(LimitedErrno.ENOSYS, "unsupported")
+
+        with patch.object(writer, "errno", LimitedErrno), patch(
+            "os.link",
+            side_effect=unsupported,
+        ), self.assertRaisesRegex(
+            ValueError,
+            "platform cannot atomically publish config",
+        ):
+            writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertFalse(output.exists())
+        self.assertEqual(entries_before, set(self.root.iterdir()))
+        self.assertEqual("created", writer.write_create_only(output, EXPECTED_CONFIG))
+
     def test_concurrent_destination_wins_atomic_install(self) -> None:
         output = self.root / "config.yml"
         concurrent = b"userOwned: true\n"
@@ -613,16 +665,41 @@ class ProjectConfigTests(unittest.TestCase):
 
     def test_selector_policy_rejects_invalid_promotions(self) -> None:
         invalid = (
-            ("mid", "openai-codex/gpt-5.6-sol", None),
-            ("mid", "llmgateway/grok-4-20-reasoning", "promotion"),
-            ("reasoning", "llmgateway/gpt-5.6-sol", "promotion"),
-            ("reasoning", "openai-codex/gpt-5.5-sol", "failed gateway"),
-            ("reasoning", "openai-codex/gpt-5.6-sol", " "),
+            (
+                "mid",
+                "openai-codex/gpt-5.6-sol",
+                None,
+                "mid must use a validated llmgateway selector",
+            ),
+            (
+                "mid",
+                "llmgateway/grok-4-20-reasoning",
+                "promotion",
+                "mid cannot record a Sol safety promotion",
+            ),
+            (
+                "reasoning",
+                "llmgateway/gpt-5.6-sol",
+                "promotion",
+                "gateway reasoning must not record a promotion reason",
+            ),
+            (
+                "reasoning",
+                "openai-codex/gpt-5.5-sol",
+                "failed gateway",
+                "reasoning selector violates the recorded Sol-promotion contract",
+            ),
+            (
+                "reasoning",
+                "openai-codex/gpt-5.6-sol",
+                " ",
+                "promoted reasoning must name the failed gateway evidence",
+            ),
         )
 
-        for role, selector, reason in invalid:
+        for role, selector, reason, expected_error in invalid:
             with self.subTest(role=role, selector=selector, reason=reason):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, expected_error):
                     writer._validate_selector_policy(role, selector, reason)
 
     def test_selector_policy_accepts_recorded_sol_promotion(self) -> None:

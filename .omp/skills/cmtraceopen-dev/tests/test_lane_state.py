@@ -106,6 +106,8 @@ def write_repo_check_artifact(
             else ""
         ),
         "stderr": "",
+        "stdoutTruncated": False,
+        "stderrTruncated": False,
         "failureClassification": classification,
         "error": None if outcome == "completed" else f"{outcome} error",
     }
@@ -1906,6 +1908,10 @@ class EvidenceTests(unittest.TestCase):
                 ("headSha", SHA_C),
                 ("baseSha", SHA_C),
                 ("exitCode", 7),
+                ("stdoutTruncated", "false"),
+                ("stderrTruncated", 0),
+                ("stdoutTruncated", True),
+                ("stderrTruncated", True),
             ):
                 with self.subTest(field=field):
                     observation = valid_observation(

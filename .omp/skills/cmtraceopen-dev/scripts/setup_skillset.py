@@ -10,7 +10,13 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 import tempfile
+
+
+def _require_supported_python(version: tuple[int, ...]) -> None:
+    if version < (3, 11):
+        raise SystemExit("error: setup_skillset.py requires Python 3.11 or newer")
 
 
 APPROVED_SKILLS: dict[str, tuple[str, str]] = {
@@ -1594,6 +1600,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    _require_supported_python(tuple(sys.version_info[:2]))
     args = parse_args()
     home = args.home.expanduser().resolve()
     repo = args.repo.expanduser().resolve()

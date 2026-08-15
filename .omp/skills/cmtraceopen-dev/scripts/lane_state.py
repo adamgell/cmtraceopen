@@ -190,6 +190,8 @@ _REPO_CHECK_ARTIFACT_KEYS = {
     "observedAt",
     "stdout",
     "stderr",
+    "stdoutTruncated",
+    "stderrTruncated",
     "failureClassification",
     "error",
 }
@@ -482,6 +484,12 @@ def _validate_repo_check_artifact(
             "or gate evidence"
         )
     command = _require_command(artifact["command"], f"{label}.command")
+    if type(artifact["stdoutTruncated"]) is not bool:
+        _fail(f"{label}.stdoutTruncated must be a boolean")
+    if type(artifact["stderrTruncated"]) is not bool:
+        _fail(f"{label}.stderrTruncated must be a boolean")
+    if artifact["stdoutTruncated"] or artifact["stderrTruncated"]:
+        _fail(f"{label} truncated output cannot be recorded as evidence")
     worktree = _require_nonempty_string(
         artifact["worktree"],
         f"{label}.worktree",

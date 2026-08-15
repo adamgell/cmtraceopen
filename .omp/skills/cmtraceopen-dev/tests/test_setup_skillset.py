@@ -86,6 +86,22 @@ class SkillsetTests(unittest.TestCase):
             for entry in target.iterdir()
         }
 
+    def test_requires_python_3_11_or_newer(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "Python 3.11 or newer"):
+            setup_skillset._require_supported_python((3, 10, 14))
+        setup_skillset._require_supported_python((3, 11, 0))
+
+    def test_main_rejects_old_python_before_argument_parsing(self) -> None:
+        with patch.object(
+            setup_skillset.sys,
+            "version_info",
+            (3, 10, 14),
+        ), patch.object(setup_skillset, "parse_args") as parse_args:
+            with self.assertRaisesRegex(SystemExit, "Python 3.11 or newer"):
+                setup_skillset.main()
+
+        parse_args.assert_not_called()
+
     def test_creates_only_approved_directory_symlinks(self) -> None:
         result = setup_skillset.reconcile(self.target, self.sources, check=False)
 
@@ -1208,6 +1224,35 @@ class SkillsetTests(unittest.TestCase):
             "Skillset reconciled: 15 approved links; 0 created, 0 replaced.\n",
             unchanged_output.getvalue(),
         )
+
+    def test_main_rejects_tampered_source_without_target_mutation(self) -> None:
+        home = self.root / "tamper-home"
+        repo = self.root / "tamper-repo"
+        repo.mkdir()
+        sources = self._create_approved_sources(home)
+        target = home / ".omp/agent/skillsets/cmtraceopen"
+        setup_skillset.reconcile(target, sources, check=False)
+        before = self._snapshot_links(target)
+        skill = sources["cmtraceopen"] / "SKILL.md"
+        skill.write_text(
+            skill.read_text(encoding="utf-8") + "injected\n",
+            encoding="utf-8",
+        )
+        arguments = [
+            "setup_skillset.py",
+            "--home",
+            str(home),
+            "--repo",
+            str(repo),
+        ]
+
+        with patch.object(sys, "argv", arguments), self.assertRaisesRegex(
+            SystemExit,
+            "does not match its approved tree digest",
+        ):
+            setup_skillset.main()
+
+        self.assertEqual(before, self._snapshot_links(target))
 
 
     def test_check_mode_reports_clean_without_mutation(self) -> None:

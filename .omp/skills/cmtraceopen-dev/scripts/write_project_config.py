@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -95,6 +96,8 @@ def _artifact_snapshot(
 ]:
     try:
         link_before = path.lstat()
+        if not stat.S_ISREG(link_before.st_mode):
+            _fail(f"probe artifact must be a regular file: {path}")
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             file_before = os.fstat(stream.fileno())
@@ -498,6 +501,21 @@ def write_create_only(path: Path, content: str) -> str:
                 raise
             _require_pinned_directory(path.parent, parent_descriptor)
             return raced_status
+        except (NotImplementedError, TypeError) as error:
+            raise ValueError(
+                "platform cannot atomically publish config"
+            ) from error
+        except OSError as error:
+            unsupported = {
+                value
+                for name in ("ENOSYS", "ENOTSUP", "EOPNOTSUPP")
+                if (value := getattr(errno, name, None)) is not None
+            }
+            if error.errno in unsupported:
+                raise ValueError(
+                    "platform cannot atomically publish config"
+                ) from error
+            raise
         _require_pinned_directory(path.parent, parent_descriptor)
         return "created"
     finally:

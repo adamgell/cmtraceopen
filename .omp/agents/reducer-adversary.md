@@ -4,7 +4,7 @@ description: Design false-story reducer attacks and return adversarial RED contr
 model: "@reasoning"
 tools: [read, grep, glob]
 spawns: []
-autoloadSkills: [semantic-reducer-framework, semantic-reducer-development]
+autoloadSkills: [semantic-reducer-framework, semantic-reducer-development, test-driven-development]
 advisor: true
 output:
   type: object

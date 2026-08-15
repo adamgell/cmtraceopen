@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -316,33 +318,152 @@ class RepositoryCheckTests(unittest.TestCase):
     def test_runner_terminates_descendants_after_parent_exits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            sentinel = root / "descendant-ran"
+            pid_path = root / "descendant.pid"
+            sentinel = root / "descendant-survived"
             descendant = (
-                "import pathlib, time; "
-                "time.sleep(0.5); "
-                f"pathlib.Path({str(sentinel)!r}).write_text('ran')"
+                "import os, pathlib, time; "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); "
+                "time.sleep(30); "
+                f"pathlib.Path({str(sentinel)!r}).write_text('survived')"
             )
             test_module = root / "test_descendant.py"
             test_module.write_text(
+                "import pathlib\n"
                 "import subprocess\n"
                 "import sys\n"
+                "import time\n"
                 "import unittest\n\n"
                 "class DescendantTests(unittest.TestCase):\n"
                 "    def test_spawn_descendant(self):\n"
-                f"        subprocess.Popen([sys.executable, '-c', {descendant!r}])\n",
+                f"        subprocess.Popen([sys.executable, '-c', {descendant!r}])\n"
+                f"        pid_path = pathlib.Path({str(pid_path)!r})\n"
+                "        deadline = time.monotonic() + 5\n"
+                "        while time.monotonic() < deadline and not pid_path.exists():\n"
+                "            time.sleep(0.01)\n"
+                "        self.assertTrue(pid_path.exists())\n",
                 encoding="utf-8",
             )
 
-            result = run_check(["python3", "-m", "unittest", "test_descendant"],
-            cwd=root,
-            timeout=30,
-            head_sha="a" * 40,
-            base_sha="b" * 40,)
-            time.sleep(0.7)
+            result = run_check(
+                ["python3", "-m", "unittest", "test_descendant"],
+                cwd=root,
+                timeout=30,
+                head_sha="a" * 40,
+                base_sha="b" * 40,
+            )
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("runner descendant remained alive after group termination")
 
             self.assertEqual("completed", result["outcome"])
             self.assertEqual(0, result["exitCode"])
             self.assertFalse(sentinel.exists())
+
+    def test_runner_bounds_actual_stdout_and_stderr_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_size = run_repo_check.CAPTURE_LIMIT_BYTES + 257
+            (root / "test_output.py").write_text(
+                "import sys\n"
+                "import unittest\n\n"
+                "class OutputTests(unittest.TestCase):\n"
+                "    def test_output(self):\n"
+                f"        sys.stdout.write('o' * {output_size})\n"
+                f"        sys.stderr.write('e' * {output_size})\n",
+                encoding="utf-8",
+            )
+
+            result = run_check(
+                ["python3", "-m", "unittest", "test_output"],
+                cwd=root,
+                timeout=30,
+                head_sha="a" * 40,
+                base_sha="b" * 40,
+            )
+
+            self.assertEqual("completed", result["outcome"])
+            self.assertEqual(
+                run_repo_check.CAPTURE_LIMIT_BYTES,
+                len(result["stdout"]),
+            )
+            self.assertEqual(
+                run_repo_check.CAPTURE_LIMIT_BYTES,
+                len(result["stderr"]),
+            )
+            self.assertTrue(result["stdoutTruncated"])
+            self.assertTrue(result["stderrTruncated"])
+
+    def test_artifact_write_failure_leaves_destination_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "check.json"
+            artifact = {"kind": "repo_check", "value": "complete"}
+            before = set(root.iterdir())
+
+            with mock.patch.object(
+                run_repo_check.os,
+                "write",
+                side_effect=OSError("injected write failure"),
+            ), self.assertRaisesRegex(OSError, "injected write failure"):
+                run_repo_check._publish_artifact(path, artifact)
+
+            self.assertFalse(path.exists())
+            self.assertEqual(before, set(root.iterdir()))
+            run_repo_check._publish_artifact(path, artifact)
+            self.assertEqual(artifact, json.loads(path.read_text(encoding="utf-8")))
+            self.assertEqual({path}, set(root.iterdir()))
+
+    def test_artifact_publication_failures_roll_back_and_retry(self) -> None:
+        real_fsync = os.fsync
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / "check.json"
+                artifact = {"kind": "repo_check", "value": "complete"}
+                before = set(root.iterdir())
+                calls = 0
+
+                def fsync(descriptor: int) -> None:
+                    nonlocal calls
+                    calls += 1
+                    if calls == fail_at:
+                        raise OSError("injected publication failure")
+                    real_fsync(descriptor)
+
+                with mock.patch.object(
+                    run_repo_check.os,
+                    "fsync",
+                    side_effect=fsync,
+                ), self.assertRaisesRegex(OSError, "injected publication failure"):
+                    run_repo_check._publish_artifact(path, artifact)
+                expected_calls = fail_at if fail_at == 1 else fail_at + 1
+                self.assertEqual(expected_calls, calls)
+
+                self.assertFalse(path.exists())
+                self.assertEqual(before, set(root.iterdir()))
+                run_repo_check._publish_artifact(path, artifact)
+                self.assertEqual(
+                    artifact,
+                    json.loads(path.read_text(encoding="utf-8")),
+                )
+
+    def test_artifact_publication_is_create_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "check.json"
+            original = {"value": "original"}
+            run_repo_check._publish_artifact(path, original)
+
+            with self.assertRaises(FileExistsError):
+                run_repo_check._publish_artifact(path, {"value": "replacement"})
+
+            self.assertEqual(original, json.loads(path.read_text(encoding="utf-8")))
 
     def test_spawn_is_runner_failure_but_import_error_is_completed_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -471,6 +592,7 @@ class RepositoryCheckTests(unittest.TestCase):
             ("cargo", "fmt", "--all", "--", "--check"),
             ("cargo", "fmt", "--check"),
             ("npm", "test", "--", "src/change.test.ts"),
+            ("npm", "test", "--", "--define=__DEV__=true"),
             ("npm", "run", "test"),
             ("npm", "run", "test:coverage"),
             ("npm", "run", "test:e2e"),
@@ -552,6 +674,10 @@ class RepositoryCheckTests(unittest.TestCase):
             ("npm", "run", "test:watch"),
             ("npm", "exec", "vitest"),
             ("mdbook", "serve"),
+            ("mdbook", "build", "C:/outside"),
+            ("git", "diff", "--check", "--", "C:/outside"),
+            ("python3", "-m", "unittest", "C:/outside"),
+            ("python3", "-m", "unittest", "discover", "C:/outside"),
             ("python3", "-m", "unittest", "discover", "/etc"),
             ("python3", "-m", "unittest", "discover", ".."),
             (
@@ -563,6 +689,19 @@ class RepositoryCheckTests(unittest.TestCase):
                 "test_*.py",
                 "/etc",
             ),
+            ("npm", "test", "--", "--config=PATHS=/etc/crontab"),
+            ("npm", "test", "--", "--config=DIRS=../outside"),
+            ("npm", "test", "--", "--config=PATHS=src,/etc/crontab"),
+            ("npm", "test", "--", "--config=DIRS=src\\..\\outside"),
+            ("npm", "test", "--", "--config=PATHS=src:/etc/crontab"),
+            ("npm", "test", "--", "--config=PATHS=src;/etc/crontab"),
+            ("npm", "test", "--", "--config=PATHS=src, /etc/crontab"),
+            ("npm", "test", "--", "--config=PATHS=src /etc/crontab"),
+            ("npm", "test", "--", "--config=PATHS='/etc/crontab'"),
+            ("npm", "test", "--", '--config=DIRS="../outside"'),
+            ("npm", "test", "--", "--config=PATHS='C:outside'"),
+            ("npm", "test", "--", "--config=DIRS=src ..\\outside"),
+            ("npm", "test", "--", "--config=PATHS=C:outside"),
         )
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             run_repo_check.subprocess,
@@ -602,6 +741,67 @@ class RepositoryCheckTests(unittest.TestCase):
                         timeout=timeout,
                     )
         process.assert_not_called()
+
+    def test_parser_requires_every_manifest_binding_flag(self) -> None:
+        arguments = [
+            "run_repo_check.py",
+            "--cwd",
+            "/repo",
+            "--timeout",
+            "30",
+            "--expected-worktree-device",
+            "17",
+            "--expected-worktree-inode",
+            "23",
+            "--expected-git-common-dir",
+            "/repo/.git",
+            "--expected-branch",
+            "feature",
+            "--expected-head-sha",
+            HEAD_SHA,
+            "--base-sha",
+            BASE_SHA,
+            "--artifact",
+            "/tmp/check.json",
+            "--",
+            "cargo",
+            "test",
+        ]
+        required_bindings = {
+            "--expected-worktree-device": 17,
+            "--expected-worktree-inode": 23,
+            "--expected-git-common-dir": Path("/repo/.git"),
+            "--expected-branch": "feature",
+            "--expected-head-sha": HEAD_SHA,
+        }
+        with mock.patch.object(run_repo_check.sys, "argv", arguments):
+            parsed = run_repo_check.parse_args()
+        for flag, expected in required_bindings.items():
+            attribute = flag.removeprefix("--").replace("-", "_")
+            self.assertEqual(expected, getattr(parsed, attribute))
+            index = arguments.index(flag)
+            omitted = arguments[:index] + arguments[index + 2 :]
+            with (
+                self.subTest(flag=flag),
+                mock.patch.object(run_repo_check.sys, "argv", omitted),
+                mock.patch.object(
+                    run_repo_check.sys,
+                    "stderr",
+                    new_callable=io.StringIO,
+                ),
+                self.assertRaises(SystemExit),
+            ):
+                run_repo_check.parse_args()
+        self.assertEqual(["cargo", "test"], parsed.command)
+
+    def test_main_rejects_old_python_before_argument_parsing(self) -> None:
+        with (
+            mock.patch.object(run_repo_check.sys, "version_info", (3, 10)),
+            mock.patch.object(run_repo_check, "parse_args") as parse_args,
+            self.assertRaisesRegex(SystemExit, "Python 3.11 or newer"),
+        ):
+            run_repo_check.main()
+        parse_args.assert_not_called()
 
     def test_runner_rejects_empty_commands_and_non_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
