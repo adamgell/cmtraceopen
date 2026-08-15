@@ -72,9 +72,9 @@ python3 .omp/skills/cmtraceopen-dev/scripts/lane_state.py \
 
 On a clean replay that reaches Task 1 before the helper exists, use only an independently reviewed, exact read-only equivalent of the helper's current snapshot contract. It must invoke fixed Git argument vectors without a shell or interpolated command text and must not run `git write-tree` or any other Git mutation. Once the helper exists, it replaces that temporary equivalent for every later comparison.
 
-The artifact covers the primary checkout's HEAD, index, tracked diff, untracked and ignored files, and primary-worktree Git controls. The filesystem digest excludes only `.git` and the orchestrator-managed top-level `.worktrees/` directory; user-owned ignored files everywhere else remain included. The Git-controls digest deliberately excludes refs and objects belonging to unrelated active branches/worktrees in the shared Git directory so normal concurrent branch activity cannot create false root-safety incidents.
+The artifact covers the primary checkout's HEAD, index, tracked diff, untracked and ignored files, primary-worktree Git controls, and managed-worktree registrations. The filesystem digest excludes only `.git` and the orchestrator-managed top-level `.worktrees/` directory; user-owned ignored files everywhere else remain included. The Git-controls digest deliberately excludes refs and objects belonging to unrelated active branches/worktrees in the shared Git directory so normal concurrent branch activity cannot create false root-safety incidents. The managed-worktree digest legitimately changes when an orchestrator-managed worktree is registered or removed.
 
-After every repository-writing task or wave through Task 11, run the same reviewed helper to `/tmp/cmtraceopen-stage1-primary-current.json` and compare it byte-for-byte with the before artifact. A relevant mismatch stops the wave; preserve both artifacts and ask Adam before reverting, cleaning, discarding, or deleting anything. Task 13 captures a fresh Stage 2 baseline and stores its artifact path in live state before allocating lanes.
+After every repository-writing task or wave through Task 11, run the same reviewed helper to `/tmp/cmtraceopen-stage1-primary-current.json` and compare it byte-for-byte with the before artifact. A relevant mismatch stops the wave; preserve both artifacts and ask Adam before reverting, cleaning, discarding, or deleting anything. Task 13 uses a separate Stage 2 contract: it may compare an unrecorded coordinator-setup pair immediately after the coordinator registration exists, but records `stage2Before` only after all three issue worktrees are registered, clean, at their allocation heads, and represented by allocated lanes. It records `stage2After` after all work stops while the same issue worktrees remain registered and before cleanup.
 
 ---
 
@@ -1510,7 +1510,7 @@ Expected: only Adam-approved issues. Fewer than three eligible issues blocks the
 
 - [ ] **Step 1: Establish the clean coordinator worktree**
 
-Refresh `origin/main`, create `.worktrees/omp-control` detached at the exact refreshed main SHA, then capture the primary-checkout before snapshot:
+Refresh `origin/main`, create `.worktrees/omp-control` detached at the exact refreshed main SHA, then prove that manifest setup does not mutate the primary checkout. This immediate setup pair is not the Stage 2 before-wave gate:
 
 ```bash
 COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
@@ -1550,7 +1550,7 @@ LANE_STATE="$CONTROL/.omp/skills/cmtraceopen-dev/scripts/lane_state.py"
 COMMON="$(git -C "$CONTROL" rev-parse --path-format=absolute --git-common-dir)"
 MANIFEST="$COMMON/omp/lanes.json"
 python3 "$LANE_STATE" snapshot-root --repo "$PRIMARY_ROOT" \
-  > /tmp/cmtraceopen-pilot-primary-before.json
+  > /tmp/cmtraceopen-coordinator-setup-before.json
 INIT_JSON="$(python3 "$LANE_STATE" init --git-common-dir "$COMMON")"
 if [ "$(printf '%s' "$INIT_JSON" | jq -r .created)" != "true" ]; then
   python3 "$LANE_STATE" show --manifest "$MANIFEST" \
@@ -1558,17 +1558,17 @@ if [ "$(printf '%s' "$INIT_JSON" | jq -r .created)" != "true" ]; then
   printf '%s\n' "Existing manifest preserved; resume or report it before starting a new pilot." >&2
   exit 2
 fi
-UPDATED_AT="$(python3 "$LANE_STATE" show --manifest "$MANIFEST" | jq -r .updatedAt)"
-python3 "$LANE_STATE" record-root-snapshot --manifest "$MANIFEST" \
-  --expected-updated-at "$UPDATED_AT" \
-  --slot stage2Before --artifact file:///tmp/cmtraceopen-pilot-primary-before.json
+python3 "$LANE_STATE" snapshot-root --repo "$PRIMARY_ROOT" \
+  > /tmp/cmtraceopen-coordinator-setup-after.json
+cmp /tmp/cmtraceopen-coordinator-setup-before.json \
+  /tmp/cmtraceopen-coordinator-setup-after.json
 ```
 
 The setup inspects `git worktree list --porcelain` before any add. An exact registered target is reused only when it is the clean detached worktree at the refreshed `origin/main` head. A conflicting registration, dirty worktree, missing registered directory, or existing unregistered target blocks and is reported without remove, reset, clean, or other normalization. `git worktree add` runs only when the target is both absent and unregistered. Start the Stage 2 Main OMP session from this coordinator worktree with `--advisor` in print mode or enable `/advisor on` before the first interactive prompt. The model does not issue the slash command. The coordinator owns orchestration state but no issue implementation files.
 
 An existing valid manifest is not reset or retried as a new pilot. Main inspects `/tmp/cmtraceopen-existing-pilot-manifest.json`: resume its nonterminal lanes from their recorded state/next action, or report its terminal/ready lanes to Adam and stop. Starting a different pilot requires Adam to approve archiving the old coordination state.
 
-For every manifest mutation in Steps 3-10, first run `show`, read its current `updatedAt`, and pass that value once as `--expected-updated-at`; never reuse a timestamp across calls:
+For every manifest mutation in Steps 3-11, first run `show`, read its current `updatedAt`, and pass that value once as `--expected-updated-at`; never reuse a timestamp across calls:
 
 ```bash
 UPDATED_AT="$(python3 "$LANE_STATE" show --manifest "$MANIFEST" | jq -r .updatedAt)"
@@ -1607,31 +1607,80 @@ For each selected issue, create one branch/worktree from refreshed `origin/main`
 
 Expected: three `allocated` lanes and a free aggregate semaphore.
 
-- [ ] **Step 4: Dispatch all three cold-complete briefs in one Task batch**
+- [ ] **Step 4: Capture the Stage 2 before-wave root snapshot**
+
+After all three allocations, verify that the manifest contains exactly three
+`allocated` lanes, the aggregate semaphore is free, and every recorded issue
+worktree is registered, clean, and at its recorded allocation head. Then
+capture and record `stage2Before` before dispatching any child or applying any
+proposal:
+
+```bash
+ALLOCATED_JSON="$(python3 "$LANE_STATE" show --manifest "$MANIFEST")"
+printf '%s' "$ALLOCATED_JSON" | jq -e '
+  (.lanes | length) == 3 and
+  all(.lanes[]; .laneState == "allocated" and
+    .headSha == .allocationBaseSha and .headSha == .currentBaseSha) and
+  .aggregateGate.holder == null and
+  (.aggregateGate.queue | length) == 0 and
+  .aggregateGate.acquiredAt == null
+'
+WORKTREE_LIST="$(git -C "$PRIMARY_ROOT" worktree list --porcelain)"
+printf '%s' "$ALLOCATED_JSON" |
+  jq -r '.lanes[] | [.worktree, .headSha] | @tsv' \
+  > /tmp/cmtraceopen-pilot-allocated-worktrees.tsv
+while IFS="$(printf '\t')" read -r ISSUE_WORKTREE ALLOCATION_HEAD; do
+  if ! printf '%s\n' "$WORKTREE_LIST" |
+    awk -v target="$ISSUE_WORKTREE" '
+      $1 == "worktree" && substr($0, 10) == target { found = 1 }
+      END { exit !found }
+    '; then
+    printf '%s\n' "Allocated issue worktree is not registered: $ISSUE_WORKTREE" >&2
+    exit 2
+  fi
+  if [ "$(git -C "$ISSUE_WORKTREE" rev-parse HEAD)" != "$ALLOCATION_HEAD" ] ||
+    [ -n "$(git -C "$ISSUE_WORKTREE" status --porcelain=v1 --untracked-files=all)" ]; then
+    printf '%s\n' "Allocated issue worktree is dirty or at the wrong head: $ISSUE_WORKTREE" >&2
+    exit 2
+  fi
+done < /tmp/cmtraceopen-pilot-allocated-worktrees.tsv
+python3 "$LANE_STATE" snapshot-root --repo "$PRIMARY_ROOT" \
+  > /tmp/cmtraceopen-pilot-primary-before.json
+UPDATED_AT="$(python3 "$LANE_STATE" show --manifest "$MANIFEST" | jq -r .updatedAt)"
+python3 "$LANE_STATE" record-root-snapshot --manifest "$MANIFEST" \
+  --expected-updated-at "$UPDATED_AT" \
+  --slot stage2Before --artifact file:///tmp/cmtraceopen-pilot-primary-before.json
+```
+
+From this capture through `stage2After`, the same exact three issue worktrees
+must remain registered. No issue worktree may be created or removed. A
+registration change blocks the pilot; it is not normalized.
+
+- [ ] **Step 5: Dispatch all three cold-complete briefs in one Task batch**
 
 Shared context contains repo invariants, advisor requirement, exact role-map artifact, review policy, and cross-lane interfaces. Each Task item sets `name` to the exact persisted `agentId`, sets `isolated: false`, and names its absolute durable worktree, branch, issue contract, evidence anchors, allowed paths, RED target, focused/aggregate gates, and native requirement. Use the charter-backed `coder` or `ui-design` agent for proposals; never the generic `task` agent. After dispatch, compare each returned Hub agent ID to the persisted `agentId`; any mismatch blocks without changing ownership or lifecycle.
 
 Expected: three Hub agents whose IDs exactly equal their allocated owner IDs, each with an active read-only advisor and no child-spawn permission. Only after exact identity confirmation does Main use a fresh `--expected-updated-at` for each transition and heartbeat: transition `allocated -> running`, then record lease heartbeats and `lastVerifiedAt`; an expired lease never transfers ownership.
 
-- [ ] **Step 5: Exercise one named failure-and-recovery path**
+- [ ] **Step 6: Exercise one named failure-and-recovery path**
 
 Exercise the failure-and-recovery contract only in a disposable synthetic repository/manifest owned by Main; never instruct a lane child to violate its allowlist. Seed a lane whose scratch path is intentionally outside its recorded allowlist, run `check-paths --manifest PATH --issue N`, and record the expected terminal rejection in the disposable evidence. Then update the synthetic allowlist through a fresh valid fixture or remove only the valueless scratch path, verify the clean path set, and discard the disposable repository after confirming it contains no user or unpushed work. Production lane ownership and lifecycle remain untouched.
 
-- [ ] **Step 6: Verify preliminary focused GREEN**
+- [ ] **Step 7: Verify preliminary focused GREEN**
 
 Main independently validates and applies each accepted proposal, inspects each resulting dirty diff, and runs only focused checks. With a fresh `--expected-updated-at` for every mutation, append the initial failure with `record-red` and store the preliminary focused result with `record-observation`, including exact command, exit code, timestamp, artifact URI, current head, and base. Do not record any passed base-sensitive aggregate/conformance/review/native/mergeability observation for uncommitted work.
 
 Expected: each lane has RED plus preliminary focused GREEN evidence; base-sensitive gates remain `not_run`.
 
-- [ ] **Step 7: Check complete path ownership before every commit/push**
+- [ ] **Step 8: Check complete path ownership before every commit/push**
 
 Run `lane_state.py check-paths --manifest PATH --issue N`; the helper loads the lane's worktree, immutable allocation base, and complete allowlist from the validated manifest. Any out-of-scope tracked or untracked path blocks the lane. Main never auto-reverts it.
 
-- [ ] **Step 8: Commit, push, and open three draft PRs**
+- [ ] **Step 9: Commit, push, and open three draft PRs**
 
 Use issue-scoped commits with prior behavior/change/why/verification bodies and `Refs #N`. Immediately after each commit, read the new local head and use a fresh timestamp with `update-heads`; this stales the pre-commit focused evidence. Collect the commit's exact changed paths and use another fresh timestamp with `invalidate-dependents`; requeue every returned downstream lane. Before push or review, rerun focused checks at the committed head, then acquire the aggregate semaphore for one lane at a time, record holder/queue/acquired time, execute the mandatory synthetic current-base scenario for aggregate/conformance/mergeability and required base-sensitive native gates, record matching artifacts, release, and require the FIFO head to acquire with a fresh timestamp. Rerun every stale downstream gate likewise. Push only after all required committed-head/current-base gates pass. Open draft PRs; with fresh timestamps per call, record exact remote SHA and PR number/URL, then transition `running -> reviewing`. Do not mark ready or merge.
 
-- [ ] **Step 9: Converge CodeRabbit and independent reviews independently**
+- [ ] **Step 10: Converge CodeRabbit and independent reviews independently**
 
 For each exact head:
 
@@ -1650,9 +1699,9 @@ Reducer lanes additionally require Reducer Contract, Adversary, and Integration 
 
 After the pre-readiness base refresh, both reviews, mergeability, and every invalidated gate are clean at the same exact head/current base, keep each lane in `reviewing` pending the root-safety gate. Complete path ownership still compares the full diff to immutable `allocationBaseSha`. Any new commit returns the lane to `running` before fixes and invalidates head-bound evidence; any later base change invalidates base-bound evidence.
 
-- [ ] **Step 10: Prove remote heads and root safety**
+- [ ] **Step 11: Prove remote heads and root safety**
 
-Verify each local head equals its remote branch head. Then run:
+Verify each local head equals its remote branch head. Stop all child and Main lane work, keep the exact same three issue worktrees registered, and perform no cleanup. Then run:
 
 ```bash
 COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
@@ -1671,13 +1720,13 @@ cmp /tmp/cmtraceopen-pilot-primary-before.json \
   /tmp/cmtraceopen-pilot-primary-after.json
 ```
 
-Before `cmp` can satisfy the gate, both artifacts must contain `filesystemSha256` and `gitControlsSha256`. The filesystem digest must include user-owned ignored files except for `.git` and the orchestrator-managed top-level `.worktrees/`; the Git-controls digest must cover primary-worktree controls while excluding unrelated active-branch refs/objects.
+Before `cmp` can satisfy the gate, both artifacts must contain `filesystemSha256`, `gitControlsSha256`, and `managedWorktreesSha256`. The filesystem digest must include user-owned ignored files except for `.git` and the orchestrator-managed top-level `.worktrees/`; the Git-controls digest must cover primary-worktree controls while excluding unrelated active-branch refs/objects; the managed-worktree digest must prove the exact issue-worktree registration set did not change. The artifacts must be byte-for-byte equal. Any issue-worktree creation or removal between `stage2Before` and `stage2After` is a blocking mismatch.
 
 Only after `cmp` succeeds, use a fresh `--expected-updated-at` per mutation to record final implementation/mergeability status and transition each lane `reviewing -> ready_for_adam`. A root-safety mismatch leaves every lane `reviewing`, records a blocker/next action, and stops without any ready state.
 
-Expected: remote heads match local heads; `cmp` exits 0; the manifest stores both root-safety artifact URIs; only then are all required lanes `ready_for_adam` rather than `merged`.
+Expected: remote heads match local heads; the same three issue worktrees remain registered; `cmp` exits 0 on the exact JSON bytes; the manifest stores both root-safety artifact URIs and SHA-256 values; only then are all required lanes `ready_for_adam` rather than `merged`. Worktree cleanup, if later authorized, occurs only after this gate and is outside the snapshot pair.
 
-- [ ] **Step 11: Report to Adam and stop**
+- [ ] **Step 12: Report to Adam and stop**
 
 For each lane, report separately: RED, implementation GREEN, focused gates, aggregate gates, conformance, committed, pushed, draft PR, CodeRabbit at head, independent review, native/lab requirement/state, current mergeability, blocker, and next action. Adam decides merges. Automatic refill remains disabled until Adam accepts the pilot evidence.
 
