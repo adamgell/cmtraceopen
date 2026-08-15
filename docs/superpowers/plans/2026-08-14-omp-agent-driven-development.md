@@ -1503,6 +1503,8 @@ python3 .omp/skills/cmtraceopen-dev/scripts/lane_state.py record-feature-owner \
   --allow '.omp/**' \
   --allow '.Clairvoyance/library.md' \
   --allow '.Clairvoyance/kickoff-prompt.md' \
+  --allow '.Clairvoyance/staff/**' \
+  --allow '.claude/skills/coderabbit-review-loop/**' \
   --allow 'docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md' \
   --allow 'docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md'
 ```
