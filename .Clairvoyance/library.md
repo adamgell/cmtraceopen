@@ -2,7 +2,7 @@
 
 This is a routing index for Clairvoyance Staff, not a reading list.
 WikiLinks in this file resolve to checked-in repository paths; do not invent a missing `.Clairvoyance/Docs/` tree.
-If no route matches, note the missing topic, write the doc when you learn it, and add the route in the same turn.
+If no route matches, report the missing topic to Main. Main may create the document and route after approval.
 
 ## When to read what
 

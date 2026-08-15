@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import secrets
+import stat
+import subprocess
 import sys
 from typing import NoReturn
 
@@ -74,6 +75,48 @@ def _validate_selector_policy(
         _fail(f"promoted {role} must name the failed gateway evidence")
 
 
+def _stat_signature(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _artifact_snapshot(
+    path: Path,
+) -> tuple[
+    tuple[int, int, int, int, int, int],
+    tuple[int, int, int, int, int, int],
+    str,
+]:
+    try:
+        link_before = path.lstat()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            file_before = os.fstat(stream.fileno())
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+            file_after = os.fstat(stream.fileno())
+        link_after = path.lstat()
+        target_after = path.stat()
+    except OSError as error:
+        raise ValueError(f"cannot snapshot probe artifact {path}: {error}") from error
+
+    link_signature = _stat_signature(link_before)
+    file_signature = _stat_signature(file_before)
+    if (
+        link_signature != _stat_signature(link_after)
+        or file_signature != _stat_signature(file_after)
+        or file_signature != _stat_signature(target_after)
+    ):
+        _fail(f"probe artifact changed while snapshotting: {path}")
+    return link_signature, file_signature, digest.hexdigest()
+
+
 def validate_role_report(report_path: Path, repo_root: Path) -> dict[str, str]:
     report = _read_json_object(report_path)
     if type(report.get("schemaVersion")) is not int or report["schemaVersion"] != 1:
@@ -101,7 +144,9 @@ def validate_role_report(report_path: Path, repo_root: Path) -> dict[str, str]:
         / "references"
         / "model-role-thresholds.json"
     )
-    selectors: dict[str, str] = {}
+    role_inputs: list[
+        tuple[str, str, str, str, Path, Path, dict[str, object]]
+    ] = []
     for role in ROLE_NAMES:
         role_record = roles[role]
         if not isinstance(role_record, dict):
@@ -123,26 +168,63 @@ def validate_role_report(report_path: Path, repo_root: Path) -> dict[str, str]:
         if not isinstance(recorded_evidence, dict):
             _fail(f"{role}.evidence must be an object")
         _validate_selector_policy(role, selector, role_record.get("promotionReason"))
-
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(validator_path),
-                "--discovery",
-                str(discovery),
-                "--artifact",
-                str(artifact),
-                "--thresholds",
-                str(thresholds_path),
-                "--selector",
-                selector,
-                "--role",
+        role_inputs.append(
+            (
                 role,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+                selector,
+                provider,
+                api,
+                discovery,
+                artifact,
+                recorded_evidence,
+            )
         )
+
+    artifact_paths = tuple(
+        dict.fromkeys(
+            artifact_path
+            for role_input in role_inputs
+            for artifact_path in role_input[4:6]
+        )
+    )
+    artifact_snapshots = {
+        artifact_path: _artifact_snapshot(artifact_path)
+        for artifact_path in artifact_paths
+    }
+
+    selectors: dict[str, str] = {}
+    for (
+        role,
+        selector,
+        provider,
+        api,
+        discovery,
+        artifact,
+        recorded_evidence,
+    ) in role_inputs:
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(validator_path),
+                    "--discovery",
+                    str(discovery),
+                    "--artifact",
+                    str(artifact),
+                    "--thresholds",
+                    str(thresholds_path),
+                    "--selector",
+                    selector,
+                    "--role",
+                    role,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise ValueError(f"probe validation timed out for {role}") from error
         if completed.returncode != 0:
             detail = completed.stderr.strip() or f"exit {completed.returncode}"
             _fail(f"probe validation failed for {role}: {detail}")
@@ -161,6 +243,12 @@ def validate_role_report(report_path: Path, repo_root: Path) -> dict[str, str]:
         if provider != observed.get("provider") or api != observed.get("api"):
             _fail(f"provider/API mismatch for {role}")
         selectors[role] = selector
+
+    if artifact_snapshots != {
+        artifact_path: _artifact_snapshot(artifact_path)
+        for artifact_path in artifact_paths
+    }:
+        _fail("probe artifacts changed during role validation")
     return selectors
 
 
@@ -219,11 +307,7 @@ task:
 '''
 
 
-def _existing_status(path: Path, proposed: bytes) -> str | None:
-    try:
-        existing = path.read_bytes()
-    except FileNotFoundError:
-        return None
+def _existing_bytes_status(existing: bytes, proposed: bytes) -> str:
     if existing == proposed:
         return "unchanged"
     raise ValueError(
@@ -239,6 +323,123 @@ def _existing_status(path: Path, proposed: bytes) -> str | None:
         )
     )
 
+
+def _existing_status_at(
+    parent_descriptor: int, name: str, proposed: bytes
+) -> str | None:
+    try:
+        before = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(before.st_mode):
+        _fail(f"existing config output must be a regular file: {name}")
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(
+            name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        raise ValueError(
+            f"config output changed during inspection: {name}"
+        ) from error
+
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _stat_signature(opened) != _stat_signature(before)
+        ):
+            _fail(f"config output changed during inspection: {name}")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            existing = stream.read()
+            after_read = os.fstat(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    try:
+        after_path = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+    except OSError as error:
+        raise ValueError(
+            f"config output changed during inspection: {name}"
+        ) from error
+    if (
+        _stat_signature(after_read) != _stat_signature(opened)
+        or _stat_signature(after_path) != _stat_signature(opened)
+    ):
+        _fail(f"config output changed during inspection: {name}")
+    return _existing_bytes_status(existing, proposed)
+
+
+def _open_pinned_directory(path: Path) -> int:
+    before = path.lstat()
+    if not stat.S_ISDIR(before.st_mode):
+        _fail(f"parent must be an existing non-symlink directory: {path}")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        after = path.lstat()
+        expected = (before.st_dev, before.st_ino)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(after.st_mode)
+            or (opened.st_dev, opened.st_ino) != expected
+            or (after.st_dev, after.st_ino) != expected
+        ):
+            _fail(f"parent directory changed while pinning: {path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _require_pinned_directory(path: Path, descriptor: int) -> None:
+    try:
+        current = path.lstat()
+        pinned = os.fstat(descriptor)
+    except OSError as error:
+        raise ValueError(f"parent directory changed: {path}") from error
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or not stat.S_ISDIR(pinned.st_mode)
+        or (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino)
+    ):
+        _fail(f"parent directory changed: {path}")
+
+
+def check_exact(path: Path, content: str) -> str:
+    parent_descriptor = _open_pinned_directory(path.parent)
+    try:
+        status = _existing_status_at(
+            parent_descriptor, path.name, content.encode("utf-8")
+        )
+        if status is None:
+            _fail(f"qualified project config is missing: {path}")
+        _require_pinned_directory(path.parent, parent_descriptor)
+        return status
+    finally:
+        os.close(parent_descriptor)
+
+
 def _write_staged(stream: object, proposed: bytes) -> None:
     remaining = memoryview(proposed)
     while remaining:
@@ -252,43 +453,66 @@ def _write_staged(stream: object, proposed: bytes) -> None:
 
 def write_create_only(path: Path, content: str) -> str:
     proposed = content.encode("utf-8")
-    existing_status = _existing_status(path, proposed)
-    if existing_status is not None:
-        return existing_status
-
-    while True:
-        temporary_path = path.with_name(
-            f".{path.name}.{secrets.token_hex(16)}.tmp"
-        )
-        try:
-            descriptor = os.open(
-                temporary_path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-            break
-        except FileExistsError:
-            continue
-
+    parent_descriptor = _open_pinned_directory(path.parent)
+    descriptor = -1
+    temporary_name: str | None = None
     try:
+        existing_status = _existing_status_at(
+            parent_descriptor, path.name, proposed
+        )
+        if existing_status is not None:
+            _require_pinned_directory(path.parent, parent_descriptor)
+            return existing_status
+
+        while True:
+            temporary_name = f".{path.name}.{secrets.token_hex(16)}.tmp"
+            try:
+                descriptor = os.open(
+                    temporary_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+                break
+            except FileExistsError:
+                continue
+
         stream = os.fdopen(descriptor, "wb")
         descriptor = -1
         with stream:
             _write_staged(stream, proposed)
         try:
-            # Atomic no-overwrite publication covers cooperating creators.
-            # Same-user mutation of another creator's temp name is out of scope.
-            os.link(temporary_path, path)
+            # Both names are resolved in the captured parent directory.
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
         except FileExistsError:
-            raced_status = _existing_status(path, proposed)
+            raced_status = _existing_status_at(
+                parent_descriptor, path.name, proposed
+            )
             if raced_status is None:
                 raise
+            _require_pinned_directory(path.parent, parent_descriptor)
             return raced_status
+        _require_pinned_directory(path.parent, parent_descriptor)
         return "created"
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary_path.unlink(missing_ok=True)
+        try:
+            if descriptor >= 0:
+                os.close(descriptor)
+        finally:
+            try:
+                if temporary_name is not None:
+                    try:
+                        os.unlink(temporary_name, dir_fd=parent_descriptor)
+                    except FileNotFoundError:
+                        pass
+            finally:
+                os.close(parent_descriptor)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -296,6 +520,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
 
@@ -308,7 +533,12 @@ def main() -> int:
         output_path = repo_root / output_path
     try:
         selectors = validate_role_report(report_path, repo_root)
-        status = write_create_only(output_path, render_config(selectors))
+        rendered = render_config(selectors)
+        status = (
+            check_exact(output_path, rendered)
+            if args.check
+            else write_create_only(output_path, rendered)
+        )
     except (OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1

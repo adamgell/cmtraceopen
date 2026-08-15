@@ -42,7 +42,9 @@ REPOSITORY_LEVEL_CHANGES = (
 SCRIPT_CHANGES = (
     "base-repository URL parsing and pending-review filtering, including prefixed "
     "enterprise pull-request URLs; reviewer targeting retargeted to coderabbitai "
-    "with approval-at-head summary fields."
+    "with approval-at-head summary fields; bounded GitHub CLI subprocesses, "
+    "fail-closed pagination cursor progress, raw string GraphQL variables, and "
+    "null-safe exact CodeRabbit bot-login aliases."
 )
 MIT_LICENSE_SECTIONS = (
     "MIT License\n",
@@ -55,14 +57,21 @@ review_state = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(review_state)
 
 
-def graphql_response(reviews: list[dict[str, object]]) -> dict[str, object]:
+def graphql_response(
+    reviews: list[dict[str, object]],
+    *,
+    head: str = "a" * 40,
+    base: str = "b" * 40,
+    threads: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     return {
         "data": {
             "repository": {
                 "pullRequest": {
                     "number": 42,
                     "url": "https://github.com/base-owner/base-repo/pull/42",
-                    "headRefOid": "a" * 40,
+                    "headRefOid": head,
+                    "baseRefOid": base,
                     "isDraft": False,
                     "reviewDecision": None,
                     "reviews": {
@@ -71,12 +80,113 @@ def graphql_response(reviews: list[dict[str, object]]) -> dict[str, object]:
                     },
                     "reviewThreads": {
                         "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        "nodes": [],
+                        "nodes": threads if threads is not None else [],
                     },
                 }
             }
         }
     }
+
+
+def pull_request_page(**connections: object) -> dict[str, object]:
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "number": 42,
+                    "url": "https://github.com/base-owner/base-repo/pull/42",
+                    "headRefOid": "a" * 40,
+                    "baseRefOid": "b" * 40,
+                    "isDraft": False,
+                    "reviewDecision": None,
+                    **connections,
+                },
+            },
+        },
+    }
+
+
+def comment_page(*comments: dict[str, object]) -> dict[str, object]:
+    return {
+        "data": {
+            "node": {
+                "comments": {
+                    "pageInfo": {
+                        "hasNextPage": False,
+                        "endCursor": comments[-1]["id"] if comments else None,
+                    },
+                    "nodes": list(comments),
+                },
+            },
+        },
+    }
+
+
+def review_thread(
+    *comments: dict[str, object],
+    thread_id: str = "thread-1",
+) -> dict[str, object]:
+    return {
+        "id": thread_id,
+        "isResolved": False,
+        "isOutdated": False,
+        "path": "src/one.ts",
+        "line": 1,
+        "resolvedBy": None,
+        "comments": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": list(comments),
+        },
+    }
+
+
+class ReviewTransportTests(unittest.TestCase):
+    def test_run_json_times_out_with_a_clear_failure(self) -> None:
+        command = ["gh", "api", "graphql"]
+        with patch.object(
+            review_state.subprocess,
+            "run",
+            side_effect=review_state.subprocess.TimeoutExpired(
+                command,
+                review_state.SUBPROCESS_TIMEOUT_SECONDS,
+            ),
+        ) as run, self.assertRaisesRegex(
+            SystemExit,
+            "timed out",
+        ):
+            review_state.run_json(command)
+
+        self.assertEqual(
+            review_state.SUBPROCESS_TIMEOUT_SECONDS,
+            run.call_args.kwargs["timeout"],
+        )
+
+    def test_run_json_rejects_empty_or_malformed_output(self) -> None:
+        command = ["gh", "api", "graphql"]
+        for stdout in ("", "{"):
+            with self.subTest(stdout=stdout), patch.object(
+                review_state.subprocess,
+                "run",
+                return_value=review_state.subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout,
+                    "",
+                ),
+            ), self.assertRaisesRegex(SystemExit, "invalid JSON"):
+                review_state.run_json(command)
+
+        with patch.object(
+            review_state.subprocess,
+            "run",
+            return_value=review_state.subprocess.CompletedProcess(
+                command,
+                0,
+                "[]",
+                "",
+            ),
+        ), self.assertRaisesRegex(SystemExit, "JSON object"):
+            review_state.run_json(command)
 
 
 class CurrentPullRequestTests(unittest.TestCase):
@@ -118,7 +228,7 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             "state": "PENDING",
             "body": "",
             "submittedAt": None,
-            "author": {"login": "coderabbitai"},
+            "author": {"login": "coderabbitai[bot]"},
             "commit": None,
         }
 
@@ -140,7 +250,7 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             "state": "CHANGES_REQUESTED",
             "body": "Review complete",
             "submittedAt": "2026-08-08T12:00:00Z",
-            "author": {"login": "coderabbitai"},
+            "author": {"login": "coderabbitai[bot]"},
             "commit": {"oid": "b" * 40},
         }
         pending = {
@@ -148,7 +258,7 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             "state": "PENDING",
             "body": "",
             "submittedAt": None,
-            "author": {"login": "coderabbitai"},
+            "author": {"login": "coderabbitai[bot]"},
             "commit": None,
         }
 
@@ -177,7 +287,7 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             "state": "APPROVED",
             "body": "lgtm",
             "submittedAt": "2026-08-08T12:00:00Z",
-            "author": {"login": "coderabbitai"},
+            "author": {"login": "coderabbitai[bot]"},
             "commit": {"oid": "b" * 40},
         }
 
@@ -197,7 +307,7 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             "state": "APPROVED",
             "body": "lgtm",
             "submittedAt": "2026-08-08T13:00:00Z",
-            "author": {"login": "coderabbitai"},
+            "author": {"login": "coderabbitai[bot]"},
             "commit": {"oid": "a" * 40},
         }
 
@@ -209,6 +319,475 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
 
         self.assertTrue(summary["approved_at_head"])
+
+    def test_spoofed_coderabbit_login_cannot_override_real_bot_review(self) -> None:
+        real_review = {
+            "id": "real",
+            "state": "CHANGES_REQUESTED",
+            "body": "changes required",
+            "submittedAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+            "commit": {"oid": "a" * 40},
+        }
+        spoofed_approval = {
+            "id": "spoofed",
+            "state": "APPROVED",
+            "body": "lgtm",
+            "submittedAt": "2026-08-08T13:00:00Z",
+            "author": {"login": "coderabbit-helper"},
+            "commit": {"oid": "a" * 40},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([real_review, spoofed_approval]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertEqual(1, summary["coderabbit_review_count"])
+        self.assertEqual(real_review, summary["latest_coderabbit_review"])
+        self.assertEqual("CHANGES_REQUESTED", summary["latest_coderabbit_review_state"])
+        self.assertFalse(summary["approved_at_head"])
+
+    def test_coderabbit_identity_accepts_exact_github_bot_logins(self) -> None:
+        for login in (
+            "coderabbitai",
+            "coderabbitai[bot]",
+            "CodeRabbitAI[Bot]",
+        ):
+            with self.subTest(login=login):
+                self.assertTrue(review_state.is_coderabbit({"login": login}))
+        for author in (
+            None,
+            {},
+            {"login": None},
+            {"login": "coderabbit-helper"},
+            {"login": "coderabbit[bot]"},
+            {"login": "adamgell"},
+        ):
+            with self.subTest(author=author):
+                self.assertFalse(review_state.is_coderabbit(author))
+
+    def test_bare_graphql_login_counts_review_and_thread(self) -> None:
+        review = {
+            "id": "review",
+            "state": "CHANGES_REQUESTED",
+            "body": "changes required",
+            "submittedAt": "2026-08-15T01:37:48Z",
+            "author": {"login": "coderabbitai"},
+            "commit": {"oid": "a" * 40},
+        }
+        thread = {
+            "id": "thread",
+            "isResolved": False,
+            "isOutdated": False,
+            "path": "src/example.py",
+            "line": 1,
+            "resolvedBy": None,
+            "comments": {
+                "pageInfo": {
+                    "hasNextPage": False,
+                    "endCursor": None,
+                },
+                "nodes": [
+                    {
+                        "id": "comment",
+                        "body": "finding",
+                        "createdAt": "2026-08-15T01:37:45Z",
+                        "author": {"login": "coderabbitai"},
+                    }
+                ]
+            },
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([review], threads=[thread]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertEqual(1, summary["coderabbit_review_count"])
+        self.assertEqual(1, summary["unresolved_coderabbit_thread_count"])
+
+    def test_asymmetric_connections_and_nested_comments_converge(self) -> None:
+        review = {
+            "id": "review-1",
+            "state": "CHANGES_REQUESTED",
+            "body": "changes",
+            "submittedAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+            "commit": {"oid": "a" * 40},
+        }
+        first_comment = {
+            "id": "comment-1",
+            "body": "first",
+            "createdAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "human"},
+        }
+        coderabbit_comment = {
+            "id": "comment-2",
+            "body": "actionable",
+            "createdAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+        }
+        first_thread = review_thread(first_comment)
+        first_thread["comments"] = {
+            "pageInfo": {"hasNextPage": True, "endCursor": "comment-1"},
+            "nodes": [first_comment],
+        }
+        second_thread = {
+            **review_thread(thread_id="thread-2"),
+            "isResolved": True,
+            "path": "src/two.ts",
+            "line": 2,
+            "resolvedBy": {"login": "human"},
+        }
+        snapshot_pages = [
+            pull_request_page(
+                reviews={
+                    "pageInfo": {"hasNextPage": False, "endCursor": "review-1"},
+                    "nodes": [review],
+                },
+                reviewThreads={
+                    "pageInfo": {"hasNextPage": True, "endCursor": "thread-1"},
+                    "nodes": [first_thread],
+                },
+            ),
+            pull_request_page(
+                reviewThreads={
+                    "pageInfo": {"hasNextPage": False, "endCursor": "thread-2"},
+                    "nodes": [first_thread, second_thread],
+                },
+            ),
+            comment_page(coderabbit_comment),
+        ]
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[*snapshot_pages, *snapshot_pages],
+        ) as run_json:
+            result = review_state.fetch("base-owner", "base-repo", 42)
+
+        self.assertEqual(1, result["summary"]["review_count"])
+        self.assertEqual(1, result["summary"]["unresolved_thread_count"])
+        self.assertEqual(1, result["summary"]["unresolved_coderabbit_thread_count"])
+        for offset in (0, 3):
+            second_command = run_json.call_args_list[offset + 1].args[0]
+            self.assertIn("skipReviews=true", second_command)
+            self.assertEqual(
+                "-f",
+                second_command[
+                    second_command.index("threads=thread-1") - 1
+                ],
+            )
+            self.assertIn("threads=thread-1", second_command)
+            self.assertIn("skipThreads=false", second_command)
+            comment_command = run_json.call_args_list[offset + 2].args[0]
+            self.assertIn("id=thread-1", comment_command)
+            self.assertEqual(
+                "-f",
+                comment_command[
+                    comment_command.index("id=thread-1") - 1
+                ],
+            )
+            self.assertEqual(
+                "-f",
+                comment_command[
+                    comment_command.index("comments=comment-1") - 1
+                ],
+            )
+            self.assertIn("comments=comment-1", comment_command)
+        self.assertEqual(6, run_json.call_count)
+
+    def test_review_pagination_rejects_missing_cursor(self) -> None:
+        response = pull_request_page(
+            reviews={
+                "pageInfo": {"hasNextPage": True, "endCursor": None},
+                "nodes": [],
+            },
+            reviewThreads={
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            },
+        )
+
+        with patch.object(
+            review_state,
+            "run_json",
+            return_value=response,
+        ), self.assertRaisesRegex(SystemExit, "reviews.*cursor"):
+            review_state._fetch_complete_snapshot(
+                "base-owner",
+                "base-repo",
+                42,
+            )
+
+    def test_review_pagination_rejects_cursor_cycle(self) -> None:
+        first = pull_request_page(
+            reviews={
+                "pageInfo": {"hasNextPage": True, "endCursor": "review-a"},
+                "nodes": [],
+            },
+            reviewThreads={
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            },
+        )
+        second = pull_request_page(
+            reviews={
+                "pageInfo": {"hasNextPage": True, "endCursor": "review-b"},
+                "nodes": [],
+            },
+        )
+        cycle = pull_request_page(
+            reviews={
+                "pageInfo": {"hasNextPage": True, "endCursor": "review-a"},
+                "nodes": [],
+            },
+        )
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[first, second, cycle],
+        ), self.assertRaisesRegex(SystemExit, "reviews.*cursor"):
+            review_state._fetch_complete_snapshot(
+                "base-owner",
+                "base-repo",
+                42,
+            )
+
+
+    def test_thread_pagination_rejects_cursor_cycle(self) -> None:
+        first = pull_request_page(
+            reviews={
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            },
+            reviewThreads={
+                "pageInfo": {"hasNextPage": True, "endCursor": "thread-1"},
+                "nodes": [],
+            },
+        )
+        second = pull_request_page(
+            reviewThreads={
+                "pageInfo": {"hasNextPage": True, "endCursor": "thread-2"},
+                "nodes": [],
+            },
+        )
+        cycle = pull_request_page(
+            reviewThreads={
+                "pageInfo": {"hasNextPage": True, "endCursor": "thread-1"},
+                "nodes": [],
+            },
+        )
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[first, second, cycle],
+        ), self.assertRaisesRegex(SystemExit, "review threads.*cursor"):
+            review_state._fetch_complete_snapshot(
+                "base-owner",
+                "base-repo",
+                42,
+            )
+
+    def test_comment_pagination_rejects_cursor_cycle(self) -> None:
+        first_comment = {
+            "id": "comment-1",
+            "body": "first",
+            "createdAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "human"},
+        }
+        thread = review_thread(first_comment)
+        thread["comments"] = {
+            "pageInfo": {
+                "hasNextPage": True,
+                "endCursor": "comment-1",
+            },
+            "nodes": [first_comment],
+        }
+        second = comment_page(first_comment)
+        second["data"]["node"]["comments"]["pageInfo"] = {
+            "hasNextPage": True,
+            "endCursor": "comment-2",
+        }
+        cycle = comment_page(first_comment)
+        cycle["data"]["node"]["comments"]["pageInfo"] = {
+            "hasNextPage": True,
+            "endCursor": "comment-1",
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[second, cycle],
+        ), self.assertRaisesRegex(SystemExit, "thread comments.*cursor"):
+            review_state._complete_thread_comments(thread)
+
+
+    def test_stable_metadata_includes_base_ref_oid(self) -> None:
+        response = graphql_response([])
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[response, response],
+        ):
+            pull_request = review_state.fetch(
+                "base-owner",
+                "base-repo",
+                42,
+            )["pull_request"]
+
+        self.assertEqual("a" * 40, pull_request["head_sha"])
+        self.assertEqual("b" * 40, pull_request["base_sha"])
+        self.assertIn("baseRefOid", review_state.QUERY)
+
+    def test_base_drift_between_complete_snapshots_fails_closed(self) -> None:
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[
+                graphql_response([]),
+                graphql_response([], base="c" * 40),
+            ],
+        ), self.assertRaisesRegex(
+            SystemExit, "pull request changed during pagination"
+        ):
+            review_state.fetch("base-owner", "base-repo", 42)
+
+    def test_head_drift_between_complete_snapshots_fails_closed(self) -> None:
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[
+                graphql_response([]),
+                graphql_response([], head="b" * 40),
+            ],
+        ), self.assertRaisesRegex(
+            SystemExit, "pull request changed during pagination"
+        ):
+            review_state.fetch("base-owner", "base-repo", 42)
+
+    def test_new_commented_coderabbit_review_at_stable_head_fails_closed(
+        self,
+    ) -> None:
+        approval = {
+            "id": "approval",
+            "state": "APPROVED",
+            "body": "lgtm",
+            "submittedAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+            "commit": {"oid": "a" * 40},
+        }
+        commented = {
+            "id": "commented",
+            "state": "COMMENTED",
+            "body": "new findings",
+            "submittedAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+            "commit": {"oid": "a" * 40},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[
+                graphql_response([approval]),
+                graphql_response([approval, commented]),
+            ],
+        ), self.assertRaisesRegex(
+            SystemExit, "review state changed during pagination"
+        ):
+            review_state.fetch("base-owner", "base-repo", 42)
+
+    def test_new_actionable_coderabbit_thread_at_stable_head_fails_closed(
+        self,
+    ) -> None:
+        coderabbit_comment = {
+            "id": "comment-1",
+            "body": "actionable",
+            "createdAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[
+                graphql_response([]),
+                graphql_response(
+                    [],
+                    threads=[review_thread(coderabbit_comment)],
+                ),
+            ],
+        ), self.assertRaisesRegex(
+            SystemExit, "review state changed during pagination"
+        ):
+            review_state.fetch("base-owner", "base-repo", 42)
+
+    def test_new_actionable_comment_at_stable_head_fails_closed(self) -> None:
+        human_comment = {
+            "id": "comment-1",
+            "body": "question",
+            "createdAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "human"},
+        }
+        coderabbit_comment = {
+            "id": "comment-2",
+            "body": "actionable",
+            "createdAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[
+                graphql_response(
+                    [],
+                    threads=[review_thread(human_comment)],
+                ),
+                graphql_response(
+                    [],
+                    threads=[review_thread(human_comment, coderabbit_comment)],
+                ),
+            ],
+        ), self.assertRaisesRegex(
+            SystemExit, "review state changed during pagination"
+        ):
+            review_state.fetch("base-owner", "base-repo", 42)
+
+    def test_unresolved_outdated_coderabbit_thread_is_not_actionable(
+        self,
+    ) -> None:
+        coderabbit_comment = {
+            "id": "comment-1",
+            "body": "superseded finding",
+            "createdAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+        }
+        outdated_thread = review_thread(coderabbit_comment)
+        outdated_thread["isOutdated"] = True
+        response = graphql_response([], threads=[outdated_thread])
+
+        with patch.object(
+            review_state,
+            "run_json",
+            side_effect=[response, response],
+        ):
+            result = review_state.fetch("base-owner", "base-repo", 42)
+
+        self.assertEqual(1, result["summary"]["unresolved_thread_count"])
+        self.assertEqual(
+            0,
+            result["summary"]["unresolved_coderabbit_thread_count"],
+        )
 
 
 class ProvenanceTests(unittest.TestCase):

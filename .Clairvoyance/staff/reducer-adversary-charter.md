@@ -1,4 +1,4 @@
-# Reducer Adversary Charter — CMTrace Open
+# Reducer Adversary Charter: CMTrace Open
 
 **Role:** Semantic adversarial reviewer
 **Reports to:** CEO; semantic findings reviewed with Reducer Contract Agent

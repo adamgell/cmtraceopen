@@ -168,6 +168,25 @@ class ProbeValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validator.validate_trace(events, SELECTOR)
 
+    def test_nonempty_read_error_fails_even_when_is_error_is_false(self) -> None:
+        events = valid_events()
+        events[1]["error"] = "read denied"
+
+        with self.assertRaises(ValueError):
+            validator.validate_trace(events, SELECTOR)
+
+    def test_each_required_charter_marker_is_mandatory(self) -> None:
+        self.assertTrue(validator._REQUIRED_CHARTER_MARKERS)
+        for marker in validator._REQUIRED_CHARTER_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, CHARTER_RESULT)
+                events = valid_events()
+                events[1]["result"] = CHARTER_RESULT.replace(marker, "removed", 1)
+
+                with self.assertRaises(ValueError):
+                    validator.validate_trace(events, SELECTOR)
+
+
     def test_duplicate_or_extra_tool_call_fails(self) -> None:
         duplicate = valid_events()
         duplicate.insert(1, dict(duplicate[0], toolCallId="read-2"))

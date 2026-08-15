@@ -1,4 +1,4 @@
-# Reducer Integration Charter — CMTrace Open
+# Reducer Integration Charter: CMTrace Open
 
 **Role:** Exact-head reducer integration and conformance verifier
 **Reports to:** CEO

@@ -169,6 +169,35 @@ class _FailingFile:
         return self._stream.fileno()
 
 
+class _ReplacingReadFile:
+    def __init__(self, stream: object, path: Path, replacement: bytes) -> None:
+        self._stream = stream
+        self._path = path
+        self._replacement = replacement
+
+    def __enter__(self) -> _ReplacingReadFile:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: object,
+    ) -> bool | None:
+        return self._stream.__exit__(exception_type, exception, traceback)
+
+    def read(self) -> bytes:
+        existing = self._stream.read()
+        replacement_path = self._path.with_name(f".{self._path.name}.replacement")
+        replacement_path.write_bytes(self._replacement)
+        os.replace(replacement_path, self._path)
+        return existing
+
+    def fileno(self) -> int:
+        return self._stream.fileno()
+
+
+
 class ProjectConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -237,6 +266,40 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertEqual(SELECTORS, selectors)
         self.assertEqual(EXPECTED_CONFIG, writer.render_config(selectors))
 
+    def test_artifact_mutation_after_role_validation_rejects_model_map(self) -> None:
+        real_run = subprocess.run
+        for artifact_path in (
+            self.artifacts[SELECTORS["mid"]],
+            self.discovery_path,
+        ):
+            with self.subTest(artifact=artifact_path.name):
+                original = artifact_path.read_bytes()
+                mutated = False
+
+                def mutate_validated_artifact(
+                    command: list[str], *args: object, **kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    nonlocal mutated
+                    completed = real_run(command, *args, **kwargs)
+                    role = command[command.index("--role") + 1]
+                    if role == "mid" and not mutated:
+                        mutated = True
+                        artifact_path.write_bytes(original + b"\n")
+                    return completed
+
+                try:
+                    with patch.object(
+                        writer.subprocess,
+                        "run",
+                        side_effect=mutate_validated_artifact,
+                    ), self.assertRaisesRegex(
+                        ValueError, "probe artifacts changed during role validation"
+                    ):
+                        writer.validate_role_report(self.report_path, REPO_ROOT)
+                    self.assertTrue(mutated)
+                finally:
+                    artifact_path.write_bytes(original)
+
     def test_identical_existing_config_is_idempotent(self) -> None:
         path = self.root / "config.yml"
         path.write_bytes(EXPECTED_CONFIG.encode("utf-8"))
@@ -245,6 +308,164 @@ class ProjectConfigTests(unittest.TestCase):
 
         self.assertEqual("unchanged", status)
         self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), path.read_bytes())
+
+    def test_check_exact_requires_existing_byte_identical_config(self) -> None:
+        path = self.root / "config.yml"
+        with self.assertRaisesRegex(ValueError, "missing"):
+            writer.check_exact(path, EXPECTED_CONFIG)
+        self.assertFalse(path.exists())
+
+        path.write_bytes(EXPECTED_CONFIG.encode("utf-8"))
+        self.assertEqual("unchanged", writer.check_exact(path, EXPECTED_CONFIG))
+
+        differing = EXPECTED_CONFIG.encode("utf-8") + b"# drift\n"
+        path.write_bytes(differing)
+        with self.assertRaisesRegex(ValueError, "differs"):
+            writer.check_exact(path, EXPECTED_CONFIG)
+        self.assertEqual(differing, path.read_bytes())
+
+    def test_existing_config_must_be_a_regular_file(self) -> None:
+        path = self.root / "config.yml"
+        target = self.root / "matching-target.yml"
+        target.write_text(EXPECTED_CONFIG, encoding="utf-8")
+        operations = (writer.check_exact, writer.write_create_only)
+
+        path.symlink_to(target)
+        for operation in operations:
+            with self.subTest(kind="symlink", operation=operation.__name__):
+                with self.assertRaisesRegex(ValueError, "regular file"):
+                    operation(path, EXPECTED_CONFIG)
+        self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), target.read_bytes())
+
+        path.unlink()
+        path.mkdir()
+        for operation in operations:
+            with self.subTest(kind="directory", operation=operation.__name__):
+                with self.assertRaisesRegex(ValueError, "regular file"):
+                    operation(path, EXPECTED_CONFIG)
+        self.assertEqual([], list(path.iterdir()))
+
+    def test_existing_config_replacement_during_inspection_fails_closed(
+        self,
+    ) -> None:
+        path = self.root / "config.yml"
+        path.write_text(EXPECTED_CONFIG, encoding="utf-8")
+        real_fdopen = os.fdopen
+
+        for operation in (writer.check_exact, writer.write_create_only):
+            replaced = False
+
+            def fdopen_with_replacement(
+                descriptor: int, mode: str, *args: object, **kwargs: object
+            ) -> _ReplacingReadFile:
+                nonlocal replaced
+                replaced = True
+                return _ReplacingReadFile(
+                    real_fdopen(descriptor, mode, *args, **kwargs),
+                    path,
+                    EXPECTED_CONFIG.encode("utf-8"),
+                )
+
+            with self.subTest(operation=operation.__name__):
+                with patch(
+                    "os.fdopen", side_effect=fdopen_with_replacement
+                ), self.assertRaisesRegex(
+                    ValueError, "config output changed during inspection"
+                ):
+                    operation(path, EXPECTED_CONFIG)
+                self.assertTrue(replaced)
+                self.assertEqual(
+                    EXPECTED_CONFIG.encode("utf-8"), path.read_bytes()
+                )
+
+    def test_initial_parent_symlink_is_rejected(self) -> None:
+        external_parent = self.root / "external"
+        external_parent.mkdir()
+        parent = self.root / "publish"
+        parent.symlink_to(external_parent, target_is_directory=True)
+        output = parent / "config.yml"
+
+        for operation in (writer.check_exact, writer.write_create_only):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(ValueError, "non-symlink directory"):
+                    operation(output, EXPECTED_CONFIG)
+        self.assertEqual([], list(external_parent.iterdir()))
+
+    def test_parent_replacement_before_unchanged_return_fails_closed(
+        self,
+    ) -> None:
+        real_existing_status = writer._existing_bytes_status
+
+        for operation in (writer.check_exact, writer.write_create_only):
+            parent = self.root / f"publish-{operation.__name__}"
+            parent.mkdir()
+            output = parent / "config.yml"
+            output.write_text(EXPECTED_CONFIG, encoding="utf-8")
+            displaced_parent = self.root / f"displaced-{operation.__name__}"
+            replacement_parent = self.root / f"replacement-{operation.__name__}"
+
+            def replace_parent_before_return(
+                existing: bytes, proposed: bytes
+            ) -> str:
+                status = real_existing_status(existing, proposed)
+                parent.rename(displaced_parent)
+                replacement_parent.mkdir()
+                parent.symlink_to(
+                    replacement_parent, target_is_directory=True
+                )
+                return status
+
+            with self.subTest(operation=operation.__name__):
+                with patch.object(
+                    writer,
+                    "_existing_bytes_status",
+                    side_effect=replace_parent_before_return,
+                ), self.assertRaisesRegex(
+                    ValueError, "parent directory changed"
+                ):
+                    operation(output, EXPECTED_CONFIG)
+                self.assertFalse(output.exists())
+                self.assertEqual(
+                    EXPECTED_CONFIG.encode("utf-8"),
+                    (displaced_parent / output.name).read_bytes(),
+                )
+                self.assertEqual([], list(replacement_parent.iterdir()))
+
+    def test_check_cli_requires_existing_exact_config(self) -> None:
+        output = self.root / "config.yml"
+        command = [
+            sys.executable,
+            str(WRITER_PATH),
+            "--check",
+            "--report",
+            str(self.report_path),
+            "--repo-root",
+            str(REPO_ROOT),
+            "--output",
+            str(output),
+        ]
+
+        missing = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, missing.returncode)
+        self.assertFalse(output.exists())
+
+        output.write_text(EXPECTED_CONFIG, encoding="utf-8")
+        exact = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, exact.returncode, exact.stderr)
+        self.assertEqual(
+            {"ok": True, "status": "unchanged"},
+            json.loads(exact.stdout),
+        )
 
     def test_differing_existing_config_is_byte_preserved_and_blocks(self) -> None:
         path = self.root / "config.yml"
@@ -334,6 +555,81 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertEqual(
             entries_before | {output},
             set(self.root.iterdir()),
+        )
+
+    def test_parent_replacement_cannot_redirect_publication_or_cleanup(self) -> None:
+        parent = self.root / "publish"
+        parent.mkdir()
+        output = parent / "config.yml"
+        displaced_parent = self.root / "displaced-publish"
+        replacement_parent = self.root / "replacement-publish"
+        sentinel = replacement_parent / "sentinel"
+        unrelated_temporary: Path | None = None
+        real_link = os.link
+
+        def replace_parent_during_publication(
+            source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            destination: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal unrelated_temporary
+            parent.rename(displaced_parent)
+            replacement_parent.mkdir()
+            sentinel.write_bytes(b"unrelated")
+            parent.symlink_to(replacement_parent, target_is_directory=True)
+            unrelated_temporary = replacement_parent / Path(source).name
+            unrelated_temporary.write_bytes(b"unrelated temporary")
+            real_link(source, destination, *args, **kwargs)
+
+        with patch(
+            "os.link", side_effect=replace_parent_during_publication
+        ), self.assertRaisesRegex(ValueError, "parent directory changed"):
+            writer.write_create_only(output, EXPECTED_CONFIG)
+        self.assertFalse(output.exists())
+        self.assertEqual(
+            EXPECTED_CONFIG.encode("utf-8"),
+            (displaced_parent / output.name).read_bytes(),
+        )
+        self.assertEqual(
+            {output.name},
+            {entry.name for entry in displaced_parent.iterdir()},
+        )
+        self.assertEqual(b"unrelated", sentinel.read_bytes())
+        self.assertIsNotNone(unrelated_temporary)
+        assert unrelated_temporary is not None
+        self.assertEqual(b"unrelated temporary", unrelated_temporary.read_bytes())
+
+    def test_probe_validator_timeout_fails_closed(self) -> None:
+        def time_out(*args: object, **kwargs: object) -> None:
+            self.assertEqual(60, kwargs.get("timeout"))
+            raise subprocess.TimeoutExpired(cmd=args[0], timeout=60)
+
+        with patch.object(writer.subprocess, "run", side_effect=time_out):
+            with self.assertRaisesRegex(
+                ValueError, "probe validation timed out for reasoning"
+            ):
+                writer.validate_role_report(self.report_path, REPO_ROOT)
+
+    def test_selector_policy_rejects_invalid_promotions(self) -> None:
+        invalid = (
+            ("mid", "openai-codex/gpt-5.6-sol", None),
+            ("mid", "llmgateway/grok-4-20-reasoning", "promotion"),
+            ("reasoning", "llmgateway/gpt-5.6-sol", "promotion"),
+            ("reasoning", "openai-codex/gpt-5.5-sol", "failed gateway"),
+            ("reasoning", "openai-codex/gpt-5.6-sol", " "),
+        )
+
+        for role, selector, reason in invalid:
+            with self.subTest(role=role, selector=selector, reason=reason):
+                with self.assertRaises(ValueError):
+                    writer._validate_selector_policy(role, selector, reason)
+
+    def test_selector_policy_accepts_recorded_sol_promotion(self) -> None:
+        writer._validate_selector_policy(
+            "advisor",
+            "openai-codex/gpt-5.6-sol",
+            "gateway probe failed the advisor threshold",
         )
 
 

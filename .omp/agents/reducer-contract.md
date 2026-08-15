@@ -8,24 +8,31 @@ autoloadSkills: [semantic-reducer-framework, semantic-reducer-development, contr
 advisor: true
 output:
   type: object
-  required: [decisions, evidence, tests, blockers]
+  additionalProperties: false
+  required: [role, phase, decisions, evidence, tests, blockers]
   properties:
+    role: { type: string, const: reducer-contract }
+    phase: { type: string, enum: [contract_report, blocked] }
     decisions:
       type: array
       items:
         type: object
+        additionalProperties: false
         required: [contract, evidence, consequence, test]
         properties:
-          contract: { type: string }
-          evidence: { type: string }
-          consequence: { type: string }
-          test: { type: string }
-    evidence: { type: array, items: { type: string } }
-    tests: { type: array, items: { type: string } }
-    blockers: { type: array, items: { type: string } }
+          contract: { type: string, minLength: 1 }
+          evidence: { type: string, minLength: 1 }
+          consequence: { type: string, minLength: 1 }
+          test: { type: string, minLength: 1 }
+    evidence: { type: array, items: { type: string, minLength: 1 } }
+    tests: { type: array, items: { type: string, minLength: 1 } }
+    blockers: { type: array, items: { type: string, minLength: 1 } }
 ---
 
+# Reducer Contract
+
 Before acting, read `.Clairvoyance/staff/reducer-contract-charter.md`, `.Clairvoyance/library.md`, `AGENTS.md`, the workload evidence card, and the referenced reducer contracts and ADRs.
+Set `role: reducer-contract`. Use `phase: contract_report` only with nonempty decisions, evidence, and proposed tests, or `phase: blocked` with those arrays empty and at least one concrete blocker.
 
 Protect evidence authority, identity/correlation, chronology, coverage, confidence, conflict, finding, and redaction semantics without forcing workload-specific reducers into one state machine. Report every decision as contract, evidence, consequence, and proposed executable test.
 

@@ -7,6 +7,6 @@ Review every Main and staff turn for:
 3. evidence/coverage/confidence violations;
 4. parser-crate impurity or compatibility layers;
 5. missing RED evidence, exact-head review, or required native validation;
-6. merge, close, force-push, reset, or deletion outside Adam's authority.
+6. merge, close, force-push, reset, or deletion outside Adam's authority, except Main's brief-required deletion of an obsolete tracked file inside the persisted sole-owner allowlist and Main's removal of the exact Task 11 disposable smoke worktree after its required checks confirm that no valuable or unpushed work remains.
 
 Advisors are read-only and advisory. Formal independent charter review remains a separate merge gate.

@@ -29,7 +29,7 @@ Upstream script path: scripts/review_state.py
 Upstream script SHA-256 at pinned commit: 71703606bcf171b9e7f8035466d41806622be7a6f04b8157ef86f16fb3ecdfad
 Downstream script commits: 925131c0da511e89eddbdb1e6f14f65ed4861a3f, a76c272d62a1d527f59c542608d10c405a210e2f
 Repository-level changes: SKILL.md uses a repository-relative invocation and an explicit --repo/--pr example; on 2026-08-08 the skill was retargeted from GitHub Copilot to CodeRabbit with an approval-at-head clean-cycle gate and an explicit no-merge terminus; downstream regression tests cover the maintained script.
-Script changes: base-repository URL parsing and pending-review filtering, including prefixed enterprise pull-request URLs; reviewer targeting retargeted to coderabbitai with approval-at-head summary fields.
+Script changes: base-repository URL parsing and pending-review filtering, including prefixed enterprise pull-request URLs; reviewer targeting retargeted to coderabbitai with approval-at-head summary fields; bounded GitHub CLI subprocesses, fail-closed pagination cursor progress, raw string GraphQL variables, and null-safe exact CodeRabbit bot-login aliases.
 License identifier: MIT, as declared by the upstream repository README. The
 upstream repository did not publish a root license file at this commit, so the
 standard MIT license text and source attribution are recorded locally.

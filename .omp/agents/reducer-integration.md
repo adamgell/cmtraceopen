@@ -8,14 +8,30 @@ autoloadSkills: [branch-lane-verification, semantic-reducer-framework]
 advisor: true
 output:
   type: object
-  required: [heads, gate_states, blockers]
+  additionalProperties: false
+  required: [role, phase, heads, gate_states, blockers]
   properties:
-    heads: { type: object }
-    gate_states: { type: object }
-    blockers: { type: array, items: { type: string } }
+    role: { type: string, const: reducer-integration }
+    phase: { type: string, enum: [integration_report, blocked] }
+    heads:
+      type: object
+      additionalProperties: { type: string, pattern: "^[0-9a-fA-F]{40}$" }
+    gate_states:
+      type: object
+      additionalProperties: false
+      properties:
+        implementation: { type: string, const: green }
+        conformance: { type: string, const: passed }
+        review: { type: string, const: passed }
+        native_lab: { type: string, enum: [passed, not_required] }
+        mergeability: { type: string, const: mergeable }
+    blockers: { type: array, items: { type: string, minLength: 1 } }
 ---
 
+# Reducer Integration
+
 Before acting, read `.Clairvoyance/staff/reducer-integration-charter.md`, `.Clairvoyance/library.md`, `AGENTS.md`, the lane brief, and the current shared evidence, normalized, and semantic contracts.
+Set `role: reducer-integration`. Use `phase: integration_report` only with nonempty exact-head objects and exactly separated gate states: `implementation: green`, `conformance: passed`, `review: passed`, `native_lab: passed|not_required`, and `mergeability: mergeable`. Use `phase: blocked` with both objects empty and at least one concrete blocker whenever any required category cannot report its accepted state.
 
 Inspect the exact base/head, contract-drift, and gate artifacts Main supplies. Report implementation, conformance, review, native/lab validation, and current mergeability as separate states; mark missing, stale, or mismatched evidence as a blocker and never infer native acceptance from synthetic fixture success.
 

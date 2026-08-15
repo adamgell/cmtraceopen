@@ -20,7 +20,7 @@ from urllib.parse import unquote, urlparse
 
 FEATURE_OWNER_STATES = ("active", "blocked", "released")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LANE_STATES = {
     "allocated",
     "running",
@@ -31,8 +31,27 @@ LANE_STATES = {
     "abandoned",
 }
 GATE_STATES = {"not_run", "running", "passed", "failed", "stale", "unavailable"}
+INDEPENDENT_REVIEW_GATE_STATES = {
+    "ci": "passed",
+    "coderabbit": "passed",
+    "charter_review": "passed",
+    "contract_conformance": "passed",
+}
+CODERABBIT_BOT_LOGINS = frozenset({
+    "coderabbitai",
+    "coderabbitai[bot]",
+})
 NATIVE_STATES = GATE_STATES | {"not_required"}
 NATIVE_REQUIREMENTS = {"required", "not_required"}
+DISPATCH_ROLES = {
+    "code-review",
+    "coder",
+    "reducer-adversary",
+    "reducer-contract",
+    "reducer-integration",
+    "tech-writer",
+    "ui-design",
+}
 IMPLEMENTATION_STATES = {"not_run", "red", "green", "failed", "stale"}
 MERGEABILITY_STATES = {
     "not_run",
@@ -79,6 +98,19 @@ GIT_TIMEOUT_SECONDS = 30.0
 ARTIFACT_HASH_CHUNK_SIZE = 1024 * 1024
 LOCK_TIMEOUT_SECONDS = 2.0
 PR_URL_PREFIX = "https://github.com/adamgell/cmtraceopen/pull/"
+PROCESS_ENV_ALLOWLIST = (
+    "COMSPEC",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "WINDIR",
+)
 
 
 class RetriableConflict(RuntimeError):
@@ -107,6 +139,8 @@ _LANE_KEYS = {
     "agentId",
     "role",
     "worktree",
+    "worktreeIdentity",
+    "gitCommonDir",
     "branch",
     "allowedPaths",
     "dependsOn",
@@ -136,7 +170,36 @@ _OBSERVATION_KEYS = {
     "exitCode",
     "observedAt",
     "artifact",
+    "redClassification",
     "baseSensitive",
+}
+_OBSERVATION_ARTIFACT_REF_KEYS = {"uri", "sha256"}
+_WORKTREE_IDENTITY_KEYS = {"device", "inode"}
+_REPO_CHECK_ARTIFACT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "outcome",
+    "command",
+    "worktree",
+    "worktreeIdentity",
+    "gitCommonDir",
+    "branch",
+    "headSha",
+    "baseSha",
+    "exitCode",
+    "observedAt",
+    "stdout",
+    "stderr",
+    "failureClassification",
+    "error",
+}
+_RED_CLASSIFICATION_KEYS = {
+    "kind",
+    "artifactSha256",
+    "focusedTest",
+    "fixture",
+    "expectedAssertion",
+    "reviewedAt",
 }
 _FEATURE_OWNER_KEYS = {
     "schemaVersion",
@@ -149,7 +212,16 @@ _FEATURE_OWNER_KEYS = {
     "transferCount",
     "evidenceInvalidatedAt",
 }
-_ROOT_SLOTS = {"stage1Before", "stage1After", "stage2Before", "stage2After"}
+_ROOT_SAFETY_KEYS = {"stage1Before", "stage1After", "stage2Waves"}
+_ROOT_ARTIFACT_KEYS = {"artifact", "sha256"}
+_STAGE2_WAVE_KEYS = {
+    "waveId",
+    "laneBindings",
+    "managedWorktreesSha256",
+    "before",
+    "after",
+}
+_STAGE2_LANE_BINDING_KEYS = {"allocationBaseSha", "worktree"}
 _ROOT_SNAPSHOT_KEYS = {
     "headSha",
     "indexTreeSha",
@@ -158,6 +230,22 @@ _ROOT_SNAPSHOT_KEYS = {
     "filesystemSha256",
     "gitControlsSha256",
     "managedWorktreesSha256",
+}
+_WINDOWS_RESERVED_NAMES = {
+    "aux",
+    "con",
+    "nul",
+    "prn",
+    "conin$",
+    "conout$",
+    "com¹",
+    "com²",
+    "com³",
+    "lpt¹",
+    "lpt²",
+    "lpt³",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
 }
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
@@ -184,6 +272,8 @@ _GITHUB_REVIEW_ARTIFACT_KEYS = _BASE_ARTIFACT_KEYS | {
     "prNumber",
     "prUrl",
     "reviewGate",
+    "isDraft",
+    "rawEvidenceSha256",
 }
 
 
@@ -203,6 +293,18 @@ def _require_exact_keys(value: dict[str, object], expected: set[str], label: str
         _fail(f"{label} keys are invalid (missing={missing}, extra={extra})")
 
 
+def _validate_independent_review_gate_states(
+    value: object,
+    label: str,
+) -> None:
+    if not isinstance(value, dict):
+        _fail(f"{label} must be an object")
+    _require_exact_keys(value, set(INDEPENDENT_REVIEW_GATE_STATES), label)
+    for gate, expected_state in INDEPENDENT_REVIEW_GATE_STATES.items():
+        if value[gate] != expected_state:
+            _fail(f"{label}.{gate} must be exactly {expected_state}")
+
+
 def _require_nonempty_string(value: object, label: str) -> str:
     if not isinstance(value, str) or not value:
         _fail(f"{label} must be a non-empty string")
@@ -217,6 +319,18 @@ def _require_optional_string(value: object, label: str) -> None:
 def _require_int(value: object, label: str, *, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         _fail(f"{label} must be an integer greater than or equal to {minimum}")
+    return value
+
+
+def _require_worktree_identity(
+    value: object,
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        _fail(f"{label} must be an object")
+    _require_exact_keys(value, _WORKTREE_IDENTITY_KEYS, label)
+    _require_int(value["device"], f"{label}.device")
+    _require_int(value["inode"], f"{label}.inode")
     return value
 
 def _require_enum(
@@ -260,6 +374,499 @@ def _require_sha256(value: object, label: str) -> str:
         _fail(f"{label} must be a lowercase SHA-256 digest")
     return value
 
+def _require_command(value: object, label: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+    ):
+        _fail(f"{label} must be a non-empty direct argv array")
+    return value
+
+
+def _read_hashed_json_uri(
+    uri_value: object,
+    sha256_value: object,
+    label: str,
+) -> dict[str, object]:
+    uri = _require_nonempty_string(uri_value, f"{label}.uri")
+    expected_sha256 = _require_sha256(sha256_value, f"{label}.sha256")
+    parsed = urlparse(uri)
+    if (
+        parsed.scheme != "file"
+        or parsed.netloc not in {"", "localhost"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        _fail(f"{label}.uri must be a local file:// URI")
+    path = Path(unquote(parsed.path))
+    if not path.is_absolute():
+        _fail(f"{label}.uri must identify an absolute path")
+    try:
+        expected = path.lstat()
+        if not stat.S_ISREG(expected.st_mode):
+            _fail(f"{label}.uri must identify a regular file")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if _stable_stat_identity(opened) != _stable_stat_identity(expected):
+                _fail(f"{label} changed while opening")
+            digest = hashlib.sha256()
+            chunks: list[bytes] = []
+            while chunk := os.read(descriptor, ARTIFACT_HASH_CHUNK_SIZE):
+                digest.update(chunk)
+                chunks.append(chunk)
+            if _stable_stat_identity(os.fstat(descriptor)) != _stable_stat_identity(
+                opened
+            ):
+                _fail(f"{label} changed while reading")
+        finally:
+            os.close(descriptor)
+        if _stable_stat_identity(path.lstat()) != _stable_stat_identity(expected):
+            _fail(f"{label} path changed while reading")
+    except OSError as error:
+        raise ValueError(f"cannot read {label}: {error}") from error
+    if digest.hexdigest() != expected_sha256:
+        _fail(f"{label}.sha256 does not match artifact content")
+    try:
+        text = b"".join(chunks).decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError(f"{label} is not valid UTF-8") from error
+    return _decode_json_object(text, uri)
+
+
+def _read_observation_artifact(
+    reference: object,
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(reference, dict):
+        _fail(f"{label} must be a content-hashed artifact reference")
+    _require_exact_keys(reference, _OBSERVATION_ARTIFACT_REF_KEYS, label)
+    return _read_hashed_json_uri(
+        reference["uri"],
+        reference["sha256"],
+        label,
+    )
+
+
+def _validate_repo_check_artifact(
+    artifact: dict[str, object],
+    observation: dict[str, object],
+    label: str,
+) -> None:
+    _require_exact_keys(artifact, _REPO_CHECK_ARTIFACT_KEYS, label)
+    _require_schema_version(artifact["schemaVersion"], f"{label}.schemaVersion")
+    if artifact["kind"] != "repo_check":
+        _fail(f"{label}.kind must be repo_check")
+    _require_enum(
+        artifact["outcome"],
+        {
+            "completed",
+            "timed_out",
+            "setup_failed",
+            "spawn_failed",
+            "containment_failed",
+        },
+        f"{label}.outcome",
+    )
+    command = _require_command(artifact["command"], f"{label}.command")
+    worktree = _require_nonempty_string(
+        artifact["worktree"],
+        f"{label}.worktree",
+    )
+    if not Path(worktree).is_absolute():
+        _fail(f"{label}.worktree must be absolute")
+    _require_worktree_identity(
+        artifact["worktreeIdentity"],
+        f"{label}.worktreeIdentity",
+    )
+    git_common_dir = _require_nonempty_string(
+        artifact["gitCommonDir"],
+        f"{label}.gitCommonDir",
+    )
+    if not Path(git_common_dir).is_absolute():
+        _fail(f"{label}.gitCommonDir must be absolute")
+    _require_nonempty_string(artifact["branch"], f"{label}.branch")
+    head_sha = _require_sha(artifact["headSha"], f"{label}.headSha")
+    base_sha = _require_sha(artifact["baseSha"], f"{label}.baseSha")
+    exit_code = artifact["exitCode"]
+    if exit_code is not None and (
+        isinstance(exit_code, bool) or not isinstance(exit_code, int)
+    ):
+        _fail(f"{label}.exitCode must be an integer or null")
+    observed_at = _require_utc(artifact["observedAt"], f"{label}.observedAt")
+    stdout = artifact["stdout"]
+    stderr = artifact["stderr"]
+    if not isinstance(stdout, str) or not isinstance(stderr, str):
+        _fail(f"{label} output must be strings")
+    classification = _require_enum(
+        artifact["failureClassification"],
+        {"success", "command_failure", "runner_failure"},
+        f"{label}.failureClassification",
+    )
+    _require_optional_string(artifact["error"], f"{label}.error")
+
+    if command != observation["command"]:
+        _fail(f"{label}.command does not match the observation command")
+    if head_sha != observation["headSha"]:
+        _fail(f"{label}.headSha does not match the observation head")
+    if base_sha != observation["baseSha"]:
+        _fail(f"{label}.baseSha does not match the observation base")
+    if exit_code != observation["exitCode"]:
+        _fail(f"{label}.exitCode does not match the observation exit")
+    if observed_at != observation["observedAt"]:
+        _fail(f"{label}.observedAt does not match the observation time")
+
+    outcome = artifact["outcome"]
+    error = artifact["error"]
+    if classification == "success":
+        if outcome != "completed" or exit_code != 0 or error is not None:
+            _fail(f"{label} success classification is inconsistent")
+    elif classification == "command_failure":
+        if outcome != "completed" or exit_code in {None, 0} or error is not None:
+            _fail(f"{label} command failure classification is inconsistent")
+    elif outcome == "completed" or error is None:
+        _fail(f"{label} runner failure classification is inconsistent")
+    if outcome in {"timed_out", "setup_failed", "spawn_failed"} and exit_code is not None:
+        _fail(f"{label} {outcome} outcome must not contain an exit code")
+
+
+def _require_repo_check_lane_binding(
+    artifact: dict[str, object],
+    lane: dict[str, object],
+    label: str,
+) -> None:
+    if artifact.get("kind") != "repo_check":
+        return
+    for field in (
+        "worktree",
+        "worktreeIdentity",
+        "gitCommonDir",
+        "branch",
+    ):
+        if artifact[field] != lane[field]:
+            _fail(f"{label}.{field} does not match the allocated lane")
+
+
+def _validate_red_classification(
+    value: object,
+    observation: dict[str, object],
+    label: str,
+) -> None:
+    if not isinstance(value, dict):
+        _fail(f"{label} must be an object")
+    _require_exact_keys(value, _RED_CLASSIFICATION_KEYS, label)
+    if value["kind"] != "main_reviewed_expected_assertion_failure":
+        _fail(f"{label}.kind is invalid")
+    reference = observation["artifact"]
+    if (
+        not isinstance(reference, dict)
+        or value["artifactSha256"] != reference.get("sha256")
+    ):
+        _fail(f"{label}.artifactSha256 must bind the runner artifact")
+    _require_sha256(value["artifactSha256"], f"{label}.artifactSha256")
+    _require_optional_string(value["focusedTest"], f"{label}.focusedTest")
+    _require_optional_string(value["fixture"], f"{label}.fixture")
+    if value["focusedTest"] is None and value["fixture"] is None:
+        _fail(f"{label} requires a focused test or fixture identity")
+    _require_nonempty_string(
+        value["expectedAssertion"],
+        f"{label}.expectedAssertion",
+    )
+    reviewed_at = _require_utc(value["reviewedAt"], f"{label}.reviewedAt")
+    observed_at = _require_utc(
+        observation["observedAt"],
+        f"{label} observation observedAt",
+    )
+    if datetime.fromisoformat(reviewed_at) < datetime.fromisoformat(observed_at):
+        _fail(f"{label}.reviewedAt must not precede the runner observation")
+
+
+def _is_coderabbit_login(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value.casefold() in CODERABBIT_BOT_LOGINS
+    )
+
+
+def _validate_coderabbit_raw_verdict(
+    raw: dict[str, object],
+    artifact: dict[str, object],
+    label: str,
+) -> None:
+    _require_exact_keys(
+        raw,
+        {"pull_request", "summary", "unresolved_threads", "reviews"},
+        label,
+    )
+    pull_request = raw["pull_request"]
+    if not isinstance(pull_request, dict):
+        _fail(f"{label}.pull_request must be an object")
+    _require_exact_keys(
+        pull_request,
+        {
+            "number",
+            "url",
+            "head_sha",
+            "base_sha",
+            "is_draft",
+            "review_decision",
+        },
+        f"{label}.pull_request",
+    )
+    if pull_request["number"] != artifact["prNumber"]:
+        _fail(f"{label} pull request number does not match review evidence")
+    if pull_request["url"] != artifact["prUrl"]:
+        _fail(f"{label} pull request URL does not match review evidence")
+    if pull_request["head_sha"] != artifact["headSha"]:
+        _fail(f"{label} head does not match review evidence")
+    if pull_request["base_sha"] != artifact["currentBaseSha"]:
+        _fail(f"{label} base does not match review evidence")
+    if pull_request["is_draft"] is not True:
+        _fail(f"{label} pull request must be draft")
+
+    summary = raw["summary"]
+    if not isinstance(summary, dict):
+        _fail(f"{label}.summary must be an object")
+    _require_exact_keys(
+        summary,
+        {
+            "review_count",
+            "coderabbit_review_count",
+            "unresolved_thread_count",
+            "unresolved_coderabbit_thread_count",
+            "latest_coderabbit_review",
+            "latest_coderabbit_review_state",
+            "approved_at_head",
+        },
+        f"{label}.summary",
+    )
+    for field in (
+        "review_count",
+        "coderabbit_review_count",
+        "unresolved_thread_count",
+        "unresolved_coderabbit_thread_count",
+    ):
+        _require_int(summary[field], f"{label}.summary.{field}")
+    if summary["approved_at_head"] is not True:
+        _fail(f"{label} must report approved_at_head true")
+    if summary["unresolved_coderabbit_thread_count"] != 0:
+        _fail(f"{label} must report zero actionable CodeRabbit threads")
+
+    latest = summary["latest_coderabbit_review"]
+    if not isinstance(latest, dict):
+        _fail(f"{label} requires a latest CodeRabbit review")
+    _require_exact_keys(
+        latest,
+        {"id", "state", "body", "submittedAt", "author", "commit"},
+        f"{label}.summary.latest_coderabbit_review",
+    )
+    author = latest["author"]
+    commit = latest["commit"]
+    if (
+        latest["state"] != "APPROVED"
+        or summary["latest_coderabbit_review_state"] != "APPROVED"
+        or not isinstance(author, dict)
+        or not _is_coderabbit_login(author.get("login"))
+        or not isinstance(commit, dict)
+        or commit.get("oid") != artifact["headSha"]
+        or not latest["submittedAt"]
+    ):
+        _fail(f"{label} latest CodeRabbit review is not approved at head")
+
+    reviews = raw["reviews"]
+    threads = raw["unresolved_threads"]
+    if not isinstance(reviews, list) or summary["review_count"] != len(reviews):
+        _fail(f"{label} review count is inconsistent")
+    coderabbit_reviews = [
+        review
+        for review in reviews
+        if isinstance(review, dict)
+        and isinstance(review.get("author"), dict)
+        and _is_coderabbit_login(review["author"].get("login"))
+        and review.get("submittedAt") is not None
+    ]
+    if (
+        summary["coderabbit_review_count"] != len(coderabbit_reviews)
+        or not coderabbit_reviews
+        or latest not in coderabbit_reviews
+    ):
+        _fail(f"{label} CodeRabbit review count is inconsistent")
+    if not isinstance(threads, list) or summary["unresolved_thread_count"] != len(
+        threads
+    ):
+        _fail(f"{label} unresolved thread count is inconsistent")
+    for thread in threads:
+        if not isinstance(thread, dict):
+            _fail(f"{label} unresolved thread must be an object")
+        comments = thread.get("comments")
+        nodes = comments.get("nodes") if isinstance(comments, dict) else None
+        if not isinstance(nodes, list):
+            _fail(f"{label} unresolved thread comments must be a list")
+        if (
+            thread.get("isResolved") is False
+            and thread.get("isOutdated") is False
+            and any(
+                isinstance(comment, dict)
+                and isinstance(comment.get("author"), dict)
+                and _is_coderabbit_login(comment["author"].get("login"))
+                for comment in nodes
+            )
+        ):
+            _fail(f"{label} contains an actionable CodeRabbit thread")
+
+
+def _validate_independent_raw_verdict(
+    raw: dict[str, object],
+    artifact: dict[str, object],
+    label: str,
+) -> None:
+    _require_exact_keys(
+        raw,
+        {
+            "role",
+            "phase",
+            "head_sha",
+            "base_sha",
+            "findings",
+            "gate_states",
+            "coverage",
+            "blockers",
+        },
+        label,
+    )
+    if raw["role"] != "code-review" or raw["phase"] != "review_report":
+        _fail(f"{label} must be a code-review review_report")
+    if raw["head_sha"] != artifact["headSha"]:
+        _fail(f"{label} head does not match review evidence")
+    if raw["base_sha"] != artifact["currentBaseSha"]:
+        _fail(f"{label} base does not match review evidence")
+    if raw["findings"] != []:
+        _fail(f"{label} must contain no findings")
+    if raw["blockers"] != []:
+        _fail(f"{label} must contain no blockers")
+    coverage = _require_string_list(raw["coverage"], f"{label}.coverage")
+    if not coverage:
+        _fail(f"{label}.coverage must not be empty")
+    _validate_independent_review_gate_states(
+        raw["gate_states"],
+        f"{label}.gate_states",
+    )
+
+
+def _validate_github_review_raw_verdict(
+    raw: dict[str, object],
+    artifact: dict[str, object],
+    label: str,
+) -> None:
+    if artifact["reviewGate"] == "coderabbit":
+        _validate_coderabbit_raw_verdict(raw, artifact, f"{label}.rawEvidence")
+    else:
+        _validate_independent_raw_verdict(raw, artifact, f"{label}.rawEvidence")
+
+
+def _validate_base_artifact_shape(
+    artifact: dict[str, object],
+    kind: str,
+    label: str,
+    *,
+    require_clean_review: bool,
+) -> None:
+    keys = (
+        _GITHUB_REVIEW_ARTIFACT_KEYS
+        if kind == "github_review"
+        else _BASE_ARTIFACT_KEYS
+    )
+    _require_exact_keys(artifact, keys, label)
+    _require_schema_version(artifact["schemaVersion"], f"{label}.schemaVersion")
+    if artifact["kind"] != kind:
+        _fail(f"{label}.kind must be {kind}")
+    _require_sha(artifact["headSha"], f"{label}.headSha")
+    _require_sha(artifact["currentBaseSha"], f"{label}.currentBaseSha")
+    _require_command(artifact["integrationCommand"], f"{label}.integrationCommand")
+    _require_command(artifact["gateCommand"], f"{label}.gateCommand")
+    if type(artifact["integrationExitCode"]) is not int:
+        _fail(f"{label}.integrationExitCode must be an integer")
+    if type(artifact["gateExitCode"]) is not int:
+        _fail(f"{label}.gateExitCode must be an integer")
+    raw_uri = _require_nonempty_string(
+        artifact["rawEvidenceUri"],
+        f"{label}.rawEvidenceUri",
+    )
+    if not urlparse(raw_uri).scheme:
+        _fail(f"{label}.rawEvidenceUri must be a URI")
+    _require_utc(artifact["observedAt"], f"{label}.observedAt")
+    if kind == "github_review":
+        _require_int(artifact["prNumber"], f"{label}.prNumber", minimum=1)
+        _require_nonempty_string(artifact["prUrl"], f"{label}.prUrl")
+        _require_enum(
+            artifact["reviewGate"],
+            {"coderabbit", "independent_review"},
+            f"{label}.reviewGate",
+        )
+        if artifact["isDraft"] is not True:
+            _fail(f"{label}.isDraft must be true")
+        _require_sha256(
+            artifact["rawEvidenceSha256"],
+            f"{label}.rawEvidenceSha256",
+        )
+        raw = _read_hashed_json_uri(
+            artifact["rawEvidenceUri"],
+            artifact["rawEvidenceSha256"],
+            f"{label}.rawEvidence",
+        )
+        if require_clean_review:
+            _validate_github_review_raw_verdict(raw, artifact, label)
+
+
+def _require_gate_artifact_kind(
+    gate: str,
+    observation: dict[str, object],
+    artifact: dict[str, object],
+) -> None:
+    if gate in {"focused", "native_lab"} and not observation["baseSensitive"]:
+        expected = "repo_check"
+    elif gate in {"coderabbit", "independent_review"}:
+        expected = "github_review"
+    else:
+        expected = "synthetic_merge"
+    if artifact.get("kind") != expected:
+        _fail(f"successful {gate} requires {expected} evidence")
+
+
+def _validated_observation_artifact(
+    observation: dict[str, object],
+    label: str,
+) -> dict[str, object]:
+    artifact = _read_observation_artifact(
+        observation["artifact"],
+        f"{label}.artifact",
+    )
+    kind = artifact.get("kind")
+    if kind == "repo_check":
+        _validate_repo_check_artifact(artifact, observation, f"{label} artifact")
+    elif kind in {"synthetic_merge", "github_review"}:
+        _validate_base_artifact_shape(
+            artifact,
+            kind,
+            f"{label} artifact",
+            require_clean_review=observation["state"] == "passed",
+        )
+        if observation["command"] is not None:
+            if artifact["gateCommand"] != observation["command"]:
+                _fail(f"{label} artifact gateCommand does not match the observation")
+            if artifact["gateExitCode"] != observation["exitCode"]:
+                _fail(f"{label} artifact gateExitCode does not match the observation")
+        if artifact["headSha"] != observation["headSha"]:
+            _fail(f"{label} artifact headSha does not match the observation")
+        if artifact["currentBaseSha"] != observation["baseSha"]:
+            _fail(f"{label} artifact base does not match the observation")
+        if artifact["observedAt"] != observation["observedAt"]:
+            _fail(f"{label} artifact observedAt does not match the observation")
+    else:
+        _fail(f"{label} artifact kind is invalid")
+    return artifact
+
 
 def _require_utc(value: object, label: str) -> str:
     if not isinstance(value, str):
@@ -295,8 +902,7 @@ def empty_manifest() -> dict[str, object]:
         "rootSafety": {
             "stage1Before": None,
             "stage1After": None,
-            "stage2Before": None,
-            "stage2After": None,
+            "stage2Waves": {},
         },
     }
 
@@ -306,6 +912,7 @@ def _validate_observation(
     label: str,
     states: set[str],
     *,
+    lane_binding: dict[str, object],
     lane_head: str,
     current_base: str,
     require_matching_head: bool,
@@ -327,6 +934,7 @@ def _validate_observation(
         "exitCode",
         "observedAt",
         "artifact",
+        "redClassification",
     )
     if initial_state:
         if any(observation[key] is not None for key in evidence_keys):
@@ -337,13 +945,36 @@ def _validate_observation(
     base_sha = _require_sha(observation["baseSha"], f"{label}.baseSha")
     command = observation["command"]
     scenario = observation["scenario"]
-    _require_optional_string(command, f"{label}.command")
+    if command is not None:
+        _require_command(command, f"{label}.command")
     _require_optional_string(scenario, f"{label}.scenario")
     if command is None and scenario is None:
         _fail(f"{label} requires command or scenario")
-    _require_int(observation["exitCode"], f"{label}.exitCode", minimum=0)
+    exit_code = observation["exitCode"]
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        _fail(f"{label}.exitCode must be an integer")
+    if state_value in {"passed", "mergeable"} and exit_code != 0:
+        _fail(f"{label} successful state requires exitCode 0")
+    if state_value == "failed" and command is not None and exit_code == 0:
+        _fail(f"{label} failed command requires a nonzero exit")
     _require_utc(observation["observedAt"], f"{label}.observedAt")
-    _require_nonempty_string(observation["artifact"], f"{label}.artifact")
+    artifact = _validated_observation_artifact(observation, label)
+    _require_repo_check_lane_binding(artifact, lane_binding, label)
+    red_classification = observation["redClassification"]
+    if red_classification is not None:
+        _validate_red_classification(
+            red_classification,
+            observation,
+            f"{label}.redClassification",
+        )
+    if state_value in {"passed", "mergeable"}:
+        if artifact["kind"] == "repo_check":
+            if artifact["failureClassification"] != "success":
+                _fail(f"{label} successful state requires successful runner evidence")
+        elif artifact.get("gateExitCode") != 0:
+            _fail(f"{label} successful state requires successful gate evidence")
+        if red_classification is not None:
+            _fail(f"{label} successful state must not contain RED classification")
     if require_matching_head and head_sha != lane_head:
         _fail(f"{label}.headSha must match the lane head")
     if require_matching_base and base_sha != current_base:
@@ -361,14 +992,42 @@ def _validate_lane(lane_key: str, lane: object) -> None:
         _fail(f"lane key {lane_key} must match issue {issue}")
     _require_nonempty_string(lane["title"], f"lane {lane_key}.title")
     agent_id = _require_nonempty_string(lane["agentId"], f"lane {lane_key}.agentId")
-    _require_nonempty_string(lane["role"], f"lane {lane_key}.role")
+    role = _require_enum(lane["role"], DISPATCH_ROLES, f"lane {lane_key}.role")
     worktree = _require_nonempty_string(lane["worktree"], f"lane {lane_key}.worktree")
     if not Path(worktree).is_absolute():
         _fail(f"lane {lane_key}.worktree must be absolute")
+    _require_worktree_identity(
+        lane["worktreeIdentity"],
+        f"lane {lane_key}.worktreeIdentity",
+    )
+    git_common_dir = _require_nonempty_string(
+        lane["gitCommonDir"],
+        f"lane {lane_key}.gitCommonDir",
+    )
+    if not Path(git_common_dir).is_absolute():
+        _fail(f"lane {lane_key}.gitCommonDir must be absolute")
     _require_nonempty_string(lane["branch"], f"lane {lane_key}.branch")
-    _require_string_list(lane["allowedPaths"], f"lane {lane_key}.allowedPaths")
+    allowed_paths = _require_string_list(
+        lane["allowedPaths"],
+        f"lane {lane_key}.allowedPaths",
+    )
+    for pattern in allowed_paths:
+        _require_portable_repo_relative(
+            pattern,
+            f"lane {lane_key}.allowedPaths",
+            allow_glob=True,
+        )
     _require_issue_list(lane["dependsOn"], f"lane {lane_key}.dependsOn")
-    _require_string_list(lane["sharedContractPaths"], f"lane {lane_key}.sharedContractPaths")
+    shared_contract_paths = _require_string_list(
+        lane["sharedContractPaths"],
+        f"lane {lane_key}.sharedContractPaths",
+    )
+    for pattern in shared_contract_paths:
+        _require_portable_repo_relative(
+            pattern,
+            f"lane {lane_key}.sharedContractPaths",
+            allow_glob=True,
+        )
     _require_int(lane["integrationOrder"], f"lane {lane_key}.integrationOrder", minimum=1)
     head_sha = _require_sha(lane["headSha"], f"lane {lane_key}.headSha")
     _require_sha(lane["allocationBaseSha"], f"lane {lane_key}.allocationBaseSha")
@@ -400,7 +1059,7 @@ def _validate_lane(lane_key: str, lane: object) -> None:
         _require_utc(lease[field], f"lane {lane_key}.lease.{field}")
 
     _require_enum(lane["laneState"], LANE_STATES, f"lane {lane_key}.laneState")
-    _require_enum(
+    implementation_state = _require_enum(
         lane["implementationState"],
         IMPLEMENTATION_STATES,
         f"lane {lane_key}.implementationState",
@@ -421,11 +1080,20 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             observation,
             f"lane {lane_key}.redEvidence[{index}]",
             {"failed"},
+            lane_binding=lane,
             lane_head=head_sha,
             current_base=current_base,
             require_matching_head=False,
             require_matching_base=False,
         )
+    if role == "coder":
+        if any(
+            observation["command"] is None or observation["exitCode"] == 0
+            for observation in red_evidence
+        ):
+            _fail(f"lane {lane_key} coder RED evidence requires a failed command")
+        if implementation_state == "green" and not red_evidence:
+            _fail(f"lane {lane_key} coder green state requires RED evidence")
 
     gates = lane["gates"]
     if not isinstance(gates, dict):
@@ -437,16 +1105,27 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             observation,
             f"lane {lane_key}.gates.{gate_name}",
             states,
+            lane_binding=lane,
             lane_head=head_sha,
             current_base=current_base,
             require_matching_head=(
                 isinstance(observation, dict)
                 and observation.get("state") != "stale"
             ),
-            require_matching_base=True,
+            require_matching_base=(
+                isinstance(observation, dict)
+                and observation.get("state") != "stale"
+                and observation.get("baseSensitive") is True
+            ),
         )
         if gate_name != "native_lab" and validated["baseSensitive"] != _GATE_BASE_SENSITIVITY[gate_name]:
             _fail(f"lane {lane_key}.gates.{gate_name}.baseSensitive is invalid")
+        if validated["state"] in {"passed", "mergeable"}:
+            artifact = _validated_observation_artifact(
+                validated,
+                f"lane {lane_key}.gates.{gate_name}",
+            )
+            _require_gate_artifact_kind(gate_name, validated, artifact)
 
     requirement = lane["nativeLabRequirement"]
     if not isinstance(requirement, dict):
@@ -480,6 +1159,59 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             )
 
 
+def _validate_root_artifact_ref(snapshot: object, label: str) -> dict[str, object]:
+    if not isinstance(snapshot, dict):
+        _fail(f"{label} must be an object")
+    _require_exact_keys(snapshot, _ROOT_ARTIFACT_KEYS, label)
+    artifact = _require_nonempty_string(snapshot["artifact"], f"{label}.artifact")
+    parsed = urlparse(artifact)
+    if (
+        parsed.scheme != "file"
+        or parsed.netloc not in {"", "localhost"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        _fail(f"{label}.artifact must be a local file:// URI")
+    _require_sha256(snapshot["sha256"], f"{label}.sha256")
+    return snapshot
+
+
+def _validate_active_lane_identities(lanes: dict[str, object]) -> None:
+    seen: dict[str, dict[object, str]] = {
+        "agentId": {},
+        "worktree": {},
+        "worktree directory": {},
+        "branch": {},
+        "pull request": {},
+    }
+    for lane_key, value in lanes.items():
+        lane = value
+        if lane["laneState"] in {"merged", "abandoned"}:
+            continue
+        identities: dict[str, object] = {
+            "agentId": lane["agentId"],
+            "worktree": lane["worktree"],
+            "worktree directory": (
+                lane["worktreeIdentity"]["device"],
+                lane["worktreeIdentity"]["inode"],
+            ),
+            "branch": lane["branch"],
+        }
+        if lane["pr"]["number"] is not None:
+            identities["pull request"] = (
+                lane["pr"]["number"],
+                lane["pr"]["url"],
+            )
+        for label, identity in identities.items():
+            previous = seen[label].get(identity)
+            if previous is not None:
+                _fail(
+                    f"duplicate active lane {label}: "
+                    f"{previous} and {lane_key}"
+                )
+            seen[label][identity] = lane_key
+
+
 def validate_manifest(data: dict[str, object]) -> None:
     if not isinstance(data, dict):
         _fail("manifest must be an object")
@@ -494,6 +1226,7 @@ def validate_manifest(data: dict[str, object]) -> None:
         if not isinstance(lane_key, str):
             _fail("lane keys must be strings")
         _validate_lane(lane_key, lane)
+    _validate_active_lane_identities(lanes)
     for lane_key, lane in lanes.items():
         for upstream_issue in lane["dependsOn"]:
             upstream_key = str(upstream_issue)
@@ -521,30 +1254,86 @@ def validate_manifest(data: dict[str, object]) -> None:
     root_safety = data["rootSafety"]
     if not isinstance(root_safety, dict):
         _fail("rootSafety must be an object")
-    _require_exact_keys(root_safety, _ROOT_SLOTS, "rootSafety")
-    for slot, snapshot in root_safety.items():
-        if snapshot is None:
-            continue
-        if not isinstance(snapshot, dict):
-            _fail(f"rootSafety.{slot} must be an object or null")
-        _require_exact_keys(
-            snapshot,
-            {"artifact", "sha256"},
-            f"rootSafety.{slot}",
+    _require_exact_keys(root_safety, _ROOT_SAFETY_KEYS, "rootSafety")
+    stage1_before = root_safety["stage1Before"]
+    stage1_after = root_safety["stage1After"]
+    if stage1_before is not None:
+        _validate_root_artifact_ref(stage1_before, "rootSafety.stage1Before")
+    if stage1_after is not None:
+        if stage1_before is None:
+            _fail("rootSafety.stage1After requires stage1Before")
+        _validate_root_artifact_ref(stage1_after, "rootSafety.stage1After")
+        if stage1_before["sha256"] != stage1_after["sha256"]:
+            _fail("rootSafety Stage 1 before and after artifacts must match")
+
+    stage2_waves = root_safety["stage2Waves"]
+    if not isinstance(stage2_waves, dict):
+        _fail("rootSafety.stage2Waves must be an object")
+    bound_lanes: set[str] = set()
+    for wave_key, stage2_wave in stage2_waves.items():
+        if not isinstance(wave_key, str) or not wave_key:
+            _fail("rootSafety.stage2Waves keys must be non-empty strings")
+        label = f"rootSafety.stage2Waves.{wave_key}"
+        if not isinstance(stage2_wave, dict):
+            _fail(f"{label} must be an object")
+        _require_exact_keys(stage2_wave, _STAGE2_WAVE_KEYS, label)
+        wave_id = _require_nonempty_string(
+            stage2_wave["waveId"],
+            f"{label}.waveId",
         )
-        artifact = _require_nonempty_string(
-            snapshot["artifact"],
-            f"rootSafety.{slot}.artifact",
+        if wave_id != wave_key:
+            _fail(f"{label}.waveId must match its key")
+        bindings = stage2_wave["laneBindings"]
+        if not isinstance(bindings, dict) or not bindings:
+            _fail(f"{label}.laneBindings must be a non-empty object")
+        for lane_key, binding in bindings.items():
+            if lane_key not in lanes:
+                _fail(f"{label}.laneBindings must name existing lanes")
+            if lane_key in bound_lanes:
+                _fail("a lane must not belong to more than one Stage 2 wave")
+            bound_lanes.add(lane_key)
+            binding_label = f"{label}.laneBindings.{lane_key}"
+            if not isinstance(binding, dict):
+                _fail(f"{binding_label} must be an object")
+            _require_exact_keys(
+                binding,
+                _STAGE2_LANE_BINDING_KEYS,
+                binding_label,
+            )
+            allocation_base = _require_sha(
+                binding["allocationBaseSha"],
+                f"{binding_label}.allocationBaseSha",
+            )
+            worktree = _require_nonempty_string(
+                binding["worktree"],
+                f"{binding_label}.worktree",
+            )
+            if allocation_base != lanes[lane_key]["allocationBaseSha"]:
+                _fail(
+                    f"{binding_label}.allocationBaseSha does not match the lane"
+                )
+            if worktree != lanes[lane_key]["worktree"]:
+                _fail(f"{binding_label}.worktree does not match the lane")
+        _require_sha256(
+            stage2_wave["managedWorktreesSha256"],
+            f"{label}.managedWorktreesSha256",
         )
-        parsed = urlparse(artifact)
-        if (
-            parsed.scheme != "file"
-            or parsed.netloc not in {"", "localhost"}
-            or parsed.query
-            or parsed.fragment
-        ):
-            _fail(f"rootSafety.{slot}.artifact must be a local file:// URI")
-        _require_sha256(snapshot["sha256"], f"rootSafety.{slot}.sha256")
+        before = _validate_root_artifact_ref(
+            stage2_wave["before"],
+            f"{label}.before",
+        )
+        after = stage2_wave["after"]
+        if after is not None:
+            validated_after = _validate_root_artifact_ref(
+                after,
+                f"{label}.after",
+            )
+            if validated_after["sha256"] != before["sha256"]:
+                _fail("rootSafety Stage 2 before and after artifacts must match")
+    for lane in lanes.values():
+        if lane["laneState"] == "ready_for_adam":
+            _require_ready_for_adam(data, lane)
+
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -565,6 +1354,14 @@ def _decode_json_object(text: str, source: str) -> dict[str, object]:
         _fail(f"{source} must contain one JSON object")
     return value
 
+def _minimal_process_environment() -> dict[str, str]:
+    return {
+        key: os.environ[key]
+        for key in PROCESS_ENV_ALLOWLIST
+        if key in os.environ
+    }
+
+
 def _git_bytes(repo: Path, *args: str) -> bytes:
     try:
         repository = repo.resolve(strict=True)
@@ -572,13 +1369,15 @@ def _git_bytes(repo: Path, *args: str) -> bytes:
         raise ValueError(f"cannot resolve repository {repo}: {error}") from error
     if not repository.is_dir():
         _fail(f"repository is not a directory: {repo}")
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("GIT_")
-    }
-    environment["GIT_OPTIONAL_LOCKS"] = "0"
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment = _minimal_process_environment()
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
     try:
         result = subprocess.run(
             [
@@ -617,18 +1416,175 @@ def git_text(repo: Path, *args: str) -> str:
         raise ValueError("git output is not valid UTF-8") from error
 
 
-def _is_repo_relative(value: object) -> bool:
-    if not isinstance(value, str) or not value or "\0" in value:
+def _worktree_path_identity(path: Path) -> dict[str, int]:
+    if not path.is_absolute():
+        _fail("lane worktree path must be absolute")
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise ValueError(f"cannot inspect lane worktree {path}: {error}") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        _fail(f"lane worktree must be a real directory: {path}")
+    return {"device": info.st_dev, "inode": info.st_ino}
+
+
+def _registered_worktree_fields(repo: Path) -> dict[bytes, bytes]:
+    output = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
+    _normalized_worktree_registrations(output)
+    encoded_path = os.fsencode(str(repo))
+    matches: list[dict[bytes, bytes]] = []
+    for record in output[:-2].split(b"\0\0"):
+        fields: dict[bytes, bytes] = {}
+        for field in record.split(b"\0"):
+            key, _, value = field.partition(b" ")
+            fields[key] = value
+        if fields.get(b"worktree") == encoded_path:
+            matches.append(fields)
+    if len(matches) != 1:
+        _fail(f"lane worktree is not uniquely registered with Git: {repo}")
+    registration = matches[0]
+    if b"prunable" in registration:
+        _fail(f"lane worktree Git registration is prunable: {repo}")
+    return registration
+
+
+def observe_lane_worktree(worktree: Path) -> dict[str, object]:
+    identity = _worktree_path_identity(worktree)
+    try:
+        top_level = Path(
+            git_text(
+                worktree,
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+            )
+        ).resolve(strict=True)
+        common_dir = Path(
+            git_text(
+                worktree,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        ).resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError(f"cannot canonicalize lane Git identity: {error}") from error
+    if top_level != worktree:
+        _fail("lane worktree path does not name the Git worktree top level")
+    if not common_dir.is_dir():
+        _fail("lane Git common directory is not a directory")
+    head_sha = _require_sha(
+        git_text(worktree, "rev-parse", "--verify", "HEAD"),
+        "observed lane HEAD",
+    )
+    branch_ref = git_text(worktree, "symbolic-ref", "--quiet", "HEAD")
+    if not branch_ref.startswith("refs/heads/"):
+        _fail("lane worktree HEAD is not attached to a local branch")
+    branch = branch_ref.removeprefix("refs/heads/")
+    if not branch:
+        _fail("lane worktree branch is empty")
+    registration = _registered_worktree_fields(worktree)
+    if registration.get(b"HEAD", b"").decode("ascii", errors="replace") != head_sha:
+        _fail("lane worktree registration HEAD does not match observed HEAD")
+    if os.fsdecode(registration.get(b"branch", b"")) != branch_ref:
+        _fail("lane worktree registration branch does not match observed branch")
+    if _worktree_path_identity(worktree) != identity:
+        _fail("lane worktree identity changed while observing Git state")
+    return {
+        "worktree": str(worktree),
+        "worktreeIdentity": identity,
+        "gitCommonDir": str(common_dir),
+        "branch": branch,
+        "headSha": head_sha,
+    }
+
+
+def require_lane_worktree_current(
+    lane: dict[str, object],
+    *,
+    expected_head: str | None = None,
+) -> dict[str, object]:
+    worktree = Path(_require_nonempty_string(lane["worktree"], "lane.worktree"))
+    try:
+        observed = observe_lane_worktree(worktree)
+    except ValueError as error:
+        _fail(f"lane worktree identity cannot be observed: {error}")
+    expected = {
+        "worktree": lane["worktree"],
+        "worktreeIdentity": lane["worktreeIdentity"],
+        "gitCommonDir": lane["gitCommonDir"],
+        "branch": lane["branch"],
+        "headSha": lane["headSha"] if expected_head is None else expected_head,
+    }
+    if observed != expected:
+        _fail("lane worktree identity, registration, branch, or HEAD changed")
+    return observed
+
+
+def _is_observed_repo_relative(value: object) -> bool:
+    if not isinstance(value, str) or not value:
         return False
+    if value.startswith("/") or "\\" in value:
+        return False
+    if (
+        len(value) >= 3
+        and value[0].isascii()
+        and value[0].isalpha()
+        and value[1:3] == ":/"
+    ):
+        return False
+    if any(
+        ord(character) <= 0x1F or 0x7F <= ord(character) <= 0x9F
+        for character in value
+    ):
+        return False
+    return all(part not in {"", ".", ".."} for part in value.split("/"))
+
+
+def _require_observed_repo_relative(value: str, label: str) -> str:
+    if not _is_observed_repo_relative(value):
+        _fail(f"{label} escapes the worktree")
+    return value
+
+
+def _is_portable_repo_relative(
+    value: object,
+    *,
+    allow_glob: bool = False,
+) -> bool:
+    if (
+        not isinstance(value, str)
+        or not _is_observed_repo_relative(value)
+        or value == "~"
+        or value.startswith("~/")
+        or "%00" in value.casefold()
+        or any(character.isspace() for character in value)
+    ):
+        return False
+    invalid_characters = '<>:"|'
+    if not allow_glob:
+        invalid_characters += "?*"
     parts = value.split("/")
-    return not value.startswith("/") and all(
-        part not in {"", ".", ".."} for part in parts
+    if any(
+        any(character in invalid_characters for character in part)
+        for part in parts
+    ):
+        return False
+    return all(
+        not part.endswith((".", " "))
+        and part.split(".", 1)[0].casefold() not in _WINDOWS_RESERVED_NAMES
+        for part in parts
     )
 
 
-def _require_repo_relative(value: str, label: str) -> str:
-    if not _is_repo_relative(value):
-        _fail(f"{label} escapes the worktree")
+def _require_portable_repo_relative(
+    value: str,
+    label: str,
+    *,
+    allow_glob: bool = False,
+) -> str:
+    if not _is_portable_repo_relative(value, allow_glob=allow_glob):
+        _fail(f"{label} must be a portable repository-relative path")
     return value
 
 def _compile_path_glob(pattern: str) -> re.Pattern[str]:
@@ -688,7 +1644,7 @@ def changed_paths(repo: Path, allocation_base: str) -> list[str]:
     except UnicodeDecodeError as error:
         raise ValueError("Git path output is not valid UTF-8") from error
     paths = {
-        _require_repo_relative(path, "changed path")
+        _require_observed_repo_relative(path, "changed path")
         for path in (*tracked_output.split("\0"), *untracked_output.split("\0"))
         if path
     }
@@ -709,7 +1665,7 @@ def _base_tracked_paths(repo: Path, allocation_base: str) -> set[str]:
     except UnicodeDecodeError as error:
         raise ValueError("Git tree path output is not valid UTF-8") from error
     return {
-        _require_repo_relative(path, "base tracked path")
+        _require_observed_repo_relative(path, "base tracked path")
         for path in output.split("\0")
         if path
     }
@@ -719,6 +1675,8 @@ def _canonical_path_violations(
     repo: Path,
     allocation_base: str,
     paths: list[str],
+    *,
+    approved_delete_path: str | None = None,
 ) -> list[str]:
     try:
         worktree = repo.resolve(strict=True)
@@ -728,17 +1686,30 @@ def _canonical_path_violations(
     if not stat.S_ISDIR(worktree_info.st_mode):
         _fail(f"lane worktree is not a directory: {repo}")
 
+    candidate_paths = _require_string_list(paths, "changed paths")
+    if approved_delete_path is not None:
+        approved_delete_path = _require_portable_repo_relative(
+            approved_delete_path,
+            "approved delete path",
+        )
+        if approved_delete_path not in candidate_paths:
+            _fail("approved delete path is not a changed path")
+
     base_paths: set[str] | None = None
     violations: list[str] = []
-    for relative_path in _require_string_list(paths, "changed paths"):
-        _require_repo_relative(relative_path, "changed path")
+    for relative_path in candidate_paths:
+        _require_observed_repo_relative(relative_path, "changed path")
         candidate = worktree
         components = relative_path.split("/")
         for index, component in enumerate(components):
             candidate /= component
+            is_final = index == len(components) - 1
             try:
                 candidate_info = candidate.lstat()
             except FileNotFoundError:
+                if not is_final or relative_path != approved_delete_path:
+                    violations.append(relative_path)
+                    break
                 if base_paths is None:
                     base_paths = _base_tracked_paths(repo, allocation_base)
                 if relative_path not in base_paths:
@@ -755,11 +1726,13 @@ def _canonical_path_violations(
                 violations.append(relative_path)
                 break
 
-            is_final = index == len(components) - 1
             if not is_final:
                 if not stat.S_ISDIR(canonical_info.st_mode):
                     violations.append(relative_path)
                     break
+                continue
+            if relative_path == approved_delete_path:
+                violations.append(relative_path)
                 continue
             if stat.S_ISREG(candidate_info.st_mode):
                 continue
@@ -775,13 +1748,19 @@ def _canonical_path_violations(
 def check_allowed_paths(paths: list[str], allowlist: list[str]) -> list[str]:
     candidate_paths = _require_string_list(paths, "changed paths")
     patterns = [
-        _compile_path_glob(_require_repo_relative(pattern, "allowed path"))
+        _compile_path_glob(
+            _require_portable_repo_relative(
+                pattern,
+                "allowed path",
+                allow_glob=True,
+            )
+        )
         for pattern in _require_string_list(allowlist, "allowed paths")
     ]
     return sorted(
         path
         for path in candidate_paths
-        if not _is_repo_relative(path)
+        if not _is_observed_repo_relative(path)
         or not any(_path_glob_matches(path, pattern) for pattern in patterns)
     )
 
@@ -791,16 +1770,29 @@ def _disallowed_changed_paths(
     allocation_base: str,
     paths: list[str],
     allowlist: list[str],
+    *,
+    approved_delete_path: str | None = None,
 ) -> list[str]:
-    unsafe = _canonical_path_violations(repo, allocation_base, paths)
+    unsafe = _canonical_path_violations(
+        repo,
+        allocation_base,
+        paths,
+        approved_delete_path=approved_delete_path,
+    )
     outside_allowlist = check_allowed_paths(paths, allowlist)
     return sorted(set(unsafe).union(outside_allowlist))
 
 
-def enforce_lane_paths(data: dict[str, object], issue: str) -> list[str]:
+def enforce_lane_paths(
+    data: dict[str, object],
+    issue: str,
+    *,
+    approved_delete_path: str | None = None,
+) -> list[str]:
     validate_manifest(data)
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
+    require_lane_worktree_current(lane)
     worktree = Path(lane["worktree"])
     paths = changed_paths(
         worktree,
@@ -811,7 +1803,9 @@ def enforce_lane_paths(data: dict[str, object], issue: str) -> list[str]:
         lane["allocationBaseSha"],
         paths,
         lane["allowedPaths"],
+        approved_delete_path=approved_delete_path,
     )
+    require_lane_worktree_current(lane)
     if not disallowed:
         return []
     if lane["laneState"] in {"merged", "abandoned"}:
@@ -885,12 +1879,15 @@ def _regular_file_sha256(path: Path, expected: os.stat_result) -> bytes:
         opened = os.fstat(file_descriptor)
         if (
             not stat.S_ISREG(opened.st_mode)
-            or (expected.st_dev, expected.st_ino)
-            != (opened.st_dev, opened.st_ino)
+            or _stable_stat_identity(opened) != _stable_stat_identity(expected)
         ):
             _fail(f"filesystem entry changed while hashing: {path}")
         while chunk := os.read(file_descriptor, ARTIFACT_HASH_CHUNK_SIZE):
             digest.update(chunk)
+        if _stable_stat_identity(os.fstat(file_descriptor)) != _stable_stat_identity(
+            opened
+        ):
+            _fail(f"filesystem entry changed while hashing: {path}")
     finally:
         os.close(file_descriptor)
     return digest.digest()
@@ -956,10 +1953,7 @@ def _hash_filesystem_node(
                     f"cannot hash filesystem entry {current}: {error}"
                 ) from error
             _digest_field(digest, content_sha)
-            if reject_symlinks:
-                pending.append(
-                    ("verify", current, b"", False, info)
-                )
+            pending.append(("verify", current, b"", False, info))
             continue
         if stat.S_ISLNK(info.st_mode):
             if reject_symlinks:
@@ -972,12 +1966,12 @@ def _hash_filesystem_node(
                     f"cannot read filesystem symlink {current}: {error}"
                 ) from error
             _digest_field(digest, target)
+            pending.append(("verify", current, b"", False, info))
             continue
         if not stat.S_ISDIR(info.st_mode):
             _fail(f"filesystem entry has unsupported kind: {current}")
         _digest_field(digest, b"directory")
-        if reject_symlinks:
-            pending.append(("verify", current, b"", False, info))
+        pending.append(("verify", current, b"", False, info))
         try:
             children = sorted(
                 current.iterdir(),
@@ -1328,7 +2322,7 @@ def _git_controls_sha256(repo: Path) -> str:
     return digest.hexdigest()
 
 
-def root_snapshot(repo: Path) -> dict[str, object]:
+def _root_snapshot_once(repo: Path) -> dict[str, object]:
     head_sha = git_text(repo, "rev-parse", "HEAD")
     index_tree_sha = _index_tree_sha(repo)
     _require_sha(head_sha, "root snapshot headSha")
@@ -1354,12 +2348,15 @@ def root_snapshot(repo: Path) -> dict[str, object]:
     untracked: list[dict[str, str]] = []
     repository = repo.resolve(strict=True)
     for relative_path in sorted(path for path in untracked_paths if path):
+        observed_relative = relative_path.removesuffix("/")
+        _require_observed_repo_relative(
+            observed_relative, "untracked path"
+        )
         if (
-            relative_path == ".worktrees"
-            or relative_path.startswith(".worktrees/")
+            observed_relative == ".worktrees"
+            or observed_relative.startswith(".worktrees/")
         ):
             continue
-        _require_repo_relative(relative_path, "untracked path")
         path = repository / relative_path
         try:
             info = path.lstat()
@@ -1371,24 +2368,14 @@ def root_snapshot(repo: Path) -> dict[str, object]:
                 digest.update(os.readlink(os.fsencode(path)))
             elif stat.S_ISREG(info.st_mode):
                 digest.update(b"regular\0")
-                file_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-                try:
-                    opened = os.fstat(file_fd)
-                    if (
-                        not stat.S_ISREG(opened.st_mode)
-                        or (info.st_dev, info.st_ino)
-                        != (opened.st_dev, opened.st_ino)
-                    ):
-                        _fail(
-                            "untracked path changed while hashing: "
-                            + relative_path
-                        )
-                    while chunk := os.read(file_fd, ARTIFACT_HASH_CHUNK_SIZE):
-                        digest.update(chunk)
-                finally:
-                    os.close(file_fd)
+                digest.update(_regular_file_sha256(path, info))
             else:
                 _fail(f"untracked path has unsupported file kind: {relative_path}")
+            if _stable_stat_identity(path.lstat()) != _stable_stat_identity(info):
+                _fail(
+                    "untracked path changed while hashing: "
+                    + relative_path
+                )
         except OSError as error:
             raise ValueError(
                 f"cannot hash untracked path {relative_path}: {error}"
@@ -1396,17 +2383,30 @@ def root_snapshot(repo: Path) -> dict[str, object]:
         untracked.append(
             {"path": relative_path, "sha256": digest.hexdigest()}
         )
+    filesystem_sha256 = _filesystem_sha256(repository)
+    git_controls_sha256 = _git_controls_sha256(repository)
+    managed_worktrees_sha256 = _managed_worktrees_sha256(repository)
+    if git_text(repo, "rev-parse", "HEAD") != head_sha:
+        _fail("root snapshot HEAD changed while hashing")
+    if _index_tree_sha(repo) != index_tree_sha:
+        _fail("root snapshot index changed while hashing")
     return {
         "headSha": head_sha,
         "indexTreeSha": index_tree_sha,
         "trackedDiffSha256": hashlib.sha256(tracked_diff).hexdigest(),
         "untracked": untracked,
-        "filesystemSha256": _filesystem_sha256(repository),
-        "gitControlsSha256": _git_controls_sha256(repository),
-        "managedWorktreesSha256": _managed_worktrees_sha256(repository),
+        "filesystemSha256": filesystem_sha256,
+        "gitControlsSha256": git_controls_sha256,
+        "managedWorktreesSha256": managed_worktrees_sha256,
     }
 
 
+def root_snapshot(repo: Path) -> dict[str, object]:
+    first = _root_snapshot_once(repo)
+    second = _root_snapshot_once(repo)
+    if first != second:
+        _fail("root snapshot changed between passes")
+    return second
 
 
 def ensure_state_dir(path: Path) -> None:
@@ -1587,11 +2587,21 @@ def _atomic_json_create_at(
 
 def _atomic_json_write(path: Path, data: dict[str, object]) -> None:
     with _open_state_dir(path.parent) as directory_fd:
+        opened = os.fstat(directory_fd)
+        identity = (opened.st_dev, opened.st_ino)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
         _atomic_json_write_at(directory_fd, path.name, data)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+
 
 def _atomic_json_create(path: Path, data: dict[str, object]) -> bool:
     with _open_state_dir(path.parent) as directory_fd:
-        return _atomic_json_create_at(directory_fd, path.name, data)
+        opened = os.fstat(directory_fd)
+        identity = (opened.st_dev, opened.st_ino)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+        created = _atomic_json_create_at(directory_fd, path.name, data)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+        return created
 
 
 def atomic_write(path: Path, data: dict[str, object]) -> None:
@@ -1603,9 +2613,16 @@ def initialize_manifest(path: Path) -> tuple[dict[str, object], bool]:
     data = empty_manifest()
     validate_manifest(data)
     with _open_state_dir(path.parent) as directory_fd:
-        if _atomic_json_create_at(directory_fd, path.name, data):
+        opened = os.fstat(directory_fd)
+        identity = (opened.st_dev, opened.st_ino)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+        created = _atomic_json_create_at(directory_fd, path.name, data)
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+        if created:
             return data, True
-        return _load_manifest_at(directory_fd, path.name, str(path)), False
+        existing = _load_manifest_at(directory_fd, path.name, str(path))
+        _require_pinned_directory_path(path.parent, directory_fd, identity)
+        return existing, False
 
 
 def _touch(data: dict[str, object]) -> None:
@@ -1643,8 +2660,48 @@ def allocate_lane(data: dict[str, object], lane: dict[str, object]) -> None:
         _fail("allocationBaseSha and currentBaseSha must match at allocation")
     if lane_copy.get("implementationState") != "not_run" or lane_copy.get("redEvidence") != []:
         _fail("new lane must begin before RED evidence")
+    worktree_value = lane_copy.get("worktree")
+    if not isinstance(worktree_value, str):
+        _fail("lane.worktree must be an absolute path")
+    try:
+        worktree = Path(worktree_value).resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError("lane.worktree cannot be resolved") from error
+    observed = observe_lane_worktree(worktree)
+    if observed["branch"] != lane_copy.get("branch"):
+        _fail("allocated worktree branch does not match lane.branch")
+    if observed["headSha"] != lane_copy.get("headSha"):
+        _fail("allocated worktree HEAD does not match lane.headSha")
+    lane_copy.update(observed)
     if lane_copy.get("mergeabilityState") != "not_run":
         _fail("new lane mergeability must be not_run")
+    if lane_copy.get("remoteSha") is not None:
+        _fail("new lane remoteSha must be null")
+    if lane_copy.get("pr") != {"number": None, "url": None}:
+        _fail("new lane pull request must be empty")
+    if lane_copy.get("blocker") is not None:
+        _fail("new lane blocker must be null")
+    native_lab = lane_copy.get("nativeLabRequirement")
+    native_requirement = (
+        native_lab.get("state")
+        if isinstance(native_lab, dict)
+        else None
+    )
+    gates = lane_copy.get("gates")
+    if not isinstance(gates, dict):
+        _fail("new lane gates must be an object")
+    for gate_name, observation in gates.items():
+        if not isinstance(observation, dict):
+            _fail(f"new lane gate {gate_name} must be an object")
+        expected_state = (
+            "not_required"
+            if gate_name == "native_lab"
+            and native_requirement == "not_required"
+            else "not_run"
+        )
+        if observation.get("state") != expected_state:
+            _fail(f"new lane gate {gate_name} must be {expected_state}")
+    require_lane_worktree_current(lane_copy)
     lanes[key] = lane_copy
     _touch(candidate)
     _commit_candidate(data, candidate)
@@ -1660,19 +2717,26 @@ def _require_ready_for_adam(
         _fail("ready_for_adam requires local head and remote SHA identity")
     if lane["implementationState"] != "green":
         _fail("ready_for_adam requires green implementation state")
+    if lane["role"] == "coder" and not lane["redEvidence"]:
+        _fail("ready_for_adam requires coder RED evidence")
     if lane["mergeabilityState"] != "mergeable":
         _fail("ready_for_adam requires mergeable state")
     if lane["blocker"] is not None:
         _fail("ready_for_adam requires no blocker")
-    stage2_before = data["rootSafety"]["stage2Before"]
-    stage2_after = data["rootSafety"]["stage2After"]
-    if stage2_before is None or stage2_after is None:
-        _fail(
-            "ready_for_adam requires stage2Before and stage2After "
-            "root safety artifacts"
-        )
-    if stage2_before["sha256"] != stage2_after["sha256"]:
-        _fail("ready_for_adam requires matching stage2 root safety sha256")
+    lane_key = str(lane["issue"])
+    matching_waves = [
+        wave
+        for wave in data["rootSafety"]["stage2Waves"].values()
+        if lane_key in wave["laneBindings"]
+    ]
+    if len(matching_waves) != 1 or matching_waves[0]["after"] is None:
+        _fail("ready_for_adam requires a completed Stage 2 wave snapshot")
+    binding = matching_waves[0]["laneBindings"][lane_key]
+    if (
+        binding["allocationBaseSha"] != lane["allocationBaseSha"]
+        or binding["worktree"] != lane["worktree"]
+    ):
+        _fail("ready_for_adam Stage 2 lane binding is stale")
     required_gates = {
         "focused": "passed",
         "aggregate": "passed",
@@ -1681,6 +2745,13 @@ def _require_ready_for_adam(
         "independent_review": "passed",
         "mergeability": "mergeable",
     }
+    for review_gate in ("coderabbit", "independent_review"):
+        artifact = _validated_observation_artifact(
+            lane["gates"][review_gate],
+            f"ready_for_adam {review_gate}",
+        )
+        if artifact.get("kind") != "github_review" or artifact.get("isDraft") is not True:
+            _fail("ready_for_adam requires draft pull request review evidence")
     for gate_name, required_state in required_gates.items():
         if lane["gates"][gate_name]["state"] != required_state:
             _fail(
@@ -1700,6 +2771,26 @@ def _require_ready_for_adam(
             )
 
 
+def _demote_ready_dependents(
+    data: dict[str, object],
+    upstream_issue: str,
+) -> None:
+    pending = [int(upstream_issue)]
+    while pending:
+        delivered_issue = pending.pop(0)
+        for lane_key, lane in data["lanes"].items():
+            if (
+                delivered_issue not in lane["dependsOn"]
+                or lane["laneState"] != "ready_for_adam"
+            ):
+                continue
+            lane["laneState"] = "reviewing"
+            lane["nextAction"] = (
+                f"revalidate dependency delivery after issue {delivered_issue}"
+            )
+            pending.append(int(lane_key))
+
+
 def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
     validate_manifest(data)
     _require_enum(state, LANE_STATES, "lane state")
@@ -1709,8 +2800,17 @@ def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
     if state not in TRANSITIONS[current]:
         _fail(f"invalid lane transition: {current} -> {state}")
     if state == "ready_for_adam":
+        require_lane_worktree_current(lane)
+    if state == "ready_for_adam":
         _require_ready_for_adam(candidate, lane)
     lane["laneState"] = state
+    if state == "ready_for_adam":
+        require_lane_worktree_current(lane)
+    if (
+        current in {"ready_for_adam", "merged"}
+        and state not in {"ready_for_adam", "merged"}
+    ):
+        _demote_ready_dependents(candidate, issue)
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1718,13 +2818,6 @@ def transition_lane(data: dict[str, object], issue: str, state: str) -> None:
 def _stale_observation(observation: dict[str, object]) -> None:
     if observation["state"] not in {"not_run", "not_required"}:
         observation["state"] = "stale"
-
-def _rebind_observation_base(
-    observation: dict[str, object],
-    current_base_sha: str,
-) -> None:
-    if observation["baseSha"] is not None:
-        observation["baseSha"] = current_base_sha
 
 
 def _apply_heads(
@@ -1743,8 +2836,6 @@ def _apply_heads(
     lane["headSha"] = head_sha
     lane["currentBaseSha"] = current_base_sha
     if base_changed:
-        for observation in lane["gates"].values():
-            _rebind_observation_base(observation, current_base_sha)
         for gate_name in BASE_BOUND:
             _stale_observation(lane["gates"][gate_name])
         native = lane["gates"]["native_lab"]
@@ -1766,11 +2857,23 @@ def update_heads(
 ) -> None:
     validate_manifest(data)
     candidate = deepcopy(data)
+    lane = _lane(candidate, issue)
+    require_lane_worktree_current(lane, expected_head=head_sha)
+    changed = (
+        head_sha != lane["headSha"]
+        or current_base_sha != lane["currentBaseSha"]
+    )
+    was_ready = lane["laneState"] == "ready_for_adam"
     _apply_heads(
-        _lane(candidate, issue),
+        lane,
         head_sha=head_sha,
         current_base_sha=current_base_sha,
     )
+    require_lane_worktree_current(lane)
+    if changed and was_ready:
+        lane["laneState"] = "reviewing"
+        lane["nextAction"] = "revalidate gates after head update"
+        _demote_ready_dependents(candidate, issue)
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1885,6 +2988,7 @@ def _validate_new_observation(
         observation,
         label,
         states,
+        lane_binding=lane,
         lane_head=lane["headSha"],
         current_base=lane["currentBaseSha"],
         require_matching_head=True,
@@ -1896,10 +3000,26 @@ def record_red(data: dict[str, object], issue: str, observation: dict[str, objec
     validate_manifest(data)
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
+    require_lane_worktree_current(lane)
     observation_copy = deepcopy(observation)
     _validate_new_observation(lane, observation_copy, "RED observation", {"failed"})
+    artifact = _validated_observation_artifact(
+        observation_copy,
+        "RED observation",
+    )
+    if (
+        artifact["kind"] != "repo_check"
+        or artifact["outcome"] != "completed"
+        or artifact["failureClassification"] != "command_failure"
+        or observation_copy["redClassification"] is None
+    ):
+        _fail(
+            "RED observation requires command failure evidence and "
+            "Main-reviewed expected assertion classification"
+        )
     lane["redEvidence"].append(observation_copy)
     lane["implementationState"] = "red"
+    require_lane_worktree_current(lane)
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -1922,26 +3042,10 @@ def _validate_base_evidence(
     if gate == "native_lab" and not observation["baseSensitive"]:
         _fail("native_lab base evidence must declare baseSensitive")
 
-    artifact_uri = _require_nonempty_string(
-        observation["artifact"],
-        f"gate {gate}.artifact",
+    artifact = _validated_observation_artifact(
+        observation,
+        f"gate {gate}",
     )
-    parsed = urlparse(artifact_uri)
-    if (
-        parsed.scheme != "file"
-        or parsed.netloc not in {"", "localhost"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        _fail(f"gate {gate}.artifact must be a local file:// URI")
-    try:
-        artifact_path = Path(unquote(parsed.path)).resolve(strict=True)
-        artifact = _decode_json_object(
-            artifact_path.read_text(encoding="utf-8"),
-            str(artifact_path),
-        )
-    except (OSError, UnicodeError) as error:
-        raise ValueError(f"cannot read base evidence artifact: {error}") from error
 
     expected_kind = (
         "github_review"
@@ -1978,6 +3082,8 @@ def _validate_base_evidence(
             artifact["prUrl"],
             "base evidence artifact.prUrl",
         )
+        if artifact["isDraft"] is not True:
+            _fail("base evidence artifact.isDraft must be true")
         if artifact["reviewGate"] != gate:
             _fail("base evidence artifact.reviewGate does not match the gate")
         if artifact["prNumber"] != pr["number"]:
@@ -1993,11 +3099,11 @@ def _validate_base_evidence(
         artifact["currentBaseSha"],
         "base evidence artifact.currentBaseSha",
     )
-    _require_nonempty_string(
+    _require_command(
         artifact["integrationCommand"],
         "base evidence artifact.integrationCommand",
     )
-    _require_nonempty_string(
+    _require_command(
         artifact["gateCommand"],
         "base evidence artifact.gateCommand",
     )
@@ -2035,6 +3141,7 @@ def record_observation(
         _fail(f"unknown gate: {gate}")
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
+    require_lane_worktree_current(lane)
     observation_copy = deepcopy(observation)
     states = _states_for_gate(gate)
     validated = _validate_new_observation(lane, observation_copy, f"gate {gate}", states)
@@ -2050,6 +3157,7 @@ def record_observation(
     lane["gates"][gate] = observation_copy
     if gate == "mergeability":
         lane["mergeabilityState"] = observation_copy["state"]
+    require_lane_worktree_current(lane)
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -2155,6 +3263,30 @@ def _acquire_lock(directory_fd: int, lock_name: str) -> int:
             raise TerminalRejection(f"cannot lock manifest: {error}") from error
 
 
+def _require_pinned_directory_path(
+    path: Path,
+    directory_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    try:
+        named = path.lstat()
+        opened = os.fstat(directory_fd)
+    except OSError as error:
+        raise ValueError(
+            f"cannot revalidate state directory path {path}: {error}"
+        ) from error
+    if (
+        stat.S_ISLNK(named.st_mode)
+        or not stat.S_ISDIR(named.st_mode)
+        or not stat.S_ISDIR(opened.st_mode)
+        or stat.S_IMODE(named.st_mode) != 0o700
+        or stat.S_IMODE(opened.st_mode) != 0o700
+        or (named.st_dev, named.st_ino) != identity
+        or (opened.st_dev, opened.st_ino) != identity
+    ):
+        _fail(f"state directory path no longer names the pinned directory: {path}")
+
+
 def _persist_mutation(
     directory_fd: int,
     name: str,
@@ -2192,6 +3324,11 @@ def _mutate_manifest(
 ) -> dict[str, object]:
     _require_utc(expected_updated_at, "expected updatedAt")
     with _open_state_dir(path.parent) as directory_fd:
+        pinned_directory = os.fstat(directory_fd)
+        pinned_directory_identity = (
+            pinned_directory.st_dev,
+            pinned_directory.st_ino,
+        )
         lock_fd = _acquire_lock(directory_fd, f"{path.name}.lock")
         try:
             try:
@@ -2204,26 +3341,42 @@ def _mutate_manifest(
                     mutation(candidate)
                 except RetriableConflict:
                     if candidate != current:
+                        _require_pinned_directory_path(
+                            path.parent,
+                            directory_fd,
+                            pinned_directory_identity,
+                        )
                         _persist_mutation(
                             directory_fd,
                             path.name,
                             candidate,
                             current["updatedAt"],
                         )
-                    raise
-                except TerminalRejection:
+                        _require_pinned_directory_path(
+                            path.parent,
+                            directory_fd,
+                            pinned_directory_identity,
+                        )
                     raise
                 except (OSError, ValueError) as error:
                     raise TerminalRejection(str(error)) from error
+                _require_pinned_directory_path(
+                    path.parent,
+                    directory_fd,
+                    pinned_directory_identity,
+                )
                 _persist_mutation(
                     directory_fd,
                     path.name,
                     candidate,
                     current["updatedAt"],
                 )
+                _require_pinned_directory_path(
+                    path.parent,
+                    directory_fd,
+                    pinned_directory_identity,
+                )
                 return candidate
-            except (RetriableConflict, TerminalRejection):
-                raise
             except (OSError, ValueError) as error:
                 raise TerminalRejection(str(error)) from error
         finally:
@@ -2238,8 +3391,6 @@ def mutate_manifest(
 ) -> dict[str, object]:
     try:
         return _mutate_manifest(path, expected_updated_at, mutation)
-    except (RetriableConflict, TerminalRejection):
-        raise
     except (OSError, ValueError) as error:
         raise TerminalRejection(str(error)) from error
 
@@ -2380,7 +3531,7 @@ def _validate_root_snapshot_payload(snapshot: dict[str, object]) -> None:
             _fail(f"{label} must be an object")
         _require_exact_keys(entry, {"path", "sha256"}, label)
         path = _require_nonempty_string(entry["path"], f"{label}.path")
-        _require_repo_relative(path, f"{label}.path")
+        _require_observed_repo_relative(path, f"{label}.path")
         if path == ".worktrees" or path.startswith(".worktrees/"):
             _fail(f"{label}.path must not name a managed worktree")
         _require_sha256(entry["sha256"], f"{label}.sha256")
@@ -2391,7 +3542,9 @@ def _validate_root_snapshot_payload(snapshot: dict[str, object]) -> None:
         )
 
 
-def _sha256_valid_root_snapshot_artifact(artifact_uri: str) -> str:
+def _read_valid_root_snapshot_artifact(
+    artifact_uri: str,
+) -> tuple[str, dict[str, object]]:
     parsed = urlparse(artifact_uri)
     if (
         parsed.scheme != "file"
@@ -2454,23 +3607,116 @@ def _sha256_valid_root_snapshot_artifact(artifact_uri: str) -> str:
         ) from error
     snapshot = _decode_json_object(artifact_text, str(artifact_path))
     _validate_root_snapshot_payload(snapshot)
-    return digest.hexdigest()
+    return digest.hexdigest(), snapshot
 
 
-def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> None:
+def record_root_snapshot(
+    data: dict[str, object],
+    slot: str,
+    artifact: str,
+    *,
+    wave_id: str | None = None,
+    issues: Sequence[int] | None = None,
+) -> None:
     validate_manifest(data)
-    if slot not in _ROOT_SLOTS:
+    if slot not in {
+        "stage1Before",
+        "stage1After",
+        "stage2Before",
+        "stage2After",
+    }:
         _fail(f"invalid root snapshot slot: {slot}")
     artifact_uri = _require_nonempty_string(
         artifact,
         "root snapshot artifact",
     )
-    artifact_sha256 = _sha256_valid_root_snapshot_artifact(artifact_uri)
-    candidate = deepcopy(data)
-    candidate["rootSafety"][slot] = {
+    artifact_sha256, snapshot = _read_valid_root_snapshot_artifact(artifact_uri)
+    artifact_ref = {
         "artifact": artifact_uri,
         "sha256": artifact_sha256,
     }
+    candidate = deepcopy(data)
+    root_safety = candidate["rootSafety"]
+
+    if slot in {"stage1Before", "stage1After"}:
+        if wave_id is not None or issues is not None:
+            _fail("Stage 1 root snapshots do not accept wave metadata")
+        if root_safety[slot] is not None:
+            _fail(f"root snapshot slot {slot} is immutable once recorded")
+        if slot == "stage1After":
+            before = root_safety["stage1Before"]
+            if before is None:
+                _fail("stage1After requires stage1Before")
+            if before["sha256"] != artifact_sha256:
+                _fail("Stage 1 before and after root snapshots must match")
+        root_safety[slot] = artifact_ref
+    else:
+        required_wave_id = _require_nonempty_string(
+            wave_id,
+            "Stage 2 wave ID",
+        )
+        issue_numbers = _require_issue_list(
+            list(issues) if issues is not None else None,
+            "Stage 2 wave issues",
+        )
+        if not issue_numbers or issue_numbers != sorted(issue_numbers):
+            _fail("Stage 2 wave issues must be non-empty and sorted")
+        issue_keys = [str(issue) for issue in issue_numbers]
+        if slot == "stage2Before":
+            stage2_waves = root_safety["stage2Waves"]
+            if required_wave_id in stage2_waves:
+                _fail("Stage 2 wave root snapshot is immutable once recorded")
+            allocated = sorted(
+                int(issue)
+                for issue, lane in candidate["lanes"].items()
+                if lane["laneState"] == "allocated"
+            )
+            if issue_numbers != allocated:
+                _fail(
+                    "Stage 2 before snapshot must bind the complete allocated wave"
+                )
+            bindings = {
+                issue: {
+                    "allocationBaseSha": candidate["lanes"][issue][
+                        "allocationBaseSha"
+                    ],
+                    "worktree": candidate["lanes"][issue]["worktree"],
+                }
+                for issue in issue_keys
+            }
+            stage2_waves[required_wave_id] = {
+                "waveId": required_wave_id,
+                "laneBindings": bindings,
+                "managedWorktreesSha256": snapshot[
+                    "managedWorktreesSha256"
+                ],
+                "before": artifact_ref,
+                "after": None,
+            }
+        else:
+            wave = root_safety["stage2Waves"].get(required_wave_id)
+            if wave is None:
+                _fail("stage2After requires a matching Stage 2 before snapshot")
+            if wave["after"] is not None:
+                _fail("Stage 2 after snapshot is immutable once recorded")
+            if wave["waveId"] != required_wave_id:
+                _fail("Stage 2 after snapshot wave ID does not match")
+            if issue_numbers != sorted(int(issue) for issue in wave["laneBindings"]):
+                _fail("Stage 2 after snapshot lane set does not match")
+            if any(
+                candidate["lanes"][issue]["laneState"]
+                not in {"reviewing", "ready_for_adam"}
+                for issue in issue_keys
+            ):
+                _fail("Stage 2 after snapshot requires every wave lane reviewing")
+            if (
+                snapshot["managedWorktreesSha256"]
+                != wave["managedWorktreesSha256"]
+            ):
+                _fail("Stage 2 managed worktree registration set changed")
+            if artifact_sha256 != wave["before"]["sha256"]:
+                _fail("Stage 2 before and after root snapshots must match")
+            wave["after"] = artifact_ref
     _touch(candidate)
     _commit_candidate(data, candidate)
 
@@ -2631,6 +3877,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_manifest_mutation_arguments(root_parser)
     root_parser.add_argument("--slot", required=True)
     root_parser.add_argument("--artifact", required=True)
+    root_parser.add_argument("--wave-id")
+    root_parser.add_argument("--issues", nargs="+", type=int)
 
     acquire_parser = subparsers.add_parser("acquire-gate")
     _add_manifest_mutation_arguments(acquire_parser)
@@ -2644,6 +3892,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_parser = subparsers.add_parser("check-paths")
     check_parser.add_argument("--manifest", type=Path, required=True)
     check_parser.add_argument("--issue", required=True)
+    check_parser.add_argument("--approved-delete-path")
 
     snapshot_parser = subparsers.add_parser("snapshot-root")
     snapshot_parser.add_argument("--repo", type=Path, required=True)
@@ -2665,6 +3914,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "check-paths":
             manifest = load_manifest_readonly(args.manifest)
             lane = _lane(manifest, args.issue)
+            require_lane_worktree_current(lane)
             worktree = Path(lane["worktree"])
             paths = changed_paths(
                 worktree,
@@ -2675,12 +3925,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lane["allocationBaseSha"],
                 paths,
                 lane["allowedPaths"],
+                approved_delete_path=args.approved_delete_path,
             )
+            require_lane_worktree_current(lane)
             if disallowed:
                 raise TerminalRejection(
                     "disallowed paths: " + ", ".join(disallowed)
                 )
-            _print_json({"ok": True, "paths": paths, "disallowed": []})
+            result = {"ok": True, "paths": paths, "disallowed": []}
+            if args.approved_delete_path is not None:
+                result["approvedDeletePath"] = args.approved_delete_path
+            _print_json(result)
             return 0
         if args.command == "snapshot-root":
             _print_json(root_snapshot(args.repo))
@@ -2779,7 +4034,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.command == "record-remote":
                 record_remote(data, args.issue, args.sha)
             elif args.command == "record-root-snapshot":
-                record_root_snapshot(data, args.slot, args.artifact)
+                record_root_snapshot(
+                    data,
+                    args.slot,
+                    args.artifact,
+                    wave_id=args.wave_id,
+                    issues=args.issues,
+                )
             elif args.command == "acquire-gate":
                 acquire_aggregate_gate(data, args.issue, args.at)
             elif args.command == "release-gate":

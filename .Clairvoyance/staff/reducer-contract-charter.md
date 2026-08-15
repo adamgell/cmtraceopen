@@ -1,4 +1,4 @@
-# Reducer Architecture / Contract Charter — CMTrace Open
+# Reducer Architecture / Contract Charter: CMTrace Open
 
 **Role:** Reducer semantic contract owner
 **Reports to:** CEO
