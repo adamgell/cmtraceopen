@@ -115,9 +115,14 @@ def _next_page_cursor(
     has_next_page = page_info.get("hasNextPage")
     if not isinstance(has_next_page, bool):
         raise SystemExit(f"{label} hasNextPage is invalid")
+    if (
+        "endCursor" not in page_info
+        or not isinstance(page_info["endCursor"], (str, type(None)))
+    ):
+        raise SystemExit(f"{label} endCursor is invalid")
     if not has_next_page:
         return None
-    cursor = page_info.get("endCursor")
+    cursor = page_info["endCursor"]
     if (
         not isinstance(cursor, str)
         or not cursor
@@ -126,6 +131,45 @@ def _next_page_cursor(
         raise SystemExit(f"{label} pagination cursor is invalid")
     seen_cursors.add(cursor)
     return cursor
+
+
+def _connection_nodes(
+    connection: dict[str, Any],
+    label: str,
+) -> list[dict[str, Any]]:
+    nodes = connection.get("nodes")
+    if not isinstance(nodes, list) or any(
+        not isinstance(node, dict) for node in nodes
+    ):
+        raise SystemExit(f"{label} nodes are invalid")
+    return nodes
+
+
+def _identified_nodes(
+    connection: dict[str, Any],
+    label: str,
+) -> list[dict[str, Any]]:
+    nodes = _connection_nodes(connection, label)
+    if any(
+        not isinstance(node.get("id"), str) or not node["id"]
+        for node in nodes
+    ):
+        raise SystemExit(f"{label} nodes are invalid")
+    return nodes
+
+
+def _thread_nodes(
+    connection: dict[str, Any],
+) -> list[dict[str, Any]]:
+    nodes = _identified_nodes(connection, "review threads")
+    if any(
+        not isinstance(node.get("isResolved"), bool)
+        or not isinstance(node.get("isOutdated"), bool)
+        or not isinstance(node.get("comments"), dict)
+        for node in nodes
+    ):
+        raise SystemExit("review threads nodes are invalid")
+    return nodes
 
 
 def current_pr() -> tuple[str, str, int]:
@@ -152,10 +196,12 @@ def _pull_request_metadata(pr: dict[str, Any]) -> dict[str, Any]:
 
 def _complete_thread_comments(thread: dict[str, Any]) -> dict[str, Any]:
     page = thread["comments"]
-    comments = list(page.get("nodes") or [])
+    comments = list(
+        _identified_nodes(page, "review thread comments")
+    )
     seen_cursors: set[str] = set()
     cursor = _next_page_cursor(
-        page["pageInfo"],
+        page.get("pageInfo"),
         seen_cursors,
         "review thread comments",
     )
@@ -169,13 +215,18 @@ def _complete_thread_comments(thread: dict[str, Any]) -> dict[str, Any]:
         payload = run_json(command, COMMENTS_QUERY)
         if payload.get("errors"):
             raise SystemExit(json.dumps(payload["errors"], indent=2))
-        node = payload.get("data", {}).get("node")
+        data = payload.get("data")
+        node = data.get("node") if isinstance(data, dict) else None
         if not isinstance(node, dict):
             raise SystemExit(f"review thread disappeared: {thread['id']}")
-        page = node["comments"]
-        comments.extend(page.get("nodes") or [])
+        page = node.get("comments")
+        if not isinstance(page, dict):
+            raise SystemExit("review thread comments are invalid")
+        comments.extend(
+            _identified_nodes(page, "review thread comments")
+        )
         cursor = _next_page_cursor(
-            page["pageInfo"],
+            page.get("pageInfo"),
             seen_cursors,
             "review thread comments",
         )
@@ -222,7 +273,37 @@ def _fetch_complete_snapshot(
         if payload.get("errors"):
             raise SystemExit(json.dumps(payload["errors"], indent=2))
 
-        pr = payload["data"]["repository"]["pullRequest"]
+        data = payload.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        pr = (
+            repository.get("pullRequest")
+            if isinstance(repository, dict)
+            else None
+        )
+        required_metadata = (
+            "number",
+            "url",
+            "headRefOid",
+            "baseRefOid",
+            "isDraft",
+            "reviewDecision",
+        )
+        if (
+            not isinstance(pr, dict)
+            or any(field not in pr for field in required_metadata)
+            or (
+                not reviews_done
+                and not isinstance(pr.get("reviews"), dict)
+            )
+            or (
+                not threads_done
+                and not isinstance(pr.get("reviewThreads"), dict)
+            )
+        ):
+            raise SystemExit(
+                "repository or pull request not found: "
+                f"{owner}/{repo}#{number}"
+            )
         page_metadata = _pull_request_metadata(pr)
         if metadata is None:
             metadata = page_metadata
@@ -231,18 +312,18 @@ def _fetch_complete_snapshot(
 
         if not reviews_done:
             review_page = pr["reviews"]
-            reviews.extend(review_page.get("nodes") or [])
+            reviews.extend(_identified_nodes(review_page, "reviews"))
             reviews_cursor = _next_page_cursor(
-                review_page["pageInfo"],
+                review_page.get("pageInfo"),
                 reviews_cursors,
                 "reviews",
             )
             reviews_done = reviews_cursor is None
         if not threads_done:
             thread_page = pr["reviewThreads"]
-            threads.extend(thread_page.get("nodes") or [])
+            threads.extend(_thread_nodes(thread_page))
             threads_cursor = _next_page_cursor(
-                thread_page["pageInfo"],
+                thread_page.get("pageInfo"),
                 threads_cursors,
                 "review threads",
             )

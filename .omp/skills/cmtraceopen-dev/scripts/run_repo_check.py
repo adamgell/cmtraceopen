@@ -183,7 +183,7 @@ def _git(cwd: Path, *args: str) -> bytes:
             "utf-8", errors="replace"
         ).strip()
         raise ValueError(
-            f"cannot observe lane Git state"
+            "cannot observe lane Git state"
             + (f": {detail}" if detail else "")
         ) from error
     return result.stdout

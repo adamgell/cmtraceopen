@@ -83,14 +83,15 @@ APPROVED_SKILL_TREE_SHA256: dict[str, str] = {
     "contract-scoped-review": (
         "30564a296fd4690fdc63af624eed1a56bf65074bae0fecf750daa9a539f16e61"
     ),
+    # NousResearch/hermes-agent@4a2198bf5124f0c4d915cb958f141116ae8607f0.
     "github-code-review": (
-        "54ef8907a100ef2bc3c28b55e5d4e3c0a787fcd17094e8aed0842a7eefef1b07"
+        "5e166a8ea948fe41ddd3e0207d0fa26b3e29243c16f6b979dcc24e901d635a10"
     ),
     "github-issues": (
-        "c730e657eef749266b1ea6cade8d1cc799f7e5ef9825574ddd744bc73a5211fe"
+        "dd55fd6c7ac90a20f0e63b2aa4fbff6a1e4f1aea52c1810821f7279d40a69128"
     ),
     "github-pr-workflow": (
-        "fe49304baf77f3f3f3c9f2b160265a6eeeb65b8e5baa20de5074c55214b16fab"
+        "198b3e52369e6c2d4d9317fb4cfef1b1f2c930939f2a69d0af6cfdf55ae9ed50"
     ),
     "mdbook-docs": (
         "017a84030b9f041858a723dce9a4ffb5b3d09d361f888fd0b3ca1e9974877b96"

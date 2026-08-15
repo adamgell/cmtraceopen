@@ -630,6 +630,144 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             review_state._complete_thread_comments(thread)
 
 
+    def test_invalid_repository_or_pull_request_fails_closed(self) -> None:
+        empty_connection = {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [],
+        }
+        responses = (
+            {"data": {"repository": None}},
+            {"data": {"repository": {"pullRequest": None}}},
+            {"data": {"repository": {"pullRequest": {}}}},
+            pull_request_page(
+                reviews=None,
+                reviewThreads=empty_connection,
+            ),
+            pull_request_page(
+                reviews=empty_connection,
+                reviewThreads=None,
+            ),
+        )
+        for response in responses:
+            with (
+                self.subTest(response=response),
+                patch.object(review_state, "run_json", return_value=response),
+                self.assertRaisesRegex(
+                    SystemExit,
+                    "repository or pull request not found",
+                ),
+            ):
+                review_state._fetch_complete_snapshot(
+                    "base-owner",
+                    "base-repo",
+                    42,
+                )
+
+
+    def test_invalid_review_connection_shapes_fail_closed(self) -> None:
+        valid_connection = {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [],
+        }
+        invalid_connections = (
+            ({"nodes": []}, "pageInfo"),
+            (
+                {
+                    "pageInfo": {
+                        "hasNextPage": False,
+                        "endCursor": None,
+                    },
+                    "nodes": None,
+                },
+                "nodes",
+            ),
+            (
+                {
+                    "pageInfo": {
+                        "hasNextPage": False,
+                        "endCursor": None,
+                    },
+                    "nodes": [None],
+                },
+                "nodes",
+            ),
+            (
+                {
+                    "pageInfo": {
+                        "hasNextPage": False,
+                        "endCursor": 7,
+                    },
+                    "nodes": [],
+                },
+                "endCursor",
+            ),
+        )
+        labels = {
+            "reviews": "reviews",
+            "reviewThreads": "review threads",
+        }
+        for connection_name, label in labels.items():
+            for invalid_connection, field in invalid_connections:
+                connections = {
+                    "reviews": valid_connection,
+                    "reviewThreads": valid_connection,
+                    connection_name: invalid_connection,
+                }
+                message = f"{label} {field}"
+                response = pull_request_page(**connections)
+                with (
+                    self.subTest(
+                        connection=connection_name,
+                        field=field,
+                    ),
+                    patch.object(
+                        review_state,
+                        "run_json",
+                        return_value=response,
+                    ),
+                    self.assertRaisesRegex(SystemExit, message),
+                ):
+                    review_state._fetch_complete_snapshot(
+                        "base-owner",
+                        "base-repo",
+                        42,
+                    )
+
+
+    def test_missing_required_review_node_fields_fail_closed(self) -> None:
+        page_info = {"hasNextPage": False, "endCursor": None}
+        cases = (
+            (
+                pull_request_page(
+                    reviews={"pageInfo": page_info, "nodes": [{}]},
+                    reviewThreads={"pageInfo": page_info, "nodes": []},
+                ),
+                "reviews nodes",
+            ),
+            (
+                pull_request_page(
+                    reviews={"pageInfo": page_info, "nodes": []},
+                    reviewThreads={
+                        "pageInfo": page_info,
+                        "nodes": [{"id": "thread-1"}],
+                    },
+                ),
+                "review threads nodes",
+            ),
+        )
+        for response, message in cases:
+            with (
+                self.subTest(message=message),
+                patch.object(review_state, "run_json", return_value=response),
+                self.assertRaisesRegex(SystemExit, message),
+            ):
+                review_state._fetch_complete_snapshot(
+                    "base-owner",
+                    "base-repo",
+                    42,
+                )
+
+
     def test_stable_metadata_includes_base_ref_oid(self) -> None:
         response = graphql_response([])
 
