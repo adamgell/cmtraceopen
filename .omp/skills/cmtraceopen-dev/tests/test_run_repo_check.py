@@ -580,12 +580,18 @@ class RepositoryCheckTests(unittest.TestCase):
                     base_sha="b" * 40,)
         process.assert_not_called()
 
-    def test_runner_rejects_non_finite_timeouts_before_popen(self) -> None:
+    def test_runner_rejects_invalid_timeouts_before_popen(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             run_repo_check.subprocess,
             "Popen",
         ) as process:
-            for timeout in (float("nan"), float("inf"), float("-inf")):
+            for timeout in (
+                float("nan"),
+                float("inf"),
+                float("-inf"),
+                0.0,
+                -1.0,
+            ):
                 with self.subTest(timeout=timeout), self.assertRaisesRegex(
                     ValueError,
                     "finite and positive",

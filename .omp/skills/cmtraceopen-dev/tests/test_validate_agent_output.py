@@ -312,6 +312,8 @@ class AgentOutputValidationTests(unittest.TestCase):
             "../change.ts:1",
             "/tmp/change.ts:1",
             "src\\change.ts:1",
+            ":1",
+            "src/change.ts:\N{ARABIC-INDIC DIGIT ONE}",
         ):
             with self.subTest(file_line=file_line), self.assertRaises(ValueError):
                 report["findings"][0]["file_line"] = file_line

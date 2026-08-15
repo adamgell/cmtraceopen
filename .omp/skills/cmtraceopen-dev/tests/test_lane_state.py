@@ -1930,8 +1930,6 @@ class EvidenceTests(unittest.TestCase):
                 "containment_failed",
             ):
                 with self.subTest(outcome=outcome):
-                    manifest = lane_state.empty_manifest()
-                    allocate_test_lane(manifest, valid_lane(root))
                     observation = valid_observation(
                         root,
                         state="failed",
@@ -1945,10 +1943,22 @@ class EvidenceTests(unittest.TestCase):
                     path.write_text(json.dumps(artifact), encoding="utf-8")
                     observation["artifact"] = artifact_ref(path)
 
-                    with self.assertRaisesRegex(ValueError, message):
-                        record_test_red(manifest, "317", observation)
-                    with self.assertRaisesRegex(ValueError, message):
-                        record_test_observation(manifest, "317", "focused", observation)
+                    for entry_point in ("red", "gate"):
+                        with self.subTest(entry_point=entry_point):
+                            manifest = lane_state.empty_manifest()
+                            allocate_test_lane(manifest, valid_lane(root))
+                            before = deepcopy(manifest)
+                            with self.assertRaisesRegex(ValueError, message):
+                                if entry_point == "red":
+                                    record_test_red(manifest, "317", observation)
+                                else:
+                                    record_test_observation(
+                                        manifest,
+                                        "317",
+                                        "focused",
+                                        observation,
+                                    )
+                            self.assertEqual(before, manifest)
 
     def test_unbound_setup_failure_cannot_be_recorded_as_evidence(self) -> None:
         message = "runner infrastructure failures are never RED, GREEN, or gate evidence"
