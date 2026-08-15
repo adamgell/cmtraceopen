@@ -886,6 +886,16 @@ def _regular_file_sha256(path: Path, expected: os.stat_result) -> bytes:
         os.close(file_descriptor)
     return digest.digest()
 
+def _stable_stat_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
 
 def _hash_filesystem_node(
     digest: UpdateDigest,
@@ -893,10 +903,33 @@ def _hash_filesystem_node(
     label: bytes,
     *,
     exclude_managed_roots: bool = False,
+    reject_symlinks: bool = False,
 ) -> None:
-    pending = [(path, label, exclude_managed_roots)]
+    pending: list[
+        tuple[
+            str,
+            Path,
+            bytes,
+            bool,
+            os.stat_result | None,
+        ]
+    ] = [("enter", path, label, exclude_managed_roots, None)]
     while pending:
-        current, current_label, exclude_roots = pending.pop()
+        action, current, current_label, exclude_roots, expected = pending.pop()
+        if action == "verify":
+            try:
+                current_info = current.lstat()
+            except OSError as error:
+                raise ValueError(
+                    f"filesystem entry changed while hashing: {current}"
+                ) from error
+            if (
+                expected is None
+                or _stable_stat_identity(current_info)
+                != _stable_stat_identity(expected)
+            ):
+                _fail(f"filesystem entry changed while hashing: {current}")
+            continue
         try:
             info = current.lstat()
         except OSError as error:
@@ -914,8 +947,14 @@ def _hash_filesystem_node(
                     f"cannot hash filesystem entry {current}: {error}"
                 ) from error
             _digest_field(digest, content_sha)
+            if reject_symlinks:
+                pending.append(
+                    ("verify", current, b"", False, info)
+                )
             continue
         if stat.S_ISLNK(info.st_mode):
+            if reject_symlinks:
+                _fail(f"protected control path contains symlink: {current}")
             _digest_field(digest, b"symlink")
             try:
                 target = os.readlink(os.fsencode(current))
@@ -928,6 +967,8 @@ def _hash_filesystem_node(
         if not stat.S_ISDIR(info.st_mode):
             _fail(f"filesystem entry has unsupported kind: {current}")
         _digest_field(digest, b"directory")
+        if reject_symlinks:
+            pending.append(("verify", current, b"", False, info))
         try:
             children = sorted(
                 current.iterdir(),
@@ -946,7 +987,9 @@ def _hash_filesystem_node(
                 if not current_label
                 else current_label + b"/" + os.fsencode(child.name)
             )
-            pending.append((child, child_label, False))
+            pending.append(
+                ("enter", child, child_label, False, None)
+            )
 
 
 def _filesystem_sha256(repository: Path) -> str:
@@ -960,15 +1003,192 @@ def _filesystem_sha256(repository: Path) -> str:
     return digest.hexdigest()
 
 
-def _git_path(repo: Path, logical_path: str) -> Path:
-    value = git_text(
-        repo,
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-path",
-        logical_path,
+
+def _non_symlink_parent_chain(path: Path) -> tuple[tuple[int, int, int], ...]:
+    if not path.is_absolute():
+        _fail(f"protected control path must be absolute: {path}")
+    current = Path(path.anchor)
+    identities: list[tuple[int, int, int]] = []
+    for component in path.parts[1:-1]:
+        current /= component
+        try:
+            info = current.lstat()
+        except OSError as error:
+            raise ValueError(
+                f"cannot inspect protected control parent {current}: {error}"
+            ) from error
+        if stat.S_ISLNK(info.st_mode):
+            _fail(f"protected control path contains symlink: {current}")
+        if not stat.S_ISDIR(info.st_mode):
+            _fail(f"protected control parent is not a directory: {current}")
+        identities.append((info.st_dev, info.st_ino, info.st_mode))
+    return tuple(identities)
+
+
+def _hash_protected_control(
+    digest: UpdateDigest,
+    path: Path,
+    label: bytes,
+) -> None:
+    before = _non_symlink_parent_chain(path)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        _digest_field(digest, label)
+        _digest_field(digest, b"missing")
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise ValueError(
+                f"cannot verify protected control path {path}: {error}"
+            ) from error
+        else:
+            _fail(f"protected control path changed while hashing: {path}")
+    except OSError as error:
+        raise ValueError(
+            f"cannot inspect protected control path {path}: {error}"
+        ) from error
+    else:
+        _hash_filesystem_node(
+            digest,
+            path,
+            label,
+            reject_symlinks=True,
+        )
+    after = _non_symlink_parent_chain(path)
+    if before != after:
+        _fail(f"protected control path changed while hashing: {path}")
+
+
+def _managed_worktrees_sha256(repository: Path) -> str:
+    digest = hashlib.sha256()
+    managed = repository / ".worktrees"
+    try:
+        managed_info = managed.lstat()
+    except FileNotFoundError:
+        managed_info = None
+    except OSError as error:
+        raise ValueError(
+            f"cannot inspect managed worktree directory {managed}: {error}"
+        ) from error
+    entry_info: dict[str, os.stat_result] = {}
+    if managed_info is not None:
+        if stat.S_ISLNK(managed_info.st_mode):
+            _fail(f"managed worktree directory must not be a symlink: {managed}")
+        if not stat.S_ISDIR(managed_info.st_mode):
+            _fail(f"managed worktree path is not a directory: {managed}")
+        try:
+            entries = sorted(
+                managed.iterdir(),
+                key=lambda entry: os.fsencode(entry.name),
+            )
+        except OSError as error:
+            raise ValueError(
+                f"cannot list managed worktree directory {managed}: {error}"
+            ) from error
+        for entry in entries:
+            try:
+                info = entry.lstat()
+            except OSError as error:
+                raise ValueError(
+                    f"cannot inspect managed worktree entry {entry}: {error}"
+                ) from error
+            entry_info[entry.name] = info
+            _digest_field(digest, os.fsencode(entry.name))
+            _digest_field(
+                digest,
+                stat.S_IMODE(info.st_mode).to_bytes(4, "big"),
+            )
+            if stat.S_ISDIR(info.st_mode):
+                _digest_field(digest, b"directory")
+            elif stat.S_ISLNK(info.st_mode):
+                _digest_field(digest, b"symlink")
+                try:
+                    _digest_field(digest, os.readlink(os.fsencode(entry)))
+                except OSError as error:
+                    raise ValueError(
+                        f"cannot read managed worktree symlink {entry}: {error}"
+                    ) from error
+            elif stat.S_ISREG(info.st_mode):
+                _digest_field(digest, b"regular")
+                try:
+                    _digest_field(
+                        digest,
+                        _regular_file_sha256(entry, info),
+                    )
+                except OSError as error:
+                    raise ValueError(
+                        f"cannot hash managed worktree entry {entry}: {error}"
+                    ) from error
+            else:
+                _fail(f"managed worktree entry has unsupported kind: {entry}")
+    registrations = _git_bytes(
+        repository,
+        "worktree",
+        "list",
+        "--porcelain",
+        "-z",
     )
-    return Path(value)
+    _digest_field(digest, b"registrations")
+    _digest_field(digest, registrations)
+    try:
+        current_managed_info = managed.lstat()
+    except FileNotFoundError:
+        current_managed_info = None
+    except OSError as error:
+        raise ValueError(
+            f"cannot verify managed worktree directory {managed}: {error}"
+        ) from error
+    if (managed_info is None) != (current_managed_info is None):
+        _fail(f"managed worktree directory changed while hashing: {managed}")
+    if managed_info is not None and current_managed_info is not None:
+        if (
+            _stable_stat_identity(managed_info)
+            != _stable_stat_identity(current_managed_info)
+        ):
+            _fail(f"managed worktree directory changed while hashing: {managed}")
+        try:
+            current_entries = {
+                entry.name: entry.lstat()
+                for entry in managed.iterdir()
+            }
+        except OSError as error:
+            raise ValueError(
+                f"cannot verify managed worktree entries in {managed}: {error}"
+            ) from error
+        if set(entry_info) != set(current_entries) or any(
+            _stable_stat_identity(entry_info[name])
+            != _stable_stat_identity(current_entries[name])
+            for name in entry_info
+        ):
+            _fail(f"managed worktree entries changed while hashing: {managed}")
+    if registrations != _git_bytes(
+        repository,
+        "worktree",
+        "list",
+        "--porcelain",
+        "-z",
+    ):
+        _fail("Git worktree registrations changed while hashing")
+    return digest.hexdigest()
+
+def _configured_hooks_path(repo: Path, common_dir: Path) -> Path:
+    configured = git_text(
+        repo,
+        "config",
+        "--path",
+        "--get",
+        "--default",
+        str(common_dir / "hooks"),
+        "core.hooksPath",
+    )
+    if not configured:
+        _fail("core.hooksPath must not be empty")
+    path = Path(configured)
+    return path if path.is_absolute() else repo / path
+
 
 
 def _git_controls_sha256(repo: Path) -> str:
@@ -983,31 +1203,17 @@ def _git_controls_sha256(repo: Path) -> str:
     )
     controls: list[tuple[bytes, Path]] = [
         (b"HEAD", git_dir / "HEAD"),
-        (b"index", _git_path(repo, "index")),
-        (b"packed-refs", common_dir / "packed-refs"),
+        (b"index", git_dir / "index"),
         (b"config", common_dir / "config"),
         (b"worktree-config", git_dir / "config.worktree"),
-        (b"hooks", _git_path(repo, "hooks")),
-        (b"info-attributes", _git_path(repo, "info/attributes")),
-        (b"info-exclude", _git_path(repo, "info/exclude")),
-        (b"info-sparse-checkout", _git_path(repo, "info/sparse-checkout")),
+        (b"hooks", _configured_hooks_path(repo, common_dir)),
+        (b"info-attributes", common_dir / "info" / "attributes"),
+        (b"info-exclude", common_dir / "info" / "exclude"),
+        (b"info-sparse-checkout", git_dir / "info" / "sparse-checkout"),
     ]
-    try:
-        branch_ref = git_text(repo, "symbolic-ref", "-q", "HEAD")
-    except ValueError:
-        branch_ref = None
-    if branch_ref is not None:
-        controls.append((b"branch-ref", _git_path(repo, branch_ref)))
-
     digest = hashlib.sha256()
     for label, path in controls:
-        try:
-            _hash_filesystem_node(digest, path, label)
-        except ValueError:
-            if path.exists() or path.is_symlink():
-                raise
-            _digest_field(digest, label)
-            _digest_field(digest, b"missing")
+        _hash_protected_control(digest, path, label)
     return digest.hexdigest()
 
 
@@ -1037,6 +1243,11 @@ def root_snapshot(repo: Path) -> dict[str, object]:
     untracked: list[dict[str, str]] = []
     repository = repo.resolve(strict=True)
     for relative_path in sorted(path for path in untracked_paths if path):
+        if (
+            relative_path == ".worktrees"
+            or relative_path.startswith(".worktrees/")
+        ):
+            continue
         _require_repo_relative(relative_path, "untracked path")
         path = repository / relative_path
         try:
@@ -1081,6 +1292,7 @@ def root_snapshot(repo: Path) -> dict[str, object]:
         "untracked": untracked,
         "filesystemSha256": _filesystem_sha256(repository),
         "gitControlsSha256": _git_controls_sha256(repository),
+        "managedWorktreesSha256": _managed_worktrees_sha256(repository),
     }
 
 
@@ -1341,6 +1553,15 @@ def _require_ready_for_adam(
         _fail("ready_for_adam requires mergeable state")
     if lane["blocker"] is not None:
         _fail("ready_for_adam requires no blocker")
+    stage2_before = data["rootSafety"]["stage2Before"]
+    stage2_after = data["rootSafety"]["stage2After"]
+    if stage2_before is None or stage2_after is None:
+        _fail(
+            "ready_for_adam requires stage2Before and stage2After "
+            "root safety artifacts"
+        )
+    if stage2_before["sha256"] != stage2_after["sha256"]:
+        _fail("ready_for_adam requires matching stage2 root safety sha256")
     required_gates = {
         "focused": "passed",
         "aggregate": "passed",

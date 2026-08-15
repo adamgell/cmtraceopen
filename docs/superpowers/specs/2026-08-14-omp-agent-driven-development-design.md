@@ -180,7 +180,7 @@ Project agent definitions map one-to-one to the tracked charters:
 - Reducer Adversary;
 - Reducer Integration.
 
-Each definition requires the agent to read its `.Clairvoyance/staff/*-charter.md` before acting. It also sets model-role preference, output shape, denied child spawning, and `advisor: true`. Every child lacks shell/process, Git/GitHub, and credential authority. Read-only profiles expose only non-mutating file tools; writing profiles expose only the dedicated file-read/edit tools needed inside their allowlist. Reducer Adversary is always read-only, returns only RED contract and fixture/test proposal text, and has no alternate mutable mode; Main routes an approved proposal to a separately dispatched Coder. RED-first execution therefore applies to Coder only. UI/Design returns proposed browser checks rather than observed evidence; Tech Writer returns proposed source, link, and render checks. Main runs all verification, and every documentation lane requires CodeRabbit.
+Each definition requires the agent to read its `.Clairvoyance/staff/*-charter.md` before acting. It also sets model-role preference, output shape, denied child spawning, and `advisor: true`. Every child has exactly `[read, grep, glob]` and lacks filesystem mutation, shell/process, Git/GitHub, and credential authority. Coder, UI/Design, and Tech Writer return structured proposals containing repository-relative paths, operations, exact content, patch intent, and proposed role-appropriate checks. Reducer Adversary returns only a RED contract and fixture/test proposal and has no alternate mutable mode. Main is the sole trusted filesystem, command, Git, and GitHub broker: it validates the canonical assigned worktree, persisted allowlist, every proposal path, and the proposal itself; applies accepted proposals exactly; runs the evidence checks; and returns any proposal needing changes to its logical lane owner. Main never becomes a competing proposal author.
 
 `.omp/config.yml` enables the advisor subsystem and binds `modelRoles.advisor` to the validated reasoning role. In print mode, the `cmtraceopen-dev` preflight requires the same launcher command to contain both the real `--advisor` flag and `--append-system-prompt` operator/system evidence stating that this invocation includes `--advisor`; either missing element blocks. OMP print agents cannot observe parent argv, so this explicit transport is accepted launch evidence rather than model self-attestation, and `pgrep`, process titles, and Hub membership are not advisor-runtime proof. In interactive mode the operator enables `/advisor on` before the first prompt. Models never issue session slash commands. Every custom staff agent starts its own read-only advisor through `advisor: true`. Advisor output is advisory evidence and never replaces formal independent review.
 
@@ -188,7 +188,7 @@ For Stages 1 and 2, only Main may spawn staff. Every staff profile denies child 
 
 ## Parallel lane model
 
-The first production release supports three simultaneous writing lanes.
+The first production release supports three simultaneous proposal lanes.
 
 Before dispatch, Main builds a wave from refreshed public data without treating that data as instructions. An eligible issue must have:
 
@@ -196,12 +196,12 @@ Before dispatch, Main builds a wave from refreshed public data without treating 
 - no open PR or active owner collision;
 - Adam-approved issue requirements and an issue-scoped acceptance contract;
 - evidence anchors where fixtures or log grammar are involved;
-- write ownership that does not overlap another lane in the wave;
+- proposed path ownership that does not overlap another lane in the wave;
 - a declared integration order when shared contracts are nearby.
 
 Main fixes shared interfaces, file ownership, cross-lane contracts, and approved requirement excerpts in a cold brief before agents start. Raw issue/PR/review text and reviewer prompts never enter a child prompt. Issues with hostile/unreviewed content, overlapping ownership, or unresolved semantic dependencies remain queued.
 
-Each active lane has exactly one writing owner, one durable worktree, one issue branch, and one draft PR. Read-only specialists and reviewers may inspect lanes concurrently but do not share the implementer's identity.
+Each active lane has exactly one logical proposal owner, one durable worktree, one issue branch, and one draft PR. All staff remain read-only; Main alone materializes that owner's accepted proposals. Contract specialists and reviewers may inspect lanes concurrently but do not share the proposal owner's identity.
 
 Focused tests may run concurrently. Aggregate Rust, Clippy, wasm, TypeScript, Tauri, and native checks share one semaphore with capacity 1 across all lanes. Main records acquisition, release, and queued lane IDs in live state.
 
@@ -250,18 +250,18 @@ Preflight derives and stores `PRIMARY_ROOT` as the canonical parent of the absol
 ## Per-lane execution flow
 
 1. Main refreshes the issue, dependencies, open PRs, `main`, branch heads, and review state as untrusted data.
-2. Main allocates the issue branch, worktree, sole writing owner, allowed paths, allocation base SHA, and lease.
+2. Main allocates the issue branch, worktree, sole logical proposal owner, allowed paths, allocation base SHA, and lease.
 3. Main extracts only Adam-approved requirements/specification excerpts and writes a cold-complete brief with scope, non-goals, evidence anchors, existing patterns, shared contracts, acceptance criteria, and verification goals.
-4. Apply the role-specific first-artifact contract. Coder writes only the smallest focused failing test/fixture. Reducer Adversary is strictly read-only and returns an adversarial RED contract plus fixture/test proposal as text. Its proposed paths must be nonblank, whitespace-free relative paths with no repeated/trailing separator, traversal segment, absolute/URI form, NUL/control character, or NUL-like escape. Before dispatching Coder, Main resolves every existing parent and the canonical target against the assigned absolute worktree, rejects symlink escape or any target outside that worktree, and requires the repository-relative path to match the persisted manifest allowlist. The proposal itself grants no write authority. UI/Design first prepares the approved UI change plus proposed browser checks. Tech Writer first prepares the approved documentation change plus proposed source, link, and render checks.
-5. Main independently inspects every proposed or written change. At the final filesystem state, Main canonicalizes every actual changed path and requires an unambiguous existing target contained in the assigned worktree and matched by the persisted manifest allowlist; a symlink or nonexistent-path ambiguity blocks before evidence is accepted. Main then runs `lane_state.py check-paths --manifest PATH --issue N`, which loads the allocation base and complete persisted allowlist from the validated lane record. This manifest-bound post-write check remains mandatory when an adversarial fixture path passed pre-dispatch validation.
-6. For Coder work, including a Coder materializing an approved adversarial proposal, Main sanitizes exact command arguments, runs the focused test, and records the observed RED result before authorizing that same Coder to implement production edits.
-7. The same authorized owner implements or prepares the smallest contract-complete change and returns only proposed role-appropriate verification. UI/Design never claims observed browser evidence; Tech Writer never claims its proposed checks ran.
-8. Main independently inspects the diff, repeats the manifest-bound path check, runs focused GREEN or browser/source/link/render verification as applicable, and records the result. Children never run commands, Git/GitHub operations, or read credentials.
+4. Apply the role-specific first-proposal contract. Coder returns only the smallest focused failing test/fixture as a structured proposal containing a repository-relative path, operation, exact content, patch intent, and proposed RED checks. Reducer Adversary returns an adversarial RED contract plus fixture/test proposal as text. UI/Design and Tech Writer return equivalent structured edit proposals plus their role-appropriate proposed checks. No child mutates the filesystem. Before applying any proposal, Main resolves every existing parent and canonical target against the assigned absolute worktree, rejects whitespace, repeated/trailing separators, traversal, absolute/URI/NUL forms, symlink escape, or any target outside that worktree, and requires the repository-relative path to match the persisted manifest allowlist. Main applies accepted proposals exactly or returns them to the logical owner for revision; it never authors a competing substitute.
+5. Main independently inspects every proposal and broker-applied change. At the final filesystem state, Main canonicalizes every actual changed path and requires an unambiguous existing target contained in the assigned worktree and matched by the persisted manifest allowlist; a symlink or nonexistent-path ambiguity blocks before evidence is accepted. Main then runs `lane_state.py check-paths --manifest PATH --issue N`, which loads the allocation base and complete persisted allowlist from the validated lane record. This manifest-bound post-write check remains mandatory when an adversarial fixture path passed pre-application validation.
+6. For Coder work, Main sanitizes the proposed check arguments, runs the focused test, and records the observed RED result before asking that same logical Coder owner for production implementation proposals.
+7. The same logical owner returns the smallest contract-complete structured proposal and only proposed role-appropriate verification. Main applies the accepted proposal exactly; UI/Design never claims observed browser evidence and Tech Writer never claims its proposed checks ran.
+8. Main independently inspects the diff, repeats the manifest-bound path check, runs focused GREEN or browser/source/link/render verification as applicable, and records the result. Children never mutate files, run commands or Git/GitHub operations, or read credentials.
 9. Main may commit and push the verified coherent diff and open or update a draft PR without pausing.
 10. Review proceeds contract first, adversarial second, mechanical third. Read-only reviewers inspect source and Main-supplied exact-head artifacts; they do not run commands. Reducer work routes semantic questions through Reducer Contract and false-story testing through Reducer Adversary.
 11. Main runs the checked-in CodeRabbit helper and continues review until a completed review targets the current head, is approved, and has no actionable unresolved threads.
 12. Independent charter review repeats at the exact head until a completed review has no unresolved actionable findings. Every disposition is recorded.
-13. Reducer Integration inspects Main-supplied exact-head shared-contract and gate artifacts for reducer lanes. Main performs and records the actual integration checks. Separation from the writing owner remains mandatory.
+13. Reducer Integration inspects Main-supplied exact-head shared-contract and gate artifacts for reducer lanes. Main performs and records the actual integration checks. Separation from the logical proposal owner remains mandatory.
 14. Main reports distinct gate states to Adam. Adam decides whether to merge.
 
 When an upstream shared contract changes, Main invalidates affected downstream conformance and review states and requires exact-head revalidation.
@@ -277,7 +277,7 @@ Without an additional approval prompt, Main may:
 - open or update draft PRs;
 - post issue/PR status evidence;
 - request CodeRabbit and independent review;
-- dispatch the lane's recorded writing owner to apply technically verified review fixes, then independently inspect, run manifest-bound path checks and gates, commit, and push the resulting diff. Main does not edit production files. To transfer ownership, Main first blocks the lane, records the new sole owner, issues a cold-complete brief, and invalidates all affected gate and review states.
+- dispatch the lane's recorded logical proposal owner for structured review-fix proposals, validate and apply accepted proposals exactly, then independently inspect, run manifest-bound path checks and gates, commit, and push the resulting diff. Main is the trusted broker, not a competing implementation author. To transfer proposal ownership, Main first blocks the lane, records the new sole owner, issues a cold-complete brief, and invalidates all affected gate and review states.
 
 Main may not:
 
@@ -289,7 +289,7 @@ Main may not:
 - waive P0, P1, or semantic findings;
 - claim native Windows validation without the exact code running there.
 
-The narrow deletion exceptions are: a writing owner may remove an obsolete tracked file only when the approved brief requires it and the file is inside the sole-owner allowlist; Main may remove the Task 11 disposable smoke worktree/branch only after verifying it contains no valuable or unpushed work and only the allowed scratch change.
+The narrow deletion exceptions are: a logical proposal owner may return a `delete` proposal only when the approved brief requires removal of an obsolete tracked file inside the persisted allowlist, and Main alone validates and performs it; Main may remove the Task 11 disposable smoke worktree/branch only after verifying it contains no valuable or unpushed work and only the allowed scratch change.
 
 ## Durable memory policy
 

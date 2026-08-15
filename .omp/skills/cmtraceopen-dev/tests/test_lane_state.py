@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 from pathlib import Path
 import stat
 import subprocess
@@ -348,6 +349,12 @@ def prepare_ready_lane(
     issue: str,
 ) -> None:
     record_all_observations(manifest, root, issue)
+    root_snapshot = {
+        "artifact": (root / "stage2-root.json").resolve().as_uri(),
+        "sha256": "d" * 64,
+    }
+    manifest["rootSafety"]["stage2Before"] = root_snapshot.copy()
+    manifest["rootSafety"]["stage2After"] = root_snapshot.copy()
     manifest["lanes"][issue]["implementationState"] = "green"
     lane_state.transition_lane(manifest, issue, "running")
     lane_state.transition_lane(manifest, issue, "reviewing")
@@ -778,6 +785,35 @@ class LifecycleTests(unittest.TestCase):
                         lane_state._require_ready_for_adam(manifest, lane)
                     self.assertEqual(original, manifest)
 
+            root_safety_rejections = {
+                "missing stage2 before": (
+                    lambda root_safety: root_safety.__setitem__(
+                        "stage2Before",
+                        None,
+                    ),
+                    "stage2Before and stage2After",
+                ),
+                "stage2 mismatch": (
+                    lambda root_safety: root_safety["stage2After"].__setitem__(
+                        "sha256",
+                        "e" * 64,
+                    ),
+                    "matching stage2 root safety",
+                ),
+            }
+            for label, (mutate, reason) in root_safety_rejections.items():
+                with self.subTest(label=label):
+                    manifest = prepared()
+                    mutate(manifest["rootSafety"])
+                    original = deepcopy(manifest)
+                    with self.assertRaisesRegex(ValueError, reason):
+                        lane_state.transition_lane(
+                            manifest,
+                            "317",
+                            "ready_for_adam",
+                        )
+                    self.assertEqual(original, manifest)
+
             mutations = {
                 "incomplete gate": lambda lane: lane["gates"].__setitem__(
                     "focused",
@@ -1099,6 +1135,7 @@ class EvidenceTests(unittest.TestCase):
                 with self.subTest(call=call):
                     with self.assertRaises(ValueError):
                         call()
+
 
 
 class TestInfrastructureTests(unittest.TestCase):
@@ -1461,6 +1498,18 @@ class PathOwnershipTests(unittest.TestCase):
         )
 
 class RootSnapshotTests(unittest.TestCase):
+    def test_hooks_path_lookup_errors_fail_closed(self) -> None:
+        with mock.patch.object(
+            lane_state,
+            "git_text",
+            side_effect=ValueError("git config failed"),
+        ):
+            with self.assertRaisesRegex(ValueError, "git config failed"):
+                lane_state._configured_hooks_path(
+                    Path("/repo"),
+                    Path("/common"),
+                )
+
     def test_existing_modified_file_change_alters_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo, _ = create_git_repo(Path(directory))
@@ -1661,6 +1710,11 @@ class RootSnapshotTests(unittest.TestCase):
                     return_value="0" * 64,
                 ),
                 mock.patch.object(
+                    lane_state,
+                    "_managed_worktrees_sha256",
+                    return_value="0" * 64,
+                ),
+                mock.patch.object(
                     lane_state.os,
                     "read",
                     side_effect=tracking_read,
@@ -1783,11 +1837,141 @@ class RootSnapshotTests(unittest.TestCase):
                 ignored_changed["filesystemSha256"],
             )
 
+    def test_managed_worktrees_digest_tracks_entries_and_registrations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo, head = create_git_repo(Path(directory))
+            baseline = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                {
+                    "headSha",
+                    "indexTreeSha",
+                    "trackedDiffSha256",
+                    "untracked",
+                    "filesystemSha256",
+                    "gitControlsSha256",
+                    "managedWorktreesSha256",
+                },
+                set(baseline),
+            )
+
+            managed = repo / ".worktrees"
+            lane = managed / "lane"
+            run_git(repo, "worktree", "add", "--detach", str(lane), head)
+            registered = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                registered["managedWorktreesSha256"],
+            )
+
+            (lane / "scratch.txt").write_text("lane write\n", encoding="utf-8")
+            lane_written = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                registered["managedWorktreesSha256"],
+                lane_written["managedWorktreesSha256"],
+            )
+
+            run_git(repo, "worktree", "remove", "--force", str(lane))
+            removed = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                baseline["managedWorktreesSha256"],
+                removed["managedWorktreesSha256"],
+            )
+
+            leftover = managed / "leftover"
+
+            ordinary_file = managed / "ordinary.txt"
+            ordinary_file.write_text("ordinary\n", encoding="utf-8")
+            with_file = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                with_file["managedWorktreesSha256"],
+            )
+            ordinary_file.unlink()
+
+            ordinary_directory = managed / "ordinary-directory"
+            ordinary_directory.mkdir()
+            with_directory = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                with_directory["managedWorktreesSha256"],
+            )
+            ordinary_directory.rmdir()
+
+            ordinary_symlink = managed / "ordinary-symlink"
+            ordinary_symlink.symlink_to("ordinary-target")
+            with_symlink = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                with_symlink["managedWorktreesSha256"],
+            )
+            ordinary_symlink.unlink()
+            self.assertEqual(
+                baseline["managedWorktreesSha256"],
+                lane_state.root_snapshot(repo)["managedWorktreesSha256"],
+            )
+            leftover.mkdir()
+            leftover_snapshot = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                leftover_snapshot["managedWorktreesSha256"],
+            )
+            leftover.rmdir()
+
+            stale = managed / "stale"
+            run_git(repo, "worktree", "add", "--detach", str(stale), head)
+            shutil.rmtree(stale)
+            stale_registration = lane_state.root_snapshot(repo)
+            self.assertNotEqual(
+                baseline["managedWorktreesSha256"],
+                stale_registration["managedWorktreesSha256"],
+            )
+            run_git(repo, "worktree", "prune")
+            pruned = lane_state.root_snapshot(repo)
+            self.assertEqual(
+                baseline["managedWorktreesSha256"],
+                pruned["managedWorktreesSha256"],
+            )
+
+    def test_git_controls_reject_symlinked_controls_and_parents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repo, _ = create_git_repo(root)
+            git_dir = Path(run_git(repo, "rev-parse", "--absolute-git-dir"))
+            outside = root / "outside"
+            outside.mkdir()
+            outside_file = outside / "control"
+            outside_file.write_text("outside\n", encoding="utf-8")
+
+            attributes = git_dir / "info" / "attributes"
+            attributes.symlink_to(outside_file)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                lane_state.root_snapshot(repo)
+            attributes.unlink()
+
+            hooks = root / "external-hooks"
+            hooks.mkdir()
+            (hooks / "pre-commit").symlink_to(outside_file)
+            run_git(repo, "config", "core.hooksPath", str(hooks))
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                lane_state.root_snapshot(repo)
+            (hooks / "pre-commit").unlink()
+
+            hooks_parent = root / "hooks-parent"
+            hooks_parent.symlink_to(outside, target_is_directory=True)
+            run_git(
+                repo,
+                "config",
+                "core.hooksPath",
+                str(hooks_parent),
+            )
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                lane_state.root_snapshot(repo)
+
     def test_snapshot_covers_primary_git_control_files_and_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo, head = create_git_repo(Path(directory))
             git_dir = Path(run_git(repo, "rev-parse", "--absolute-git-dir"))
-            hooks = Path(directory) / "effective-hooks"
+            hooks = Path(directory).resolve() / "effective-hooks"
             hooks.mkdir()
             run_git(repo, "config", "core.hooksPath", str(hooks))
             baseline = lane_state.root_snapshot(repo)
@@ -1839,31 +2023,26 @@ class RootSnapshotTests(unittest.TestCase):
             )
 
             head_file.write_text(f"ref: refs/heads/{branch}\n", encoding="ascii")
+            before_primary_change = lane_state.root_snapshot(repo)
             (repo / "owned.txt").write_text("branch update\n", encoding="utf-8")
             run_git(repo, "commit", "--quiet", "-am", "branch update")
-            branch_changed = lane_state.root_snapshot(repo)
+            primary_changed = lane_state.root_snapshot(repo)
             self.assertNotEqual(
-                head_control_changed["gitControlsSha256"],
-                branch_changed["gitControlsSha256"],
+                before_primary_change["headSha"],
+                primary_changed["headSha"],
             )
 
-            before_packing = branch_changed
+            run_git(repo, "branch", "unrelated", head)
+            before_packing = lane_state.root_snapshot(repo)
             run_git(repo, "pack-refs", "--all", "--prune")
-            packed_refs = git_dir / "packed-refs"
-            self.assertTrue(packed_refs.is_file())
-            self.assertFalse((git_dir / "refs" / "heads" / branch).exists())
             packed = lane_state.root_snapshot(repo)
-            self.assertNotEqual(
+            self.assertEqual(
+                before_packing["headSha"],
+                packed["headSha"],
+            )
+            self.assertEqual(
                 before_packing["gitControlsSha256"],
                 packed["gitControlsSha256"],
-            )
-            packed_refs.chmod(
-                stat.S_IMODE(packed_refs.stat().st_mode) | stat.S_IXUSR
-            )
-            packed_mutated = lane_state.root_snapshot(repo)
-            self.assertNotEqual(
-                packed["gitControlsSha256"],
-                packed_mutated["gitControlsSha256"],
             )
 
             sparse_checkout = info / "sparse-checkout"
@@ -2042,6 +2221,12 @@ class InvalidationTests(unittest.TestCase):
                 depends_on=[318],
                 shared_contract_paths=["contracts/**"],
             )
+            root_snapshot = {
+                "artifact": (root / "stage2-root.json").resolve().as_uri(),
+                "sha256": "d" * 64,
+            }
+            manifest["rootSafety"]["stage2Before"] = root_snapshot.copy()
+            manifest["rootSafety"]["stage2After"] = root_snapshot.copy()
             manifest["lanes"]["317"]["laneState"] = "merged"
             for issue in ("318", "319"):
                 record_all_observations(manifest, root, issue)
