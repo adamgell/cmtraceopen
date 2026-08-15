@@ -150,6 +150,15 @@ _FEATURE_OWNER_KEYS = {
     "evidenceInvalidatedAt",
 }
 _ROOT_SLOTS = {"stage1Before", "stage1After", "stage2Before", "stage2After"}
+_ROOT_SNAPSHOT_KEYS = {
+    "headSha",
+    "indexTreeSha",
+    "trackedDiffSha256",
+    "untracked",
+    "filesystemSha256",
+    "gitControlsSha256",
+    "managedWorktreesSha256",
+}
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _STAGE1_ALLOWED_PATHS = [
@@ -2238,7 +2247,49 @@ def record_remote(data: dict[str, object], issue: str, remote_sha: str) -> None:
     _commit_candidate(data, candidate)
 
 
-def _sha256_local_artifact(artifact_uri: str) -> str:
+def _validate_root_snapshot_payload(snapshot: dict[str, object]) -> None:
+    _require_exact_keys(
+        snapshot,
+        _ROOT_SNAPSHOT_KEYS,
+        "root snapshot artifact",
+    )
+    _require_sha(snapshot["headSha"], "root snapshot artifact.headSha")
+    _require_sha(
+        snapshot["indexTreeSha"],
+        "root snapshot artifact.indexTreeSha",
+    )
+    for field in (
+        "trackedDiffSha256",
+        "filesystemSha256",
+        "gitControlsSha256",
+        "managedWorktreesSha256",
+    ):
+        _require_sha256(
+            snapshot[field],
+            f"root snapshot artifact.{field}",
+        )
+    untracked = snapshot["untracked"]
+    if not isinstance(untracked, list):
+        _fail("root snapshot artifact.untracked must be a list")
+    paths: list[str] = []
+    for index, entry in enumerate(untracked):
+        label = f"root snapshot artifact.untracked[{index}]"
+        if not isinstance(entry, dict):
+            _fail(f"{label} must be an object")
+        _require_exact_keys(entry, {"path", "sha256"}, label)
+        path = _require_nonempty_string(entry["path"], f"{label}.path")
+        _require_repo_relative(path, f"{label}.path")
+        if path == ".worktrees" or path.startswith(".worktrees/"):
+            _fail(f"{label}.path must not name a managed worktree")
+        _require_sha256(entry["sha256"], f"{label}.sha256")
+        paths.append(path)
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        _fail(
+            "root snapshot artifact.untracked paths must be unique and sorted"
+        )
+
+
+def _sha256_valid_root_snapshot_artifact(artifact_uri: str) -> str:
     parsed = urlparse(artifact_uri)
     if (
         parsed.scheme != "file"
@@ -2247,14 +2298,60 @@ def _sha256_local_artifact(artifact_uri: str) -> str:
         or parsed.fragment
     ):
         _fail("root snapshot artifact must be a local file:// URI")
+    artifact_path = Path(unquote(parsed.path))
+    before_parents = _non_symlink_parent_chain(artifact_path)
+    file_descriptor: int | None = None
     try:
-        artifact_path = Path(unquote(parsed.path)).resolve(strict=True)
+        expected = artifact_path.lstat()
+        if stat.S_ISLNK(expected.st_mode):
+            _fail("root snapshot artifact must not be a symlink")
+        if not stat.S_ISREG(expected.st_mode):
+            _fail("root snapshot artifact must be a regular file")
+        file_descriptor = os.open(
+            artifact_path,
+            os.O_RDONLY | os.O_NOFOLLOW,
+        )
+        opened = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _stable_stat_identity(expected)
+            != _stable_stat_identity(opened)
+        ):
+            _fail("root snapshot artifact changed while opening")
         digest = hashlib.sha256()
-        with artifact_path.open("rb") as artifact_file:
-            while chunk := artifact_file.read(ARTIFACT_HASH_CHUNK_SIZE):
-                digest.update(chunk)
+        content = bytearray()
+        while chunk := os.read(file_descriptor, ARTIFACT_HASH_CHUNK_SIZE):
+            digest.update(chunk)
+            content.extend(chunk)
+        if (
+            _stable_stat_identity(opened)
+            != _stable_stat_identity(os.fstat(file_descriptor))
+        ):
+            _fail("root snapshot artifact changed while reading")
     except OSError as error:
         raise ValueError(f"cannot read root snapshot artifact: {error}") from error
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+    try:
+        current = artifact_path.lstat()
+    except OSError as error:
+        raise ValueError(f"cannot verify root snapshot artifact: {error}") from error
+    if (
+        _stable_stat_identity(expected)
+        != _stable_stat_identity(current)
+    ):
+        _fail("root snapshot artifact changed while reading")
+    if before_parents != _non_symlink_parent_chain(artifact_path):
+        _fail("root snapshot artifact path changed while reading")
+    try:
+        artifact_text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            "root snapshot artifact must be valid UTF-8 JSON"
+        ) from error
+    snapshot = _decode_json_object(artifact_text, str(artifact_path))
+    _validate_root_snapshot_payload(snapshot)
     return digest.hexdigest()
 
 
@@ -2266,7 +2363,7 @@ def record_root_snapshot(data: dict[str, object], slot: str, artifact: str) -> N
         artifact,
         "root snapshot artifact",
     )
-    artifact_sha256 = _sha256_local_artifact(artifact_uri)
+    artifact_sha256 = _sha256_valid_root_snapshot_artifact(artifact_uri)
     candidate = deepcopy(data)
     candidate["rootSafety"][slot] = {
         "artifact": artifact_uri,

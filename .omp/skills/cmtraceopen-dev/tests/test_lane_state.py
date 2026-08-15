@@ -39,6 +39,23 @@ STAGE1_ALLOWED_PATHS = [
     "docs/superpowers/specs/2026-08-14-omp-agent-driven-development-design.md",
     "docs/superpowers/plans/2026-08-14-omp-agent-driven-development.md",
 ]
+
+def root_snapshot_fixture() -> dict[str, object]:
+    return {
+        "headSha": SHA_A,
+        "indexTreeSha": SHA_B,
+        "trackedDiffSha256": "0" * 64,
+        "untracked": [
+            {
+                "path": "scratch.txt",
+                "sha256": "1" * 64,
+            }
+        ],
+        "filesystemSha256": "2" * 64,
+        "gitControlsSha256": "3" * 64,
+        "managedWorktreesSha256": "4" * 64,
+    }
+
 TEST_GIT_TIMEOUT_SECONDS = 15.0
 
 
@@ -349,12 +366,22 @@ def prepare_ready_lane(
     issue: str,
 ) -> None:
     record_all_observations(manifest, root, issue)
-    root_snapshot = {
-        "artifact": (root / "stage2-root.json").resolve().as_uri(),
-        "sha256": "d" * 64,
-    }
-    manifest["rootSafety"]["stage2Before"] = root_snapshot.copy()
-    manifest["rootSafety"]["stage2After"] = root_snapshot.copy()
+    artifact = root / "stage2-root.json"
+    artifact.write_text(
+        json.dumps(root_snapshot_fixture()),
+        encoding="utf-8",
+    )
+    artifact_uri = artifact.resolve().as_uri()
+    lane_state.record_root_snapshot(
+        manifest,
+        "stage2Before",
+        artifact_uri,
+    )
+    lane_state.record_root_snapshot(
+        manifest,
+        "stage2After",
+        artifact_uri,
+    )
     manifest["lanes"][issue]["implementationState"] = "green"
     lane_state.transition_lane(manifest, issue, "running")
     lane_state.transition_lane(manifest, issue, "reviewing")
@@ -1087,7 +1114,11 @@ class EvidenceTests(unittest.TestCase):
             manifest = lane_state.empty_manifest()
             lane_state.allocate_lane(manifest, valid_lane(Path(directory)))
             artifact = Path(directory) / "root-stage1-before.json"
-            artifact_bytes = b'{"snapshot":true}\n'
+            artifact_bytes = json.dumps(
+                root_snapshot_fixture(),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
             artifact.write_bytes(artifact_bytes)
             artifact_uri = artifact.resolve().as_uri()
 
@@ -1558,14 +1589,115 @@ class RootSnapshotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unmerged"):
                 lane_state.root_snapshot(repo)
 
+    def test_record_root_snapshot_rejects_invalid_snapshot_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = lane_state.empty_manifest()
+            valid = root_snapshot_fixture()
+            missing = deepcopy(valid)
+            missing.pop("managedWorktreesSha256")
+            extra = deepcopy(valid)
+            extra["unexpected"] = True
+            wrong_untracked = deepcopy(valid)
+            wrong_untracked["untracked"] = {"path": "scratch.txt"}
+            invalid_untracked_path = deepcopy(valid)
+            invalid_untracked_path["untracked"] = [
+                {
+                    "path": "../escape",
+                    "sha256": "1" * 64,
+                }
+            ]
+            malformed_digest = deepcopy(valid)
+            malformed_head = deepcopy(valid)
+            malformed_head["headSha"] = "not-a-git-sha"
+            malformed_digest["gitControlsSha256"] = "not-a-digest"
+            payloads = {
+                "opaque JSON": {},
+                "missing field": missing,
+                "extra field": extra,
+                "wrong field type": wrong_untracked,
+                "invalid untracked path": invalid_untracked_path,
+                "malformed digest": malformed_digest,
+                "malformed Git SHA": malformed_head,
+            }
+            for label, payload in payloads.items():
+                with self.subTest(label=label):
+                    artifact = root / f"{label.replace(' ', '-')}.json"
+                    artifact.write_text(
+                        json.dumps(payload),
+                        encoding="utf-8",
+                    )
+                    original = deepcopy(manifest)
+                    with self.assertRaises(ValueError):
+                        lane_state.record_root_snapshot(
+                            manifest,
+                            "stage2Before",
+                            artifact.resolve().as_uri(),
+                        )
+                    self.assertEqual(original, manifest)
+
+    def test_record_root_snapshot_accepts_exact_helper_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, _ = create_git_repo(root)
+            payload = lane_state.root_snapshot(repo)
+            artifact = root / "root-snapshot.json"
+            artifact_bytes = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            artifact.write_bytes(artifact_bytes)
+            manifest = lane_state.empty_manifest()
+
+            lane_state.record_root_snapshot(
+                manifest,
+                "stage2Before",
+                artifact.resolve().as_uri(),
+            )
+
+            self.assertEqual(
+                {
+                    "artifact": artifact.resolve().as_uri(),
+                    "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+                },
+                manifest["rootSafety"]["stage2Before"],
+            )
+
+    def test_record_root_snapshot_rejects_symlinked_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "snapshot.json"
+            target.write_text(
+                json.dumps(root_snapshot_fixture()),
+                encoding="utf-8",
+            )
+            artifact = root / "snapshot-link.json"
+            artifact.symlink_to(target)
+            manifest = lane_state.empty_manifest()
+            original = deepcopy(manifest)
+
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                lane_state.record_root_snapshot(
+                    manifest,
+                    "stage2Before",
+                    artifact.absolute().as_uri(),
+                )
+            self.assertEqual(original, manifest)
+
     def test_root_artifact_is_chunk_hashed_inside_manifest_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = lane_state.empty_manifest()
             path = write_manifest(root, manifest)
             artifact = root / "large-snapshot.json"
-            chunk_size = lane_state.ARTIFACT_HASH_CHUNK_SIZE
-            artifact.write_bytes(b"x" * (2 * chunk_size + 1))
+            artifact_bytes = json.dumps(
+                root_snapshot_fixture(),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            artifact.write_bytes(artifact_bytes)
+            chunk_size = 64
             callback_active = False
             chunk_sizes: list[int] = []
             original_mutate = lane_state.mutate_manifest
@@ -1613,6 +1745,11 @@ class RootSnapshotTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     lane_state,
+                    "ARTIFACT_HASH_CHUNK_SIZE",
+                    chunk_size,
+                ),
+                mock.patch.object(
+                    lane_state,
                     "mutate_manifest",
                     side_effect=observing_mutate,
                 ),
@@ -1644,7 +1781,10 @@ class RootSnapshotTests(unittest.TestCase):
 
             self.assertEqual(0, exit_code)
             self.assertEqual(
-                [chunk_size, chunk_size, 1],
+                [
+                    len(artifact_bytes[offset : offset + chunk_size])
+                    for offset in range(0, len(artifact_bytes), chunk_size)
+                ],
                 chunk_sizes,
             )
             updated = lane_state.load_manifest(path)
@@ -2953,7 +3093,12 @@ class CliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             snapshot_artifact = root / "snapshot.json"
-            snapshot_artifact.write_text("{}", encoding="utf-8")
+            snapshot_bytes = json.dumps(
+                root_snapshot_fixture(),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            snapshot_artifact.write_bytes(snapshot_bytes)
 
             def prepared_manifest(command: str) -> dict[str, object]:
                 manifest = lane_state.empty_manifest()
@@ -3114,7 +3259,7 @@ class CliTests(unittest.TestCase):
                         snapshot_artifact.resolve().as_uri(),
                     ],
                     ("rootSafety", "stage1Before", "sha256"),
-                    hashlib.sha256(b"{}").hexdigest(),
+                    hashlib.sha256(snapshot_bytes).hexdigest(),
                     set(),
                 ),
                 (
