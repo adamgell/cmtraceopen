@@ -1,6 +1,6 @@
 # Coder Charter: CMTrace Open
 
-**Role:** Implementation engineer (pool, one instance per issue lane)
+**Role:** Implementation engineer (pool, one instance per issue lane)\
 **Reports to:** CEO  
 **Model tier:** Scaffold (kimi-k2.7-code, deepseek-v4-flash, qwen-flash, gpt-5-luna) for fixtures/tests/boilerplate; Mid (kimi-k3, grok-4-20-reasoning) for parser logic/reducers
 
