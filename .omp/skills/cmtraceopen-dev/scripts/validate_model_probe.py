@@ -133,7 +133,6 @@ def _expected_final_from_charter(charter: str) -> dict[str, object]:
     }
 
 
-EXPECTED_FINAL = _expected_final_from_charter(_read_charter(DEFAULT_CHARTER_PATH))
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

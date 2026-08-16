@@ -160,7 +160,7 @@ The symlinks are user-local and are not committed. Stage 1 runs the authenticate
 
 OMP's native, Agents, Claude-project, and enabled plugin providers remain available. The project will not apply a global `includeSkills` allow-list that could hide built-in safety or process skills.
 
-The enabled Claude-project provider supplies the checked-in `.claude/skills/batch-issue-prs`, `.claude/skills/frontend-design`, and `.claude/skills/coderabbit-review-loop` skills. These exact project paths, not similarly named user or plugin skills, satisfy the role table below. Stage 1 records each resolved source path.
+The enabled Claude-project provider supplies the checked-in `.claude/skills/batch-issue-prs`, `.claude/skills/frontend-design`, and `.claude/skills/coderabbit-review-loop` skills. These exact project paths, not similarly named user or plugin skills, satisfy the role table below. They are intentionally not duplicated in the curated external skillset. Stage 1 records each resolved source path.
 
 `cmtraceopen-dev` treats commands embedded in sourced Claude or Hermes skills as intent, not executable syntax. It maps issue fan-out to OMP Task/Hub plus explicit worktrees, frontend verification to OMP's designer/browser surfaces, and CodeRabbit state to the checked-in `review_state.py` plus GitHub tools. An unsupported harness command blocks dispatch; OMP never guesses or shell-emulates it.
 
@@ -176,6 +176,8 @@ Agents autoload only the skills needed for their role:
 | Reducer Contract | `semantic-reducer-framework`, `semantic-reducer-development`, `contract-scoped-review` |
 | Reducer Adversary | `semantic-reducer-framework`, `semantic-reducer-development`, `test-driven-development` |
 | Tech Writer | `cmtraceopen`, `mdbook-docs` |
+
+The five approved skills not autoloaded by a child profile are Main-only, on-demand capabilities. Main uses `github-issues` and `github-pr-workflow` for issue and pull-request state transitions, `github-code-review` for generic review operations outside the dedicated Code Reviewer profile, and `windows-lab-workers` plus `windows-remote-validation` for Windows worker dispatch and evidence collection. They remain unavailable to read-only staff because they can coordinate external work or mutate GitHub state.
 
 Unknown or unavailable skills are configuration failures during Stage 1, not silent no-ops.
 

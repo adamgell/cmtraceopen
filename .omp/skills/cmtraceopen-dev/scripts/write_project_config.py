@@ -182,6 +182,12 @@ def validate_role_report(report_path: Path, repo_root: Path) -> dict[str, str]:
                 recorded_evidence,
             )
         )
+    reported_selectors = {
+        role: selector
+        for role, selector, *_ in role_inputs
+    }
+    if reported_selectors["advisor"] != reported_selectors["reasoning"]:
+        _fail("advisor selector must equal reasoning selector")
 
     artifact_paths = tuple(
         dict.fromkeys(

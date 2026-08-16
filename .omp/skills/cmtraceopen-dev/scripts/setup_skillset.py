@@ -18,6 +18,15 @@ def _require_supported_python(version: tuple[int, ...]) -> None:
     if version < (3, 11):
         raise SystemExit("error: setup_skillset.py requires Python 3.11 or newer")
 
+_require_supported_python(tuple(sys.version_info[:2]))
+
+
+def _require_supported_platform() -> None:
+    if os.name != "posix":
+        raise SystemExit(
+            "error: setup_skillset.py requires POSIX process semantics"
+        )
+
 
 APPROVED_SKILLS: dict[str, str] = {
     "branch-lane-verification": (
@@ -65,10 +74,10 @@ APPROVED_SKILL_TREE_SHA256: dict[str, str] = {
         "bea4fa1d2cb8d556c6fb51c85dde6122bfbacb8721bd17aa01b81e9c2bb1fcd9"
     ),
     "cmtraceopen": (
-        "4b4b3276dcfc008da21e709e3edac08681074bcd1756bc0b75cc8061a63e72d8"
+        "958ccfb1fb8c8ab557c16edc8301110657f721ebe6ff5a989248fb833e7a1897"
     ),
     "cmtraceopen-code-review": (
-        "ba70993c4b5b8bff2fd523b9b93c1797cb14e77bebf79ff21a7a4e412a37487f"
+        "db52e8dfef604019106c484add5286242dabde93365ed0927461cc42ea74d305"
     ),
     "contract-scoped-review": (
         "30564a296fd4690fdc63af624eed1a56bf65074bae0fecf750daa9a539f16e61"
@@ -461,13 +470,18 @@ def _entry_identity_at(
     name: str,
     display_path: Path,
 ) -> EntryIdentity:
-    before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-    link_target = (
-        os.readlink(name, dir_fd=descriptor)
-        if stat.S_ISLNK(before.st_mode)
-        else None
-    )
-    after = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    try:
+        before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        link_target = (
+            os.readlink(name, dir_fd=descriptor)
+            if stat.S_ISLNK(before.st_mode)
+            else None
+        )
+        after = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ValueError(
+            f"target entry changed during inspection: {display_path}"
+        ) from error
     before_identity = (
         before.st_dev,
         before.st_ino,
@@ -734,17 +748,9 @@ def _skillset_lock_file(lock_path: Path) -> Iterator[None]:
             lock_info = os.fstat(descriptor)
             if not stat.S_ISREG(lock_info.st_mode):
                 raise ValueError("skillset lock must be a regular file")
-            if os.name == "nt":
-                import msvcrt
+            import fcntl
 
-                if lock_info.st_size == 0:
-                    os.write(descriptor, b"\0")
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
         except OSError as error:
             raise ValueError("cannot acquire the skillset lock") from error
         locked = True
@@ -756,11 +762,7 @@ def _skillset_lock_file(lock_path: Path) -> Iterator[None]:
         cleanup_error: OSError | None = None
         try:
             if locked:
-                if os.name == "nt":
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
         except OSError as error:
             cleanup_error = error
         try:
@@ -1100,6 +1102,7 @@ def reconcile(
     check: bool,
     approved_tree_sha256: dict[str, str] | None = None,
 ) -> dict[str, list[str]]:
+    _require_supported_platform()
     source_identities = validate_sources(sources)
     if approved_tree_sha256 is not None:
         _require_approved_tree_digests(source_identities, approved_tree_sha256)
@@ -1599,7 +1602,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    _require_supported_python(tuple(sys.version_info[:2]))
+    _require_supported_platform()
     args = parse_args()
     home = args.home.expanduser().resolve()
     target = (

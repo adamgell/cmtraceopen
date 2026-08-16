@@ -91,14 +91,25 @@ class SkillsetTests(unittest.TestCase):
             setup_skillset._require_supported_python((3, 10, 14))
         setup_skillset._require_supported_python((3, 11, 0))
 
-    def test_main_rejects_old_python_before_argument_parsing(self) -> None:
-        with patch.object(
-            setup_skillset.sys,
-            "version_info",
-            (3, 10, 14),
-        ), patch.object(setup_skillset, "parse_args") as parse_args:
-            with self.assertRaisesRegex(SystemExit, "Python 3.11 or newer"):
-                setup_skillset.main()
+    def test_python_guard_runs_during_module_import(self) -> None:
+        module_spec = importlib.util.spec_from_file_location(
+            "setup_skillset_old_python", SCRIPT_PATH
+        )
+        assert module_spec is not None and module_spec.loader is not None
+        module = importlib.util.module_from_spec(module_spec)
+
+        with patch.object(sys, "version_info", (3, 10, 14)), self.assertRaisesRegex(
+            SystemExit, "Python 3.11 or newer"
+        ):
+            module_spec.loader.exec_module(module)
+
+    def test_main_rejects_non_posix_before_argument_parsing(self) -> None:
+        with patch.object(setup_skillset.os, "name", "nt"), patch.object(
+            setup_skillset, "parse_args"
+        ) as parse_args, self.assertRaisesRegex(
+            SystemExit, "POSIX process semantics"
+        ):
+            setup_skillset.main()
 
         parse_args.assert_not_called()
 
@@ -304,6 +315,58 @@ class SkillsetTests(unittest.TestCase):
         self.assertEqual(["beta", "gamma"], result["created"])
         self.assertEqual([], result["missing"])
         self.assertEqual([], result["wrong"])
+
+    def test_disappearing_wrong_link_is_reported_as_concurrent_change(self) -> None:
+        self.target.mkdir()
+        decoy = self.root / "decoy"
+        decoy.mkdir()
+        wrong_link = self.target / "alpha"
+        wrong_link.symlink_to(decoy, target_is_directory=True)
+        original_listdir = os.listdir
+        removed = False
+
+        def remove_after_list(
+            directory: int | str | bytes | os.PathLike[str],
+        ) -> list[str]:
+            nonlocal removed
+            entries = original_listdir(directory)
+            if "alpha" in entries and not removed:
+                removed = True
+                wrong_link.unlink()
+            return entries
+
+        with patch.object(
+            setup_skillset.os,
+            "listdir",
+            side_effect=remove_after_list,
+        ), self.assertRaisesRegex(ValueError, "changed during inspection"):
+            setup_skillset.reconcile(self.target, self.sources, check=False)
+
+        self.assertFalse(wrong_link.exists())
+        self.assertFalse((self.target / "beta").exists())
+        self.assertFalse((self.target / "gamma").exists())
+
+    def test_post_install_unlink_is_reported_as_concurrent_change(self) -> None:
+        self.target.mkdir()
+        alpha = self.target / "alpha"
+        original_require = setup_skillset._require_target_entries
+        removed = False
+
+        def remove_after_revalidation(*args: object, **kwargs: object) -> None:
+            nonlocal removed
+            original_require(*args, **kwargs)
+            if alpha.is_symlink() and not removed:
+                removed = True
+                alpha.unlink()
+
+        with patch.object(
+            setup_skillset,
+            "_require_target_entries",
+            side_effect=remove_after_revalidation,
+        ), self.assertRaisesRegex(ValueError, "changed during inspection"):
+            setup_skillset.reconcile(self.target, self.sources, check=False)
+
+        self.assertEqual([], list(self.target.iterdir()))
 
     def test_changed_wrong_link_blocks_without_overwriting_concurrent_entry(
         self,

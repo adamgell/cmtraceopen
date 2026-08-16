@@ -124,7 +124,8 @@ def _events(selector: str) -> list[dict[str, object]]:
                     {
                         "type": "text",
                         "text": json.dumps(
-                            validator.EXPECTED_FINAL, separators=(",", ":")
+                            validator._expected_final_from_charter(CHARTER_RESULT),
+                            separators=(",", ":"),
                         ),
                     }
                 ],
@@ -262,6 +263,20 @@ class ProjectConfigTests(unittest.TestCase):
 
         self.assertEqual(SELECTORS, selectors)
         self.assertEqual(EXPECTED_CONFIG, writer.render_config(selectors))
+
+    def test_expected_config_matches_committed_project_config(self) -> None:
+        committed = (REPO_ROOT / ".omp" / "config.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(EXPECTED_CONFIG, committed)
+        self.assertEqual(EXPECTED_CONFIG, writer.render_config(SELECTORS))
+
+    def test_advisor_threshold_matches_reasoning_threshold(self) -> None:
+        thresholds = json.loads(THRESHOLDS_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            thresholds["roles"]["reasoning"],
+            thresholds["roles"]["advisor"],
+        )
 
     def test_artifact_mutation_after_role_validation_rejects_model_map(self) -> None:
         real_run = subprocess.run
@@ -711,6 +726,19 @@ class ProjectConfigTests(unittest.TestCase):
                 ValueError, "probe validation timed out for reasoning"
             ):
                 writer.validate_role_report(self.report_path, REPO_ROOT)
+
+    def test_advisor_selector_must_match_reasoning_selector(self) -> None:
+        roles = self.report["roles"]
+        assert isinstance(roles, dict)
+        advisor = roles["advisor"]
+        assert isinstance(advisor, dict)
+        advisor["selector"] = "llmgateway/gpt-5.6-luna"
+        self.report_path.write_text(json.dumps(self.report), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            ValueError, "advisor selector must equal reasoning selector"
+        ):
+            writer.validate_role_report(self.report_path, REPO_ROOT)
 
     def test_selector_policy_rejects_invalid_promotions(self) -> None:
         invalid = (

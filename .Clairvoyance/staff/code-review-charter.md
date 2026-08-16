@@ -16,7 +16,7 @@ review dimensions; it is never a freehand "looks good to merge."
    repo where its knowledge lives before going to code.
 2. `soul.md` and `memory.md` (repo root): the specialist agent context.
 3. For any change touching a reducer or evidence lane
-   (`crates/cmtraceopen-parser/src/intune/`, `crates/cmtraceopen-parser/src/sccm/`): the four ADRs in
+   (`crates/cmtraceopen-parser/src/intune/`, `crates/cmtraceopen-parser/src/sccm/`): the ADRs in
    `docs/architecture/decisions/`, the reducer review checklist in
    `docs/superpowers/plans/2026-08-07-reducer-framework-v1.md`, and the
    [[reducer-contract-charter.md]] hard rules.

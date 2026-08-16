@@ -855,6 +855,24 @@ class RepositoryCheckTests(unittest.TestCase):
                 run_repo_check.parse_args()
         self.assertEqual(["cargo", "test"], parsed.command)
 
+    def test_cli_exit_code_maps_every_outcome_class(self) -> None:
+        cases = (
+            ({"outcome": "completed", "exitCode": 0}, 0),
+            ({"outcome": "completed", "exitCode": 7}, 7),
+            ({"outcome": "completed", "exitCode": 300}, 255),
+            ({"outcome": "completed", "exitCode": -9}, 137),
+            ({"outcome": "completed", "exitCode": -200}, 255),
+            ({"outcome": "completed", "exitCode": None}, 2),
+            ({"outcome": "timed_out", "exitCode": None}, 2),
+            ({"outcome": "setup_failed", "exitCode": None}, 2),
+            ({"outcome": "spawn_failed", "exitCode": None}, 2),
+            ({"outcome": "containment_failed", "exitCode": 0}, 2),
+        )
+
+        for artifact, expected in cases:
+            with self.subTest(artifact=artifact):
+                self.assertEqual(expected, run_repo_check._cli_exit_code(artifact))
+
     def test_main_rejects_old_python_before_argument_parsing(self) -> None:
         with (
             mock.patch.object(run_repo_check.sys, "version_info", (3, 10)),
