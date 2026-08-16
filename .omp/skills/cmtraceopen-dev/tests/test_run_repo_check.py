@@ -370,6 +370,33 @@ class RepositoryCheckTests(unittest.TestCase):
 
         queue.close.assert_called_once_with()
 
+    def test_foreign_kqueue_event_fails_closed(self) -> None:
+        process_handle = mock.Mock(pid=123)
+        queue = mock.MagicMock()
+        queue.control.return_value = [
+            mock.Mock(flags=0, data=0, filter=-5, fflags=0x80000000, ident=456)
+        ]
+        with mock.patch.object(
+            run_repo_check.os,
+            "waitid",
+            None,
+            create=True,
+        ), mock.patch.multiple(
+            run_repo_check.select,
+            create=True,
+            kqueue=mock.Mock(return_value=queue),
+            kevent=mock.Mock(return_value="exit-event"),
+            KQ_FILTER_PROC=-5,
+            KQ_EV_ADD=1,
+            KQ_EV_ENABLE=4,
+            KQ_EV_ONESHOT=16,
+            KQ_EV_ERROR=16384,
+            KQ_NOTE_EXIT=0x80000000,
+        ), self.assertRaisesRegex(RuntimeError, "unexpected kqueue process event"):
+            run_repo_check._wait_without_reaping(process_handle, 1)
+
+        queue.close.assert_called_once_with()
+
 
     def test_runner_uses_no_shell_and_a_bounded_process_group(self) -> None:
 

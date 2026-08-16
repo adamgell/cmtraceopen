@@ -518,6 +518,13 @@ class AgentOutputValidationTests(unittest.TestCase):
         }]
         blocked_review["coverage"] = ["src/change.ts"]
         validator.validate_output("code-review", blocked_review)
+        blocked_review["coverage"] = []
+        with self.assertRaisesRegex(
+            ValueError,
+            "blocked code-review findings require nonempty coverage",
+        ):
+            validator.validate_output("code-review", blocked_review)
+        blocked_review["coverage"] = ["src/change.ts"]
         blocked_review["findings"] = []
         blocked_review["coverage"] = []
         blocked_review["gate_states"] = clean_review_gate_states()
