@@ -371,6 +371,12 @@ def _validate_integration_report(
     payload: dict[str, object],
     phase: str,
 ) -> None:
+    heads = payload.get("heads")
+    gate_states = payload.get("gate_states")
+    if not isinstance(heads, dict):
+        _fail("reducer-integration.heads must be an object")
+    if not isinstance(gate_states, dict):
+        _fail("reducer-integration.gate_states must be an object")
     _validate_report_role(
         payload,
         phase,
@@ -379,12 +385,6 @@ def _validate_integration_report(
     )
     if phase == "blocked":
         return
-    heads = payload["heads"]
-    gate_states = payload["gate_states"]
-    if not isinstance(heads, dict):
-        _fail("reducer-integration.heads must be an object")
-    if not isinstance(gate_states, dict):
-        _fail("reducer-integration.gate_states must be an object")
     for name, head_sha in heads.items():
         if not isinstance(name, str) or not name:
             _fail("reducer-integration head name must be nonempty")

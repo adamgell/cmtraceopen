@@ -3,15 +3,18 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = SKILL_ROOT.parents[2]
 SCRIPT_PATH = SKILL_ROOT / "scripts" / "review_state.py"
 SKILL_PATH = SKILL_ROOT / "SKILL.md"
 LICENSE_PATH = SKILL_ROOT / "LICENSE.txt"
 UPSTREAM_COMMIT = "72ef3d3322ee0ac8db02cf324c2030f13d3bb68d"
+ORIGINAL_IMPORT_COMMIT = "6fb2a06e7cec174fe1b46f1930175ddd1f1cf5b6"
 UPSTREAM_SCRIPT_SHA256 = (
     "71703606bcf171b9e7f8035466d41806622be7a6f04b8157ef86f16fb3ecdfad"
 )
@@ -191,6 +194,24 @@ class ReviewTransportTests(unittest.TestCase):
             ),
         ), self.assertRaisesRegex(SystemExit, "JSON object"):
             review_state.run_json(command)
+
+    def test_run_json_reports_command_failure(self) -> None:
+        command = ["gh", "api", "graphql"]
+        for stderr, message in (
+            ("gh: authentication required", "authentication required"),
+            ("", "command failed"),
+        ):
+            with self.subTest(stderr=stderr), patch.object(
+                review_state.subprocess,
+                "run",
+                return_value=review_state.subprocess.CompletedProcess(
+                    command,
+                    1,
+                    "",
+                    stderr,
+                ),
+            ), self.assertRaisesRegex(SystemExit, message):
+                review_state.run_json(command)
 
 
 class CurrentPullRequestTests(unittest.TestCase):
@@ -969,6 +990,26 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
 
 class ProvenanceTests(unittest.TestCase):
     def test_modified_script_provenance_is_explicit(self) -> None:
+        script_history = subprocess.run(
+            [
+                "git",
+                "log",
+                "--reverse",
+                "--format=%H",
+                "--",
+                ".claude/skills/gh-copilot-review-loop/scripts/review_state.py",
+                ".claude/skills/coderabbit-review-loop/scripts/review_state.py",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.splitlines()
+        self.assertEqual(
+            [ORIGINAL_IMPORT_COMMIT, *DOWNSTREAM_SCRIPT_COMMITS],
+            script_history,
+        )
         script_digest = hashlib.sha256(SCRIPT_PATH.read_bytes()).hexdigest()
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         license_text = LICENSE_PATH.read_text(encoding="utf-8")

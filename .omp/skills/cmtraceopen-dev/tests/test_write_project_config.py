@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -69,7 +70,7 @@ skills:
   enableSkillCommands: true
   enableClaudeUser: false
   enableClaudeProject: true
-  enableAgentsUser: true
+  enableAgentsUser: false
   enableAgentsProject: true
   customDirectories:
     - ~/.omp/agent/skillsets/cmtraceopen
@@ -596,6 +597,69 @@ class ProjectConfigTests(unittest.TestCase):
 
         self.assertEqual(2, calls)
         self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
+
+    def test_main_rejects_missing_dir_fd_support_before_argument_parsing(
+        self,
+    ) -> None:
+        stderr = io.StringIO()
+        with patch.object(writer.os, "supports_dir_fd", set()), patch.object(
+            writer,
+            "_parse_args",
+        ) as parse_args, contextlib.redirect_stderr(stderr):
+            self.assertEqual(1, writer.main())
+
+        parse_args.assert_not_called()
+        self.assertIn(
+            "platform does not support required dir_fd operations",
+            stderr.getvalue(),
+        )
+
+    def test_main_normalizes_unsupported_stat_for_write_and_check(self) -> None:
+        real_stat = os.stat
+        for check, fail_on_call in ((False, 1), (True, 2)):
+            with self.subTest(check=check, fail_on_call=fail_on_call):
+                output = self.root / f"unsupported-stat-{check}.yml"
+                output.write_text(EXPECTED_CONFIG, encoding="utf-8")
+                calls = 0
+
+                def unsupported_stat(
+                    path: object,
+                    *args: object,
+                    **kwargs: object,
+                ) -> os.stat_result:
+                    nonlocal calls
+                    if kwargs.get("dir_fd") is not None and path == output.name:
+                        calls += 1
+                        if calls == fail_on_call:
+                            raise NotImplementedError("dir_fd unavailable")
+                    return real_stat(path, *args, **kwargs)
+
+                arguments = writer.argparse.Namespace(
+                    report=self.report_path,
+                    repo_root=REPO_ROOT,
+                    output=output,
+                    check=check,
+                )
+                stderr = io.StringIO()
+                with patch.object(
+                    writer,
+                    "_require_dir_fd_support",
+                ), patch.object(
+                    writer,
+                    "_parse_args",
+                    return_value=arguments,
+                ), patch.object(
+                    writer.os,
+                    "stat",
+                    side_effect=unsupported_stat,
+                ), contextlib.redirect_stderr(stderr):
+                    self.assertEqual(1, writer.main())
+
+                self.assertIn("dir_fd unavailable", stderr.getvalue())
+                self.assertEqual(
+                    EXPECTED_CONFIG.encode("utf-8"),
+                    output.read_bytes(),
+                )
 
     def test_platform_link_limitation_fails_closed_and_retries(self) -> None:
         output = self.root / "config.yml"

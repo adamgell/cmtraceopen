@@ -26,7 +26,7 @@ skills:
   enableSkillCommands: true
   enableClaudeUser: false
   enableClaudeProject: true
-  enableAgentsUser: true
+  enableAgentsUser: false
   enableAgentsProject: true
   customDirectories:
     - ~/.omp/agent/skillsets/cmtraceopen

@@ -27,11 +27,18 @@ def _read_charter(path: Path) -> str:
 
 
 def _charter_lines(text: str) -> list[str]:
-    lines = []
-    for line in text.splitlines():
+    original = text.splitlines()
+    candidate = original
+    if candidate and candidate[0].startswith("[") and candidate[0].endswith("]"):
+        candidate = candidate[1:]
+
+    numbered = []
+    for expected, line in enumerate(candidate, start=1):
         prefix, separator, content = line.partition(":")
-        lines.append(content if separator and prefix.isdigit() else line)
-    return lines
+        if not separator or prefix != str(expected):
+            return original
+        numbered.append(content)
+    return numbered
 
 
 def _red_first_policy(lines: list[str]) -> bool:
@@ -76,7 +83,7 @@ def _merge_policy(lines: list[str]) -> bool:
         lowered = stripped.casefold()
         if "merge" not in lowered:
             continue
-        if in_never_section or any(
+        denies_merge = in_never_section or any(
             phrase in lowered
             for phrase in (
                 "never merge",
@@ -85,9 +92,8 @@ def _merge_policy(lines: list[str]) -> bool:
                 "does not grant merge",
                 "does not grant authority to merge",
             )
-        ):
-            policies.append(False)
-        elif any(
+        )
+        grants_merge = any(
             phrase in lowered
             for phrase in (
                 "may merge",
@@ -96,10 +102,13 @@ def _merge_policy(lines: list[str]) -> bool:
                 "merge authority is granted",
                 "authority to merge is granted",
             )
-        ):
-            policies.append(True)
-        else:
+        )
+        if not denies_merge and not grants_merge:
             _fail("coder charter merge policy is ambiguous")
+        if denies_merge:
+            policies.append(False)
+        if grants_merge:
+            policies.append(True)
 
     if not policies:
         _fail("coder charter must declare an explicit merge policy")

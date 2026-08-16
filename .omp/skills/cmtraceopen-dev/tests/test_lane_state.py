@@ -3927,6 +3927,41 @@ class InvalidationTests(unittest.TestCase):
                     )
                 )
             )
+            self.assertEqual(
+                [("stale", SHA_A)],
+                [
+                    (observation["state"], observation["headSha"])
+                    for observation in lane["redEvidence"]
+                ],
+            )
+            lane["implementationState"] = "green"
+            with self.assertRaisesRegex(
+                ValueError,
+                "green state requires current RED evidence",
+            ):
+                lane_state.validate_manifest(manifest)
+            lane["implementationState"] = "stale"
+
+            record_test_red(
+                manifest,
+                "317",
+                valid_observation(
+                    root,
+                    state="failed",
+                    head_sha=SHA_C,
+                    lane=lane,
+                ),
+            )
+            lane = manifest["lanes"]["317"]
+            lane["implementationState"] = "green"
+            lane_state.validate_manifest(manifest)
+            self.assertEqual(
+                [("stale", SHA_A), ("failed", SHA_C)],
+                [
+                    (observation["state"], observation["headSha"])
+                    for observation in lane["redEvidence"]
+                ],
+            )
 
     def test_base_head_change_stales_aggregate_reviews_and_mergeability(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

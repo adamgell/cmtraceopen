@@ -1090,7 +1090,7 @@ def _validate_lane(lane_key: str, lane: object) -> None:
         _validate_observation(
             observation,
             f"lane {lane_key}.redEvidence[{index}]",
-            {"failed"},
+            {"failed", "stale"},
             lane_binding=lane,
             lane_head=head_sha,
             current_base=current_base,
@@ -1103,8 +1103,16 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             for observation in red_evidence
         ):
             _fail(f"lane {lane_key} coder RED evidence requires a failed command")
-        if implementation_state == "green" and not red_evidence:
-            _fail(f"lane {lane_key} coder green state requires RED evidence")
+        current_red_evidence = [
+            observation
+            for observation in red_evidence
+            if observation["state"] == "failed"
+            and observation["headSha"] == head_sha
+        ]
+        if implementation_state == "green" and not current_red_evidence:
+            _fail(
+                f"lane {lane_key} coder green state requires current RED evidence"
+            )
 
     gates = lane["gates"]
     if not isinstance(gates, dict):
@@ -2855,6 +2863,8 @@ def _apply_heads(
     if head_changed:
         for gate_name in HEAD_BOUND:
             _stale_observation(lane["gates"][gate_name])
+        for observation in lane["redEvidence"]:
+            _stale_observation(observation)
         lane["implementationState"] = "stale"
     lane["mergeabilityState"] = "stale"
 

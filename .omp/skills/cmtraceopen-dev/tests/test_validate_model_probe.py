@@ -253,6 +253,26 @@ class ProbeValidationTests(unittest.TestCase):
 
             validator.validate_trace(events, SELECTOR, charter_path)
 
+    def test_charter_lines_preserve_numeric_content_and_parse_read_output(
+        self,
+    ) -> None:
+        numeric_content = "2026: merge authority is granted"
+        self.assertEqual(
+            [numeric_content],
+            validator._charter_lines(numeric_content),
+        )
+
+        numbered = "\n".join(
+            f"{number}:{line}"
+            for number, line in enumerate(CHARTER_RESULT.splitlines(), start=1)
+        )
+        read_output = f"[coder-charter.md#ABCD]\n{numbered}"
+
+        self.assertEqual(
+            FINAL_OBJECT,
+            validator._expected_final_from_charter(read_output),
+        )
+
     def test_ambiguous_red_first_policy_fails_closed(self) -> None:
         ambiguous_charter = CHARTER_RESULT.replace(
             "capture the failing test before production code.",
@@ -270,6 +290,34 @@ class ProbeValidationTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validator._expected_final_from_charter(charter_without_merge_policy)
+
+    def test_never_section_denies_bare_merge_instruction(self) -> None:
+        charter = CHARTER_RESULT.replace(
+            "The Coder may not merge, or close issues.\n",
+            "## You never\n\nMerge the release branch.\n",
+        )
+
+        derived = validator._expected_final_from_charter(charter)
+
+        self.assertIs(derived["mayMerge"], False)
+
+    def test_conflicting_merge_policies_fail_closed(self) -> None:
+        charter = CHARTER_RESULT.replace(
+            "The Coder may not merge, or close issues.\n",
+            "The Coder may not merge.\nThe Coder may merge reviewed work.\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflicting merge policies"):
+            validator._expected_final_from_charter(charter)
+
+    def test_conflicting_merge_policy_on_one_line_fails_closed(self) -> None:
+        charter = CHARTER_RESULT.replace(
+            "The Coder may not merge, or close issues.\n",
+            "The Coder may not merge but may merge reviewed work.\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflicting merge policies"):
+            validator._expected_final_from_charter(charter)
 
     def test_wrong_final_json_fails(self) -> None:
         wrong_value = dict(FINAL_OBJECT, mayMerge=True)

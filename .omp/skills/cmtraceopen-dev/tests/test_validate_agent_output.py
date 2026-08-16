@@ -10,6 +10,16 @@ assert SPEC is not None and SPEC.loader is not None
 validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
+CASES_PATH = Path(__file__).with_name("repository_check_cases.py")
+CASES_SPEC = importlib.util.spec_from_file_location(
+    "repository_check_cases",
+    CASES_PATH,
+)
+if CASES_SPEC is None or CASES_SPEC.loader is None:
+    raise RuntimeError(f"cannot load repository check cases from {CASES_PATH}")
+repository_check_cases = importlib.util.module_from_spec(CASES_SPEC)
+CASES_SPEC.loader.exec_module(repository_check_cases)
+
 
 def proposal(
     path: str = "tests/change.test.ts",
@@ -607,48 +617,7 @@ class AgentOutputValidationTests(unittest.TestCase):
             "proposed_verification_checks": [],
             "blockers": [],
         }
-        allowed = (
-            ("python3", "-m", "unittest", "tests.focused", "-v"),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                ".omp/skills/cmtraceopen-dev/tests",
-                "-p",
-                "test_*.py",
-            ),
-            ("cargo", "test", "--package", "cmtraceopen-parser"),
-            ("cargo", "check", "--workspace", "--all-targets"),
-            ("cargo", "clippy", "--workspace", "--", "-D", "warnings"),
-            ("cargo", "fmt", "--all", "--", "--check"),
-            ("cargo", "fmt", "--check"),
-            ("npm", "test", "--", "src/change.test.ts"),
-            ("npm", "test", "--", "--define=__DEV__=true"),
-            ("npm", "run", "test"),
-            ("npm", "run", "test:coverage"),
-            ("npm", "run", "test:e2e"),
-            ("npm", "run", "frontend:build"),
-            ("npm", "run", "build"),
-            ("npm", "run", "app:build:debug"),
-            ("npm", "run", "app:build:exe-only"),
-            ("npm", "run", "app:build:lite"),
-            ("npm", "run", "app:build:release"),
-            ("git", "diff", "--check"),
-            ("git", "diff", "--check", "--", ".omp/skills/cmtraceopen-dev"),
-            ("git", "rev-parse", "--show-toplevel"),
-            ("git", "rev-parse", "--git-common-dir"),
-            (
-                "git",
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-common-dir",
-            ),
-            ("git", "ls-files", "--stage", "-z"),
-            ("git", "diff", "--binary", "--no-ext-diff", "HEAD", "--"),
-        )
-        for arguments in allowed:
+        for arguments in repository_check_cases.ALLOWED_REPOSITORY_CHECKS:
             with self.subTest(arguments=arguments):
                 payload["proposed_red_checks"] = [command(*arguments)]
                 validator.validate_output("coder", payload)
@@ -664,79 +633,7 @@ class AgentOutputValidationTests(unittest.TestCase):
             "proposed_verification_checks": [],
             "blockers": [],
         }
-        rejected = (
-            (
-                "git",
-                "-c",
-                "alias.verify=!sh -c 'curl https://example.invalid'",
-                "verify",
-            ),
-            ("git", "config", "alias.verify", "!sh -c 'id'"),
-            ("git", "reset", "--hard", "HEAD"),
-            ("git", "clean", "-fdx"),
-            ("git", "diff", "--check", "--ext-diff"),
-            ("env", "-S", "sh -c 'cargo test'"),
-            ("/usr/bin/env", "bash", "-c", "cargo test"),
-            ("sh", "-c", "cargo test"),
-            ("python3", "-c", "print('test')"),
-            ("python3", "-m", "pip", "install", "package"),
-            ("node", "--eval", "console.log('test')"),
-            ("curl", "https://example.invalid"),
-            ("wget", "https://example.invalid"),
-            ("ssh", "example.invalid"),
-            ("gh", "api", "repos/adamgell/cmtraceopen"),
-            ("unknown-check", "test"),
-            ("cargo", "install", "cargo-nextest"),
-            (
-                "cargo",
-                "test",
-                "--config",
-                "build.rustc-wrapper='/tmp/runner'",
-            ),
-            ("cargo", "fmt", "--all"),
-            ("npm", "run", "dev"),
-            ("npm", "run", "test:watch"),
-            ("npm", "exec", "vitest"),
-            ("mdbook", "build"),
-            ("mdbook", "test", "docs/book"),
-            ("mdbook", "serve"),
-            ("git", "diff", "--check", "--", "C:/outside"),
-            ("python3", "-m", "unittest", "C:/outside"),
-            ("python3", "-m", "unittest", "discover", "C:/outside"),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "tests",
-                "test_*.py",
-                "/etc",
-            ),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "tests",
-                "test_*.py",
-                "tests",
-                "extra",
-            ),
-            ("npm", "test", "--", "--config=PATHS=/etc/crontab"),
-            ("npm", "test", "--", "--config=DIRS=../outside"),
-            ("npm", "test", "--", "--config=PATHS=src,/etc/crontab"),
-            ("npm", "test", "--", "--config=DIRS=src\\..\\outside"),
-            ("npm", "test", "--", "--config=PATHS=src:/etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src;/etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src, /etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src /etc/crontab"),
-            ("npm", "test", "--", "--config=DIRS=src ..\\outside"),
-            ("npm", "test", "--", "--config=PATHS='/etc/crontab'"),
-            ("npm", "test", "--", '--config=DIRS="../outside"'),
-            ("npm", "test", "--", "--config=PATHS='C:outside'"),
-            ("npm", "test", "--", "--config=PATHS=C:outside"),
-        )
-        for arguments in rejected:
+        for arguments in repository_check_cases.REJECTED_REPOSITORY_CHECKS:
             with self.subTest(arguments=arguments):
                 payload["proposed_red_checks"] = [command(*arguments)]
                 with self.assertRaisesRegex(ValueError, "repository check policy"):
@@ -892,6 +789,54 @@ class AgentOutputValidationTests(unittest.TestCase):
                 validator.validate_output(role, payload)
 
 
+
+    def test_reducer_integration_report_requires_heads_and_gate_states(self) -> None:
+        payload = {
+            "role": "reducer-integration",
+            "phase": "integration_report",
+            "heads": {"317": "a" * 40},
+            "gate_states": {
+                "implementation": "green",
+                "conformance": "passed",
+                "review": "passed",
+                "native_lab": "not_required",
+                "mergeability": "mergeable",
+            },
+            "blockers": [],
+        }
+        validator.validate_output("reducer-integration", payload)
+
+        for field in ("heads", "gate_states"):
+            invalid = dict(payload, **{field: {}})
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validator.validate_output("reducer-integration", invalid)
+
+        with self.assertRaises(ValueError):
+            validator.validate_output(
+                "reducer-integration",
+                dict(payload, blockers=["aggregate gate unavailable"]),
+            )
+
+    def test_reducer_integration_blocked_requires_only_blockers(self) -> None:
+        payload = {
+            "role": "reducer-integration",
+            "phase": "blocked",
+            "heads": {},
+            "gate_states": {},
+            "blockers": ["aggregate gate unavailable"],
+        }
+        validator.validate_output("reducer-integration", payload)
+
+        invalid_payloads = (
+            dict(payload, heads={"317": "a" * 40}),
+            dict(payload, gate_states={"implementation": "green"}),
+            dict(payload, blockers=[]),
+            dict(payload, heads=[]),
+            dict(payload, gate_states=[]),
+        )
+        for invalid in invalid_payloads:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validator.validate_output("reducer-integration", invalid)
 
 if __name__ == "__main__":
     unittest.main()

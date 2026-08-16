@@ -22,6 +22,20 @@ def _fail(message: str) -> NoReturn:
     raise ValueError(message)
 
 
+def _require_dir_fd_support() -> None:
+    supported = getattr(os, "supports_dir_fd", ())
+    missing = [
+        function.__name__
+        for function in (os.open, os.stat, os.link, os.unlink)
+        if function not in supported
+    ]
+    if missing:
+        _fail(
+            "platform does not support required dir_fd operations: "
+            + ", ".join(missing)
+        )
+
+
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -296,7 +310,7 @@ skills:
   enableSkillCommands: true
   enableClaudeUser: false
   enableClaudeProject: true
-  enableAgentsUser: true
+  enableAgentsUser: false
   enableAgentsProject: true
   customDirectories:
     - ~/.omp/agent/skillsets/cmtraceopen
@@ -552,13 +566,14 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = _parse_args()
-    repo_root = args.repo_root.expanduser().absolute()
-    report_path = args.report.expanduser()
-    output_path = args.output.expanduser()
-    if not output_path.is_absolute():
-        output_path = repo_root / output_path
     try:
+        _require_dir_fd_support()
+        args = _parse_args()
+        repo_root = args.repo_root.expanduser().absolute()
+        report_path = args.report.expanduser()
+        output_path = args.output.expanduser()
+        if not output_path.is_absolute():
+            output_path = repo_root / output_path
         selectors = validate_role_report(report_path, repo_root)
         rendered = render_config(selectors)
         status = (
@@ -566,7 +581,7 @@ def main() -> int:
             if args.check
             else write_create_only(output_path, rendered)
         )
-    except (OSError, ValueError) as error:
+    except (NotImplementedError, OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "status": status}, separators=(",", ":")))

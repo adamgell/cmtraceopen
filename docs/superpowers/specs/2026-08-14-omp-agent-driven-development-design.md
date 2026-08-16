@@ -156,9 +156,9 @@ The installer validates every source before target mutation and serializes coope
 
 Lock-file open failures are classified as `cannot open the skillset lock`; `fstat` or `flock` failures as `cannot acquire the skillset lock`, except that a nonregular descriptor is rejected as `skillset lock must be a regular file`; and unlock or close failures as `cannot release the skillset lock`. Cleanup failure notes preserve any active primary error.
 
-The symlinks are user-local and are not committed. Stage 1 runs the authenticated complete-tree check before reading any curated external skill, then proves that OMP resolves each symlinked skill and its referenced assets before any role autoloads it. `.omp/config.yml` points `skills.customDirectories` only at this curated root. It disables Claude user-level skill discovery for this project while retaining Claude project skills and Agents user/project skills, so unrelated personal Claude skills do not enter the project session.
+The symlinks are user-local and are not committed. Stage 1 runs the authenticated complete-tree check before reading any curated external skill, then proves that OMP resolves each symlinked skill and its referenced assets before any role autoloads it. `.omp/config.yml` points `skills.customDirectories` only at this curated root. It disables Claude and Agents user-level skill discovery for this project while retaining their checked-in project skills, so unrelated personal skills do not enter the project session.
 
-OMP's native, Agents, Claude-project, and enabled plugin providers remain available. The project will not apply a global `includeSkills` allow-list that could hide built-in safety or process skills.
+OMP's native, Agents-project, Claude-project, and enabled plugin providers remain available. The project will not apply a global `includeSkills` allow-list that could hide built-in safety or process skills.
 
 The enabled Claude-project provider supplies the checked-in `.claude/skills/batch-issue-prs`, `.claude/skills/frontend-design`, and `.claude/skills/coderabbit-review-loop` skills. These exact project paths, not similarly named user or plugin skills, satisfy the role table below. They are intentionally not duplicated in the curated external skillset. Stage 1 records each resolved source path.
 
@@ -224,7 +224,7 @@ Volatile orchestration state is not committed. The schema-versioned JSON manifes
 
 Lane agents report state through Hub messages and artifacts; Main independently verifies each observation before serialization. Gate and review fields use `not_run | running | passed | failed | stale | unavailable`; native/lab state additionally permits `not_required`. Every observation records `head_sha`, applicable `base_sha`, command or scenario, exit code, artifact URI, and timestamp.
 
-Any lane-head change marks focused, aggregate, conformance, CodeRabbit, independent-review, native/lab, and mergeability observations `stale`. Any base-head change marks aggregate, conformance, CodeRabbit, independent-review, native/lab when base-sensitive, and mergeability observations `stale`. Leases record `expires_at`; expiry alone never changes ownership.
+Any lane-head change marks RED evidence, focused, aggregate, conformance, CodeRabbit, independent-review, native/lab, and mergeability observations `stale`; replacement RED evidence must bind the new `head_sha` before RED-before-GREEN can pass. Any base-head change marks aggregate, conformance, CodeRabbit, independent-review, native/lab when base-sensitive, and mergeability observations `stale`. Leases record `expires_at`; expiry alone never changes ownership.
 
 Lane lifecycle values are `allocated | running | blocked | reviewing | ready_for_adam | merged | abandoned`. Legal transitions are `allocated -> running|blocked|abandoned`, `running -> blocked|reviewing|abandoned`, `blocked -> running|abandoned`, `reviewing -> running|blocked|ready_for_adam`, and `ready_for_adam -> reviewing|blocked|merged|abandoned`; `merged` and `abandoned` are terminal. `lane_state.py` enforces the transition graph.
 

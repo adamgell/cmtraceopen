@@ -26,6 +26,26 @@ output:
         native_lab: { type: string, enum: [passed, not_required] }
         mergeability: { type: string, const: mergeable }
     blockers: { type: array, items: { type: string, minLength: 1 } }
+  allOf:
+    - if:
+        properties:
+          phase: { const: integration_report }
+        required: [phase]
+      then:
+        properties:
+          heads: { minProperties: 1 }
+          gate_states:
+            required: [implementation, conformance, review, native_lab, mergeability]
+          blockers: { maxItems: 0 }
+    - if:
+        properties:
+          phase: { const: blocked }
+        required: [phase]
+      then:
+        properties:
+          heads: { maxProperties: 0 }
+          gate_states: { maxProperties: 0 }
+          blockers: { minItems: 1 }
 ---
 
 # Reducer Integration

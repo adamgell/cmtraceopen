@@ -19,6 +19,16 @@ assert SPEC is not None and SPEC.loader is not None
 run_repo_check = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(run_repo_check)
 
+CASES_PATH = Path(__file__).with_name("repository_check_cases.py")
+CASES_SPEC = importlib.util.spec_from_file_location(
+    "repository_check_cases",
+    CASES_PATH,
+)
+if CASES_SPEC is None or CASES_SPEC.loader is None:
+    raise RuntimeError(f"cannot load repository check cases from {CASES_PATH}")
+repository_check_cases = importlib.util.module_from_spec(CASES_SPEC)
+CASES_SPEC.loader.exec_module(repository_check_cases)
+
 
 HEAD_SHA = "a" * 40
 BASE_SHA = "b" * 40
@@ -627,56 +637,7 @@ class RepositoryCheckTests(unittest.TestCase):
         )
 
     def test_runner_accepts_every_checked_in_repository_check_form(self) -> None:
-        allowed = (
-            ("python3", "-m", "unittest", "tests.focused", "-v"),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                "tests",
-                "-p",
-                "test_*.py",
-            ),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "tests",
-                "test_*.py",
-                ".",
-            ),
-            ("cargo", "test", "--package", "cmtraceopen-parser"),
-            ("cargo", "check", "--workspace", "--all-targets"),
-            ("cargo", "clippy", "--workspace", "--", "-D", "warnings"),
-            ("cargo", "fmt", "--all", "--", "--check"),
-            ("cargo", "fmt", "--check"),
-            ("npm", "test", "--", "src/change.test.ts"),
-            ("npm", "test", "--", "--define=__DEV__=true"),
-            ("npm", "run", "test"),
-            ("npm", "run", "test:coverage"),
-            ("npm", "run", "test:e2e"),
-            ("npm", "run", "frontend:build"),
-            ("npm", "run", "build"),
-            ("npm", "run", "app:build:debug"),
-            ("npm", "run", "app:build:exe-only"),
-            ("npm", "run", "app:build:lite"),
-            ("npm", "run", "app:build:release"),
-            ("git", "diff", "--check"),
-            ("git", "diff", "--check", "--", ".omp/skills/cmtraceopen-dev"),
-            ("git", "rev-parse", "--show-toplevel"),
-            ("git", "rev-parse", "--git-common-dir"),
-            (
-                "git",
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-common-dir",
-            ),
-            ("git", "ls-files", "--stage", "-z"),
-            ("git", "diff", "--binary", "--no-ext-diff", "HEAD", "--"),
-        )
+        allowed = repository_check_cases.ALLOWED_REPOSITORY_CHECKS
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             run_repo_check.subprocess,
             "Popen",
@@ -691,79 +652,18 @@ class RepositoryCheckTests(unittest.TestCase):
         ):
             for arguments in allowed:
                 with self.subTest(arguments=arguments):
-                    result = run_check(arguments,
-                    cwd=Path(directory),
-                    timeout=30,
-                    head_sha="a" * 40,
-                    base_sha="b" * 40,)
+                    result = run_check(
+                        arguments,
+                        cwd=Path(directory),
+                        timeout=30,
+                        head_sha="a" * 40,
+                        base_sha="b" * 40,
+                    )
                     self.assertEqual("completed", result["outcome"])
         self.assertEqual(len(allowed), process.call_count)
 
     def test_runner_rejects_policy_bypasses_before_popen(self) -> None:
-        rejected = (
-            (
-                "git",
-                "-c",
-                "alias.verify=!sh -c 'curl https://example.invalid'",
-                "verify",
-            ),
-            ("git", "config", "alias.verify", "!sh -c 'id'"),
-            ("git", "reset", "--hard", "HEAD"),
-            ("git", "clean", "-fdx"),
-            ("git", "diff", "--check", "--ext-diff"),
-            ("env", "-S", "sh -c 'cargo test'"),
-            ("/usr/bin/env", "bash", "-c", "cargo test"),
-            ("sh", "-c", "cargo test"),
-            ("python3", "-c", "print('test')"),
-            ("python3", "-m", "pip", "install", "package"),
-            ("node", "--eval", "console.log('test')"),
-            ("curl", "https://example.invalid"),
-            ("wget", "https://example.invalid"),
-            ("ssh", "example.invalid"),
-            ("gh", "api", "repos/adamgell/cmtraceopen"),
-            ("unknown-check", "test"),
-            ("cargo", "install", "cargo-nextest"),
-            (
-                "cargo",
-                "test",
-                "--config",
-                "build.rustc-wrapper='/tmp/runner'",
-            ),
-            ("cargo", "fmt", "--all"),
-            ("npm", "run", "dev"),
-            ("npm", "run", "test:watch"),
-            ("npm", "exec", "vitest"),
-            ("mdbook", "build"),
-            ("mdbook", "test", "docs/book"),
-            ("mdbook", "serve"),
-            ("git", "diff", "--check", "--", "C:/outside"),
-            ("python3", "-m", "unittest", "C:/outside"),
-            ("python3", "-m", "unittest", "discover", "C:/outside"),
-            ("python3", "-m", "unittest", "discover", "/etc"),
-            ("python3", "-m", "unittest", "discover", ".."),
-            (
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "tests",
-                "test_*.py",
-                "/etc",
-            ),
-            ("npm", "test", "--", "--config=PATHS=/etc/crontab"),
-            ("npm", "test", "--", "--config=DIRS=../outside"),
-            ("npm", "test", "--", "--config=PATHS=src,/etc/crontab"),
-            ("npm", "test", "--", "--config=DIRS=src\\..\\outside"),
-            ("npm", "test", "--", "--config=PATHS=src:/etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src;/etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src, /etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS=src /etc/crontab"),
-            ("npm", "test", "--", "--config=PATHS='/etc/crontab'"),
-            ("npm", "test", "--", '--config=DIRS="../outside"'),
-            ("npm", "test", "--", "--config=PATHS='C:outside'"),
-            ("npm", "test", "--", "--config=DIRS=src ..\\outside"),
-            ("npm", "test", "--", "--config=PATHS=C:outside"),
-        )
+        rejected = repository_check_cases.REJECTED_REPOSITORY_CHECKS
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             run_repo_check.subprocess,
             "Popen",
@@ -773,11 +673,13 @@ class RepositoryCheckTests(unittest.TestCase):
                     ValueError,
                     "repository check policy",
                 ):
-                    run_check(arguments,
-                    cwd=Path(directory),
-                    timeout=30,
-                    head_sha="a" * 40,
-                    base_sha="b" * 40,)
+                    run_check(
+                        arguments,
+                        cwd=Path(directory),
+                        timeout=30,
+                        head_sha="a" * 40,
+                        base_sha="b" * 40,
+                    )
         process.assert_not_called()
 
     def test_runner_rejects_invalid_timeouts_before_popen(self) -> None:
