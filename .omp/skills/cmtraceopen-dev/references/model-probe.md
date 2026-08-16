@@ -13,4 +13,4 @@ Return one JSON object and no prose with exactly these keys and types:
 
 Do not infer charter outcome values from this prompt; read and derive them.
 
-The run passes only when the validator proves one successful grounded read and the final object matches its private expected values.
+The run passes only when the validator proves one successful grounded read, independently derives its private expected role and authority values from the checked-in charter, confirms the observed read has the same semantics, and matches the final object exactly.

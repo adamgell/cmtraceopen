@@ -201,6 +201,7 @@ class _ReplacingReadFile:
 class ProjectConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
         self.root = Path(self.temporary_directory.name)
         self.discovery_path = self.root / "discovery.json"
         self.artifacts: dict[str, Path] = {}
@@ -255,10 +256,6 @@ class ProjectConfigTests(unittest.TestCase):
         }
         self.report_path = self.root / "model-probe-report.json"
         self.report_path.write_text(json.dumps(self.report), encoding="utf-8")
-
-    def tearDown(self) -> None:
-        self.temporary_directory.cleanup()
-
 
     def test_validated_role_report_renders_exact_project_config(self) -> None:
         selectors = writer.validate_role_report(self.report_path, REPO_ROOT)

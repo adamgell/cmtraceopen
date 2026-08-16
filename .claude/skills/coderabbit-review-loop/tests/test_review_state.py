@@ -18,6 +18,10 @@ UPSTREAM_SCRIPT_SHA256 = (
 DOWNSTREAM_SCRIPT_COMMITS = (
     "925131c0da511e89eddbdb1e6f14f65ed4861a3f",
     "a76c272d62a1d527f59c542608d10c405a210e2f",
+    "608e6659194ef5f6badeb0bb4aafb8ffad40f92b",
+    "4c14b704f22266456380e07784fbd3a58b87c609",
+    "eae1fa8ae87c0f65fbbba8f319451823408bcebb",
+    "3afa2cf66950827fcbfe161334482698b6db0929",
 )
 UPSTREAM_SOURCE = (
     "https://github.com/jorgeasaurus/agent-skills/tree/"

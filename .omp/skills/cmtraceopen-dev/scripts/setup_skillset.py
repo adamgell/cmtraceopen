@@ -19,51 +19,41 @@ def _require_supported_python(version: tuple[int, ...]) -> None:
         raise SystemExit("error: setup_skillset.py requires Python 3.11 or newer")
 
 
-APPROVED_SKILLS: dict[str, tuple[str, str]] = {
+APPROVED_SKILLS: dict[str, str] = {
     "branch-lane-verification": (
-        "home",
-        ".hermes/skills/software-development/branch-lane-verification",
+        ".hermes/skills/software-development/branch-lane-verification"
     ),
     "cmtrace-scaffold-pipeline": (
-        "home",
-        ".hermes/skills/software-development/cmtrace-scaffold-pipeline",
+        ".hermes/skills/software-development/cmtrace-scaffold-pipeline"
     ),
-    "cmtraceopen": ("home", ".hermes/skills/software-development/cmtraceopen"),
+    "cmtraceopen": ".hermes/skills/software-development/cmtraceopen",
     "cmtraceopen-code-review": (
-        "home",
-        ".hermes/skills/software-development/cmtraceopen-code-review",
+        ".hermes/skills/software-development/cmtraceopen-code-review"
     ),
     "contract-scoped-review": (
-        "home",
-        ".hermes/skills/software-development/contract-scoped-review",
+        ".hermes/skills/software-development/contract-scoped-review"
     ),
-    "github-code-review": ("home", ".hermes/skills/github/github-code-review"),
-    "github-issues": ("home", ".hermes/skills/github/github-issues"),
-    "github-pr-workflow": ("home", ".hermes/skills/github/github-pr-workflow"),
-    "mdbook-docs": ("home", ".hermes/skills/software-development/mdbook-docs"),
+    "github-code-review": ".hermes/skills/github/github-code-review",
+    "github-issues": ".hermes/skills/github/github-issues",
+    "github-pr-workflow": ".hermes/skills/github/github-pr-workflow",
+    "mdbook-docs": ".hermes/skills/software-development/mdbook-docs",
     "semantic-reducer-development": (
-        "home",
-        ".hermes/skills/software-development/semantic-reducer-development",
+        ".hermes/skills/software-development/semantic-reducer-development"
     ),
     "semantic-reducer-framework": (
-        "home",
-        ".hermes/skills/software-development/semantic-reducer-framework",
+        ".hermes/skills/software-development/semantic-reducer-framework"
     ),
     "systematic-debugging": (
-        "home",
-        ".hermes/skills/software-development/systematic-debugging",
+        ".hermes/skills/software-development/systematic-debugging"
     ),
     "test-driven-development": (
-        "home",
-        ".hermes/skills/software-development/test-driven-development",
+        ".hermes/skills/software-development/test-driven-development"
     ),
     "windows-lab-workers": (
-        "home",
-        ".hermes/skills/software-development/windows-lab-workers",
+        ".hermes/skills/software-development/windows-lab-workers"
     ),
     "windows-remote-validation": (
-        "home",
-        ".hermes/skills/system-administration/windows-remote-validation",
+        ".hermes/skills/system-administration/windows-remote-validation"
     ),
 }
 
@@ -117,11 +107,10 @@ APPROVED_SKILL_TREE_SHA256: dict[str, str] = {
 }
 
 
-def resolve_sources(home: Path, repo: Path) -> dict[str, Path]:
-    roots = {"home": home, "repo": repo}
+def resolve_sources(home: Path) -> dict[str, Path]:
     return {
-        name: roots[root] / relative_path
-        for name, (root, relative_path) in APPROVED_SKILLS.items()
+        name: home / relative_path
+        for name, relative_path in APPROVED_SKILLS.items()
     }
 
 
@@ -1605,7 +1594,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--check", action="store_true", help="report drift without changes")
     parser.add_argument("--home", type=Path, default=Path.home())
-    parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--target", type=Path)
     return parser.parse_args()
 
@@ -1614,13 +1602,12 @@ def main() -> None:
     _require_supported_python(tuple(sys.version_info[:2]))
     args = parse_args()
     home = args.home.expanduser().resolve()
-    repo = args.repo.expanduser().resolve()
     target = (
         Path(os.path.abspath(args.target.expanduser()))
         if args.target is not None
         else home / ".omp/agent/skillsets/cmtraceopen"
     )
-    sources = resolve_sources(home, repo)
+    sources = resolve_sources(home)
 
     try:
         result = reconcile(

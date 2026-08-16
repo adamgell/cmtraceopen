@@ -102,6 +102,18 @@ class SkillsetTests(unittest.TestCase):
 
         parse_args.assert_not_called()
 
+    def test_cli_rejects_removed_repo_option(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            ["setup_skillset.py", "--repo", str(self.root)],
+        ), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(
+            SystemExit
+        ) as exit_context:
+            setup_skillset.parse_args()
+
+        self.assertEqual(2, exit_context.exception.code)
+
     def test_creates_only_approved_directory_symlinks(self) -> None:
         result = setup_skillset.reconcile(self.target, self.sources, check=False)
 
@@ -1202,8 +1214,6 @@ class SkillsetTests(unittest.TestCase):
 
     def test_install_mode_reports_exact_changes_and_noop(self) -> None:
         home = self.root / "install-home"
-        repo = self.root / "install-repo"
-        repo.mkdir()
         sources = self._create_approved_sources(home)
         target = home / ".omp/agent/skillsets/cmtraceopen"
         setup_skillset.reconcile(target, sources, check=False)
@@ -1217,8 +1227,6 @@ class SkillsetTests(unittest.TestCase):
             "setup_skillset.py",
             "--home",
             str(home),
-            "--repo",
-            str(repo),
         ]
 
         changed_output = io.StringIO()
@@ -1249,8 +1257,6 @@ class SkillsetTests(unittest.TestCase):
 
     def test_main_rejects_tampered_source_without_target_mutation(self) -> None:
         home = self.root / "tamper-home"
-        repo = self.root / "tamper-repo"
-        repo.mkdir()
         sources = self._create_approved_sources(home)
         target = home / ".omp/agent/skillsets/cmtraceopen"
         setup_skillset.reconcile(target, sources, check=False)
@@ -1264,8 +1270,6 @@ class SkillsetTests(unittest.TestCase):
             "setup_skillset.py",
             "--home",
             str(home),
-            "--repo",
-            str(repo),
         ]
 
         with patch.object(sys, "argv", arguments), self.assertRaisesRegex(
@@ -1279,8 +1283,6 @@ class SkillsetTests(unittest.TestCase):
 
     def test_check_mode_reports_clean_without_mutation(self) -> None:
         home = self.root / "home"
-        repo = self.root / "repo"
-        repo.mkdir()
         sources = self._create_approved_sources(home)
         target = home / ".omp/agent/skillsets/cmtraceopen"
         setup_skillset.reconcile(target, sources, check=False)
@@ -1289,8 +1291,6 @@ class SkillsetTests(unittest.TestCase):
             "setup_skillset.py",
             "--home",
             str(home),
-            "--repo",
-            str(repo),
             "--check",
         ]
         output = io.StringIO()
@@ -1444,16 +1444,12 @@ class SkillsetTests(unittest.TestCase):
         for drift in ("missing", "wrong"):
             with self.subTest(drift=drift):
                 home = self.root / f"{drift}-home"
-                repo = self.root / f"{drift}-repo"
-                repo.mkdir()
                 sources = self._create_approved_sources(home)
                 target = home / ".omp/agent/skillsets/cmtraceopen"
                 arguments = [
                     "setup_skillset.py",
                     "--home",
                     str(home),
-                    "--repo",
-                    str(repo),
                     "--check",
                 ]
                 if drift == "wrong":
@@ -1484,8 +1480,6 @@ class SkillsetTests(unittest.TestCase):
             with self.subTest(destination_exists=destination_exists):
                 case_root = self.root / f"target-link-{destination_exists}"
                 home = case_root / "home"
-                repo = case_root / "repo"
-                repo.mkdir(parents=True)
                 self._create_approved_sources(home)
                 destination = case_root / "destination"
                 if destination_exists:
@@ -1497,8 +1491,6 @@ class SkillsetTests(unittest.TestCase):
                     "setup_skillset.py",
                     "--home",
                     str(home),
-                    "--repo",
-                    str(repo),
                     "--target",
                     str(target),
                 ]
@@ -1517,13 +1509,12 @@ class SkillsetTests(unittest.TestCase):
 
     def test_resolves_exact_approved_skill_sources(self) -> None:
         home = self.root / "home"
-        repo = self.root / "repo"
         expected = {
             name: home / relative_path
             for name, relative_path in EXPECTED_RELATIVE_PATHS.items()
         }
 
-        self.assertEqual(expected, setup_skillset.resolve_sources(home, repo))
+        self.assertEqual(expected, setup_skillset.resolve_sources(home))
         self.assertEqual(
             set(EXPECTED_RELATIVE_PATHS),
             set(setup_skillset.APPROVED_SKILL_TREE_SHA256),

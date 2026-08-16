@@ -175,29 +175,19 @@ class ProbeValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validator.validate_trace(events, SELECTOR)
 
-    def test_each_required_charter_marker_is_mandatory(self) -> None:
-        self.assertTrue(validator._REQUIRED_CHARTER_MARKERS)
-        for marker in validator._REQUIRED_CHARTER_MARKERS:
-            with self.subTest(marker=marker):
-                self.assertIn(marker, CHARTER_RESULT)
+    def test_observed_charter_semantics_must_match_checked_in_charter(self) -> None:
+        replacements = (
+            ("Implementation engineer", "Release engineer"),
+            ("Red first:", "Delivery:"),
+            ("may not merge", "may merge"),
+        )
+        for old, new in replacements:
+            with self.subTest(field=old):
                 events = valid_events()
-                events[1]["result"] = CHARTER_RESULT.replace(marker, "removed", 1)
+                events[1]["result"] = CHARTER_RESULT.replace(old, new, 1)
 
                 with self.assertRaises(ValueError):
                     validator.validate_trace(events, SELECTOR)
-
-    def test_required_markers_match_the_checked_in_coder_charter(self) -> None:
-        charter = (
-            Path(__file__).resolve().parents[4]
-            / ".Clairvoyance"
-            / "staff"
-            / "coder-charter.md"
-        ).read_text(encoding="utf-8")
-
-        for marker in validator._REQUIRED_CHARTER_MARKERS:
-            with self.subTest(marker=marker):
-                self.assertIn(marker, charter)
-
 
     def test_duplicate_or_extra_tool_call_fails(self) -> None:
         duplicate = valid_events()
@@ -218,6 +208,68 @@ class ProbeValidationTests(unittest.TestCase):
             with self.subTest(events=events):
                 with self.assertRaises(ValueError):
                     validator.validate_trace(events, SELECTOR)
+
+    def test_checked_in_charter_derives_expected_final_semantics(self) -> None:
+        alternate_charter = """# Coder charter
+
+**Role:** Release engineer (pool)
+
+## How you work
+
+- Red first: not required.
+
+## Authority
+
+- May merge reviewed work.
+
+## You never
+
+- Force-push or close issues.
+"""
+        alternate_final = {
+            "schemaVersion": 1,
+            "source": ".Clairvoyance/staff/coder-charter.md",
+            "role": "Release engineer",
+            "redFirst": False,
+            "mayMerge": True,
+            "conflictRejected": True,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            charter_path = Path(directory) / "coder-charter.md"
+            charter_path.write_text(alternate_charter, encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                validator.validate_trace(valid_events(), SELECTOR, charter_path)
+
+            events = valid_events()
+            events[1]["result"] = alternate_charter
+            message = events[2]["message"]
+            assert isinstance(message, dict)
+            content = message["content"]
+            assert isinstance(content, list)
+            text_part = content[0]
+            assert isinstance(text_part, dict)
+            text_part["text"] = json.dumps(alternate_final, separators=(",", ":"))
+
+            validator.validate_trace(events, SELECTOR, charter_path)
+
+    def test_ambiguous_red_first_policy_fails_closed(self) -> None:
+        ambiguous_charter = CHARTER_RESULT.replace(
+            "capture the failing test before production code.",
+            "maybe.",
+        )
+
+        with self.assertRaises(ValueError):
+            validator._expected_final_from_charter(ambiguous_charter)
+
+    def test_missing_merge_policy_fails_closed(self) -> None:
+        charter_without_merge_policy = CHARTER_RESULT.replace(
+            "The Coder may not merge, or close issues.\n",
+            "",
+        )
+
+        with self.assertRaises(ValueError):
+            validator._expected_final_from_charter(charter_without_merge_policy)
 
     def test_wrong_final_json_fails(self) -> None:
         wrong_value = dict(FINAL_OBJECT, mayMerge=True)
@@ -297,28 +349,36 @@ class ProbeValidationTests(unittest.TestCase):
     def test_role_threshold_failure_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            discovery = valid_discovery()
-            models = discovery["models"]
-            assert isinstance(models, list)
-            models[0]["contextWindow"] = 131071
             discovery_path = root / "discovery.json"
             artifact_path = root / "artifact.jsonl"
             thresholds_path = root / "thresholds.json"
-            discovery_path.write_text(json.dumps(discovery), encoding="utf-8")
             artifact_path.write_text(
                 "".join(json.dumps(event) + "\n" for event in valid_events()),
                 encoding="utf-8",
             )
             thresholds_path.write_text(json.dumps(thresholds()), encoding="utf-8")
 
-            with self.assertRaises(ValueError):
-                validator.validate_probe(
-                    discovery_path,
-                    artifact_path,
-                    thresholds_path,
-                    SELECTOR,
-                    "reasoning",
-                )
+            for field, below in (
+                ("contextWindow", 131071),
+                ("maxTokens", 32767),
+            ):
+                with self.subTest(field=field):
+                    discovery = valid_discovery()
+                    models = discovery["models"]
+                    assert isinstance(models, list)
+                    models[0][field] = below
+                    discovery_path.write_text(
+                        json.dumps(discovery),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ValueError):
+                        validator.validate_probe(
+                            discovery_path,
+                            artifact_path,
+                            thresholds_path,
+                            SELECTOR,
+                            "reasoning",
+                        )
 
             discovery_path.write_text(
                 json.dumps(valid_discovery()),

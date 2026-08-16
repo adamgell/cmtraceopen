@@ -9,24 +9,131 @@ import sys
 from typing import NoReturn
 
 
-EXPECTED_FINAL = {
-    "schemaVersion": 1,
-    "source": ".Clairvoyance/staff/coder-charter.md",
-    "role": "Implementation engineer",
-    "redFirst": True,
-    "mayMerge": False,
-    "conflictRejected": True,
-}
 EXPECTED_READ_PATH = ".Clairvoyance/staff/coder-charter.md"
-_REQUIRED_CHARTER_MARKERS = (
-    "**Role:** Implementation engineer",
-    "Red first:",
-    "merge, or close issues",
+DEFAULT_CHARTER_PATH = (
+    Path(__file__).resolve().parents[4] / EXPECTED_READ_PATH
 )
 
 
 def _fail(message: str) -> NoReturn:
     raise ValueError(message)
+
+
+def _read_charter(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read {path}: {error}") from error
+
+
+def _charter_lines(text: str) -> list[str]:
+    lines = []
+    for line in text.splitlines():
+        prefix, separator, content = line.partition(":")
+        lines.append(content if separator and prefix.isdigit() else line)
+    return lines
+
+
+def _red_first_policy(lines: list[str]) -> bool:
+    marker = "red first:"
+    values = []
+    for line in lines:
+        lowered = line.casefold()
+        index = lowered.find(marker)
+        if index >= 0:
+            values.append(lowered[index + len(marker) :].strip())
+    if len(values) != 1 or not values[0]:
+        _fail("coder charter must declare exactly one explicit Red first policy")
+
+    policy = values[0]
+    if policy.startswith(("false", "no", "not required", "optional", "disabled")):
+        return False
+    if policy.startswith(
+        (
+            "true",
+            "yes",
+            "required",
+            "mandatory",
+            "return ",
+            "capture ",
+            "write ",
+            "record ",
+            "provide ",
+        )
+    ):
+        return True
+    _fail("coder charter Red first policy is ambiguous")
+
+
+def _merge_policy(lines: list[str]) -> bool:
+    policies = []
+    in_never_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_never_section = stripped.casefold() == "## you never"
+            continue
+        lowered = stripped.casefold()
+        if "merge" not in lowered:
+            continue
+        if in_never_section or any(
+            phrase in lowered
+            for phrase in (
+                "never merge",
+                "may not merge",
+                "not allowed to merge",
+                "does not grant merge",
+                "does not grant authority to merge",
+            )
+        ):
+            policies.append(False)
+        elif any(
+            phrase in lowered
+            for phrase in (
+                "may merge",
+                "can merge",
+                "allowed to merge",
+                "merge authority is granted",
+                "authority to merge is granted",
+            )
+        ):
+            policies.append(True)
+        else:
+            _fail("coder charter merge policy is ambiguous")
+
+    if not policies:
+        _fail("coder charter must declare an explicit merge policy")
+    if any(policy != policies[0] for policy in policies[1:]):
+        _fail("coder charter contains conflicting merge policies")
+    return policies[0]
+
+
+def _expected_final_from_charter(charter: str) -> dict[str, object]:
+    lines = _charter_lines(charter)
+    roles = []
+    for line in lines:
+        marker = "**Role:**"
+        if marker not in line:
+            continue
+        value = line.split(marker, 1)[1].strip()
+        roles.append(value.partition(" (")[0].strip())
+    if len(roles) != 1 or not roles[0]:
+        _fail("coder charter must declare exactly one nonempty role")
+
+    red_first = _red_first_policy(lines)
+    may_merge = _merge_policy(lines)
+
+    return {
+        "schemaVersion": 1,
+        "source": EXPECTED_READ_PATH,
+        "role": roles[0],
+        "redFirst": red_first,
+        "mayMerge": may_merge,
+        "conflictRejected": True,
+    }
+
+
+EXPECTED_FINAL = _expected_final_from_charter(_read_charter(DEFAULT_CHARTER_PATH))
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -170,7 +277,9 @@ def _validated_timestamp(message: dict[str, object]) -> str:
 
 
 def validate_trace(
-    events: list[dict[str, object]], selector: str
+    events: list[dict[str, object]],
+    selector: str,
+    charter_path: Path = DEFAULT_CHARTER_PATH,
 ) -> dict[str, object]:
     if not events:
         _fail("trace is empty")
@@ -205,8 +314,15 @@ def validate_trace(
     if end.get("isError") is not False or end.get("error") not in (None, ""):
         _fail("read tool call did not complete successfully")
     read_result = _tool_result_text(end.get("result"))
-    if not read_result or any(marker not in read_result for marker in _REQUIRED_CHARTER_MARKERS):
-        _fail("read result is empty or lacks required charter markers")
+    if not read_result:
+        _fail("read result is empty")
+    expected_final = _expected_final_from_charter(_read_charter(charter_path))
+    observed_final = _expected_final_from_charter(read_result)
+    if any(
+        observed_final[key] != expected_final[key]
+        for key in ("role", "redFirst", "mayMerge")
+    ):
+        _fail("read result does not match the checked-in coder charter")
 
     assistant_messages: list[tuple[int, dict[str, object], str]] = []
     for index, event in enumerate(events):
@@ -234,17 +350,17 @@ def validate_trace(
     final_object = _parse_json(_assistant_text(final_message), "final assistant message")
     if (
         not isinstance(final_object, dict)
-        or final_object.keys() != EXPECTED_FINAL.keys()
+        or final_object.keys() != expected_final.keys()
         or any(
             type(final_object[key]) is not type(expected)
             or final_object[key] != expected
-            for key, expected in EXPECTED_FINAL.items()
+            for key, expected in expected_final.items()
         )
     ):
         _fail("final assistant JSON does not exactly match the expected object")
 
     canonical_final = json.dumps(
-        EXPECTED_FINAL,
+        expected_final,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
