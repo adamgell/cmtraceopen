@@ -516,6 +516,7 @@ def write_create_only(path: Path, content: str) -> str:
                     "platform cannot atomically publish config"
                 ) from error
             raise
+        os.fsync(parent_descriptor)
         _require_pinned_directory(path.parent, parent_descriptor)
         return "created"
     finally:

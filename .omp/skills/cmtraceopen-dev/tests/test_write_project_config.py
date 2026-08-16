@@ -533,6 +533,25 @@ class ProjectConfigTests(unittest.TestCase):
                 )
                 self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
 
+    def test_post_publish_directory_fsync_failure_is_reported(self) -> None:
+        output = self.root / "post-publish-fsync-config.yml"
+        real_fsync = os.fsync
+        calls = 0
+
+        def fail_directory_fsync(descriptor: int) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected directory fsync failure")
+            real_fsync(descriptor)
+
+        with patch("os.fsync", side_effect=fail_directory_fsync):
+            with self.assertRaisesRegex(OSError, "directory fsync failure"):
+                writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertEqual(2, calls)
+        self.assertEqual(EXPECTED_CONFIG.encode("utf-8"), output.read_bytes())
+
     def test_platform_link_limitation_fails_closed_and_retries(self) -> None:
         output = self.root / "config.yml"
         entries_before = set(self.root.iterdir())

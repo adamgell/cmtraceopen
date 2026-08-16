@@ -629,6 +629,41 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
         ), self.assertRaisesRegex(SystemExit, "thread comments.*cursor"):
             review_state._complete_thread_comments(thread)
 
+    def test_comment_page_response_failures_fail_closed(self) -> None:
+        first_comment = {
+            "id": "comment-1",
+            "body": "first",
+            "createdAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "human"},
+        }
+        responses = (
+            (
+                {"errors": [{"message": "rate limited"}]},
+                "rate limited",
+            ),
+            (
+                {"data": {"node": None}},
+                "review thread disappeared",
+            ),
+        )
+
+        for response, message in responses:
+            with self.subTest(message=message):
+                thread = review_thread(first_comment)
+                thread["comments"] = {
+                    "pageInfo": {
+                        "hasNextPage": True,
+                        "endCursor": "comment-1",
+                    },
+                    "nodes": [first_comment],
+                }
+                with patch.object(
+                    review_state,
+                    "run_json",
+                    return_value=response,
+                ), self.assertRaisesRegex(SystemExit, message):
+                    review_state._complete_thread_comments(thread)
+
 
     def test_invalid_repository_or_pull_request_fails_closed(self) -> None:
         empty_connection = {
