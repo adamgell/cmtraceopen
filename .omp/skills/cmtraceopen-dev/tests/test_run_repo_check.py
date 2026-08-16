@@ -261,28 +261,114 @@ class RepositoryCheckTests(unittest.TestCase):
     def test_missing_posix_process_apis_fail_before_spawn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for capability in ("waitid", "killpg"):
-                with self.subTest(capability=capability), mock.patch.object(
-                    run_repo_check.os,
-                    capability,
-                    None,
-                ), mock.patch.object(
-                    run_repo_check.subprocess,
-                    "Popen",
-                ) as process:
-                    result = run_check(
-                        ["cargo", "test"],
-                        cwd=root,
-                        timeout=30,
-                    )
-
-                self.assertEqual("setup_failed", result["outcome"])
-                self.assertEqual(
-                    "runner_failure",
-                    result["failureClassification"],
+            with mock.patch.object(
+                run_repo_check.os,
+                "killpg",
+                None,
+            ), mock.patch.object(
+                run_repo_check.subprocess,
+                "Popen",
+            ) as process:
+                result = run_check(
+                    ["cargo", "test"],
+                    cwd=root,
+                    timeout=30,
                 )
-                self.assertIn(f"os.{capability}", result["error"])
-                process.assert_not_called()
+
+            self.assertEqual("setup_failed", result["outcome"])
+            self.assertEqual("runner_failure", result["failureClassification"])
+            self.assertIn("os.killpg", result["error"])
+            process.assert_not_called()
+
+    def test_missing_waitid_uses_kqueue_without_reaping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process_handle = mock.Mock(pid=123)
+            process_handle.wait.return_value = 0
+            queue = mock.MagicMock()
+            exit_event = mock.Mock(
+                flags=0,
+                filter=-5,
+                fflags=0x80000000,
+                ident=123,
+            )
+            queue.control.side_effect = [[], [exit_event]]
+            kqueue_surface = {
+                "kqueue": mock.Mock(return_value=queue),
+                "kevent": mock.Mock(return_value="exit-event"),
+                "KQ_FILTER_PROC": -5,
+                "KQ_EV_ADD": 1,
+                "KQ_EV_ENABLE": 4,
+                "KQ_EV_ONESHOT": 16,
+                "KQ_EV_ERROR": 16384,
+                "KQ_NOTE_EXIT": 0x80000000,
+            }
+            kevent = kqueue_surface["kevent"]
+            with mock.patch.object(
+                run_repo_check.os,
+                "waitid",
+                None,
+                create=True,
+            ), mock.patch.multiple(
+                run_repo_check.select,
+                create=True,
+                **kqueue_surface,
+            ), mock.patch.object(
+                run_repo_check.subprocess,
+                "Popen",
+                return_value=process_handle,
+            ), mock.patch.object(
+                run_repo_check.os,
+                "killpg",
+            ) as kill_group:
+                result = run_check(
+                    ["cargo", "test"],
+                    cwd=root,
+                    timeout=12,
+                )
+
+            self.assertEqual("completed", result["outcome"])
+            kevent.assert_called_once_with(
+                123,
+                filter=run_repo_check.select.KQ_FILTER_PROC,
+                flags=(
+                    run_repo_check.select.KQ_EV_ADD
+                    | run_repo_check.select.KQ_EV_ENABLE
+                    | run_repo_check.select.KQ_EV_ONESHOT
+                ),
+                fflags=run_repo_check.select.KQ_NOTE_EXIT,
+            )
+            self.assertEqual(2, queue.control.call_count)
+            queue.close.assert_called_once_with()
+            process_handle.wait.assert_called_once_with()
+            kill_group.assert_called_once_with(123, run_repo_check.signal.SIGKILL)
+
+    def test_kqueue_registration_error_fails_closed(self) -> None:
+        process_handle = mock.Mock(pid=123)
+        queue = mock.MagicMock()
+        queue.control.return_value = [
+            mock.Mock(flags=16384, data=1, filter=-5, fflags=0, ident=123)
+        ]
+        with mock.patch.object(
+            run_repo_check.os,
+            "waitid",
+            None,
+            create=True,
+        ), mock.patch.multiple(
+            run_repo_check.select,
+            create=True,
+            kqueue=mock.Mock(return_value=queue),
+            kevent=mock.Mock(return_value="exit-event"),
+            KQ_FILTER_PROC=-5,
+            KQ_EV_ADD=1,
+            KQ_EV_ENABLE=4,
+            KQ_EV_ONESHOT=16,
+            KQ_EV_ERROR=16384,
+            KQ_NOTE_EXIT=0x80000000,
+        ), self.assertRaisesRegex(OSError, "kqueue process-exit registration"):
+            run_repo_check._wait_without_reaping(process_handle, 1)
+
+        queue.close.assert_called_once_with()
 
 
     def test_runner_uses_no_shell_and_a_bounded_process_group(self) -> None:
@@ -299,6 +385,7 @@ class RepositoryCheckTests(unittest.TestCase):
                 run_repo_check.os,
                 "waitid",
                 return_value=object(),
+                create=True,
             ) as waitid, mock.patch.object(
                 run_repo_check.os,
                 "killpg",
@@ -595,6 +682,7 @@ class RepositoryCheckTests(unittest.TestCase):
                 run_repo_check.os,
                 "waitid",
                 return_value=object(),
+                create=True,
             ), mock.patch.object(
                 run_repo_check.os,
                 "killpg",

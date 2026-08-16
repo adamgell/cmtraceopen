@@ -39,7 +39,7 @@ def _is_repo_relative_path(argument: str) -> bool:
     )
     if (
         not argument
-        or argument.startswith(("/", "\\"))
+        or argument.startswith(("/", "\\", ":"))
         or "\\" in argument
         or drive_qualified
     ):

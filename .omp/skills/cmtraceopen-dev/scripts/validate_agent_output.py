@@ -447,13 +447,20 @@ def validate_output(role: str, payload: object) -> None:
             phase,
             "review_report",
             ("gate_states", "coverage"),
-            ("findings", "gate_states", "coverage"),
+            ("gate_states",),
         )
         if phase == "review_report":
+            if _list(payload, "findings"):
+                _fail("productive review_report must contain no findings")
             validate_independent_review_gate_states(
                 payload.get("gate_states"),
                 "code-review.gate_states",
             )
+        else:
+            findings = _list(payload, "findings")
+            coverage = _list(payload, "coverage")
+            if findings and not coverage:
+                _fail("blocked code-review findings require nonempty coverage")
     elif role == "reducer-contract":
         _validate_report_role(
             payload, phase, "contract_report", ("decisions", "evidence", "tests")

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import select
 import signal
 import stat
 import subprocess
@@ -100,23 +101,65 @@ def _wait_without_reaping(
     timeout: float,
     drain: Callable[[], None] | None = None,
 ) -> None:
-    deadline = time.monotonic() + timeout
-    while True:
-        if drain is not None:
-            drain()
-        status = os.waitid(
-            os.P_PID,
-            process.pid,
-            os.WEXITED | os.WNOWAIT | os.WNOHANG,
-        )
-        if status is not None:
-            return
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(
-                f"repository check timed out after {timeout:g} seconds"
+    waitid = getattr(os, "waitid", None)
+    if callable(waitid):
+        deadline = time.monotonic() + timeout
+        while True:
+            if drain is not None:
+                drain()
+            status = waitid(
+                os.P_PID,
+                process.pid,
+                os.WEXITED | os.WNOWAIT | os.WNOHANG,
             )
-        time.sleep(min(0.01, remaining))
+            if status is not None:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"repository check timed out after {timeout:g} seconds"
+                )
+            time.sleep(min(0.01, remaining))
+
+    queue = select.kqueue()
+    try:
+        event = select.kevent(
+            process.pid,
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE | select.KQ_EV_ONESHOT,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        deadline = time.monotonic() + timeout
+        changes = [event]
+        while True:
+            if drain is not None:
+                drain()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"repository check timed out after {timeout:g} seconds"
+                )
+            events = queue.control(changes, 1, min(0.01, remaining))
+            changes = []
+            if not events:
+                continue
+            observed = events[0]
+            if observed.flags & select.KQ_EV_ERROR:
+                raise OSError(
+                    observed.data,
+                    "kqueue process-exit registration failed",
+                )
+            if (
+                observed.ident != process.pid
+                or observed.filter != select.KQ_FILTER_PROC
+                or not observed.fflags & select.KQ_NOTE_EXIT
+            ):
+                raise RuntimeError("unexpected kqueue process event")
+            if drain is not None:
+                drain()
+            return
+    finally:
+        queue.close()
 
 
 def _terminate_group_and_reap(process: subprocess.Popen[bytes]) -> int:
@@ -414,9 +457,23 @@ def run(
         )
     missing_capabilities = [
         name
-        for name in ("waitid", "killpg")
+        for name in ("killpg",)
         if not callable(getattr(os, name, None))
     ]
+    has_wait_backend = callable(getattr(os, "waitid", None)) or all(
+        hasattr(select, name)
+        for name in (
+            "kqueue",
+            "kevent",
+            "KQ_FILTER_PROC",
+            "KQ_EV_ADD",
+            "KQ_EV_ENABLE",
+            "KQ_EV_ONESHOT",
+            "KQ_NOTE_EXIT",
+        )
+    )
+    if not has_wait_backend:
+        missing_capabilities.append("waitid or kqueue")
     if missing_capabilities:
         return _artifact(
             command,

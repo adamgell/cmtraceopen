@@ -315,7 +315,7 @@ class AgentOutputValidationTests(unittest.TestCase):
     ) -> None:
         report = {
             "role": "code-review",
-            "phase": "review_report",
+            "phase": "blocked",
             "head_sha": "a" * 40,
             "base_sha": "b" * 40,
             "findings": [{
@@ -324,9 +324,9 @@ class AgentOutputValidationTests(unittest.TestCase):
                 "failure_scenario": "the cited branch fails",
                 "severity": "major",
             }],
-            "gate_states": clean_review_gate_states(),
+            "gate_states": {},
             "coverage": ["reviewed source and contracts"],
-            "blockers": [],
+            "blockers": ["verified blocking finding remains"],
         }
         validator.validate_output("code-review", report)
 
@@ -343,6 +343,24 @@ class AgentOutputValidationTests(unittest.TestCase):
             with self.subTest(file_line=file_line), self.assertRaises(ValueError):
                 report["findings"][0]["file_line"] = file_line
                 validator.validate_output("code-review", report)
+
+        clean_report = {
+            **report,
+            "phase": "review_report",
+            "findings": [{
+                "file_line": "src/change.ts:42",
+                "mechanism": "validated location",
+                "failure_scenario": "the cited branch fails",
+                "severity": "major",
+            }],
+            "gate_states": clean_review_gate_states(),
+            "blockers": [],
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "productive review_report must contain no findings",
+        ):
+            validator.validate_output("code-review", clean_report)
 
     def test_reducer_contract_tests_require_policy_checked_commands(
         self,
@@ -494,13 +512,14 @@ class AgentOutputValidationTests(unittest.TestCase):
         validator.validate_output("code-review", blocked_review)
         blocked_review["findings"] = [{
             "file_line": "src/change.ts:1",
-            "mechanism": "mixed result",
-            "failure_scenario": "blocked output also reports findings",
+            "mechanism": "verified defect",
+            "failure_scenario": "the reviewed path fails",
             "severity": "important",
         }]
-        with self.assertRaises(ValueError):
-            validator.validate_output("code-review", blocked_review)
+        blocked_review["coverage"] = ["src/change.ts"]
+        validator.validate_output("code-review", blocked_review)
         blocked_review["findings"] = []
+        blocked_review["coverage"] = []
         blocked_review["gate_states"] = clean_review_gate_states()
         with self.assertRaises(ValueError):
             validator.validate_output("code-review", blocked_review)
