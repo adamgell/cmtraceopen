@@ -174,12 +174,6 @@ def _validate_npm(argv: tuple[str, ...]) -> None:
         _reject("npm script arguments must not select paths outside the repository")
 
 
-def _validate_mdbook(argv: tuple[str, ...]) -> None:
-    if len(argv) not in {2, 3} or argv[1] not in {"build", "test"}:
-        _reject("mdbook is limited to build or test")
-    if len(argv) == 3 and not _is_repo_relative_path(argv[2]):
-        _reject("mdbook book path must be repository-relative")
-
 
 def _validate_git(argv: tuple[str, ...]) -> None:
     arguments = argv[1:]
@@ -227,7 +221,6 @@ def validate_check_command(argv: Sequence[object]) -> tuple[str, ...]:
     validators = {
         "cargo": _validate_cargo,
         "git": _validate_git,
-        "mdbook": _validate_mdbook,
         "npm": _validate_npm,
         "python3": _validate_python,
     }

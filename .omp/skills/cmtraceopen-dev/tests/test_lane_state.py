@@ -2398,7 +2398,7 @@ class PathOwnershipTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             allocate_test_lane(manifest, lane)
         self.assertTrue(
-            lane_state._is_portable_repo_relative("src/資料-résumé.txt")
+            lane_state.is_portable_repo_relative("src/資料-résumé.txt")
         )
 
     def test_out_of_scope_path_blocks_lane_without_deleting_it(self) -> None:

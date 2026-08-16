@@ -32,17 +32,17 @@ def _load_command_policy() -> object:
 
 
 _LANE_STATE = _load_lane_state()
-_is_portable_repo_relative: Callable[..., bool] = getattr(
-    _LANE_STATE, "_is_portable_repo_relative"
+is_portable_repo_relative: Callable[..., bool] = getattr(
+    _LANE_STATE, "is_portable_repo_relative"
 )
-_decode_json_object: Callable[[str, str], dict[str, object]] = getattr(
-    _LANE_STATE, "_decode_json_object"
+decode_json_object: Callable[[str, str], dict[str, object]] = getattr(
+    _LANE_STATE, "decode_json_object"
 )
-_require_sha: Callable[[object, str], str] = getattr(
-    _LANE_STATE, "_require_sha"
+require_sha: Callable[[object, str], str] = getattr(
+    _LANE_STATE, "require_sha"
 )
-_validate_independent_review_gate_states: Callable[[object, str], None] = getattr(
-    _LANE_STATE, "_validate_independent_review_gate_states"
+validate_independent_review_gate_states: Callable[[object, str], None] = getattr(
+    _LANE_STATE, "validate_independent_review_gate_states"
 )
 _COMMAND_POLICY = _load_command_policy()
 _validate_check_command: Callable[[Sequence[object]], tuple[str, ...]] = getattr(
@@ -159,7 +159,7 @@ def _validate_review_findings(payload: dict[str, object]) -> None:
         file_path, separator, line = item["file_line"].rpartition(":")
         if (
             not separator
-            or not _is_portable_repo_relative(file_path)
+            or not is_portable_repo_relative(file_path)
             or not line.isascii()
             or not line.isdigit()
             or line.startswith("0")
@@ -193,7 +193,7 @@ def _require_empty(payload: dict[str, object], *keys: str) -> None:
 
 
 def _validate_path(value: object, label: str) -> None:
-    if not _is_portable_repo_relative(value):
+    if not is_portable_repo_relative(value):
         _fail(f"{label} is not a portable repository-relative path")
 
 
@@ -339,7 +339,7 @@ def _validate_integration_report(
     for name, head_sha in heads.items():
         if not isinstance(name, str) or not name:
             _fail("reducer-integration head name must be nonempty")
-        _require_sha(
+        require_sha(
             head_sha,
             f"reducer-integration.heads.{name}",
         )
@@ -371,8 +371,8 @@ def validate_output(role: str, payload: object) -> None:
     if role in {"coder", "ui-design", "tech-writer"}:
         _validate_nonempty_fields(payload, ("summary",), role)
     elif role == "code-review":
-        _require_sha(payload.get("head_sha"), "code-review.head_sha")
-        _require_sha(payload.get("base_sha"), "code-review.base_sha")
+        require_sha(payload.get("head_sha"), "code-review.head_sha")
+        require_sha(payload.get("base_sha"), "code-review.base_sha")
         _validate_review_findings(payload)
     elif role == "reducer-contract":
         _validate_reducer_contract_decisions(payload)
@@ -384,11 +384,11 @@ def validate_output(role: str, payload: object) -> None:
         _validate_scenario_list(payload, "proposed_browser_checks")
         _validate_edit_role(payload, phase, ("proposed_browser_checks",))
     elif role == "tech-writer":
-        _validate_command_list(payload, "proposed_source_link_render_checks")
+        _validate_command_list(payload, "proposed_documentation_checks")
         _validate_edit_role(
             payload,
             phase,
-            ("evidence_sources", "proposed_source_link_render_checks"),
+            ("evidence_sources", "proposed_documentation_checks"),
         )
     elif role == "reducer-adversary":
         _validate_adversary(payload, phase)
@@ -401,7 +401,7 @@ def validate_output(role: str, payload: object) -> None:
             ("findings", "gate_states", "coverage"),
         )
         if phase == "review_report":
-            _validate_independent_review_gate_states(
+            validate_independent_review_gate_states(
                 payload.get("gate_states"),
                 "code-review.gate_states",
             )
@@ -424,7 +424,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
         text = args.input.read_text(encoding="utf-8")
-        payload = _decode_json_object(text, str(args.input))
+        payload = decode_json_object(text, str(args.input))
         validate_output(args.role, payload)
     except (OSError, UnicodeError, ValueError) as error:
         print(json.dumps({"ok": False, "reason": str(error)}, separators=(",", ":")))

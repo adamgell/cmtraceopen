@@ -297,7 +297,7 @@ def _require_exact_keys(value: dict[str, object], expected: set[str], label: str
         _fail(f"{label} keys are invalid (missing={missing}, extra={extra})")
 
 
-def _validate_independent_review_gate_states(
+def validate_independent_review_gate_states(
     value: object,
     label: str,
 ) -> None:
@@ -368,7 +368,7 @@ def _require_issue_list(value: object, label: str) -> list[int]:
     return issues
 
 
-def _require_sha(value: object, label: str) -> str:
+def require_sha(value: object, label: str) -> str:
     if not isinstance(value, str) or _SHA_PATTERN.fullmatch(value) is None:
         _fail(f"{label} must be a 40-hex SHA")
     return value
@@ -436,7 +436,7 @@ def _read_hashed_json_uri(
         text = b"".join(chunks).decode("utf-8")
     except UnicodeError as error:
         raise ValueError(f"{label} is not valid UTF-8") from error
-    return _decode_json_object(text, uri)
+    return decode_json_object(text, uri)
 
 
 def _read_observation_artifact(
@@ -507,8 +507,8 @@ def _validate_repo_check_artifact(
     if not Path(git_common_dir).is_absolute():
         _fail(f"{label}.gitCommonDir must be absolute")
     _require_nonempty_string(artifact["branch"], f"{label}.branch")
-    head_sha = _require_sha(artifact["headSha"], f"{label}.headSha")
-    base_sha = _require_sha(artifact["baseSha"], f"{label}.baseSha")
+    head_sha = require_sha(artifact["headSha"], f"{label}.headSha")
+    base_sha = require_sha(artifact["baseSha"], f"{label}.baseSha")
     exit_code = artifact["exitCode"]
     if exit_code is not None and (
         isinstance(exit_code, bool) or not isinstance(exit_code, int)
@@ -759,7 +759,7 @@ def _validate_independent_raw_verdict(
     coverage = _require_string_list(raw["coverage"], f"{label}.coverage")
     if not coverage:
         _fail(f"{label}.coverage must not be empty")
-    _validate_independent_review_gate_states(
+    validate_independent_review_gate_states(
         raw["gate_states"],
         f"{label}.gate_states",
     )
@@ -792,8 +792,8 @@ def _validate_base_artifact_shape(
     _require_schema_version(artifact["schemaVersion"], f"{label}.schemaVersion")
     if artifact["kind"] != kind:
         _fail(f"{label}.kind must be {kind}")
-    _require_sha(artifact["headSha"], f"{label}.headSha")
-    _require_sha(artifact["currentBaseSha"], f"{label}.currentBaseSha")
+    require_sha(artifact["headSha"], f"{label}.headSha")
+    require_sha(artifact["currentBaseSha"], f"{label}.currentBaseSha")
     _require_command(artifact["integrationCommand"], f"{label}.integrationCommand")
     _require_command(artifact["gateCommand"], f"{label}.gateCommand")
     if type(artifact["integrationExitCode"]) is not int:
@@ -952,8 +952,8 @@ def _validate_observation(
             _fail(f"{label} initial state must not contain observation evidence")
         return observation
 
-    head_sha = _require_sha(observation["headSha"], f"{label}.headSha")
-    base_sha = _require_sha(observation["baseSha"], f"{label}.baseSha")
+    head_sha = require_sha(observation["headSha"], f"{label}.headSha")
+    base_sha = require_sha(observation["baseSha"], f"{label}.baseSha")
     command = observation["command"]
     scenario = observation["scenario"]
     if command is not None:
@@ -1040,11 +1040,11 @@ def _validate_lane(lane_key: str, lane: object) -> None:
             allow_glob=True,
         )
     _require_int(lane["integrationOrder"], f"lane {lane_key}.integrationOrder", minimum=1)
-    head_sha = _require_sha(lane["headSha"], f"lane {lane_key}.headSha")
-    _require_sha(lane["allocationBaseSha"], f"lane {lane_key}.allocationBaseSha")
-    current_base = _require_sha(lane["currentBaseSha"], f"lane {lane_key}.currentBaseSha")
+    head_sha = require_sha(lane["headSha"], f"lane {lane_key}.headSha")
+    require_sha(lane["allocationBaseSha"], f"lane {lane_key}.allocationBaseSha")
+    current_base = require_sha(lane["currentBaseSha"], f"lane {lane_key}.currentBaseSha")
     if lane["remoteSha"] is not None:
-        _require_sha(lane["remoteSha"], f"lane {lane_key}.remoteSha")
+        require_sha(lane["remoteSha"], f"lane {lane_key}.remoteSha")
 
     pr = lane["pr"]
     if not isinstance(pr, dict):
@@ -1311,7 +1311,7 @@ def validate_manifest(data: dict[str, object]) -> None:
                 _STAGE2_LANE_BINDING_KEYS,
                 binding_label,
             )
-            allocation_base = _require_sha(
+            allocation_base = require_sha(
                 binding["allocationBaseSha"],
                 f"{binding_label}.allocationBaseSha",
             )
@@ -1356,7 +1356,7 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _decode_json_object(text: str, source: str) -> dict[str, object]:
+def decode_json_object(text: str, source: str) -> dict[str, object]:
     try:
         value = json.loads(text, object_pairs_hook=_unique_object)
     except (UnicodeError, json.JSONDecodeError) as error:
@@ -1484,7 +1484,7 @@ def observe_lane_worktree(worktree: Path) -> dict[str, object]:
         _fail("lane worktree path does not name the Git worktree top level")
     if not common_dir.is_dir():
         _fail("lane Git common directory is not a directory")
-    head_sha = _require_sha(
+    head_sha = require_sha(
         git_text(worktree, "rev-parse", "--verify", "HEAD"),
         "observed lane HEAD",
     )
@@ -1558,7 +1558,7 @@ def _require_observed_repo_relative(value: str, label: str) -> str:
     return value
 
 
-def _is_portable_repo_relative(
+def is_portable_repo_relative(
     value: object,
     *,
     allow_glob: bool = False,
@@ -1594,7 +1594,7 @@ def _require_portable_repo_relative(
     *,
     allow_glob: bool = False,
 ) -> str:
-    if not _is_portable_repo_relative(value, allow_glob=allow_glob):
+    if not is_portable_repo_relative(value, allow_glob=allow_glob):
         _fail(f"{label} must be a portable repository-relative path")
     return value
 
@@ -1634,7 +1634,7 @@ def _path_glob_matches(path: str, pattern: re.Pattern[str]) -> bool:
 
 
 def changed_paths(repo: Path, allocation_base: str) -> list[str]:
-    _require_sha(allocation_base, "allocation base")
+    require_sha(allocation_base, "allocation base")
     try:
         tracked_output = _git_bytes(
             repo,
@@ -1662,7 +1662,7 @@ def changed_paths(repo: Path, allocation_base: str) -> list[str]:
     return sorted(paths)
 
 def _base_tracked_paths(repo: Path, allocation_base: str) -> set[str]:
-    _require_sha(allocation_base, "allocation base")
+    require_sha(allocation_base, "allocation base")
     try:
         output = _git_bytes(
             repo,
@@ -2336,8 +2336,8 @@ def _git_controls_sha256(repo: Path) -> str:
 def _root_snapshot_once(repo: Path) -> dict[str, object]:
     head_sha = git_text(repo, "rev-parse", "HEAD")
     index_tree_sha = _index_tree_sha(repo)
-    _require_sha(head_sha, "root snapshot headSha")
-    _require_sha(index_tree_sha, "root snapshot indexTreeSha")
+    require_sha(head_sha, "root snapshot headSha")
+    require_sha(index_tree_sha, "root snapshot indexTreeSha")
     tracked_diff = _git_bytes(
         repo,
         "diff",
@@ -2504,7 +2504,7 @@ def _load_json_object_at(
             text = source_file.read()
     except (OSError, UnicodeError) as error:
         raise ValueError(f"cannot load JSON from {source}: {error}") from error
-    return _decode_json_object(text, source)
+    return decode_json_object(text, source)
 
 
 def _load_json_object(path: Path) -> dict[str, object]:
@@ -2837,8 +2837,8 @@ def _apply_heads(
     head_sha: str,
     current_base_sha: str,
 ) -> None:
-    _require_sha(head_sha, "lane head SHA")
-    _require_sha(current_base_sha, "lane current base SHA")
+    require_sha(head_sha, "lane head SHA")
+    require_sha(current_base_sha, "lane current base SHA")
     head_changed = head_sha != lane["headSha"]
     base_changed = current_base_sha != lane["currentBaseSha"]
     if not head_changed and not base_changed:
@@ -3105,8 +3105,8 @@ def _validate_base_evidence(
         _fail("base evidence artifact headSha does not match the lane head")
     if artifact["currentBaseSha"] != lane["currentBaseSha"]:
         _fail("base evidence artifact currentBaseSha does not match the lane base")
-    _require_sha(artifact["headSha"], "base evidence artifact.headSha")
-    _require_sha(
+    require_sha(artifact["headSha"], "base evidence artifact.headSha")
+    require_sha(
         artifact["currentBaseSha"],
         "base evidence artifact.currentBaseSha",
     )
@@ -3498,7 +3498,7 @@ def record_pr(data: dict[str, object], issue: str, number: int, url: str) -> Non
 
 def record_remote(data: dict[str, object], issue: str, remote_sha: str) -> None:
     validate_manifest(data)
-    _require_sha(remote_sha, "remote SHA")
+    require_sha(remote_sha, "remote SHA")
     candidate = deepcopy(data)
     lane = _lane(candidate, issue)
     changed = lane["remoteSha"] != remote_sha
@@ -3517,8 +3517,8 @@ def _validate_root_snapshot_payload(snapshot: dict[str, object]) -> None:
         _ROOT_SNAPSHOT_KEYS,
         "root snapshot artifact",
     )
-    _require_sha(snapshot["headSha"], "root snapshot artifact.headSha")
-    _require_sha(
+    require_sha(snapshot["headSha"], "root snapshot artifact.headSha")
+    require_sha(
         snapshot["indexTreeSha"],
         "root snapshot artifact.indexTreeSha",
     )
@@ -3616,7 +3616,7 @@ def _read_valid_root_snapshot_artifact(
         raise ValueError(
             "root snapshot artifact must be valid UTF-8 JSON"
         ) from error
-    snapshot = _decode_json_object(artifact_text, str(artifact_path))
+    snapshot = decode_json_object(artifact_text, str(artifact_path))
     _validate_root_snapshot_payload(snapshot)
     return digest.hexdigest(), snapshot
 
@@ -3747,7 +3747,7 @@ def _read_cli_json(path: Path) -> dict[str, object]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise ValueError(f"cannot read JSON from {path}: {error}") from error
-    return _decode_json_object(text, str(path))
+    return decode_json_object(text, str(path))
 
 
 def _print_json(value: dict[str, object]) -> None:

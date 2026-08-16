@@ -76,7 +76,7 @@ class AgentOutputValidationTests(unittest.TestCase):
                 "summary": "nothing",
                 "edit_proposals": [],
                 "evidence_sources": [],
-                "proposed_source_link_render_checks": [],
+                "proposed_documentation_checks": [],
                 "blockers": [],
             },
             "reducer-adversary": {
@@ -146,7 +146,9 @@ class AgentOutputValidationTests(unittest.TestCase):
                 "summary": "Docs",
                 "edit_proposals": [proposal("docs/book/src/change.md")],
                 "evidence_sources": ["src/change.ts:1"],
-                "proposed_source_link_render_checks": [command("mdbook", "build")],
+                "proposed_documentation_checks": [
+                    command("git", "diff", "--check", "--", "docs/change.md")
+                ],
                 "blockers": [],
             },
             "reducer-adversary": {
@@ -541,8 +543,6 @@ class AgentOutputValidationTests(unittest.TestCase):
             ("npm", "run", "app:build:exe-only"),
             ("npm", "run", "app:build:lite"),
             ("npm", "run", "app:build:release"),
-            ("mdbook", "build"),
-            ("mdbook", "test", "docs/book"),
             ("git", "diff", "--check"),
             ("git", "diff", "--check", "--", ".omp/skills/cmtraceopen-dev"),
             ("git", "rev-parse", "--show-toplevel"),
@@ -605,8 +605,9 @@ class AgentOutputValidationTests(unittest.TestCase):
             ("npm", "run", "dev"),
             ("npm", "run", "test:watch"),
             ("npm", "exec", "vitest"),
+            ("mdbook", "build"),
+            ("mdbook", "test", "docs/book"),
             ("mdbook", "serve"),
-            ("mdbook", "build", "C:/outside"),
             ("git", "diff", "--check", "--", "C:/outside"),
             ("python3", "-m", "unittest", "C:/outside"),
             ("python3", "-m", "unittest", "discover", "C:/outside"),
@@ -691,7 +692,9 @@ class AgentOutputValidationTests(unittest.TestCase):
             "summary": "Docs",
             "edit_proposals": [proposal("docs/book/src/change.md")],
             "evidence_sources": ["src/change.ts:1"],
-            "proposed_source_link_render_checks": [command("mdbook", "build")],
+            "proposed_documentation_checks": [
+                command("git", "diff", "--check", "--", "docs/change.md")
+            ],
             "blockers": [],
         }
         validator.validate_output("tech-writer", payload)
@@ -715,7 +718,7 @@ class AgentOutputValidationTests(unittest.TestCase):
         )
         for invalid in invalid_checks:
             with self.subTest(invalid=invalid):
-                payload["proposed_source_link_render_checks"] = [invalid]
+                payload["proposed_documentation_checks"] = [invalid]
                 with self.assertRaises(ValueError):
                     validator.validate_output("tech-writer", payload)
 
