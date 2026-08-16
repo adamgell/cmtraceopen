@@ -331,7 +331,8 @@ def _fetch_complete_snapshot(
         if reviews_done and threads_done:
             break
 
-    assert metadata is not None
+    if metadata is None:
+        raise SystemExit("pull request metadata was never collected")
     reviews = list({review["id"]: review for review in reviews}.values())
     threads = list({thread["id"]: thread for thread in threads}.values())
     threads = [_complete_thread_comments(thread) for thread in threads]

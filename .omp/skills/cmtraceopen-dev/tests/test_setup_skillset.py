@@ -1110,7 +1110,15 @@ class SkillsetTests(unittest.TestCase):
                             interrupted = True
                             raise failure
 
-                    with patch.object(shutil, "rmtree", cleanup_then_interrupt):
+                    with patch.object(
+                        shutil,
+                        "rmtree",
+                        cleanup_then_interrupt,
+                    ), patch.object(
+                        setup_skillset.sys,
+                        "stderr",
+                        new_callable=io.StringIO,
+                    ) as stderr:
                         result = setup_skillset.reconcile(
                             target, sources, check=False
                         )
@@ -1120,6 +1128,11 @@ class SkillsetTests(unittest.TestCase):
                         self.assertEqual(["alpha"], result["replaced"])
                     else:
                         self.assertEqual(sorted(sources), result["created"])
+                    warning = stderr.getvalue()
+                    self.assertIn("warning: workspace cleanup failed for ", warning)
+                    self.assertIn(str(case_root), warning)
+                    if str(failure):
+                        self.assertIn(str(failure), warning)
 
     def test_workspace_replacement_is_retained_before_cleanup(self) -> None:
         original_rename = Path.rename

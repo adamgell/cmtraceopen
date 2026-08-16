@@ -1585,8 +1585,18 @@ def _reconcile_locked(
                     )
                 else:
                     raise
-            except BaseException:
-                pass
+            except BaseException as cleanup_error:
+                if active_error is not None:
+                    _add_rollback_note(
+                        active_error,
+                        f"{cleanup_error}; workspace cleanup failed at {workspace}",
+                    )
+                else:
+                    print(
+                        f"warning: workspace cleanup failed for {workspace}: "
+                        f"{cleanup_error}",
+                        file=sys.stderr,
+                    )
 
 
 def parse_args() -> argparse.Namespace:

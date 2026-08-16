@@ -239,6 +239,14 @@ class RepositoryCheckTests(unittest.TestCase):
                     result["failureClassification"],
                 )
                 self.assertFalse(marker.exists())
+                for field in (
+                    "worktree",
+                    "worktreeIdentity",
+                    "gitCommonDir",
+                    "branch",
+                    "headSha",
+                ):
+                    self.assertIsNone(result[field])
 
     def test_runner_uses_no_shell_and_a_bounded_process_group(self) -> None:
 
@@ -453,6 +461,33 @@ class RepositoryCheckTests(unittest.TestCase):
                     artifact,
                     json.loads(path.read_text(encoding="utf-8")),
                 )
+
+    def test_artifact_publication_reports_unsupported_link_api(self) -> None:
+        failures = (
+            NotImplementedError("directory-relative link is unsupported"),
+            TypeError("follow_symlinks is unsupported"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / "check.json"
+                before = set(root.iterdir())
+
+                with mock.patch.object(
+                    run_repo_check.os,
+                    "link",
+                    side_effect=failure,
+                ), self.assertRaisesRegex(
+                    ValueError,
+                    "platform cannot atomically publish",
+                ):
+                    run_repo_check._publish_artifact(
+                        path,
+                        {"kind": "repo_check"},
+                    )
+
+                self.assertFalse(path.exists())
+                self.assertEqual(before, set(root.iterdir()))
 
     def test_artifact_publication_is_create_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -819,6 +854,14 @@ class RepositoryCheckTests(unittest.TestCase):
             head_sha="a" * 40,
             base_sha="b" * 40,)
             self.assertEqual("setup_failed", missing_cwd["outcome"])
+            for field in (
+                "worktree",
+                "worktreeIdentity",
+                "gitCommonDir",
+                "branch",
+                "headSha",
+            ):
+                self.assertIsNone(missing_cwd[field])
 
 
 if __name__ == "__main__":

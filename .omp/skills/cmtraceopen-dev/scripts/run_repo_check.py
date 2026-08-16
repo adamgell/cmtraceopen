@@ -685,13 +685,18 @@ def _publish_artifact(path: Path, artifact: dict[str, object]) -> None:
         descriptor = -1
 
         require_parent_identity()
-        os.link(
-            temporary_name,
-            path.name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-            follow_symlinks=False,
-        )
+        try:
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except (NotImplementedError, TypeError) as error:
+            raise ValueError(
+                "platform cannot atomically publish the repository check artifact"
+            ) from error
         installed = True
         os.fsync(directory_fd)
         require_parent_identity()
