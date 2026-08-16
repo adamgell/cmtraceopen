@@ -357,6 +357,16 @@ class ProbeValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validator.find_discovered_model(discovery, SELECTOR)
 
+    def test_discovery_entry_must_compose_selector(self) -> None:
+        discovery = valid_discovery()
+        models = discovery["models"]
+        assert isinstance(models, list)
+        models[0]["id"] = "other-model"
+
+        with self.assertRaisesRegex(ValueError, "provider and model id"):
+            validator.find_discovered_model(discovery, SELECTOR)
+
+
 
 if __name__ == "__main__":
     unittest.main()

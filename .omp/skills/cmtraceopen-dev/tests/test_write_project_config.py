@@ -497,6 +497,39 @@ class ProjectConfigTests(unittest.TestCase):
         self.assertNotIn("userOwned", str(caught.exception))
         self.assertNotIn(EXPECTED_CONFIG, str(caught.exception))
 
+    def test_staged_name_allocation_is_bounded(self) -> None:
+        output = self.root / "config.yml"
+        real_open = os.open
+        attempts = 0
+
+        def collide_on_staged_name(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            nonlocal attempts
+            if path == ".config.yml.collision.tmp":
+                attempts += 1
+                if attempts > 16:
+                    raise RuntimeError("staged-name allocation did not stop")
+                raise FileExistsError(path)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with patch(
+            "secrets.token_hex", return_value="collision"
+        ), patch(
+            "os.open", side_effect=collide_on_staged_name
+        ), self.assertRaisesRegex(
+            OSError, "cannot allocate staged config path"
+        ):
+            writer.write_create_only(output, EXPECTED_CONFIG)
+
+        self.assertEqual(16, attempts)
+        self.assertFalse(output.exists())
+
+
     def test_create_failures_leave_no_partial_destination_and_retry(self) -> None:
         original_fdopen = os.fdopen
         for stage in ("write", "flush", "fsync", "close", "install"):

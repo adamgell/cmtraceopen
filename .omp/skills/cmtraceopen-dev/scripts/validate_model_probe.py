@@ -299,8 +299,6 @@ def validate_probe(
     max_tokens = _required_positive_integer(model.get("maxTokens"), "maxTokens")
     if context_window < min_context or max_tokens < min_max_tokens:
         _fail(f"discovered model does not meet the {role} role threshold")
-    if model.get("provider") != trace["provider"]:
-        _fail("discovery provider does not match the observed provider")
 
     return {
         "fixtureVersion": fixture_version,

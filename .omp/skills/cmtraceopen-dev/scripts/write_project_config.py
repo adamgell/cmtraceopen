@@ -467,7 +467,7 @@ def write_create_only(path: Path, content: str) -> str:
             _require_pinned_directory(path.parent, parent_descriptor)
             return existing_status
 
-        while True:
+        for _ in range(16):
             temporary_name = f".{path.name}.{secrets.token_hex(16)}.tmp"
             try:
                 descriptor = os.open(
@@ -478,7 +478,9 @@ def write_create_only(path: Path, content: str) -> str:
                 )
                 break
             except FileExistsError:
-                continue
+                temporary_name = None
+        else:
+            raise OSError("cannot allocate staged config path")
 
         stream = os.fdopen(descriptor, "wb")
         descriptor = -1
