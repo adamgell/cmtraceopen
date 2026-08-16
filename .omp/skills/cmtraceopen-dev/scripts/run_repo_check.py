@@ -412,6 +412,28 @@ def run(
             failure_classification="runner_failure",
             error="repository checks require POSIX process-group isolation",
         )
+    missing_capabilities = [
+        name
+        for name in ("waitid", "killpg")
+        if not callable(getattr(os, name, None))
+    ]
+    if missing_capabilities:
+        return _artifact(
+            command,
+            binding=None,
+            base_sha=base_sha,
+            outcome="setup_failed",
+            exit_code=None,
+            stdout="",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+            failure_classification="runner_failure",
+            error=(
+                "repository checks require POSIX process APIs: "
+                + ", ".join(f"os.{name}" for name in missing_capabilities)
+            ),
+        )
     try:
         binding = _observe_expected_worktree(
             cwd,

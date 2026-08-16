@@ -248,6 +248,33 @@ class RepositoryCheckTests(unittest.TestCase):
                 ):
                     self.assertIsNone(result[field])
 
+    def test_missing_posix_process_apis_fail_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for capability in ("waitid", "killpg"):
+                with self.subTest(capability=capability), mock.patch.object(
+                    run_repo_check.os,
+                    capability,
+                    None,
+                ), mock.patch.object(
+                    run_repo_check.subprocess,
+                    "Popen",
+                ) as process:
+                    result = run_check(
+                        ["cargo", "test"],
+                        cwd=root,
+                        timeout=30,
+                    )
+
+                self.assertEqual("setup_failed", result["outcome"])
+                self.assertEqual(
+                    "runner_failure",
+                    result["failureClassification"],
+                )
+                self.assertIn(f"os.{capability}", result["error"])
+                process.assert_not_called()
+
+
     def test_runner_uses_no_shell_and_a_bounded_process_group(self) -> None:
 
         with tempfile.TemporaryDirectory() as directory:

@@ -11,7 +11,20 @@ validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
 
-def proposal(path: str = "src/change.ts") -> dict[str, str]:
+def proposal(
+    path: str = "tests/change.test.ts",
+    proposal_kind: str = "test",
+) -> dict[str, str]:
+    return {
+        "proposal_kind": proposal_kind,
+        "path": path,
+        "operation": "replace",
+        "exact_content": "replacement",
+        "patch_intent": "exercise the requested contract",
+    }
+
+
+def edit_proposal(path: str = "src/change.ts") -> dict[str, str]:
     return {
         "path": path,
         "operation": "replace",
@@ -133,7 +146,7 @@ class AgentOutputValidationTests(unittest.TestCase):
                 "role": "ui-design",
                 "phase": "edit_proposal",
                 "summary": "UI",
-                "edit_proposals": [proposal()],
+                "edit_proposals": [edit_proposal()],
                 "proposed_browser_checks": [
                     "At a 1280x720 viewport, click Settings and confirm "
                     "the panel is visually aligned."
@@ -144,7 +157,7 @@ class AgentOutputValidationTests(unittest.TestCase):
                 "role": "tech-writer",
                 "phase": "edit_proposal",
                 "summary": "Docs",
-                "edit_proposals": [proposal("docs/book/src/change.md")],
+                "edit_proposals": [edit_proposal("docs/book/src/change.md")],
                 "evidence_sources": ["src/change.ts:1"],
                 "proposed_documentation_checks": [
                     command("git", "diff", "--check", "--", "docs/change.md")
@@ -363,6 +376,85 @@ class AgentOutputValidationTests(unittest.TestCase):
                         candidate["tests"] = [invalid]
                     with self.assertRaises(ValueError):
                         validator.validate_output("reducer-contract", candidate)
+
+    def test_red_proposals_accept_only_test_or_fixture_targets(self) -> None:
+        payload = {
+            "role": "coder",
+            "phase": "red_proposal",
+            "summary": "RED",
+            "implementation_proposals": [proposal()],
+            "proposed_red_checks": [
+                command("python3", "-m", "unittest", "tests.focused")
+            ],
+            "proposed_green_checks": [],
+            "proposed_verification_checks": [],
+            "blockers": [],
+        }
+        accepted = (
+            ("tests/parser.rs", "test"),
+            ("src/__tests__/parser.ts", "test"),
+            ("crates/parser/tests/fixtures/malformed.log", "fixture"),
+            ("src/parser.test.ts", "test"),
+            ("src/parser.spec.tsx", "test"),
+        )
+        for path, proposal_kind in accepted:
+            with self.subTest(path=path, proposal_kind=proposal_kind):
+                payload["implementation_proposals"] = [
+                    proposal(path, proposal_kind)
+                ]
+                validator.validate_output("coder", payload)
+
+        rejected = (
+            ("src/parser.rs", "test"),
+            ("src/parser.ts", "fixture"),
+            ("package.json", "production"),
+            ("tests/parser.rs", "production"),
+            ("tests/fixtures/parser.log", "test"),
+            ("src/test_parser.py", "test"),
+        )
+        for path, proposal_kind in rejected:
+            with self.subTest(
+                path=path,
+                proposal_kind=proposal_kind,
+            ), self.assertRaisesRegex(
+                ValueError,
+                "does not match|test or fixture",
+            ):
+                payload["implementation_proposals"] = [
+                    proposal(path, proposal_kind)
+                ]
+                validator.validate_output("coder", payload)
+
+        payload["phase"] = "green_proposal"
+        payload["implementation_proposals"] = [
+            proposal("src/parser.rs", "production")
+        ]
+        payload["proposed_red_checks"] = []
+        payload["proposed_green_checks"] = [command("cargo", "test")]
+        payload["proposed_verification_checks"] = [command("cargo", "check")]
+        validator.validate_output("coder", payload)
+
+    def test_future_role_does_not_fall_through_to_integration(self) -> None:
+        role = "future-role"
+        validator.ROLES.add(role)
+        validator.TEXT_LIST_KEYS[role] = ("blockers",)
+        try:
+            with self.assertRaisesRegex(
+                ValueError,
+                f"no validation contract for role: {role}",
+            ):
+                validator.validate_output(
+                    role,
+                    {
+                        "role": role,
+                        "phase": "future-report",
+                        "blockers": [],
+                    },
+                )
+        finally:
+            validator.TEXT_LIST_KEYS.pop(role)
+            validator.ROLES.remove(role)
+
 
     def test_accepts_explicit_blocked_payload_and_rejects_mixed_blocked_payload(self) -> None:
         blocked = {
@@ -661,7 +753,7 @@ class AgentOutputValidationTests(unittest.TestCase):
             "role": "ui-design",
             "phase": "edit_proposal",
             "summary": "UI",
-            "edit_proposals": [proposal()],
+            "edit_proposals": [edit_proposal()],
             "proposed_browser_checks": [scenario],
             "blockers": [],
         }
@@ -709,7 +801,7 @@ class AgentOutputValidationTests(unittest.TestCase):
             "role": "tech-writer",
             "phase": "edit_proposal",
             "summary": "Docs",
-            "edit_proposals": [proposal("docs/book/src/change.md")],
+            "edit_proposals": [edit_proposal("docs/book/src/change.md")],
             "evidence_sources": ["src/change.ts:1"],
             "proposed_documentation_checks": [
                 command("git", "diff", "--check", "--", "docs/change.md")

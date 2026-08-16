@@ -184,6 +184,15 @@ class SkillsetTests(unittest.TestCase):
                 self.assertFalse((target / "beta").exists())
                 self.assertFalse((target / "gamma").exists())
 
+    def test_empty_sources_require_an_existing_target(self) -> None:
+        target = self.root / "empty-target"
+
+        with self.assertRaisesRegex(ValueError, "target directory is missing"):
+            setup_skillset.reconcile(target, {}, check=False)
+
+        self.assertFalse(target.exists())
+
+
     def test_nested_source_symlink_is_rejected_before_target_mutation(self) -> None:
         case_root = self.root / "stable-source-links"
         sources = self._create_sources(case_root)

@@ -213,6 +213,33 @@ def _validate_proposal_paths(payload: dict[str, object], key: str) -> None:
             _fail(f"{label}.exact_content must be a string")
 
 
+def _proposal_kind_from_path(path: object) -> str:
+    if not isinstance(path, str):
+        return "production"
+    parts = tuple(part.casefold() for part in path.split("/"))
+    directories = parts[:-1]
+    name = parts[-1]
+    if any(
+        part
+        in {
+            "__snapshots__",
+            "fixture",
+            "fixtures",
+            "snapshots",
+            "testdata",
+        }
+        for part in directories
+    ) or name.endswith(".snap"):
+        return "fixture"
+    if any(
+        part in {"__tests__", "test", "tests"} for part in directories
+    ) or any(marker in name for marker in (".spec.", ".test.")):
+        return "test"
+    return "production"
+
+
+
+
 def _validate_blocked(payload: dict[str, object], empty_keys: Sequence[str]) -> None:
     _require_nonempty(payload, "blockers")
     _require_empty(payload, *empty_keys)
@@ -238,6 +265,21 @@ def _validate_coder(payload: dict[str, object], phase: str) -> None:
         _fail("productive coder output cannot contain blockers")
     _require_nonempty(payload, "implementation_proposals")
     _validate_proposal_paths(payload, "implementation_proposals")
+    proposals = _list(payload, "implementation_proposals")
+    for index, proposal in enumerate(proposals):
+        if not isinstance(proposal, dict) or proposal.get(
+            "proposal_kind"
+        ) not in {"test", "fixture", "production"}:
+            _fail(
+                "implementation_proposals"
+                f"[{index}].proposal_kind must be test, fixture, or production"
+            )
+        actual_kind = _proposal_kind_from_path(proposal.get("path"))
+        if proposal["proposal_kind"] != actual_kind:
+            _fail(
+                "implementation_proposals"
+                f"[{index}].proposal_kind does not match its path"
+            )
     if phase == "red_proposal":
         _require_nonempty(payload, "proposed_red_checks")
         _require_empty(
@@ -245,6 +287,13 @@ def _validate_coder(payload: dict[str, object], phase: str) -> None:
             "proposed_green_checks",
             "proposed_verification_checks",
         )
+        for index, proposal in enumerate(proposals):
+            if proposal["proposal_kind"] == "production":
+                _fail(
+                    "implementation_proposals"
+                    f"[{index}] must target a test or fixture "
+                    "during red_proposal"
+                )
     elif phase == "green_proposal":
         _require_empty(payload, "proposed_red_checks")
         _require_nonempty(
@@ -409,8 +458,10 @@ def validate_output(role: str, payload: object) -> None:
         _validate_report_role(
             payload, phase, "contract_report", ("decisions", "evidence", "tests")
         )
-    else:
+    elif role == "reducer-integration":
         _validate_integration_report(payload, phase)
+    else:
+        _fail(f"no validation contract for role: {role}")
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:

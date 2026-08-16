@@ -1255,8 +1255,8 @@ def _reconcile_locked(
             return result
 
         if not missing and not wrong:
-            assert target_identity is not None
-            assert target_descriptor is not None
+            if target_identity is None or target_descriptor is None:
+                raise ValueError(f"target directory is missing: {target}")
             _require_directory_identities(
                 protected_directories,
                 "target ancestor",
