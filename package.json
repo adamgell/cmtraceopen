@@ -27,9 +27,9 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@fluentui/react-charts": "^9.3.23",
-    "@fluentui/react-components": "^9.74.5",
-    "@fluentui/react-icons": "^2.0.335",
+    "@fluentui/react-charts": "^9.3.24",
+    "@fluentui/react-components": "^9.74.6",
+    "@fluentui/react-icons": "^2.0.337",
     "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
@@ -41,7 +41,7 @@
     "@tauri-apps/plugin-window-state": "^2.4.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
