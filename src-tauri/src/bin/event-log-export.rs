@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::RwLock;
@@ -199,7 +200,7 @@ const MAX_EVENT_ID_FILTER_VALUES: usize = 65_536;
 
 fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
     let mut event_ids = BTreeSet::new();
-    for part in input.split([',', ' ', '\t']).filter(|part| !part.is_empty()) {
+    for part in input.split([',', ' ', '\t', '\r', '\n']).filter(|part| !part.is_empty()) {
         if let Some((low, high)) = part.split_once('-') {
             let Ok(low) = low.parse::<u32>() else {
                 continue;
@@ -283,7 +284,24 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     Ok(cli)
 }
 
-fn coverage_report(coverage: &Coverage, exported_records: u64) -> String {
+fn reject_source_destination(sources: &[String], output: Option<&str>) -> Result<(), String> {
+    let Some(output) = output.filter(|path| *path != "-") else {
+        return Ok(());
+    };
+    let normalize = |path: &str| {
+        fs::canonicalize(path).unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(path)
+        })
+    };
+    let destination = normalize(output);
+    if sources.iter().any(|source| normalize(source) == destination) {
+        return Err("output path cannot overwrite a source path".to_owned());
+    }
+    Ok(())
+}
+fn coverage_report(coverage: &Coverage, exported_records: &str) -> String {
     let mut report = format!(
         "coverage: sourceRecords={} exportedRecords={} parseErrors={} gaps={}",
         coverage.total_records,
@@ -304,7 +322,12 @@ where
 {
     let cli = load_cli(parse_args(args)?)?;
     let records = filtered_records(cli.records, &cli.filter)?;
-    let stats = match cli.output.as_deref().map(Path::new) {
+    let stats = match cli
+        .output
+        .as_deref()
+        .filter(|output| *output != "-")
+        .map(Path::new)
+    {
         Some(path) => app_lib::event_log::writer::write_records_to_destination(
             &records,
             cli.format,
@@ -316,10 +339,10 @@ where
     .map_err(|error| {
         format!(
             "{}\nexport failed: {error}",
-            coverage_report(&cli.coverage, 0)
+            coverage_report(&cli.coverage, "unknown")
         )
     })?;
-    Ok(coverage_report(&cli.coverage, stats.records))
+    Ok(coverage_report(&cli.coverage, &stats.records.to_string()))
 }
 
 fn run() -> Result<(), String> {
@@ -338,7 +361,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{filtered_records, parse_args, parse_event_ids, run_with_args, Cli, Filter};
+    use super::{
+        filtered_records, parse_args, parse_event_ids, reject_source_destination, run_with_args, Cli,
+        Filter,
+    };
     use app_lib::event_log::models::{EvtxLevel, EvtxRecord};
 
     fn make_record() -> EvtxRecord {
@@ -537,8 +563,27 @@ mod tests {
             65_535
         );
         assert_eq!(parse_event_ids("326,abc").expect("mixed tokens"), vec![326]);
-        assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
         assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![326]);
+        assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
+    }
+
+    #[test]
+    fn event_id_parser_accepts_newline_separated_values() {
+        assert_eq!(parse_event_ids("326\n4624\r\n1").expect("IDs"), vec![1, 326, 4624]);
+    }
+
+    #[test]
+    fn source_destination_collision_is_rejected_before_writing() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let source = directory.path().join("events.evtx");
+        std::fs::write(&source, "evidence").expect("source");
+        let error = reject_source_destination(
+            &[source.to_str().expect("source path").to_owned()],
+            Some(source.to_str().expect("source path")),
+        )
+        .expect_err("source overwrite rejected");
+        assert!(error.contains("overwrite"));
+        assert_eq!(std::fs::read_to_string(source).expect("source"), "evidence");
     }
     #[test]
     fn run_writes_direct_file_and_returns_coverage_report() {
@@ -592,6 +637,8 @@ mod tests {
                 manifest_path.to_str().expect("manifest path"),
                 "--format",
                 "json",
+                "--output",
+                "-",
             ],
             &mut stdout,
         )

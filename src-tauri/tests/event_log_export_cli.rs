@@ -79,7 +79,7 @@ fn binary_returns_nonzero_and_surfaces_writer_errors() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr");
-    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=0 parseErrors=1 gaps=1"));
+    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown parseErrors=1 gaps=1"));
     assert!(stderr.contains("coverage-gap: damaged.evtx: truncated"));
     assert!(stderr.contains("export failed"));
     assert!(stderr.contains("record is missing raw XML"));
@@ -120,5 +120,5 @@ fn binary_rejects_malformed_raw_xml_without_creating_an_artifact() {
     assert!(!destination.exists());
     let stderr = String::from_utf8(output.stderr).expect("stderr");
     assert!(stderr.contains("raw XML is malformed"));
-    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=0"));
+    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown"));
 }

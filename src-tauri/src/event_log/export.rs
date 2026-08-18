@@ -59,7 +59,7 @@ impl ExportFormat {
 ///
 /// `User SID` is here because it is a primary pivot for event triage; leaving it out meant an
 /// analyst who exported the grid got fewer columns than the grid had shown them.
-pub(crate) const COLUMNS: [&str; 14] = [
+pub(crate) const COLUMNS: [&str; 15] = [
     "Event Time",
     "Record ID",
     "Event ID",
@@ -74,6 +74,7 @@ pub(crate) const COLUMNS: [&str; 14] = [
     "User SID",
     "Keywords",
     "Description",
+    "Source Label",
 ];
 
 /// Map-derived column names present across `records`, in first-seen order.
@@ -161,6 +162,7 @@ pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
         record.user_sid.clone().unwrap_or_default(),
         record.keywords.clone().unwrap_or_default(),
         record.message.clone(),
+        record.source_label.clone(),
     ];
     for property in mapped {
         // An incomplete mapping renders empty here for the same reason it does in the grid: a
@@ -266,6 +268,7 @@ fn labeled_xml_field_pattern() -> &'static Regex {
 fn redact_xml_tag(tag: &str) -> String {
     let mut output = String::with_capacity(tag.len());
     let mut cursor = 0;
+    let mut pending_label: Option<String> = None;
     while cursor < tag.len() {
         let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
         else {
@@ -280,7 +283,29 @@ fn redact_xml_tag(tag: &str) -> String {
             break;
         };
         let end = opening + 1 + relative_end;
-        output.push_str(&redact_text(&tag[opening + 1..end]));
+        let before = tag[..opening].trim_end();
+        let attr_name = before
+            .rfind('=')
+            .and_then(|equals| before[..equals].trim_end().rsplit(|c: char| c == ' ' || c == '\t').next())
+            .unwrap_or("")
+            .trim_start_matches(|c: char| c == '<' || c == '/');
+        let value = &tag[opening + 1..end];
+        let label = if attr_name.eq_ignore_ascii_case("value") {
+            pending_label.as_deref().unwrap_or(attr_name)
+        } else if attr_name.eq_ignore_ascii_case("computer") {
+            "ComputerName"
+        } else {
+            attr_name
+        };
+        if attr_name.eq_ignore_ascii_case("name") {
+            pending_label = Some(value.to_owned());
+            output.push_str(value);
+        } else {
+            output.push_str(&redact_xml_value(label, value));
+            if attr_name.eq_ignore_ascii_case("value") {
+                pending_label = None;
+            }
+        }
         output.push(quote as char);
         cursor = end + 1;
     }
@@ -332,6 +357,18 @@ fn redact_raw_xml(xml: &str) -> String {
         let opening = cursor + relative_open;
         output.push_str(&redact_text(&labeled[cursor..opening]));
         let tail = &labeled[opening..];
+        if let Some(content) = tail.strip_prefix("<?") {
+            if let Some(end) = content.find("?>") {
+                output.push_str("<?");
+                output.push_str(&redact_text(&content[..end]));
+                output.push_str("?>");
+                cursor = opening + 2 + end + 2;
+                continue;
+            }
+            output.push_str("<?");
+            output.push_str(&redact_text(content));
+            break;
+        }
         if let Some(content) = tail.strip_prefix("<!--") {
             if let Some(end) = content.find("-->") {
                 output.push_str("<!--");
@@ -549,6 +586,7 @@ mod tests {
     fn tsv_uses_tabs_and_quotes_values_containing_them() {
         let out = export_records(&[record("a\tb")], ExportFormat::Tsv).expect("exports");
         assert!(out.starts_with("Event Time\tRecord ID"));
+        assert!(out.contains("Live"));
         assert!(out.contains("\"a\tb\""));
     }
 
@@ -672,6 +710,26 @@ mod tests {
             serde_json::from_value(json).expect("a trimmed payload deserializes");
         assert_eq!(records[0].raw_xml, "");
         assert!(records[0].event_data.is_empty());
+    }
+
+    #[test]
+    fn raw_xml_attributes_and_processing_instructions_are_redacted() {
+        let mut event = record("safe");
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><Data Name="RemoteHost" Value="REMOTE-HOST" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
+        for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
+            let output = export_records(&[event.clone()], format).expect("export");
+            assert!(!output.contains("DESKTOP-JOHN"));
+            assert!(!output.contains("REMOTE-HOST"));
+            assert!(!output.contains("hunter2"));
+            assert!(output.contains("<?provider"));
+        }
+    }
+    #[test]
+    fn json_rejects_malformed_raw_xml_before_serializing_it() {
+        let mut event = record("safe");
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN">"#.into();
+        let error = export_records(&[event], ExportFormat::Json).expect_err("malformed XML rejected");
+        assert!(error.contains("malformed") || error.contains("incomplete"));
     }
 
     #[test]

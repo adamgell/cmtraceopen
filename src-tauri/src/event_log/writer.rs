@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -89,6 +89,11 @@ fn write_html_row<W: Write>(
     writer.write_all(b"</tr>\n")
 }
 
+fn invalid_comment(comment: quick_xml::events::BytesText<'_>) -> bool {
+    let bytes = comment.into_inner();
+    bytes.windows(2).any(|pair| pair == b"--") || bytes.last() == Some(&b'-')
+}
+
 fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
     let raw_xml = record.raw_xml.trim();
     if raw_xml.is_empty() {
@@ -98,17 +103,65 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
         ));
     }
     let mut reader = quick_xml::Reader::from_str(raw_xml);
+    let mut depth = 0usize;
+    let mut root_seen = false;
     loop {
-        match reader.read_event() {
-            Ok(quick_xml::events::Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("raw XML is malformed: {error}"),
-                ));
+        let event = reader.read_event().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("raw XML is malformed: {error}"),
+            )
+        })?;
+        match event {
+            quick_xml::events::Event::Eof => break,
+            quick_xml::events::Event::Start(element) => {
+                if depth == 0 && root_seen {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has multiple roots"));
+                }
+                for attribute in element.attributes().with_checks(true) {
+                    attribute.map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
+                    })?;
+                }
+                if depth == 0 {
+                    root_seen = true;
+                }
+                depth += 1;
             }
+            quick_xml::events::Event::Empty(element) => {
+                if depth == 0 && root_seen {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has multiple roots"));
+                }
+                for attribute in element.attributes().with_checks(true) {
+                    attribute.map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
+                    })?;
+                }
+                if depth == 0 {
+                    root_seen = true;
+                }
+            }
+            quick_xml::events::Event::End(_) => {
+                if depth == 0 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an unexpected closing tag"));
+                }
+                depth -= 1;
+            }
+            quick_xml::events::Event::Text(text) => {
+                if depth == 0 && !text.into_inner().iter().all(u8::is_ascii_whitespace) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has text outside its root"));
+                }
+            }
+            quick_xml::events::Event::Comment(comment) => {
+                if invalid_comment(comment) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an invalid comment"));
+                }
+            }
+            _ => {}
         }
+    }
+    if depth != 0 || !root_seen {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML is incomplete"));
     }
     Ok(raw_xml)
 }
@@ -225,7 +278,7 @@ where
 }
 
 pub(crate) fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> io::Result<()> {
-    if matches!(format, ExportFormat::Xml | ExportFormat::RawXml) {
+    if matches!(format, ExportFormat::Json | ExportFormat::Xml | ExportFormat::RawXml) {
         for record in records {
             required_raw_xml(record)?;
         }
@@ -258,10 +311,40 @@ pub fn write_records_to_destination(
     }
 
     let path = destination.expect("destination checked above");
-    let mut file = File::create(path)
-        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
-    write_records(&mut file, format, records)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("events");
+    let mut temporary = None;
+    let mut file = None;
+    for attempt in 0..100u32 {
+        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(handle) => {
+                temporary = Some(candidate);
+                file = Some(handle);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create temporary output: {error}")),
+        }
+    }
+    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
+    let mut file = file.expect("temporary file handle");
+    let result = write_records(&mut file, format, records)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()));
+    drop(file);
+    match result {
+        Ok(stats) => match fs::rename(&temporary, path) {
+            Ok(()) => Ok(stats),
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                Err(format!("cannot replace {}: {error}", path.display()))
+            }
+        },
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
 }
 #[cfg(test)]
 fn record(message: &str) -> EvtxRecord {
@@ -379,6 +462,37 @@ fn writes_directly_to_a_file_and_reports_bytes() {
     assert_eq!(stats.bytes, bytes.len() as u64);
     assert_eq!(stats.records, 1);
     assert!(String::from_utf8_lossy(&bytes).contains("file output"));
+}
+
+#[test]
+fn failed_file_validation_preserves_existing_destination() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let path = directory.path().join("events.xml");
+    std::fs::write(&path, "sentinel").expect("seed destination");
+    let mut invalid = record("invalid");
+    invalid.raw_xml = "<Event>".into();
+    let error = super::writer::write_records_to_destination(
+        &[invalid],
+        ExportFormat::Xml,
+        Some(&path),
+    )
+    .expect_err("malformed XML fails");
+    assert!(error.contains("malformed") || error.contains("incomplete"));
+    assert_eq!(std::fs::read_to_string(path).expect("destination"), "sentinel");
+}
+
+#[test]
+fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
+    for raw_xml in [
+        r#"<Event id="1" id="2"/>"#,
+        r#"<Event><!-- invalid--comment --></Event>"#,
+    ] {
+        let mut event = record("invalid");
+        event.raw_xml = raw_xml.into();
+        let error = super::writer::write_records(&mut Cursor::new(Vec::new()), ExportFormat::Json, &[event])
+            .expect_err("strict XML must reject malformed content");
+        assert!(error.to_string().contains("malformed") || error.to_string().contains("invalid"));
+    }
 }
 #[test]
 fn xml_redaction_preserves_markup_and_masks_named_event_data() {
