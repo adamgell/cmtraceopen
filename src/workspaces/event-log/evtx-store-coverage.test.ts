@@ -481,6 +481,47 @@ describe("the time window reaches the service", () => {
       });
   });
 });
+  it("refetches loaded live channels when before-load levels broaden", async () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Error"]),
+    });
+    invoke.mockResolvedValueOnce(result("Application", []));
+
+    useEvtxStore.getState().setFilterLevels(new Set(["Error", "Information"]));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+
+    expect(
+      invoke.mock.calls.some(
+        (call) =>
+          JSON.stringify(
+            (call[1] as { filter?: { levels?: number[] } })?.filter?.levels
+          ) === JSON.stringify([2, 0, 4])
+      )
+    ).toBe(true);
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+  });
+  it("restores all levels when toggling off the final active level", () => {
+    useEvtxStore.setState({
+      sourceMode: null,
+      loadedChannels: new Set<string>(),
+      filterLevels: new Set(["Error"]),
+    });
+
+    useEvtxStore.getState().toggleFilterLevel("Error");
+
+    expect([...useEvtxStore.getState().filterLevels].sort()).toEqual([
+      "Critical",
+      "Error",
+      "Information",
+      "Verbose",
+      "Warning",
+    ]);
+  });
+
+
 
 describe("records that arrive in batches while the query runs", () => {
   beforeEach(() => {

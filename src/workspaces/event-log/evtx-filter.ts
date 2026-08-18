@@ -34,15 +34,29 @@ export type EvtxQuickFilterScope = "allColumns" | "visibleColumns";
 /** Whether matching records are retained or removed. */
 export type EvtxQuickFilterAction = "show" | "hide";
 
-/** Interactive filter state shared by local evaluation, persistence, and the UI. */
-export interface EvtxQuickFilter {
-  mode: EvtxQuickFilterMode;
-  query: string;
-  scope: EvtxQuickFilterScope;
-  action: EvtxQuickFilterAction;
-  caseSensitive: boolean;
-  /** The next triage lane consumes this flag when it renders match highlights. */
-  highlight: boolean;
+/** Criteria that can be compiled into the backend query before records load. */
+export interface EvtxBeforeLoadCriteria {
+  levels: EvtxLevel[];
+  eventIds: string;
+  timeWindow: EvtxTimeWindow;
+}
+
+/** Criteria evaluated against records as they arrive. */
+export interface EvtxOnLoadCriteria {
+  search: string;
+  quickFilter: EvtxQuickFilter;
+}
+
+/** Criteria applied only after records are loaded for presentation. */
+export interface EvtxAfterLoadCriteria {
+  groupBy: EvtxGroupField[];
+}
+
+/** Single typed contract shared by server derivation, local matching, and persistence. */
+export interface EvtxFilterModel {
+  beforeLoad: EvtxBeforeLoadCriteria;
+  onLoad: EvtxOnLoadCriteria;
+  afterLoad: EvtxAfterLoadCriteria;
 }
 
 
@@ -166,6 +180,8 @@ export interface VisibleRecordsInput {
   quickFilter?: EvtxQuickFilter;
   /** The ordered column ids currently shown by the grid. */
   visibleColumns?: readonly EvtxColumnId[];
+  /** Timezone used by the rendered timestamp column. */
+  timeZoneMode?: EvtxTimeZoneMode;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -183,19 +199,15 @@ function searchableValues(
   record: EvtxRecord,
   scope: EvtxQuickFilterScope,
   visibleColumns: readonly EvtxColumnId[] | undefined,
-  caseSensitive: boolean
+  caseSensitive: boolean,
+  timeZoneMode: EvtxTimeZoneMode
 ): string[] {
   const columns =
     scope === "visibleColumns" && visibleColumns
       ? visibleColumns
       : availableColumns(discoverMappedProperties([record])).map((column) => column.id);
-  const values = columns.map((id) => columnValue(record, id));
-  // EventData is the source for mapped/inserted values when no map column exists. It is included in
-  // all-columns mode, but never leaks into visible-column matching unless a rendered column carries
-  // it.
-  if (scope === "allColumns") {
-    values.push(...record.eventData.map((field) => field.value));
-  }
+  const values = columns.map((id) => columnValue(record, id, timeZoneMode));
+  if (scope === "allColumns") values.push(...record.eventData.map((field) => field.value));
   return values.map((value) => normalizeText(value, caseSensitive)).filter(Boolean);
 }
 
@@ -203,7 +215,8 @@ function searchableValues(
 export function matchesQuickFilter(
   record: EvtxRecord,
   quickFilter: EvtxQuickFilter,
-  visibleColumns?: readonly EvtxColumnId[]
+  visibleColumns?: readonly EvtxColumnId[],
+  timeZoneMode: EvtxTimeZoneMode = "local"
 ): boolean {
   const query = quickFilter.query.trim();
   if (!query) return false;
@@ -219,7 +232,8 @@ export function matchesQuickFilter(
     record,
     quickFilter.scope,
     visibleColumns,
-    quickFilter.caseSensitive
+    quickFilter.caseSensitive,
+    timeZoneMode
   );
   const normalizedQuery = normalizeText(query, quickFilter.caseSensitive);
   const contains = (term: string) => values.some((value) => value.includes(term));
@@ -252,6 +266,7 @@ export function recordMatchesVisibleFilter(
   input: Pick<VisibleRecordsInput, "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"> & {
     quickFilter?: EvtxQuickFilter;
     visibleColumns?: readonly EvtxColumnId[];
+    timeZoneMode?: EvtxTimeZoneMode;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
@@ -269,7 +284,12 @@ export function recordMatchesVisibleFilter(
 
   const quickFilter = input.quickFilter;
   if (!quickFilter || !quickFilter.query.trim()) return true;
-  const matched = matchesQuickFilter(record, quickFilter, input.visibleColumns);
+  const matched = matchesQuickFilter(
+    record,
+    quickFilter,
+    input.visibleColumns,
+    input.timeZoneMode
+  );
   return quickFilter.action === "hide" ? !matched : matched;
 }
 

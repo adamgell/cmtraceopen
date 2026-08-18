@@ -18,6 +18,7 @@ export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
   parseEventIdSelectors,
+  type EvtxBeforeLoadCriteria,
   type EvtxEventIdSelector,
   type EvtxGroupField,
   type EvtxQuickFilter,
@@ -64,7 +65,9 @@ function buildServerFilter(
   }
 
   if (filterLevels.size > 0 && filterLevels.size < ALL_LEVELS.length) {
-    filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
+    filter.levels = [...filterLevels].flatMap((level) =>
+      level === "Information" ? [0, 4] : [ALL_LEVELS.indexOf(level) + 1]
+    );
   }
   return filter;
 }
@@ -119,9 +122,8 @@ interface EvtxState {
   setFilterLevels: (levels: Set<EvtxLevel>) => void;
   toggleFilterLevel: (level: EvtxLevel) => void;
   setFilterEventIds: (eventIds: string) => void;
+  setBeforeLoadCriteria: (criteria: EvtxBeforeLoadCriteria) => void;
   setFilterSearch: (search: string) => void;
-  setQuickFilter: (filter: EvtxQuickFilter) => void;
-  setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
   moveColumnBy: (id: EvtxColumnId, direction: -1 | 1) => void;
@@ -150,7 +152,15 @@ function applyParseResult(
   };
 }
 
-export const useEvtxStore = create<EvtxState>()((set, get) => ({
+export const useEvtxStore = create<EvtxState>()((set, get) => {
+  const refreshBeforeLoad = () => {
+    const state = get();
+    if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
+      void state.refreshLoadedChannels();
+    }
+  };
+
+  return ({
   records: [],
   channels: [],
   sourceMode: null,
@@ -551,23 +561,39 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     set({ selectedChannels: new Set<string>() });
   },
 
-  setFilterLevels: (levels) => set({ filterLevels: levels }),
+  setFilterLevels: (levels) => {
+    set({ filterLevels: levels });
+    refreshBeforeLoad();
+  },
 
   toggleFilterLevel: (level) => {
     const current = get().filterLevels;
     const next = new Set(current);
-    if (next.has(level)) {
-      next.delete(level);
-    } else {
-      next.add(level);
-    }
+    if (next.has(level)) next.delete(level);
+    else next.add(level);
+    if (next.size === 0) ALL_LEVELS.forEach((known) => next.add(known));
     set({ filterLevels: next });
+    refreshBeforeLoad();
   },
 
-  setFilterEventIds: (eventIds) => set({ filterEventIds: eventIds }),
+  setFilterEventIds: (eventIds) => {
+    set({ filterEventIds: eventIds });
+    refreshBeforeLoad();
+  },
+  setBeforeLoadCriteria: (criteria) => {
+    set({
+      filterLevels: new Set(criteria.levels),
+      filterEventIds: criteria.eventIds,
+      timeWindow: criteria.timeWindow,
+    });
+    refreshBeforeLoad();
+  },
   setFilterSearch: (search) => set({ filterSearch: search }),
   setQuickFilter: (filter) => set({ quickFilter: { ...filter } }),
-  setTimeWindow: (window) => set({ timeWindow: window }),
+  setTimeWindow: (window) => {
+    set({ timeWindow: window });
+    refreshBeforeLoad();
+  },
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
   setGroupBy: (fields) => set({ groupBy: fields, collapsedGroups: new Set<string>() }),
@@ -599,13 +625,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadingProgress: null,
       loadStartTime: null,
       loadElapsedMs: null,
+      filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
       quickFilter: { ...DEFAULT_QUICK_FILTER },
       timeWindow: "24h",
-      // Reset with everything else. Gaps describe records that are gone, so surviving a reset
-      // would report a hole in a set no longer on screen, and a zone left over from a previous
-      // session would silently reinterpret the next one's timestamps.
       coverageGaps: [],
       timeZoneMode: "local",
       columnConfig: defaultColumnConfig(),
@@ -615,7 +639,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       sortDirection: "asc",
       selectedRecordId: null,
     }),
-}));
+});
+});
 
 // Listen for progress events from the Rust backend
 listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {

@@ -8,6 +8,7 @@
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import {
   DEFAULT_QUICK_FILTER,
+  type EvtxFilterModel,
   type EvtxGroupField,
   type EvtxQuickFilter,
   type EvtxQuickFilterAction,
@@ -15,15 +16,8 @@ import {
   type EvtxQuickFilterScope,
 } from "./evtx-filter";
 
-/** Everything a saved filter restores. */
-export interface EvtxFilterCriteria {
-  levels: EvtxLevel[];
-  eventIds: string;
-  search: string;
-  timeWindow: EvtxTimeWindow;
-  groupBy: EvtxGroupField[];
-  quickFilter: EvtxQuickFilter;
-}
+/** Everything a saved filter restores, using the same layered model as runtime evaluation. */
+export interface EvtxFilterCriteria extends EvtxFilterModel {}
 
 export interface EvtxSavedFilter {
   id: string;
@@ -82,7 +76,7 @@ const GROUP_FIELDS: EvtxGroupField[] = [
 ];
 
 /** The current schema version, so an older export can be recognised rather than misread. */
-export const SAVED_FILTER_SCHEMA = 1;
+export const SAVED_FILTER_SCHEMA = 2;
 
 export interface EvtxFilterExport {
   schema: number;
@@ -102,30 +96,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
   const raw = isRecord(input) ? input : {};
+  const before = isRecord(raw.beforeLoad) ? raw.beforeLoad : {};
+  const onLoad = isRecord(raw.onLoad) ? raw.onLoad : {};
+  const after = isRecord(raw.afterLoad) ? raw.afterLoad : {};
 
-  const levels = Array.isArray(raw.levels)
-    ? (raw.levels.filter((level): level is EvtxLevel =>
+  const levels = Array.isArray(before.levels)
+    ? (before.levels.filter((level): level is EvtxLevel =>
         ALL_LEVELS.includes(level as EvtxLevel)
       ) as EvtxLevel[])
     : [];
-
-  const groupBy = Array.isArray(raw.groupBy)
-    ? (raw.groupBy.filter((field): field is EvtxGroupField =>
+  const groupBy = Array.isArray(after.groupBy)
+    ? (after.groupBy.filter((field): field is EvtxGroupField =>
         GROUP_FIELDS.includes(field as EvtxGroupField)
       ) as EvtxGroupField[])
     : [];
 
   return {
-    // An empty level list would match nothing, which no operator means to save, so it falls back
-    // to every level rather than producing a filter that silently hides everything.
-    levels: levels.length > 0 ? levels : [...ALL_LEVELS],
-    eventIds: typeof raw.eventIds === "string" ? raw.eventIds : "",
-    search: typeof raw.search === "string" ? raw.search : "",
-    timeWindow: TIME_WINDOWS.includes(raw.timeWindow as EvtxTimeWindow)
-      ? (raw.timeWindow as EvtxTimeWindow)
-      : "24h",
-    groupBy,
-    quickFilter: sanitizeQuickFilter(raw.quickFilter),
+    beforeLoad: {
+      levels: levels.length > 0 ? levels : [...ALL_LEVELS],
+      eventIds: typeof before.eventIds === "string" ? before.eventIds : "",
+      timeWindow: TIME_WINDOWS.includes(before.timeWindow as EvtxTimeWindow)
+        ? (before.timeWindow as EvtxTimeWindow)
+        : "24h",
+    },
+    onLoad: {
+      search: typeof onLoad.search === "string" ? onLoad.search : "",
+      quickFilter: sanitizeQuickFilter(onLoad.quickFilter),
+    },
+    afterLoad: { groupBy },
   };
 }
 

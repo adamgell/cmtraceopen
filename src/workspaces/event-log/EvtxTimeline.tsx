@@ -85,6 +85,7 @@ export function EvtxTimeline() {
           filterSearch,
           quickFilter,
           visibleColumns: columnConfig.order,
+          timeZoneMode,
         })
       ),
     [
@@ -95,6 +96,7 @@ export function EvtxTimeline() {
       filterSearch,
       quickFilter,
       columnConfig.order,
+      timeZoneMode,
     ]
   );
 

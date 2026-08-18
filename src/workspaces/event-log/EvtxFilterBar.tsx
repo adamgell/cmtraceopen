@@ -129,7 +129,6 @@ export function EvtxFilterBar() {
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
-  const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
 
@@ -137,6 +136,7 @@ export function EvtxFilterBar() {
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
 
   const setFilterLevels = useEvtxStore((s) => s.setFilterLevels);
+  const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
   const saveFilter = useSavedFilterStore((s) => s.save);
   const markFilterUsed = useSavedFilterStore((s) => s.markUsed);
@@ -161,16 +161,19 @@ export function EvtxFilterBar() {
   const commitFilterName = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const state = useEvtxStore.getState();
     const saved = saveFilter(
       trimmed,
       sanitizeCriteria({
-        levels: [...state.filterLevels],
-        eventIds: state.filterEventIds,
-        search: state.filterSearch,
-        timeWindow: state.timeWindow,
-        groupBy: state.groupBy,
-        quickFilter: state.quickFilter,
+        beforeLoad: {
+          levels: [...state.filterLevels],
+          eventIds: state.filterEventIds,
+          timeWindow: state.timeWindow,
+        },
+        onLoad: {
+          search: state.filterSearch,
+          quickFilter: state.quickFilter,
+        },
+        afterLoad: { groupBy: state.groupBy },
       })
     );
     setPendingName(null);
@@ -181,16 +184,10 @@ export function EvtxFilterBar() {
     const filter = savedFilters.find((candidate) => candidate.id === id);
     if (!filter) return;
     const { criteria } = filter;
-    setFilterLevels(new Set(criteria.levels));
-    setFilterEventIds(criteria.eventIds);
-    setFilterSearch(criteria.search);
-    setQuickFilter(criteria.quickFilter);
-    setGroupBy(criteria.groupBy);
-    // The time window is a server-side predicate, so applying it has to refetch.
-    if (criteria.timeWindow !== useEvtxStore.getState().timeWindow) {
-      setTimeWindow(criteria.timeWindow);
-      if (sourceMode === "live") void refreshLoadedChannels();
-    }
+    setBeforeLoadCriteria(criteria.beforeLoad);
+    setFilterSearch(criteria.onLoad.search);
+    setQuickFilter(criteria.onLoad.quickFilter);
+    setGroupBy(criteria.afterLoad.groupBy);
     markFilterUsed(id);
   };
 
@@ -201,6 +198,7 @@ export function EvtxFilterBar() {
     const records = selectVisibleRecords({
       ...state,
       visibleColumns: state.columnConfig.order,
+      timeZoneMode: state.timeZoneMode,
     });
     if (records.length === 0) {
       setExportState("Nothing to export");
@@ -268,8 +266,6 @@ export function EvtxFilterBar() {
               const next = data.optionValue as EvtxTimeWindow;
               if (!next || next === timeWindow) return;
               setTimeWindow(next);
-              // The window is a server-side predicate, so it only takes effect on a refetch.
-              void refreshLoadedChannels();
             }}
           >
             {TIME_WINDOWS.map((window) => (

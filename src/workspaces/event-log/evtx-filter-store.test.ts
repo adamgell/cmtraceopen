@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { sanitizeCriteria } from "./evtx-saved-filters";
 
-const criteria = () => sanitizeCriteria({ levels: ["Error"], search: "boot" });
+const criteria = () =>
+  sanitizeCriteria({ beforeLoad: { levels: ["Error"] }, onLoad: { search: "boot" } });
 
 /** save() returns null for an empty name; every call here uses a real one, so assert that. */
 function saveNamed(name: string) {
@@ -27,19 +28,21 @@ describe("useSavedFilterStore", () => {
     const saved = useSavedFilterStore.getState().save(
       "Triage",
       sanitizeCriteria({
-        groupBy: ["provider", "eventId"],
-        quickFilter: {
-          mode: "allStrings",
-          query: "boot,failed",
-          scope: "visibleColumns",
-          action: "hide",
-          caseSensitive: true,
-          highlight: false,
+        afterLoad: { groupBy: ["provider", "eventId"] },
+        onLoad: {
+          quickFilter: {
+            mode: "allStrings",
+            query: "boot,failed",
+            scope: "visibleColumns",
+            action: "hide",
+            caseSensitive: true,
+            highlight: false,
+          },
         },
       })
     );
-    expect(saved?.criteria.groupBy).toEqual(["provider", "eventId"]);
-    expect(saved?.criteria.quickFilter).toEqual({
+    expect(saved?.criteria.afterLoad.groupBy).toEqual(["provider", "eventId"]);
+    expect(saved?.criteria.onLoad.quickFilter).toEqual({
       mode: "allStrings",
       query: "boot,failed",
       scope: "visibleColumns",
@@ -53,12 +56,12 @@ describe("useSavedFilterStore", () => {
     const first = saveNamed("Boot");
     const second = useSavedFilterStore
       .getState()
-      .save("boot", sanitizeCriteria({ search: "changed" }));
+      .save("boot", sanitizeCriteria({ onLoad: { search: "changed" } }));
     if (!second) throw new Error("save refused a valid name");
 
     expect(useSavedFilterStore.getState().savedFilters).toHaveLength(1);
     expect(second.id).toBe(first.id);
-    expect(useSavedFilterStore.getState().savedFilters[0].criteria.search).toBe("changed");
+    expect(useSavedFilterStore.getState().savedFilters[0].criteria.onLoad.search).toBe("changed");
   });
 
   it("preserves the favorite flag when re-saving", () => {
