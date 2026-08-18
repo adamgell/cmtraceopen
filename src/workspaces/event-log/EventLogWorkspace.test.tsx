@@ -8,6 +8,7 @@ const virtualizerState = vi.hoisted(() => ({
   totalSize: 0,
   resizedSizes: new Map<number, number>(),
   measureCalls: 0,
+  resizeObserverCalls: 0,
   visibleCount: null as number | null,
   recalculate: () => undefined,
   measureElement: (element: HTMLElement | null) => {
@@ -24,7 +25,11 @@ const virtualizerState = vi.hoisted(() => ({
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
     }
-    virtualizerState.measuredSizes.set(index, measured);
+    virtualizerState.resizeObserver(index, measured);
+  },
+  resizeObserver: (index: number, size: number) => {
+    virtualizerState.resizeObserverCalls += 1;
+    virtualizerState.measuredSizes.set(index, size);
     virtualizerState.recalculate();
   },
 }));
@@ -163,6 +168,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measuredSizes.clear();
     virtualizerState.visibleCount = null;
     virtualizerState.measureCalls = 0;
+    virtualizerState.resizeObserverCalls = 0;
     virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
@@ -343,9 +349,11 @@ describe("event-viewer shared font metrics", () => {
       `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight}px`
     );
     expect(virtualizerState.initialItems[0].size).toBe(smallList.rowHeight);
+    const initialResizeObserverCalls = virtualizerState.resizeObserverCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
+    expect(virtualizerState.resizeObserverCalls).toBeGreaterThan(initialResizeObserverCalls);
 
     expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
