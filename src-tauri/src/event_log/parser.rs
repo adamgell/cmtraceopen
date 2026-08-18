@@ -740,6 +740,13 @@ fn normalize_windows_path(raw: &str) -> String {
             value => components.push(value),
         }
     }
+    if prefix == "\\\\?\\"
+        && components
+            .first()
+            .is_some_and(|component| component.len() == 2 && component.as_bytes()[1] == b':')
+    {
+        return components.join("\\");
+    }
     format!("{prefix}{}", components.join("\\"))
 }
 fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceManifest {
@@ -1282,7 +1289,7 @@ mod tests {
         );
         assert_eq!(
             normalize_source_path(Path::new(r"\\?\C:\logs\.\Application.evtx")),
-            r"\\?\C:\logs\Application.evtx"
+            r"C:\logs\Application.evtx"
         );
         assert_eq!(
             normalize_source_path(Path::new(
@@ -1315,7 +1322,7 @@ mod tests {
         );
         assert_eq!(
             normalize_source_path(Path::new(r"\\?\C:\logs\..\Application.evtx")),
-            r"\\?\C:\Application.evtx"
+            r"C:\Application.evtx"
         );
         assert!(!is_vss_path(r"C:\logs\harddiskvolumeshadowcopy1\Application.evtx"));
         assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
