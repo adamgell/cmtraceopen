@@ -427,11 +427,11 @@ mod windows_capture {
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
 
-        for (array_property, name_property, value_property, message_property, target) in [
-            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelName, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
-            (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskName, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
-            (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
-            (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
+        for (array_property, value_property, message_property, target) in [
+            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
+            (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
+            (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
+            (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
         ] {
             let array_values = get_publisher_variant(metadata_handle, array_property)?;
             let Some(OwnedVariant::Handle(array_handle)) = array_values else { continue };
@@ -445,8 +445,6 @@ mod windows_capture {
             }
             for index in 0..count {
                 let index = u32::try_from(index).map_err(|_| "metadata array index overflow".to_string())?;
-                let name = string(object_property(array_handle.0.0, index, name_property.0 as u32)?)
-                    .ok_or_else(|| format!("metadata array {} name has an invalid type", array_property.0))?;
                 let raw_value = number(object_property(array_handle.0.0, index, value_property.0 as u32)?)
                     .ok_or_else(|| format!("metadata array {} value has an invalid type", array_property.0))?;
                 let value = metadata_key_value(target, raw_value);
@@ -472,7 +470,9 @@ mod windows_capture {
                     2 => &mut metadata.keywords,
                     _ => &mut metadata.levels,
                 };
-                target_map.insert(value.to_string(), message_text.unwrap_or(name));
+                if let Some(message_text) = message_text {
+                    target_map.insert(value.to_string(), message_text);
+                }
             }
         }
 
