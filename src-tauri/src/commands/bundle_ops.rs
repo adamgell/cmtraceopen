@@ -316,6 +316,11 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
             let size = metadata.len();
             if size > BUNDLE_BATCH_MAX_FILE_SIZE {
                 skipped_large += 1;
+                child_errors.push(format!(
+                    "{}: file exceeds the {} byte bundle limit",
+                    entry_path.display(),
+                    BUNDLE_BATCH_MAX_FILE_SIZE
+                ));
                 log::debug!(
                     "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
                     entry_path.display()
