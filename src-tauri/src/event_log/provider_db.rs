@@ -10,10 +10,12 @@
 //! ```text
 //! CREATE TABLE "ProviderDetails" (
 //!   "ProviderName" TEXT COLLATE NOCASE, "VersionKey" TEXT,
-//!   "Events" BLOB, "Keywords" BLOB, "Levels" BLOB, "Maps" BLOB, "Messages" BLOB,
+//!   "Events" BLOB, "Keywords" BLOB, "Maps" BLOB, "Messages" BLOB,
 //!   "Opcodes" BLOB, "Parameters" BLOB, "Tasks" BLOB,
 //!   PRIMARY KEY ("ProviderName","VersionKey"))
-//! ```
+//!
+//! Captured level maps are stored separately in the keyed `ProviderLevels` table;
+//! canonical EventLogExpert databases may omit that table.
 //!
 //! Every BLOB is gzip-compressed JSON. A real database holds about 1,180 providers in 16 MB, so
 //! rows are read on demand and cached rather than loaded eagerly.
