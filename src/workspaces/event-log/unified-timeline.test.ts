@@ -220,4 +220,27 @@ describe("filterTimelineToRecords", () => {
     );
     expect(filtered.items.map((item) => item.message)).toEqual(["unsafe"]);
   });
+
+  it("filters a large event list without recomputing each record per item", () => {
+    const records = Array.from({ length: 512 }, (_, index) => ({
+      sourceLabel: "Live",
+      computer: "HOST",
+      channel: "Security",
+      eventRecordId: index + 1,
+    })) as EvtxRecord[];
+    const items = records.map((record, index) => ({
+      timestampMs: index,
+      severity: "info" as const,
+      message: String(index),
+      origin: {
+        ...eventOrigin,
+        stableId: `source4:Live|machine4:HOST|channel8:Security|record${record.eventRecordId}`,
+        machine: "HOST",
+        channel: "Security",
+        recordId: record.eventRecordId,
+      },
+    }));
+    const filtered = filterTimelineToRecords(timeline({ items }), records);
+    expect(filtered.items).toHaveLength(records.length);
+  });
 });

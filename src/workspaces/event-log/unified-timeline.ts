@@ -83,21 +83,38 @@ function eventIdentityPrefix(record: EvtxRecord): string {
   return `${source}|${machine}${channel}`;
 }
 
-function stableRecordIdentity(record: EvtxRecord): string {
+function stableRecordBase(record: EvtxRecord): string {
   const prefix = eventIdentityPrefix(record);
   if (record.eventRecordId !== 0) {
     return Number.isSafeInteger(record.eventRecordId)
       ? `${prefix}|record${record.eventRecordId}`
       : `${prefix}|record`;
   }
-  return `${prefix}|missing${missingRecordDigest(record)}-0`;
+  return `${prefix}|missing${missingRecordDigest(record)}`;
 }
 
-function matchesEventRecord(origin: Extract<TimelineOrigin, { kind: "event" }>, record: EvtxRecord): boolean {
-  if (record.eventRecordId === 0 || Number.isSafeInteger(record.eventRecordId)) {
-    return origin.stableId === stableRecordIdentity(record);
+function stableRecordIdentities(records: EvtxRecord[]): {
+  keys: Set<string>;
+  unsafePrefixes: Set<string>;
+} {
+  const keys = new Set<string>();
+  const unsafePrefixes = new Set<string>();
+  const occurrences = new Map<string, number>();
+  for (const record of records) {
+    const base = stableRecordBase(record);
+    if (record.eventRecordId !== 0) {
+      if (Number.isSafeInteger(record.eventRecordId)) {
+        keys.add(base);
+      } else {
+        unsafePrefixes.add(base);
+      }
+      continue;
+    }
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    keys.add(`${base}-${occurrence}`);
   }
-  return origin.stableId.startsWith(`${eventIdentityPrefix(record)}|record`);
+  return { keys, unsafePrefixes };
 }
 
 /**
@@ -110,9 +127,13 @@ export function filterTimelineToRecords(
   timeline: UnifiedTimeline,
   records: EvtxRecord[]
 ): UnifiedTimeline {
-  const keep = (origin: TimelineOrigin) =>
-    origin.kind === "log" ||
-    records.some((record) => origin.kind === "event" && matchesEventRecord(origin, record));
+  const { keys, unsafePrefixes } = stableRecordIdentities(records);
+  const keep = (origin: TimelineOrigin) => {
+    if (origin.kind === "log") return true;
+    if (keys.has(origin.stableId)) return true;
+    const marker = origin.stableId.lastIndexOf("|record");
+    return marker >= 0 && unsafePrefixes.has(origin.stableId.replace(/record\d+$/, "record"));
+  };
   return {
     items: timeline.items.filter((item) => keep(item.origin)),
     unplaced: timeline.unplaced.filter((item) => keep(item.origin)),
