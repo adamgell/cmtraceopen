@@ -49,8 +49,8 @@ export function EventLogWorkspace() {
   const [timeline, setTimeline] = useState<UnifiedTimeline>({ items: [], unplaced: [] });
   const [timelineError, setTimelineError] = useState<string | null>(null);
   const visibleTimeline = useMemo(
-    () => filterTimelineToRecords(timeline, visibleRecords),
-    [timeline, visibleRecords]
+    () => filterTimelineToRecords(timeline, visibleRecords, records),
+    [timeline, visibleRecords, records]
   );
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);

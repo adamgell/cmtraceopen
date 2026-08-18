@@ -135,6 +135,30 @@ function stableRecordBase(record: EvtxRecord): string {
 export function stableRecordIdentity(record: EvtxRecord): string {
   return stableRecordBase(record);
 }
+
+function canonicalRecordKeys(records: EvtxRecord[]): Map<EvtxRecord, string> {
+  const ordered = [...records].sort(
+    (left, right) =>
+      (left.timestampEpoch ?? 0) - (right.timestampEpoch ?? 0) ||
+      compareRustStrings(stableRecordBase(left), stableRecordBase(right)) ||
+      compareRustStrings(left.timestamp ?? "", right.timestamp ?? "") ||
+      compareRustStrings(left.message ?? "", right.message ?? "") ||
+      compareRustStrings(left.rawXml ?? "", right.rawXml ?? "")
+  );
+  const occurrences = new Map<string, number>();
+  const keys = new Map<EvtxRecord, string>();
+  for (const record of ordered) {
+    const base = stableRecordBase(record);
+    if (record.eventRecordId !== 0 || exactRecordIdText(record) !== null) {
+      keys.set(record, base);
+      continue;
+    }
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    keys.set(record, `${base}-${occurrence}`);
+  }
+  return keys;
+}
 function compareRustStrings(left: string, right: string): number {
   const leftBytes = utf8Encoder.encode(left);
   const rightBytes = utf8Encoder.encode(right);
@@ -199,20 +223,14 @@ function stableRecordIdentities(records: EvtxRecord[]): {
  */
 export function filterTimelineToRecords(
   timeline: UnifiedTimeline,
-  records: EvtxRecord[]
+  records: EvtxRecord[],
+  allRecords: EvtxRecord[] = records
 ): UnifiedTimeline {
-  const { keys, unsafePrefixes } = stableRecordIdentities(records);
-  const visibleMissingBases = new Set(
-    records
-      .filter((record) => record.eventRecordId === 0 && exactRecordIdText(record) === null)
-      .map((record) => stableRecordBase(record))
+  const canonicalKeys = canonicalRecordKeys(allRecords);
+  const keys = new Set(
+    records.map((record) => canonicalKeys.get(record) ?? stableRecordBase(record))
   );
-  const canonicalMissingBases = new Set<string>();
-  for (const item of [...timeline.items, ...timeline.unplaced]) {
-    if (item.origin.kind !== "event") continue;
-    const match = item.origin.stableId.match(/^(.*\|missing[0-9a-f]+)-\d+$/);
-    if (match) canonicalMissingBases.add(match[1]);
-  }
+  const { unsafePrefixes } = stableRecordIdentities(records);
   const unsafeOriginCounts = new Map<string, number>();
   for (const item of [...timeline.items, ...timeline.unplaced]) {
     if (item.origin.kind !== "event") continue;
@@ -224,14 +242,6 @@ export function filterTimelineToRecords(
   const keep = (origin: TimelineOrigin) => {
     if (origin.kind === "log") return true;
     if (keys.has(origin.stableId)) return true;
-    const missingMatch = origin.stableId.match(/^(.*\|missing[0-9a-f]+)-\d+$/);
-    if (
-      missingMatch &&
-      visibleMissingBases.has(missingMatch[1]) &&
-      canonicalMissingBases.has(missingMatch[1])
-    ) {
-      return true;
-    }
     const marker = origin.stableId.lastIndexOf("|record");
     const prefix = origin.stableId.replace(/record\d+$/, "record");
     return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;

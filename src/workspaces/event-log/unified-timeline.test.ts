@@ -225,9 +225,11 @@ describe("filterTimelineToRecords", () => {
       recordIdText: "0",
     };
 
+    const visibleRecord = { ...missingRecord };
     const filtered = filterTimelineToRecords(
       timeline({ items: [{ timestampMs: 1, severity: "info", message: "missing", origin }] }),
-      [missingRecord]
+      [visibleRecord],
+      [missingRecord, visibleRecord]
     );
     expect(filtered.items.map((item) => item.message)).toEqual(["missing"]);
 
