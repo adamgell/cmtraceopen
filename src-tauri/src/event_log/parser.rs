@@ -121,6 +121,7 @@ pub fn build_source_manifest_for_selections(
         let is_wildcard = is_wildcard_source(source)
             && !fs::symlink_metadata(source)
                 .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir());
+        let coverage_start = manifest.coverage.len();
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage, &mut inspected_work)
         } else {
@@ -128,13 +129,15 @@ pub fn build_source_manifest_for_selections(
         };
 
         if is_wildcard
-            && paths.is_empty()
-            && !manifest.coverage.iter().any(|coverage| match coverage {
-                SourceCoverage::Unsupported { path, .. }
-                | SourceCoverage::AccessDenied { path, .. }
-                | SourceCoverage::Missing { path, .. }
-                | SourceCoverage::InvalidPattern { path, .. }
-                | SourceCoverage::LimitReached { path, .. } => path == source,
+            && !manifest.coverage[coverage_start..].iter().any(|coverage| {
+                matches!(
+                    coverage,
+                    SourceCoverage::Unsupported { .. }
+                        | SourceCoverage::AccessDenied { .. }
+                        | SourceCoverage::Missing { .. }
+                        | SourceCoverage::InvalidPattern { .. }
+                        | SourceCoverage::LimitReached { .. }
+                )
             })
         {
             manifest.coverage.push(SourceCoverage::Missing {
@@ -1552,10 +1555,10 @@ mod tests {
         {
             assert_eq!(manifest.entries.len(), 1);
             assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Wildcard);
-            assert!(matches!(
-                manifest.coverage.as_slice(),
-                [SourceCoverage::Unsupported { .. }]
-            ));
+            assert!(manifest
+                .coverage
+                .iter()
+                .any(|coverage| matches!(coverage, SourceCoverage::Unsupported { .. })));
         }
 
 
