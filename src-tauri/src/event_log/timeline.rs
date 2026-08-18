@@ -12,6 +12,7 @@ use cmtraceopen_parser::unified_timeline::{
     UnplacedItem, UnplacedReason,
 };
 
+use super::event_node::parse_event_xml;
 use super::models::{EvtxLevel, EvtxRecord};
 
 /// Maps the record's level back to a timeline severity.
@@ -28,12 +29,11 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
         EvtxLevel::Information => TimelineSeverity::Info,
     }
 }
-
 fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
     TimelineOrigin::Event {
         stable_id: record.id,
         source: record.source_label.clone(),
-        machine: (!record.computer.is_empty()).then(|| record.computer.clone()),
+        machine: machine_of(&record.computer),
         bundle: bundle_from_source(&record.source_label),
         channel: record.channel.clone(),
         provider: record.provider.clone(),
@@ -42,6 +42,11 @@ fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
         event_id: record.event_id,
         record_id: record.event_record_id,
     }
+}
+
+fn machine_of(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && !value.eq_ignore_ascii_case("unknown")).then(|| value.to_string())
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
@@ -54,28 +59,18 @@ fn bundle_from_source(source: &str) -> Option<String> {
 }
 
 /// Extracts only the provider-declared correlation ActivityID; absence remains explicit.
+///
+/// The correlation element is scoped to the event's `System` block. Looking for the attribute by
+/// substring would accept unrelated provider data (or `RelatedActivityID`) as a causal identity.
 fn extract_activity_id(xml: &str) -> Option<String> {
-    let marker = "ActivityID";
-    let mut offset = 0;
-    while let Some(relative) = xml[offset..].find(marker) {
-        let start = offset + relative;
-        let preceding = xml[..start].chars().next_back();
-        if preceding.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_') {
-            offset = start + marker.len();
-            continue;
-        }
-        let rest = xml[start + marker.len()..].trim_start();
-        let rest = rest.strip_prefix('=')?.trim_start();
-        let quote = rest.chars().next()?;
-        if quote != '"' && quote != '\'' {
-            return None;
-        }
-        let value = &rest[quote.len_utf8()..];
-        let end = value.find(quote)?;
-        let value = &value[..end];
-        return (!value.is_empty()).then(|| value.to_string());
-    }
-    None
+    let root = parse_event_xml(xml).ok()?;
+    let system = root.children.iter().find(|child| child.name == "System")?;
+    let correlation = system
+        .children
+        .iter()
+        .find(|child| child.name == "Correlation")?;
+    let value = correlation.attribute("ActivityID")?.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// Converts one event, or reports why it has no position.
@@ -281,7 +276,8 @@ mod tests {
         source.computer = "HOST-A".to_string();
         source.process_id = Some(4321);
         source.raw_xml =
-            r#"<Correlation ActivityID="{1234}" RelatedActivityID="{5678}"/>"#.to_string();
+            r#"<Event><System><Correlation ActivityID="{1234}" RelatedActivityID="{5678}"/></System></Event>"#
+                .to_string();
 
         match &from_event(&source).expect("placed").origin {
             TimelineOrigin::Event {
@@ -306,12 +302,12 @@ mod tests {
     fn same_basename_sources_with_reused_event_record_ids_keep_distinct_keys() {
         let mut first = record(1_000, "first source", EvtxLevel::Information);
         first.id = 101;
-        first.source_label = "capture.evtx".to_string();
+        first.source_label = "C:\\evidence\\folder-a\\capture.evtx".to_string();
         first.computer = "HOST-A".to_string();
 
         let mut second = record(1_000, "second source", EvtxLevel::Information);
         second.id = 202;
-        second.source_label = "capture.evtx".to_string();
+        second.source_label = "D:\\evidence\\folder-b\\capture.evtx".to_string();
         second.computer = "HOST-B".to_string();
 
         let timeline = build(&[], &[first, second]);
@@ -333,8 +329,18 @@ mod tests {
         assert_eq!(
             origins,
             vec![
-                (101, "capture.evtx".to_string(), Some("HOST-A".to_string()), 1234),
-                (202, "capture.evtx".to_string(), Some("HOST-B".to_string()), 1234),
+                (
+                    101,
+                    "C:\\evidence\\folder-a\\capture.evtx".to_string(),
+                    Some("HOST-A".to_string()),
+                    1234,
+                ),
+                (
+                    202,
+                    "D:\\evidence\\folder-b\\capture.evtx".to_string(),
+                    Some("HOST-B".to_string()),
+                    1234,
+                ),
             ]
         );
     }
@@ -342,12 +348,49 @@ mod tests {
     #[test]
     fn related_activity_does_not_masquerade_as_activity() {
         let mut source = record(1, "x", EvtxLevel::Information);
-        source.raw_xml = r#"<Correlation RelatedActivityID="{5678}"/>"#.to_string();
+        source.raw_xml =
+            r#"<Event><System><Correlation RelatedActivityID="{5678}"/></System></Event>"#
+                .to_string();
         let item = from_event(&source).expect("placed");
         match item.origin {
             TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
             other => panic!("expected event origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn activity_id_requires_the_system_correlation_element() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.raw_xml = r#"<Event><System><Provider ActivityID="{wrong}"/></System><Correlation ActivityID="{outside}"/></Event>"#.to_string();
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_computer_is_rendered_as_absent_machine_provenance() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.computer = "Unknown".to_string();
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { machine, .. } => assert_eq!(machine, None),
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn equal_timestamp_event_append_keeps_input_order() {
+        let mut timeline = build(
+            &[],
+            &[record(5_000, "existing", EvtxLevel::Information)],
+        );
+        let mut appended = record(5_000, "appended", EvtxLevel::Information);
+        appended.id = 99;
+        append(&mut timeline, &[], &[appended]);
+        let messages: Vec<_> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages, vec!["existing", "appended"]);
     }
     #[test]
     fn append_reconciles_new_events_without_dropping_unplaced_records() {

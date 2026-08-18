@@ -12,6 +12,8 @@ import type {
   EventQueryFilterSubset,
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
+import type { LogEntry } from "../../types/log";
+import type { UnifiedTimeline } from "./unified-timeline";
 
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
@@ -35,6 +37,14 @@ import {
 function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
   if (timeWindow === "all") return {};
   return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
+}
+
+/** Builds the backend-owned merged timeline for the records currently shown in this workspace. */
+export function buildUnifiedTimeline(
+  records: EvtxRecord[],
+  entries: LogEntry[] = []
+): Promise<UnifiedTimeline> {
+  return invoke<UnifiedTimeline>("evtx_build_unified_timeline", { entries, records });
 }
 
 export type EvtxSourceMode = "files" | "live" | null;
