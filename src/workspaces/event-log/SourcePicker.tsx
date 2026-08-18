@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Input, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEvtxStore } from "./evtx-store";
@@ -16,9 +16,16 @@ export function SourcePicker() {
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
+  const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
-  const [remoteTarget, setRemoteTarget] = useState("");
+  const [remoteTarget, setRemoteTarget] = useState(remoteMachine ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (remoteMachine && remoteMachine !== remoteTarget) {
+      setRemoteTarget(remoteMachine);
+    }
+  }, [remoteMachine, remoteTarget]);
 
   const isWindows = currentPlatform === "windows";
 

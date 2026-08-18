@@ -257,10 +257,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
         const newLoaded = new Set(state.loadedChannels);
+        const hasHardFailure = result.parseErrors > 0 && result.records.length === 0;
         const channelHasUsableData =
-          gaps.length === 0 ||
-          result.records.length > 0 ||
-          (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
+          !hasHardFailure &&
+          (gaps.length === 0 ||
+            result.records.length > 0 ||
+            (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0);
         if (channelHasUsableData) newLoaded.add(ch);
 
         set({
@@ -337,6 +339,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadElapsedMs: performance.now() - startTime,
         loadError,
       });
+
     } catch (error) {
       if (!isCurrentRequest(requestId)) return;
       const message = error instanceof Error ? error.message : String(error);

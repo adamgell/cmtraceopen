@@ -70,6 +70,16 @@ describe("SourcePicker remote source", () => {
     );
   });
 
+  it("restores the remote target from the store after remount", () => {
+    useEvtxStore.setState({ remoteMachine: "lab-host" });
+
+    render(<SourcePicker />);
+
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Remote computer name"]')?.value).toBe(
+      "lab-host"
+    );
+  });
+
   it("shows channel coverage gaps alongside the source error", () => {
     useEvtxStore.setState({
       loadError: "lab-host: remote source access denied",
@@ -80,5 +90,29 @@ describe("SourcePicker remote source", () => {
 
     expect(document.body.textContent).toContain("remote source access denied");
     expect(document.body.textContent).toContain("Security: not read (access denied)");
+  });
+
+  it("keeps classified coverage visible when a remote query also fails", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_remote_channels") {
+        return [
+          { name: "Application", eventCount: 1, sourceType: { remote: { machine: "lab-host" } } },
+        ];
+      }
+      throw new Error("access denied");
+    });
+
+    render(<SourcePicker />);
+    const input = document.querySelector('input[aria-label="Remote computer name"]');
+    fireEvent.change(input!, { target: { value: "lab-host" } });
+    const remoteButton = Array.from(document.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Remote computer")
+    );
+    fireEvent.click(remoteButton!);
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("lab-host/Application: access denied");
+      expect(document.body.textContent).toContain("lab-host/Application: not read (access denied)");
+    });
   });
 });
