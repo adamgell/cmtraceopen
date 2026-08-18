@@ -172,7 +172,7 @@ export function EvtxTimeline() {
     rows.forEach((row, index) => {
       virtualizer.resizeItem(
         index,
-        row.kind === "group" ? metrics.rowHeight + 1 : metrics.rowHeight + 2
+        row.kind === "group" ? metrics.rowHeight : metrics.rowHeight + 2
       );
     });
     for (const element of rowElementsRef.current.values()) {
@@ -327,6 +327,7 @@ export function EvtxTimeline() {
                     gap: "6px",
                     paddingLeft: `${8 + row.depth * 16}px`,
                     height: `${metrics.rowHeight}px`,
+                    boxSizing: "border-box",
                     fontSize: `${smallFontSize}px`,
                     fontWeight: 600,
                     cursor: "pointer",
