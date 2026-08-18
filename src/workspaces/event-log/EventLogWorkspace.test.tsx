@@ -6,8 +6,10 @@ const virtualizerState = vi.hoisted(() => ({
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
   totalSize: 0,
   resizedSizes: new Map<number, number>(),
+  measureCalls: 0,
   recalculate: () => undefined,
   measureElement: (element: HTMLElement | null) => {
+    virtualizerState.measureCalls += 1;
     if (!element) return;
     const index = Number(element.dataset.index);
     const measured =
@@ -145,6 +147,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     virtualizerState.measuredSizes.clear();
+    virtualizerState.measureCalls = 0;
     virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
@@ -316,6 +319,7 @@ describe("event-viewer shared font metrics", () => {
     const filterButton = filter.getByRole("button", { name: "Crit" });
     const timeline = render(<EvtxTimeline />);
     const recordRow = timeline.getByRole("option");
+    const initialMeasureCalls = virtualizerState.measureCalls;
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(
@@ -323,6 +327,7 @@ describe("event-viewer shared font metrics", () => {
     );
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+    expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
 
     expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
