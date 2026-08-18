@@ -1,12 +1,11 @@
 #[cfg(target_os = "windows")]
 use serde::Serialize;
-use tauri::AppHandle;
-#[cfg(target_os = "windows")]
-use tauri::Emitter;
-
 use super::models::{EvtxChannelInfo, EvtxParseResult};
 use super::parser;
 use crate::state::app_state::AppState;
+use tauri::{AppHandle, Manager};
+#[cfg(target_os = "windows")]
+use tauri::Emitter;
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
@@ -318,6 +317,69 @@ pub async fn evtx_provider_databases(
         .read()
         .map_err(|_| "provider store lock was poisoned".to_string())?
         .registered())
+}
+
+/// Imports one provider database into the active renderer registry.
+#[tauri::command]
+pub async fn evtx_import_provider_database(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<super::provider_db::ProviderDbLoadOutcome, String> {
+    let path = std::path::PathBuf::from(path);
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut loaded = super::provider_db::ProviderStore::default();
+        let outcome = loaded.load_database(&path)?;
+        *providers
+            .write()
+            .map_err(|_| "provider store lock was poisoned".to_string())? = loaded;
+        Ok(outcome)
+    })
+    .await
+    .map_err(|error| format!("provider database import task failed: {error}"))?
+}
+
+/// Exports a provider database without reconstructing or dropping canonical ProviderDetails
+/// columns.
+#[tauri::command]
+pub async fn evtx_export_provider_database(
+    source: String,
+    destination: String,
+) -> Result<super::provider_db::ProviderDbInfo, String> {
+    let source = std::path::PathBuf::from(source);
+    let destination = std::path::PathBuf::from(destination);
+    tokio::task::spawn_blocking(move || {
+        super::provider_db::export_provider_database(&source, &destination)
+    })
+    .await
+    .map_err(|error| format!("provider database export task failed: {error}"))?
+}
+
+/// Loads a curated provider database bundled with the application.
+///
+/// When no real Windows capture has been checked in, the command reports that prerequisite instead
+/// of fabricating a small database and making packaged coverage look complete.
+#[tauri::command]
+pub async fn evtx_load_packaged_provider_databases(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<super::provider_db::ProviderDbLoadOutcome, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("cannot locate packaged resources: {error}"))?;
+    let directory = super::provider_db::packaged_provider_directory(&resource_dir)?;
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut loaded = super::provider_db::ProviderStore::default();
+        let outcome = loaded.load_directory(&directory)?;
+        *providers
+            .write()
+            .map_err(|_| "provider store lock was poisoned".to_string())? = loaded;
+        Ok(outcome)
+    })
+    .await
+    .map_err(|error| format!("packaged provider database load task failed: {error}"))?
 }
 
 /// Calls the provider-capture seam. The Windows traversal itself lives in the provider-capture
