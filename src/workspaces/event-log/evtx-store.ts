@@ -412,7 +412,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
     // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
     // count a previous run's batches towards this one.
-    resetStreamedRecords(channels, generation);
+    invalidateAllStreamedRecords(generation);
 
     const results = await Promise.all(
       channels.map(async (ch) => {
@@ -552,6 +552,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (loaded.length === 0) return;
     const generation = state.loadGeneration + 1;
     const startTime = performance.now();
+    invalidateAllStreamedRecords(generation);
     set({
       records: [],
       loadedChannels: new Set<string>(),
@@ -780,9 +781,25 @@ listen<{ channel: string; requestId: number; fetched: number }>("evtx-query-prog
  */
 const pendingBatches = new Map<
   string,
-  { requestId?: number; records: EvtxRecord[]; sequences: Set<number> }
+  {
+    requestId?: number;
+    records: EvtxRecord[];
+    sequences: Set<number>;
+    terminal?: { sequenceCount: number; totalRecords: number };
+  }
 >();
 const activeRequestIds = new Map<string, number>();
+function retireCompletedStream(channel: string, pending: { requestId?: number; sequences: Set<number>; terminal?: { sequenceCount: number; totalRecords: number } }): void {
+  const terminal = pending.terminal;
+  if (!terminal || terminal.sequenceCount !== pending.sequences.size) return;
+  for (let sequence = 0; sequence < terminal.sequenceCount; sequence++) {
+    if (!pending.sequences.has(sequence)) return;
+  }
+  pendingBatches.delete(channel);
+  if (pending.requestId !== undefined && activeRequestIds.get(channel) === pending.requestId) {
+    activeRequestIds.delete(channel);
+  }
+}
 function invalidateAllStreamedRecords(requestId: number): void {
   const channels = new Set([...pendingBatches.keys(), ...activeRequestIds.keys()]);
   resetStreamedRecords([...channels], requestId);
@@ -832,9 +849,20 @@ listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRec
     });
     pending.sequences.add(sequence);
     pending.records.push(...records);
+    retireCompletedStream(channel, pending);
   }
 );
 
+listen<{ channel: string; requestId: number; sequenceCount: number; totalRecords: number }>(
+  "evtx-record-stream-complete",
+  (event) => {
+    const { channel, requestId, sequenceCount, totalRecords } = event.payload;
+    const pending = pendingBatches.get(channel);
+    if (!pending || pending.requestId !== requestId) return;
+    pending.terminal = { sequenceCount, totalRecords };
+    retireCompletedStream(channel, pending);
+  }
+);
 /** Takes everything received for `channel` so far, and reports whether it is contiguous. */
 export function drainStreamedRecords(channel: string, requestId?: number): {
   records: EvtxRecord[];
@@ -847,7 +875,6 @@ export function drainStreamedRecords(channel: string, requestId?: number): {
   ) {
     return { records: [], missingSequences: [] };
   }
-  pendingBatches.delete(channel);
   let highest = 0;
   for (const sequence of pending.sequences) {
     if (sequence > highest) highest = sequence;

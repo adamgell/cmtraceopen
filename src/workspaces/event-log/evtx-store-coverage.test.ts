@@ -637,9 +637,9 @@ describe("records that arrive in batches while the query runs", () => {
   });
  
   it("remaps the selected record when an earlier streamed event reorders rows", () => {
-    const selected = { ...record("System", 100), id: 0 } as unknown as EvtxRecord;
+    const selected = { ...record("Selection", 100), id: 0 } as unknown as EvtxRecord;
     useEvtxStore.setState({ records: [selected], selectedRecordId: 0 });
-    emitBatch("System", 0, [{ ...record("System", 1), id: 1 }]);
+    emitBatch("Selection", 0, [{ ...record("Selection", 1), id: 1 }]);
 
     const state = useEvtxStore.getState();
     expect(state.records.map((item) => item.eventRecordId)).toEqual([1, 100]);

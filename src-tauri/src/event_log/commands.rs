@@ -35,6 +35,15 @@ struct EvtxRecordBatch {
     sequence: usize,
     records: Vec<super::models::EvtxRecord>,
 }
+#[cfg(target_os = "windows")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvtxRecordStreamComplete {
+    channel: String,
+    request_id: u64,
+    sequence_count: usize,
+    total_records: usize,
+}
 
 #[tauri::command]
 pub async fn evtx_parse_files(
@@ -142,8 +151,23 @@ pub async fn evtx_query_channels(
                                      sequence={sequence} error=\"{error}\""
                                 );
                             }
-                        },
+                        }
                     );
+                    let total_records = outcome.as_ref().map(|scan| scan.delivered).unwrap_or(0);
+                    if let Err(error) = app_ref.emit(
+                        "evtx-record-stream-complete",
+                        EvtxRecordStreamComplete {
+                            channel: batch_channel.clone(),
+                            request_id: request_id.unwrap_or_default(),
+                            sequence_count,
+                            total_records,
+                        },
+                    ) {
+                        log::warn!(
+                            "event=evtx_stream_complete_emit_failed channel=\"{batch_channel}\" \
+                             error=\"{error}\""
+                        );
+                    }
                     (channel.clone(), outcome)
                 })
                 .collect();
