@@ -199,6 +199,35 @@ describe("live batch delivery through initial and refresh loads", () => {
     );
   });
 
+  it("clears batches left by a failed initial query before retrying", async () => {
+    let queryAttempts = 0;
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 1, sourceType: "live" }];
+      }
+      queryAttempts += 1;
+      if (queryAttempts === 1) {
+        emitBatch("Application", 0, [streamedRecord("Application", 99)]);
+        throw new Error("transient query failure");
+      }
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+    await useEvtxStore.getState().enumerateChannels();
+
+    expect(queryAttempts).toBe(2);
+    expect(useEvtxStore.getState().records).toHaveLength(1);
+    expect(useEvtxStore.getState().records[0].eventRecordId).toBe(0);
+  });
+
   it("assembles streamed batches during refresh", async () => {
     useEvtxStore.setState({
       channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],

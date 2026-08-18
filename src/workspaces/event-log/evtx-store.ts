@@ -223,6 +223,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
       const promises = availableCore.map(async (ch) => {
         try {
+          resetStreamedRecords([ch]);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: null,
@@ -417,6 +418,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
       try {
+        resetStreamedRecords([ch]);
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
           maxEvents: null,
