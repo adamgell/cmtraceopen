@@ -150,7 +150,13 @@ export function originDetail(origin: TimelineOrigin): string {
   ]
     .filter((part): part is string => part !== null)
     .join(" / ");
-  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${origin.recordId} / ${provenance}`;
+  const record =
+    origin.recordId === 0
+      ? "record missing"
+      : Number.isSafeInteger(origin.recordId)
+        ? `record ${origin.recordId}`
+        : "record unavailable (see stable identity)";
+  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / ${record} / ${provenance}`;
 }
 
 /** True when the item came from a Windows event rather than a text log. */

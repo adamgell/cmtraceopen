@@ -241,21 +241,43 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry]) {
     }
     *timeline = merge(placed, unplaced);
 }
+/// Builds a collision-resistant textual key for deterministic provenance ordering.
+fn key_part(value: &str) -> String {
+    format!("{}:{value}", value.len())
+}
+
+fn origin_sort_key(origin: &TimelineOrigin) -> String {
+    match origin {
+        TimelineOrigin::Log {
+            source,
+            file,
+            line,
+            component,
+            record_id,
+            ..
+        } => format!(
+            "log|{}|{}|{line:010}|{record_id:020}|{}",
+            key_part(source),
+            key_part(file),
+            key_part(component.as_deref().unwrap_or_default())
+        ),
+        TimelineOrigin::Event { stable_id, .. } => format!("event|{}", key_part(stable_id)),
+    }
+}
+
 /// Merges already-converted items into one chronological timeline.
 ///
-/// Ordering is stable: items sharing a timestamp keep the order they were supplied in. That matters
-/// because a text log and an event recorded in the same millisecond have no discoverable ordering
-/// between them, and re-sorting on severity or source would invent one.
+/// Equal timestamps use deterministic source identity ordering, so channel completion order and
+/// append history cannot change the merged result.
 pub fn merge(
     placed: impl IntoIterator<Item = TimelineItem>,
     unplaced: impl IntoIterator<Item = UnplacedItem>,
 ) -> UnifiedTimeline {
     let mut items: Vec<TimelineItem> = placed.into_iter().collect();
-    items.sort_by_key(|item| item.timestamp_ms);
-    UnifiedTimeline {
-        items,
-        unplaced: unplaced.into_iter().collect(),
-    }
+    items.sort_by_cached_key(|item| (item.timestamp_ms, origin_sort_key(&item.origin)));
+    let mut unplaced: Vec<UnplacedItem> = unplaced.into_iter().collect();
+    unplaced.sort_by_cached_key(|item| origin_sort_key(&item.origin));
+    UnifiedTimeline { items, unplaced }
 }
 
 /// Converts and merges a slice of log entries, collecting the ones that cannot be placed.
@@ -494,6 +516,21 @@ mod tests {
         let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
         assert_eq!(messages, vec!["first", "last"]);
         assert!(timeline.is_complete());
+    }
+
+    #[test]
+    fn equal_timestamps_order_cross_source_identity_not_input_history() {
+        let log = from_log_entries(&[log_entry(Some(5_000), "text", Severity::Info)])
+            .items
+            .pop()
+            .expect("log item");
+        let event_item = event(5_000, "event", TimelineSeverity::Info);
+        let one = merge([log.clone(), event_item.clone()], []);
+        let two = merge([event_item, log], []);
+        let messages_one: Vec<_> = one.items.iter().map(|item| item.message.as_str()).collect();
+        let messages_two: Vec<_> = two.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages_one, messages_two);
+        assert_eq!(messages_one, vec!["event", "text"]);
     }
 
     #[test]

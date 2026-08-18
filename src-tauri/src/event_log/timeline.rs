@@ -548,6 +548,26 @@ mod tests {
         let messages: Vec<_> = timeline.items.iter().map(|item| item.message.as_str()).collect();
         assert_eq!(messages, vec!["existing", "appended"]);
     }
+
+    #[test]
+    fn cross_source_equal_time_order_matches_full_build_and_append_history() {
+        let event = record(5_000, "event", EvtxLevel::Information);
+        let log = entry( Some(5_000), "log");
+        let full = build(std::slice::from_ref(&log), std::slice::from_ref(&event));
+
+        let mut appended = build(&[], &[]);
+        append(&mut appended, &[log], &[]);
+        append(&mut appended, &[], &[event]);
+
+        let full_messages: Vec<_> = full.items.iter().map(|item| item.message.as_str()).collect();
+        let appended_messages: Vec<_> = appended
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
+        assert_eq!(full_messages, appended_messages);
+        assert_eq!(full_messages, vec!["event", "log"]);
+    }
     #[test]
     fn append_reconciles_new_events_without_dropping_unplaced_records() {
         let mut timeline = build(&[], &[record(2_000, "second", EvtxLevel::Information)]);

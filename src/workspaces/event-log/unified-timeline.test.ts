@@ -94,6 +94,22 @@ describe("originDetail", () => {
       "stable source4:Live|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234"
     );
   });
+
+  it("does not present a missing EventRecordID as record zero", () => {
+    const detail = originDetail({ ...eventOrigin, recordId: 0 });
+    expect(detail).toContain("record missing");
+    expect(detail).not.toContain("record 0");
+  });
+
+  it("does not display an unsafe numeric EventRecordID as a rounded decimal", () => {
+    const detail = originDetail({
+      ...eventOrigin,
+      recordId: Number.MAX_SAFE_INTEGER + 2,
+      stableId: "source4:Live|channel72:...|record9007199254740993",
+    });
+    expect(detail).toContain("record unavailable (see stable identity)");
+    expect(detail).toContain("record9007199254740993");
+  });
 });
 
 describe("isEventOrigin", () => {
