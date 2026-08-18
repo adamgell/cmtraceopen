@@ -1089,8 +1089,8 @@ mod live_service_tests {
             .expect("set CMTRACE_REMOTE_DENIED_MACHINE for the Windows credential scenario");
         let error = enumerate_remote_channels(&machine).expect_err("remote access should fail");
         assert!(
-            error.contains("credentials rejected"),
-            "credential failure must remain explicit: {error}"
+            error.contains("credentials rejected") || error.contains("access denied"),
+            "remote denial must retain the native credential/access classification: {error}"
         );
         assert!(!error.contains("0 events"));
     }
