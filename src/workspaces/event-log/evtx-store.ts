@@ -257,7 +257,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
         const newLoaded = new Set(state.loadedChannels);
-        newLoaded.add(ch);
+        const channelHasUsableData =
+          gaps.length === 0 ||
+          result.records.length > 0 ||
+          (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
+        if (channelHasUsableData) newLoaded.add(ch);
 
         set({
           records: merged,
@@ -302,6 +306,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
           );
         } catch (e) {
+          if (!isCurrentRequest(requestId)) return;
           const msg = e instanceof Error ? e.message : String(e);
           const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
           console.warn(`[evtx] Failed to query ${context}: ${msg}`);
@@ -483,8 +488,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
 
+        const reportedGaps = [...checked.errorMessages, ...gapsFound];
         const newLoaded = new Set(state.loadedChannels);
-        newLoaded.add(channel);
+        const channelHasUsableData =
+          reportedGaps.length === 0 ||
+          arrived.length > 0 ||
+          (result.channels.find((c) => c.name === channel)?.eventCount ?? 0) > 0;
+        if (channelHasUsableData) newLoaded.add(channel);
 
         set({
           records: merged,
@@ -492,10 +502,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           loadedChannels: newLoaded,
           // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
           // backend reported here would show a complete view of a partly unreadable set.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
-            ...checked.errorMessages,
-            ...gapsFound,
-          ]),
+          coverageGaps: mergeCoverageGaps(state.coverageGaps, reportedGaps),
         });
       } catch (processingError) {
         // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
@@ -580,19 +587,20 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           ...c,
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
+        const reportedGaps = [...checked.errorMessages, ...streamedGaps, ...shortfallGaps];
         const newLoaded = new Set(s.loadedChannels);
-        newLoaded.add(ch);
+        const channelHasUsableData =
+          reportedGaps.length === 0 ||
+          arrived.length > 0 ||
+          (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
+        if (channelHasUsableData) newLoaded.add(ch);
 
         set({
           records: merged,
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-            ...checked.errorMessages,
-            ...streamedGaps,
-            ...shortfallGaps,
-          ]),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, reportedGaps),
         });
       } catch (e) {
         if (!isCurrentRequest(requestId)) return;
@@ -683,7 +691,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSelectedRecordId: (id) => set({ selectedRecordId: id }),
 
-  reset: () =>
+  reset: () => {
+    beginRequest();
     set({
       records: [],
       channels: [],
@@ -712,7 +721,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,
-    }),
+    });
+  },
 }));
 
 // Listen for progress events from the Rust backend

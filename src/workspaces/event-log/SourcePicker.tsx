@@ -161,7 +161,7 @@ export function SourcePicker() {
         </div>
       )}
 
-      {displayCoverage && !displayError && (
+      {displayCoverage && (
         <div
           style={{
             fontSize: "12px",

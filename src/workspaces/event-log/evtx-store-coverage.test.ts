@@ -54,10 +54,10 @@ function streamedRecord(channel: string, id = 0): EvtxRecord {
   };
 }
 
-function result(channel: string, gaps: string[]) {
+function result(channel: string, gaps: string[], eventCount = 0) {
   return {
     records: [],
-    channels: [{ name: channel, eventCount: 0, sourceType: "live" }],
+    channels: [{ name: channel, eventCount, sourceType: "live" }],
     totalRecords: 0,
     parseErrors: gaps.length,
     errorMessages: gaps,
@@ -120,11 +120,11 @@ describe("coverage gaps through the store", () => {
   it("a refresh drops gaps from the records it replaced", async () => {
     // The refresh clears the records, so gaps describing them must go too, or the banner reports a
     // gap in a set that is no longer on screen.
-    invoke.mockResolvedValueOnce(result("Application", ["Application: stale gap"]));
+    invoke.mockResolvedValueOnce(result("Application", ["Application: stale gap"], 1));
     await useEvtxStore.getState().queryChannels(["Application"]);
     expect(useEvtxStore.getState().coverageGaps).toHaveLength(1);
 
-    invoke.mockResolvedValueOnce(result("Application", ["Application: fresh gap"]));
+    invoke.mockResolvedValueOnce(result("Application", ["Application: fresh gap"], 1));
     await useEvtxStore.getState().refreshLoadedChannels();
 
     expect(useEvtxStore.getState().coverageGaps).toEqual(["Application: fresh gap"]);
@@ -814,6 +814,40 @@ describe("remote event sources", () => {
     expect(state.loadError).toBe("lab-host/Security: access denied");
     expect(state.sourceMode).toBeNull();
     expect(state.records).toEqual([]);
+  });
+
+  it("does not mark an error result as a loaded remote channel", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_remote_channels") {
+        return [
+          {
+            name: "Security",
+            eventCount: 0,
+            sourceType: { remote: { machine: "lab-host" } },
+          },
+        ];
+      }
+      return {
+        records: [],
+        channels: [
+          {
+            name: "Security",
+            eventCount: 0,
+            sourceType: { remote: { machine: "lab-host" } },
+          },
+        ],
+        totalRecords: 0,
+        parseErrors: 1,
+        errorMessages: ["lab-host/Security: access denied"],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    const state = useEvtxStore.getState();
+    expect(state.loadedChannels.size).toBe(0);
+    expect(state.sourceMode).toBeNull();
+    expect(state.coverageGaps).toContain("lab-host/Security: access denied");
   });
   it("preserves successful remote channels when another core channel is denied", async () => {
     invoke.mockImplementation(async (name: string, args?: { channels?: string[] }) => {

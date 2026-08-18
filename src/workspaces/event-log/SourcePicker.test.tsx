@@ -69,4 +69,16 @@ describe("SourcePicker remote source", () => {
       expect.objectContaining({ machine: "lab-host", channels: ["Application"] })
     );
   });
+
+  it("shows channel coverage gaps alongside the source error", () => {
+    useEvtxStore.setState({
+      loadError: "lab-host: remote source access denied",
+      coverageGaps: ["lab-host/Security: not read (access denied)"],
+    });
+
+    render(<SourcePicker />);
+
+    expect(document.body.textContent).toContain("remote source access denied");
+    expect(document.body.textContent).toContain("Security: not read (access denied)");
+  });
 });
