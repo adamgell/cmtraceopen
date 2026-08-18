@@ -6,6 +6,31 @@
  * placed.
  */
 
+import type { EvtxRecord } from "./types";
+import type { LogEntry, LogSource } from "../../types/log";
+import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
+
+function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
+  if (source === null) return false;
+  const root = source.kind === "known" ? source.defaultPath : source.path;
+  const normalize = (value: string) =>
+    value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+  const normalizedRoot = normalize(root);
+  if (normalizedRoot === "" || normalizedRoot === "/") return true;
+  const normalizedEntry = normalize(entry.filePath);
+  return normalizedEntry === normalizedRoot || normalizedEntry.startsWith(`${normalizedRoot}/`);
+}
+
+export function scopeLogEntries(
+  entries: LogEntry[],
+  source: LogSource | null,
+  mode: SourceOpenMode
+): LogEntry[] {
+  return mode === "merged"
+    ? entries
+    : entries.filter((entry) => logEntryBelongsToSource(entry, source));
+}
+
 export type TimelineSeverity =
   | "verbose"
   | "info"
@@ -14,15 +39,34 @@ export type TimelineSeverity =
   | "critical";
 
 export type TimelineOrigin =
-  | { kind: "log"; file: string; component: string | null; line: number }
+  | {
+      kind: "log";
+      file: string;
+      component: string | null;
+      line: number;
+      source: string;
+      machine: string | null;
+      bundle: string | null;
+      recordId: number;
+    }
   | {
       kind: "event";
+      /** Stable source/channel identity plus EventRecordID; unaffected by live UI reindexing. */
+      stableId: string;
+      source: string;
+      machine: string | null;
+      bundle: string | null;
       channel: string;
       provider: string;
+      processId: number | null;
+      activityId: string | null;
       eventId: number;
+      /** Lossless decimal EventRecordID, when supplied by the backend. */
+      recordIdText?: string | null;
+      /** EventRecordID, scoped to the event channel. */
       recordId: number;
-    };
 
+    };
 export interface TimelineItem {
   timestampMs: number;
   severity: TimelineSeverity;
@@ -38,6 +82,164 @@ export interface UnplacedItem {
 export interface UnifiedTimeline {
   items: TimelineItem[];
   unplaced: UnplacedItem[];
+}
+
+const utf8Encoder = new TextEncoder();
+
+function missingRecordDigest(record: EvtxRecord): string {
+  const input = `${record.timestampEpoch}|${record.eventId}|${record.provider}|${record.message}|${record.rawXml}`;
+  let first = 2_166_136_261;
+  let second = (first ^ 0x9e37_79b9) >>> 0;
+  for (const byte of utf8Encoder.encode(input)) {
+    first = Math.imul(first ^ byte, 16_777_619) >>> 0;
+    second = Math.imul(second ^ (byte ^ 0xa5), 16_777_619) >>> 0;
+  }
+  return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
+}
+
+function eventIdentityPrefix(record: EvtxRecord): string {
+  const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
+  const hasComputer = record.computer !== undefined;
+  const machineValue = record.computer?.trim() ?? "";
+  const machine = hasComputer
+    ? `machine${utf8Encoder.encode(machineValue).length}:${machineValue}|`
+    : "";
+  const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
+  return `${source}|${machine}${channel}`;
+}
+
+function exactRecordIdText(record: EvtxRecord): string | null {
+  const text = record.eventRecordIdText?.trim();
+  if (!text || !/^\d+$/.test(text)) return null;
+  try {
+    return BigInt(text) === 0n ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+function stableRecordBase(record: EvtxRecord): string {
+  const prefix = eventIdentityPrefix(record);
+  const exactId = exactRecordIdText(record);
+  if (exactId !== null) {
+    return `${prefix}|record${exactId}`;
+  }
+  if (record.eventRecordId !== 0) {
+    return Number.isSafeInteger(record.eventRecordId)
+      ? `${prefix}|record${record.eventRecordId}`
+      : `${prefix}|record`;
+  }
+  return `${prefix}|missing${missingRecordDigest(record)}`;
+}
+
+export function stableRecordIdentity(record: EvtxRecord): string {
+  return stableRecordBase(record);
+}
+function compareRustStrings(left: string, right: string): number {
+  const leftBytes = utf8Encoder.encode(left);
+  const rightBytes = utf8Encoder.encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = leftBytes[index] - rightBytes[index];
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+function stableRecordIdentityMap(records: EvtxRecord[]): Map<EvtxRecord, string> {
+  const identities = new Map<EvtxRecord, string>();
+  const occurrences = new Map<string, number>();
+  const orderedRecords = [...records].sort((left, right) =>
+    (left.timestampEpoch ?? 0) - (right.timestampEpoch ?? 0) ||
+    compareRustStrings(stableRecordBase(left), stableRecordBase(right)) ||
+    compareRustStrings(left.timestamp ?? "", right.timestamp ?? "") ||
+    compareRustStrings(left.message ?? "", right.message ?? "") ||
+    compareRustStrings(left.rawXml ?? "", right.rawXml ?? "")
+  );
+  for (const record of orderedRecords) {
+    const base = stableRecordBase(record);
+    const exactId = exactRecordIdText(record);
+    if (record.eventRecordId !== 0 || exactId !== null) {
+      identities.set(record, base);
+      continue;
+    }
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    identities.set(record, `${base}-${occurrence}`);
+  }
+  return identities;
+}
+
+function stableRecordIdentities(records: EvtxRecord[]): {
+  keys: Set<string>;
+  unsafePrefixes: Set<string>;
+} {
+  const identities = stableRecordIdentityMap(records);
+  const keys = new Set<string>();
+  const unsafePrefixes = new Set<string>();
+  for (const [record, identity] of identities) {
+    const exactId = exactRecordIdText(record);
+    if (record.eventRecordId !== 0 || exactId !== null) {
+      if (exactId !== null || Number.isSafeInteger(record.eventRecordId)) {
+        keys.add(identity);
+      } else {
+        unsafePrefixes.add(identity);
+      }
+      continue;
+    }
+    keys.add(identity);
+  }
+  return { keys, unsafePrefixes };
+}
+
+/**
+ * Filters a cached backend timeline to the records currently visible in the event list.
+ *
+ * Provenance/activity is parsed once when the raw record set changes; channel, level, Event ID,
+ * and search transitions only select from that cached result and never resend raw XML to Tauri.
+ */
+export function filterTimelineToRecords(
+  timeline: UnifiedTimeline,
+  records: EvtxRecord[]
+): UnifiedTimeline {
+  const { keys, unsafePrefixes } = stableRecordIdentities(records);
+  const visibleMissingBases = new Set(
+    records
+      .filter((record) => record.eventRecordId === 0 && exactRecordIdText(record) === null)
+      .map((record) => stableRecordBase(record))
+  );
+  const canonicalMissingBases = new Set<string>();
+  for (const item of [...timeline.items, ...timeline.unplaced]) {
+    if (item.origin.kind !== "event") continue;
+    const match = item.origin.stableId.match(/^(.*\|missing[0-9a-f]+)-\d+$/);
+    if (match) canonicalMissingBases.add(match[1]);
+  }
+  const unsafeOriginCounts = new Map<string, number>();
+  for (const item of [...timeline.items, ...timeline.unplaced]) {
+    if (item.origin.kind !== "event") continue;
+    const marker = item.origin.stableId.lastIndexOf("|record");
+    if (marker < 0) continue;
+    const prefix = item.origin.stableId.replace(/record\d+$/, "record");
+    unsafeOriginCounts.set(prefix, (unsafeOriginCounts.get(prefix) ?? 0) + 1);
+  }
+  const keep = (origin: TimelineOrigin) => {
+    if (origin.kind === "log") return true;
+    if (keys.has(origin.stableId)) return true;
+    const missingMatch = origin.stableId.match(/^(.*\|missing[0-9a-f]+)-\d+$/);
+    if (
+      missingMatch &&
+      visibleMissingBases.has(missingMatch[1]) &&
+      canonicalMissingBases.has(missingMatch[1])
+    ) {
+      return true;
+    }
+    const marker = origin.stableId.lastIndexOf("|record");
+    const prefix = origin.stableId.replace(/record\d+$/, "record");
+    return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;
+  };
+  return {
+    items: timeline.items.filter((item) => keep(item.origin)),
+    unplaced: timeline.unplaced.filter((item) => keep(item.origin)),
+  };
 }
 
 export const TIMELINE_SEVERITY_RANK: Record<TimelineSeverity, number> = {
@@ -61,12 +263,43 @@ export function originLabel(origin: TimelineOrigin): string {
   return `${leaf} (${origin.eventId})`;
 }
 
+/** Compact machine/source context shown beside the stable source label. */
+export function originContext(origin: TimelineOrigin): string {
+  const machine = origin.machine ?? "machine unknown";
+  return `${machine} · ${origin.source}`;
+}
+
 /** Full source description, for a tooltip. */
 export function originDetail(origin: TimelineOrigin): string {
   if (origin.kind === "log") {
-    return `${origin.file}:${origin.line}${origin.component ? ` (${origin.component})` : ""}`;
+    const provenance = [
+      `source ${origin.source}`,
+      origin.machine ? `machine ${origin.machine}` : null,
+      origin.bundle ? `bundle ${origin.bundle}` : null,
+      `record ${origin.recordId}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" / ");
+    return `${origin.file}:${origin.line}${origin.component ? ` (${origin.component})` : ""} / ${provenance}`;
   }
-  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${origin.recordId}`;
+  const provenance = [
+    `source ${origin.source}`,
+    origin.machine ? `machine ${origin.machine}` : null,
+    origin.bundle ? `bundle ${origin.bundle}` : null,
+    origin.processId !== null ? `process ${origin.processId}` : null,
+    origin.activityId ? `activity ${origin.activityId}` : null,
+    `stable ${origin.stableId}`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" / ");
+  const record =
+    origin.recordIdText ??
+    (origin.recordId === 0
+      ? "missing"
+      : Number.isSafeInteger(origin.recordId)
+        ? String(origin.recordId)
+        : "unavailable (see stable identity)");
+  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${record} / ${provenance}`;
 }
 
 /** True when the item came from a Windows event rather than a text log. */

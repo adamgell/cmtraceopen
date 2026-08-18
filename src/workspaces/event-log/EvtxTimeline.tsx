@@ -82,6 +82,7 @@ export function EvtxTimeline() {
   const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
   const rowEstimate = metrics.rowHeight + recordRowExtra;
 
+
   const filteredRecords = useMemo(
     () =>
       selectVisibleRecords({

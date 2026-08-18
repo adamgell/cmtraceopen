@@ -1,6 +1,8 @@
 export interface EvtxRecord {
   id: number;
   eventRecordId: number;
+  /** Lossless decimal EventRecordID emitted alongside the legacy numeric field. */
+  eventRecordIdText?: string | null;
   timestamp: string;
   timestampEpoch: number;
   provider: string;

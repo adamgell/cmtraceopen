@@ -1,12 +1,16 @@
-import { useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
-import { useEvtxStore } from "./evtx-store";
+import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
+import { useLogStore } from "../../stores/log-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
+import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
+import { selectVisibleRecords } from "./evtx-filter";
+import { filterTimelineToRecords, scopeLogEntries, type UnifiedTimeline } from "./unified-timeline";
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
@@ -15,10 +19,39 @@ const MAX_DETAIL_RATIO = 0.7;
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const logEntries = useLogStore((s) => s.entries);
+  const activeLogSource = useLogStore((s) => s.activeSource);
+  const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const scopedLogEntries = useMemo(
+    () => scopeLogEntries(logEntries, activeLogSource, logSourceOpenMode),
+    [logEntries, activeLogSource, logSourceOpenMode]
+  );
   const records = useEvtxStore((s) => s.records);
+  const selectedChannels = useEvtxStore((s) => s.selectedChannels);
+  const filterLevels = useEvtxStore((s) => s.filterLevels);
+  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
+  const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const visibleRecords = useMemo(
+    () =>
+      selectVisibleRecords({
+        records,
+        selectedChannels,
+        filterLevels,
+        filterEventIds,
+        filterSearch,
+      }),
+    [records, selectedChannels, filterLevels, filterEventIds, filterSearch]
+  );
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
+
+  const [timeline, setTimeline] = useState<UnifiedTimeline>({ items: [], unplaced: [] });
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const visibleTimeline = useMemo(
+    () => filterTimelineToRecords(timeline, visibleRecords),
+    [timeline, visibleRecords]
+  );
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
@@ -53,9 +86,38 @@ export function EventLogWorkspace() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (records.length === 0 && scopedLogEntries.length === 0) {
+      setTimeline({ items: [], unplaced: [] });
+      setTimelineError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void buildUnifiedTimeline(records, scopedLogEntries)
+      .then((nextTimeline) => {
+        if (cancelled) return;
+        setTimeline(nextTimeline);
+        setTimelineError(null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        setTimeline({ items: [], unplaced: [] });
+        setTimelineError(`Unified timeline could not be built: ${message}`);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scopedLogEntries, records]);
+
   const hasData =
-    sourceMode !== null &&
-    (records.length > 0 || channels.length > 0 || coverageGaps.length > 0);
+    scopedLogEntries.length > 0 ||
+    (sourceMode !== null &&
+      (records.length > 0 || channels.length > 0 || coverageGaps.length > 0));
 
   if (!hasData && !isLoading) {
     return <SourcePicker />;
@@ -91,6 +153,12 @@ export function EventLogWorkspace() {
       <EvtxFilterBar />
       <EvtxCoverageBanner />
 
+      {timelineError && (
+        <div role="alert" style={{ color: tokens.colorPaletteRedForeground1, padding: "4px 12px" }}>
+          {timelineError}
+        </div>
+      )}
+
       <div
         style={{
           flex: 1,
@@ -108,7 +176,9 @@ export function EventLogWorkspace() {
             overflow: "hidden",
           }}
         >
-          {/* Timeline */}
+          <div style={{ height: "240px", flexShrink: 0, overflow: "hidden" }}>
+            <UnifiedTimelineView timeline={visibleTimeline} />
+          </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <EvtxTimeline />
           </div>

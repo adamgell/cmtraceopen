@@ -475,6 +475,7 @@ mod tests {
         EvtxRecord {
             id: 0,
             event_record_id: 42,
+            event_record_id_text: None,
             timestamp: "2026-08-09 12:00:00".into(),
             timestamp_epoch: 0,
             provider: "ESENT".into(),

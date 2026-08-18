@@ -43,29 +43,26 @@ export function buildMergeCacheKey(
 export function mergeEntries(
   entriesByFile: Record<string, LogEntry[]>
 ): LogEntry[] {
-  const allTimestamped: LogEntry[] = [];
+  const allEntries = Object.values(entriesByFile).flat();
 
-  for (const entries of Object.values(entriesByFile)) {
-    for (const entry of entries) {
-      if (entry.timestamp != null) {
-        allTimestamped.push(entry);
-      }
+  allEntries.sort((a, b) => {
+    if (a.timestamp == null || b.timestamp == null) {
+      if (a.timestamp != null) return -1;
+      if (b.timestamp != null) return 1;
+    } else if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
     }
-  }
-
-  allTimestamped.sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp! - b.timestamp!;
     const fileCmp = a.filePath.localeCompare(b.filePath);
     if (fileCmp !== 0) return fileCmp;
     return a.lineNumber - b.lineNumber;
   });
 
   // Reassign IDs to be globally unique across merged files
-  for (let i = 0; i < allTimestamped.length; i++) {
-    allTimestamped[i] = { ...allTimestamped[i], id: i };
+  for (let i = 0; i < allEntries.length; i++) {
+    allEntries[i] = { ...allEntries[i], id: i };
   }
 
-  return allTimestamped;
+  return allEntries;
 }
 
 export function filterByVisibility(

@@ -25,6 +25,14 @@ const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 const MAX_SOURCE_RECORDS: usize = 1_000_000;
 const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum number of files a source selection may hand to the EVTX parser.
+
+/// Keeps the normalized manifest member path as the record's source identity.
+///
+/// A basename is only a display label: two folder members commonly share one and would otherwise
+/// collide in a merged timeline.
+fn source_label_for_path(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
 ///
 /// This is deliberately applied before parsing. A folder or wildcard is user input and must not
 /// turn into an unbounded parser workload.
@@ -1353,7 +1361,7 @@ pub fn parse_evtx_manifest(
                         .rev()
                         .map(format_coverage_gap),
                 );
-                let source_label = source.path.clone();
+                let source_label = source_label_for_path(path);
 
                 let mut channel_counts: std::collections::HashMap<String, u64> =
                     std::collections::HashMap::new();
@@ -1362,6 +1370,8 @@ pub fn parse_evtx_manifest(
                 }
 
                 if channel_counts.is_empty() {
+                    // No records — still emit an entry keyed by the full source path so the file
+                    // appears in the picker without colliding with a same-named member.
                     channels.push(EvtxChannelInfo {
                         name: source_label,
                         event_count: 0,
@@ -1453,10 +1463,7 @@ fn parse_single_file(
             format!("failed to open EVTX file: {error}"),
         )
     })?;
-    let source_label = path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let source_label = source_label_for_path(path);
 
 
     let mut records = Vec::new();
@@ -1572,6 +1579,7 @@ fn parse_single_file(
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
+            event_record_id_text: Some(event_record_id.to_string()),
             timestamp: timestamp_str,
             timestamp_epoch,
             provider,
@@ -1694,6 +1702,14 @@ mod tests {
         extract_event_data(&parse(xml)).insertions
     }
 
+    #[test]
+    fn source_label_keeps_full_manifest_member_path_for_timeline_identity() {
+        let path = Path::new("bundle\\server-a\\capture.evtx");
+        assert_eq!(
+            source_label_for_path(path),
+            "bundle\\server-a\\capture.evtx"
+        );
+    }
     #[test]
     fn a_file_that_cannot_be_opened_is_named_in_the_result() {
         // A count with no file name and no reason leaves an operator with a number and no next
