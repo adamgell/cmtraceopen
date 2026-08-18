@@ -10,10 +10,21 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { selectVisibleRecords } from "./evtx-filter";
-import {
-  filterTimelineToRecords,
-  type UnifiedTimeline,
-} from "./unified-timeline";
+import type { LogEntry, LogSource } from "../../types/log";
+import { filterTimelineToRecords, type UnifiedTimeline } from "./unified-timeline";
+
+function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
+  if (source === null) return false;
+  const root = source.kind === "known" ? source.defaultPath : source.path;
+  const normalizedRoot = root.replace(/[\\/]+$/, "").toLowerCase();
+  const normalizedEntry = entry.filePath.toLowerCase();
+  return (
+    normalizedEntry === normalizedRoot ||
+    normalizedEntry.startsWith(`${normalizedRoot}/`) ||
+    normalizedEntry.startsWith(`${normalizedRoot}\\`)
+  );
+}
+
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
 const MAX_DETAIL_RATIO = 0.7;
@@ -22,6 +33,11 @@ export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const logEntries = useLogStore((s) => s.entries);
+  const activeLogSource = useLogStore((s) => s.activeSource);
+  const scopedLogEntries = useMemo(
+    () => logEntries.filter((entry) => logEntryBelongsToSource(entry, activeLogSource)),
+    [logEntries, activeLogSource]
+  );
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const filterLevels = useEvtxStore((s) => s.filterLevels);
@@ -83,7 +99,7 @@ export function EventLogWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    if (records.length === 0 && logEntries.length === 0) {
+    if (records.length === 0 && scopedLogEntries.length === 0) {
       setTimeline({ items: [], unplaced: [] });
       setTimelineError(null);
       return () => {
@@ -91,7 +107,7 @@ export function EventLogWorkspace() {
       };
     }
 
-    void buildUnifiedTimeline(records, logEntries)
+    void buildUnifiedTimeline(records, scopedLogEntries)
       .then((nextTimeline) => {
         if (cancelled) return;
         setTimeline(nextTimeline);
@@ -107,10 +123,10 @@ export function EventLogWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [logEntries, records]);
+  }, [scopedLogEntries, records]);
 
   const hasData =
-    logEntries.length > 0 || (sourceMode !== null && (records.length > 0 || channels.length > 0));
+    scopedLogEntries.length > 0 || (sourceMode !== null && (records.length > 0 || channels.length > 0));
 
   if (!hasData && !isLoading) {
     return <SourcePicker />;

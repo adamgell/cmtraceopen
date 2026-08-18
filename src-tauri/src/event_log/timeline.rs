@@ -76,7 +76,7 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         stable_id: stable_event_id_with_occurrence(record, occurrence),
         source: record.source_label.clone(),
         machine: machine_of(&record.computer),
-        bundle: None,
+        bundle: bundle_from_source(&record.source_label),
         channel: record.channel.clone(),
         provider: record.provider.clone(),
         process_id: record.process_id,
@@ -89,6 +89,11 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
 fn machine_of(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty() && !value.eq_ignore_ascii_case("unknown")).then(|| value.to_string())
+}
+
+fn bundle_from_source(source: &str) -> Option<String> {
+    let first = source.split(['/', '\\']).next()?;
+    first.eq_ignore_ascii_case("bundle").then(|| first.to_string())
 }
 
 fn timestamp_is_present(record: &EvtxRecord) -> bool {
@@ -394,7 +399,7 @@ mod tests {
             } => {
                 assert_eq!(source, "bundle/evidence/events.evtx");
                 assert_eq!(machine.as_deref(), Some("HOST-A"));
-                assert_eq!(bundle, &None);
+                assert_eq!(bundle.as_deref(), Some("bundle"));
                 assert_eq!(*process_id, Some(4321));
                 assert_eq!(activity_id.as_deref(), Some("{1234}"));
             }
