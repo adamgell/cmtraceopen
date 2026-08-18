@@ -12,7 +12,7 @@ const virtualizerState = vi.hoisted(() => ({
     const index = Number(element.dataset.index);
     const measured =
       element.getAttribute("role") === "treeitem"
-        ? Number.parseFloat(element.style.height)
+        ? Number.parseFloat(element.style.height) + 1
         : Number.parseFloat(element.style.lineHeight) + 5;
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
@@ -201,9 +201,11 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
       size: smallList.rowHeight + 2,
-      start: smallList.rowHeight,
+      start: smallList.rowHeight + 1,
     });
-    expect(virtualizerState.totalSize).toBe(smallList.rowHeight + smallList.rowHeight + 2);
+    expect(virtualizerState.totalSize).toBe(
+      smallList.rowHeight + 1 + smallList.rowHeight + 2
+    );
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
     fireEvent.keyDown(timelineRoot, { key: "ArrowDown" });
     expect(timelineRoot).toHaveFocus();
@@ -263,12 +265,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
       size: largeList.rowHeight + 2,
-      start: largeList.rowHeight,
+      start: largeList.rowHeight + 1,
     });
     const groupRowLarge = screen.getByRole("treeitem");
     expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 2
+      largeList.rowHeight + 1 + largeList.rowHeight + 2
     );
     fireEvent.keyDown(timelineRootLarge, { key: "ArrowDown" });
     expect(timelineRootLarge).toHaveFocus();
@@ -327,11 +329,11 @@ describe("event-viewer shared font metrics", () => {
     expect(timeline.getByRole("option")).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
-    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
+    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight + 1);
     expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 2);
-    expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
+    expect(virtualizerState.items[1].start).toBe(largeList.rowHeight + 1);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 2
+      largeList.rowHeight + 1 + largeList.rowHeight + 2
     );
   });
 });
