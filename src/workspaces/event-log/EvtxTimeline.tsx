@@ -104,6 +104,7 @@ export function EvtxTimeline() {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const rowElementsRef = useRef(new Map<number, HTMLElement>());
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
@@ -150,11 +151,27 @@ export function EvtxTimeline() {
     },
     overscan: 10,
   });
-  // Persisted font-size changes alter rendered row heights. Re-measure after the new styles commit so
-  // TanStack Virtual's cumulative offsets and total size stay aligned with the visible rows.
+  const measureRow = useCallback(
+    (node: HTMLElement | null) => {
+      if (node) {
+        rowElementsRef.current.set(Number(node.dataset.index), node);
+      } else {
+        for (const [index, element] of rowElementsRef.current) {
+          if (!element.isConnected) rowElementsRef.current.delete(index);
+        }
+      }
+      virtualizer.measureElement(node);
+    },
+    [virtualizer.measureElement]
+  );
+
+  // Persisted font-size changes alter rendered row heights. Re-measure the committed row nodes
+  // without clearing valid item sizes, so grouped rows and records keep real cumulative offsets.
   useEffect(() => {
-    virtualizer.measure();
-  }, [virtualizer, metrics.rowHeight]);
+    for (const element of rowElementsRef.current.values()) {
+      if (element.isConnected) virtualizer.measureElement(element);
+    }
+  }, [metrics.rowHeight, virtualizer.measureElement]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
@@ -277,7 +294,7 @@ export function EvtxTimeline() {
               return (
                 <div
                   key={virtualRow.key}
-                  ref={virtualizer.measureElement}
+                  ref={measureRow}
                   data-index={virtualRow.index}
                   role="treeitem"
                   aria-level={row.depth + 1}
@@ -323,7 +340,7 @@ export function EvtxTimeline() {
             return (
               <EvtxTimelineRow
                 key={virtualRow.key}
-                ref={virtualizer.measureElement}
+                ref={measureRow}
                 record={record}
                 dataIndex={virtualRow.index}
                 isSelected={selectedRecordId === record.id}

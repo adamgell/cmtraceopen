@@ -5,7 +5,6 @@ const virtualizerState = vi.hoisted(() => ({
   measuredSizes: new Map<number, number>(),
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
   totalSize: 0,
-  remeasure: () => undefined,
   recalculate: () => undefined,
   measureElement: (element: HTMLElement | null) => {
     if (!element) return;
@@ -18,6 +17,7 @@ const virtualizerState = vi.hoisted(() => ({
       virtualizerState.measured.push(element);
     }
     virtualizerState.measuredSizes.set(index, measured);
+    virtualizerState.recalculate();
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -58,11 +58,6 @@ vi.mock("@tanstack/react-virtual", () => ({
       virtualizerState.items = items;
       return items;
     };
-    virtualizerState.remeasure = () => {
-      for (const element of virtualizerState.measured) {
-        virtualizerState.measureElement(element);
-      }
-    };
     virtualizerState.recalculate = () => {
       getTotalSize();
       getVirtualItems();
@@ -72,10 +67,6 @@ vi.mock("@tanstack/react-virtual", () => ({
       getVirtualItems,
       measureElement: virtualizerState.measureElement,
       scrollToIndex: vi.fn(),
-      measure: () => {
-        virtualizerState.remeasure();
-        virtualizerState.recalculate();
-      },
     };
   },
 }));
