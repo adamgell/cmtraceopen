@@ -101,8 +101,9 @@ interface EvtxState {
   selectedRecordId: number | null;
 
   parseFiles: (paths: string[]) => Promise<void>;
-  enumerateRemoteChannels: (machine: string) => Promise<void>;
   enumerateChannels: () => Promise<void>;
+  enumerateLocalChannels: () => Promise<void>;
+  enumerateRemoteChannels: (machine: string) => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
@@ -195,9 +196,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const availableCore = coreChannels.filter((c) =>
         channels.some((ch) => ch.name === c)
       );
-
       let updatedChannels = channels;
       let loadError: string | null = null;
+      const emptyRemoteGaps =
+        remoteMachine && channels.length === 0
+          ? [`${remoteMachine}: remote source is empty (no channels available)`]
+          : [];
 
       // Show channels immediately, then load events in parallel
       const selectedNames = new Set(availableCore);
@@ -207,7 +211,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         sourceMode: "live",
         isLoading: true,
         loadError: null,
-        coverageGaps: [],
+        coverageGaps: emptyRemoteGaps,
         loadStartTime: startTime,
         loadElapsedMs: null,
         selectedChannels: selectedNames,
@@ -295,6 +299,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
+  },
+
+  enumerateLocalChannels: async () => {
+    set({ remoteMachine: null });
+    await get().enumerateChannels();
   },
 
   enumerateRemoteChannels: async (machine) => {

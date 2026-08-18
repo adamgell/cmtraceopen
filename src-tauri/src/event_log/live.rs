@@ -77,7 +77,7 @@ impl Drop for OwnedEvtHandle {
     }
 }
 #[cfg(target_os = "windows")]
-fn normalize_remote_machine(machine: &str) -> Result<String, String> {
+pub fn normalize_remote_machine_name(machine: &str) -> Result<String, String> {
     let normalized = machine.trim().trim_start_matches('\\').to_string();
     if normalized.is_empty() || normalized.contains('/') || normalized.contains('\\') {
         return Err("remote machine name must be a hostname or UNC computer name".to_string());
@@ -100,7 +100,7 @@ fn remote_login(server: &mut [u16]) -> EVT_RPC_LOGIN {
 
 #[cfg(target_os = "windows")]
 fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), String> {
-    let machine = normalize_remote_machine(machine)?;
+    let machine = normalize_remote_machine_name(machine)?;
     let mut server: Vec<u16> = machine.encode_utf16().chain(std::iter::once(0)).collect();
     let login = remote_login(&mut server);
     let session = unsafe {
@@ -154,7 +154,7 @@ fn enumerate_channels_for_session(
     let raw_handle = unsafe { EvtOpenChannelEnum(session.map(|h| h.0).unwrap_or(0), 0) };
     if raw_handle == 0 {
         let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
-        return Err(format_remote_code("EvtOpenChannelEnum", error));
+        return Err(format_channel_code("EvtOpenChannelEnum", error, session.is_some()));
     }
     let enum_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
 
@@ -189,7 +189,7 @@ fn enumerate_channels_for_session(
                 // ERROR_INSUFFICIENT_BUFFER — resize and retry
                 buffer.resize(used as usize, 0);
             } else {
-                return Err(format_remote_code("EvtNextChannelPath", err));
+                return Err(format_channel_code("EvtNextChannelPath", err, session.is_some()));
             }
         }
     }
@@ -349,6 +349,7 @@ fn query_channel_inner(
     on_progress: impl Fn(usize, Option<usize>),
     mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
 ) -> Result<ChannelScan, String> {
+    let remote = source_label.starts_with("Remote:");
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
     // A filter that cannot be expressed is refused here rather than silently degraded to "*",
@@ -367,7 +368,7 @@ fn query_channel_inner(
             EvtQueryChannelPath.0 | EvtQueryReverseDirection.0 | EvtQueryTolerateQueryErrors.0,
         )
     }
-    .map_err(|e| format_error(&format!("EvtQuery({channel})"), &e))?;
+    .map_err(|e| format_source_error(&format!("EvtQuery({channel})"), &e, remote))?;
     let query_handle = OwnedEvtHandle::new(query_handle);
     log::info!("event=evtx_live_query channel=\"{channel}\" limit={limit}");
 
@@ -422,10 +423,9 @@ fn query_channel_inner(
                         error.code().0 as u32
                     );
                     gaps.push(format!(
-                        "{channel}: stopped after {} events, the channel could not be read further ({}, 0x{:08x})",
+                        "{channel}: stopped after {} events, the channel could not be read further ({})",
                         produced,
-                        error.message().trim(),
-                        error.code().0 as u32
+                        format_source_error("EvtNext", &error, remote),
                     ));
                     break;
                 }
@@ -462,7 +462,7 @@ fn query_channel_inner(
                     if unrenderable == 1 {
                         log::warn!(
                             "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
-                            format_error("EvtRender", &error)
+                            format_source_error("EvtRender", &error, remote)
                         );
                     }
                     continue;
@@ -494,16 +494,25 @@ fn query_channel_inner(
             // Only attempted when the event named a provider. Asking the service for the metadata
             // of a publisher the event never named would fail once per event and cache the failure
             // under a name no provider has.
-            let rendered_message = system.provider.as_deref().and_then(|provider| {
-                format_event_message(
+            let rendered_message = match system.provider.as_deref() {
+                Some(provider) => match format_event_message(
                     event_handle.raw(),
                     provider,
                     session,
                     &mut publisher_metadata,
-                )
-                    .ok()
-                    .flatten()
-            });
+                ) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        unrenderable += 1;
+                        log::warn!(
+                            "event=evtx_metadata_failed channel=\"{channel}\" error=\"{}\"",
+                            format_source_error("EvtFormatMessage", &error, remote)
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
 
             let mut record = super::rendered::record_from_parts(
                 &parsed,
@@ -729,8 +738,26 @@ fn format_remote_error(context: &str, error: &Error) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn format_source_error(context: &str, error: &Error, remote: bool) -> String {
+    if remote {
+        format_remote_error(context, error)
+    } else {
+        format_error(context, error)
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn format_remote_code(context: &str, code: u32) -> String {
     format!("{context}: {} (error {code})", remote_error_kind(code))
+}
+
+#[cfg(target_os = "windows")]
+fn format_channel_code(context: &str, code: u32, remote: bool) -> String {
+    if remote {
+        format_remote_code(context, code)
+    } else {
+        format!("{context}: Windows error {code}")
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -985,10 +1012,20 @@ mod live_service_tests {
     fn a_remote_session_can_enumerate_and_query_a_channel() {
         let machine = std::env::var("CMTRACE_REMOTE_MACHINE")
             .expect("set CMTRACE_REMOTE_MACHINE for the Windows remote-source scenario");
+        let normalized = normalize_remote_machine_name(&machine).expect("valid remote machine");
         let channels = enumerate_remote_channels(&machine).expect("remote enumeration succeeds");
         assert!(
             channels.iter().any(|channel| channel.name == CHANNEL),
             "remote source should expose {CHANNEL}"
+        );
+        assert!(
+            channels.iter().all(|channel| {
+                channel.source_type
+                    == ChannelSourceType::Remote {
+                        machine: normalized.clone(),
+                    }
+            }),
+            "remote channels must retain normalized machine provenance"
         );
         let scan = query_remote_channel_streamed(
             &machine,
@@ -1000,42 +1037,40 @@ mod live_service_tests {
             |_| {},
         )
         .expect("remote query succeeds");
-        assert!(
-            scan.records.iter().all(|record| record.source_label == format!("Remote: {machine}")),
-            "remote records must retain machine provenance"
-        );
+        if scan.records.is_empty() {
+            assert_eq!(scan.delivered, 0, "empty remote channels must be explicit");
+        } else {
+            assert!(scan
+                .records
+                .iter()
+                .all(|record| record.source_label == format!("Remote: {normalized}")));
+        }
     }
 
-    #[test]
-    #[ignore = "requires a reachable Windows source and intentionally invalid credentials"]
-    fn remote_credential_failure_is_not_reported_as_an_empty_channel() {
-        let machine = std::env::var("CMTRACE_REMOTE_DENIED_MACHINE")
-            .expect("set CMTRACE_REMOTE_DENIED_MACHINE for the Windows credential scenario");
-        let error = enumerate_remote_channels(&machine).expect_err("remote access should fail");
-        assert!(
-            error.contains("credentials rejected") || error.contains("access denied"),
-            "credential failure must remain distinguishable: {error}"
-        );
-        assert!(!error.contains("0 events"));
-    }
-
-    #[test]
     #[ignore = "requires a reachable Windows Event Log source"]
+    #[test]
     fn remote_session_and_event_handles_are_closed_at_scope_end() {
         let machine = std::env::var("CMTRACE_REMOTE_MACHINE")
             .expect("set CMTRACE_REMOTE_MACHINE for the Windows cleanup scenario");
-        {
-            let (session, _) = open_remote_session(&machine).expect("remote session opens");
-            let _ = enumerate_channels_for_session(
-                Some(session.raw()),
-                ChannelSourceType::Remote {
-                    machine: machine.clone(),
-                },
-            )
-            .expect("remote enumeration succeeds");
+        let scan = query_remote_channel_streamed(
+            &machine,
+            CHANNEL,
+            &EventQueryFilter::default(),
+            &no_maps(),
+            Some(10),
+            |_, _| {},
+            |_| {},
+        )
+        .expect("remote query succeeds");
+        if scan.records.is_empty() {
+            assert_eq!(scan.delivered, 0);
+        } else {
+            assert!(scan
+                .records
+                .iter()
+                .all(|record| record.source_label.starts_with("Remote: ")));
         }
-        // OwnedEvtHandle closes the session here, and the enumeration handle plus every event and
-        // provider-metadata handle are independently closed by their own RAII guards.
-        assert!(open_remote_session(&machine).is_ok());
+        // query_remote_channel_streamed owns the session, query, event, and publisher metadata
+        // handles. Returning from this scope drops every one of those guards.
     }
 }

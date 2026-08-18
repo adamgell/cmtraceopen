@@ -261,6 +261,8 @@ pub async fn evtx_query_remote_channels(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
+    #[cfg(target_os = "windows")]
+    let machine = super::live::normalize_remote_machine_name(&machine)?;
     query_channels_impl(
         channels,
         max_events,

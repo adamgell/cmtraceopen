@@ -11,10 +11,11 @@ const EVTX_FILE_DIALOG_FILTERS = [
 
 export function SourcePicker() {
   const parseFiles = useEvtxStore((s) => s.parseFiles);
-  const enumerateChannels = useEvtxStore((s) => s.enumerateChannels);
+  const enumerateLocalChannels = useEvtxStore((s) => s.enumerateLocalChannels);
   const enumerateRemoteChannels = useEvtxStore((s) => s.enumerateRemoteChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
+  const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
   const [remoteTarget, setRemoteTarget] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
@@ -37,11 +38,10 @@ export function SourcePicker() {
       setLocalError(message);
     }
   };
-
   const handleEnumerate = async () => {
     setLocalError(null);
     try {
-      await enumerateChannels();
+      await enumerateLocalChannels();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
@@ -59,6 +59,7 @@ export function SourcePicker() {
   };
 
   const displayError = loadError ?? localError;
+  const displayCoverage = coverageGaps.join(" • ");
 
   return (
     <div
@@ -157,6 +158,20 @@ export function SourcePicker() {
           }}
         >
           {displayError}
+        </div>
+      )}
+
+      {displayCoverage && !displayError && (
+        <div
+          style={{
+            fontSize: "12px",
+            color: tokens.colorPaletteYellowForeground1,
+            maxWidth: "500px",
+            textAlign: "center",
+            wordBreak: "break-word",
+          }}
+        >
+          {displayCoverage}
         </div>
       )}
     </div>

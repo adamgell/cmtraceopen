@@ -699,4 +699,36 @@ describe("remote event sources", () => {
     );
     expect(useEvtxStore.getState().loadError).toBe("Security: access denied");
   });
+  it("keeps local source selection local after a remote attempt", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 0, sourceType: "live" }];
+      }
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 0, sourceType: "live" }],
+        totalRecords: 0,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+    useEvtxStore.setState({ remoteMachine: "stale-remote" });
+
+    await useEvtxStore.getState().enumerateLocalChannels();
+
+    expect(invoke).toHaveBeenCalledWith("evtx_enumerate_channels");
+    expect(useEvtxStore.getState().remoteMachine).toBeNull();
+  });
+
+  it("represents an empty remote source as coverage instead of local live data", async () => {
+    invoke.mockResolvedValueOnce([]);
+
+    await useEvtxStore.getState().enumerateRemoteChannels("empty-host");
+
+    expect(useEvtxStore.getState().channels).toEqual([]);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([
+      "empty-host: remote source is empty (no channels available)",
+    ]);
+    expect(useEvtxStore.getState().remoteMachine).toBe("empty-host");
+  });
 });
