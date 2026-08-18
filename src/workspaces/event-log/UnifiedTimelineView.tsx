@@ -17,6 +17,8 @@ import {
   type UnifiedTimeline,
 } from "./unified-timeline";
 
+const UNPLACED_PREVIEW_LIMIT = 100;
+
 const SEVERITY_COLORS: Record<TimelineSeverity, string> = {
   critical: tokens.colorPaletteRedForeground1,
   error: tokens.colorPaletteRedForeground1,
@@ -94,10 +96,87 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
             color: tokens.colorNeutralForeground3,
             fontSize: `${fontSize}px`,
             fontFamily: LOG_UI_FONT_FAMILY,
+            overflowY: "auto",
           }}
         >
-          Nothing to place on the timeline yet. Load a log file and an event source to correlate
-          them.
+          {timeline.unplaced.length === 0 ? (
+            "Nothing to place on the timeline yet. Load a log file and an event source to correlate them."
+          ) : (
+            <>
+              <div style={{ marginBottom: "16px", fontWeight: 600 }}>{dropped}</div>
+              <div
+                role="list"
+                aria-label="Unplaced timeline entries"
+                style={{
+                  display: "grid",
+                  gap: "4px",
+                  margin: "0 auto",
+                  maxWidth: "1100px",
+                  textAlign: "left",
+                }}
+              >
+                {timeline.unplaced.slice(0, UNPLACED_PREVIEW_LIMIT).map((entry, index) => (
+                  <div
+                    key={`${originDetail(entry.origin)}-${index}`}
+                    role="listitem"
+                    title={originDetail(entry.origin)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "6px 8px",
+                      border: `1px solid ${tokens.colorNeutralStroke2}`,
+                      backgroundColor: tokens.colorNeutralBackground2,
+                      fontSize: `${smallFontSize}px`,
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: "70px",
+                        flexShrink: 0,
+                        fontWeight: 700,
+                        color: tokens.colorPaletteMarigoldForeground1,
+                      }}
+                    >
+                      {isEventOrigin(entry.origin) ? "UNPLACED EVT" : "UNPLACED LOG"}
+                    </span>
+                    <span
+                      style={{
+                        width: "220px",
+                        flexShrink: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {originLabel(entry.origin)}
+                    </span>
+                    <span
+                      style={{
+                        width: "220px",
+                        flexShrink: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: tokens.colorNeutralForeground4,
+                      }}
+                    >
+                      {originContext(entry.origin)}
+                    </span>
+                    <span style={{ color: tokens.colorNeutralForeground3 }}>No timestamp</span>
+                  </div>
+                ))}
+              </div>
+              {timeline.unplaced.length > UNPLACED_PREVIEW_LIMIT && (
+                <div style={{ marginTop: "12px", fontSize: `${smallFontSize}px` }}>
+                  Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
+                  {timeline.unplaced.length.toLocaleString()} unplaced entries. Use the source
+                  details above to investigate the missing timestamps.
+                </div>
+              )}
+            </>
+          )}
         </div>
       ) : (
         <div

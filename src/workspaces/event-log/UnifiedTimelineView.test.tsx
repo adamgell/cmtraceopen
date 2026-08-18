@@ -72,4 +72,11 @@ describe("UnifiedTimelineView", () => {
     expect(screen.getByText("1 event could not be placed: no timestamp")).toBeInTheDocument();
     expect(screen.getByText("Enrollment failed")).toBeInTheDocument();
   });
+  it("renders actionable details when every entry is unplaced", () => {
+    render(<UnifiedTimelineView timeline={{ ...timeline, items: [] }} />);
+    expect(screen.getByRole("list", { name: "Unplaced timeline entries" })).toBeInTheDocument();
+    expect(screen.getByText("Security (4624)")).toBeInTheDocument();
+    expect(screen.getByText("machine unknown · capture.evtx")).toBeInTheDocument();
+    expect(screen.getByText("No timestamp")).toBeInTheDocument();
+  });
 });
