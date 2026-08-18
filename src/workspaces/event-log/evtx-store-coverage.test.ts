@@ -36,6 +36,18 @@ function emitBatch(
     payload: { channel, sequence, records, requestId },
   });
 }
+function emitTerminal(
+  channel: string,
+  sequenceCount: number,
+  totalRecords: number,
+  requestId?: number
+) {
+  listeners.get("evtx-record-stream-complete")?.({
+    payload: { channel, sequenceCount, totalRecords, requestId },
+  });
+}
+
+/** A collecting reply is paired with its terminal event just as the backend does. */
 
 function streamedRecord(channel: string, id = 0) {
   return {
@@ -57,13 +69,15 @@ function streamedRecord(channel: string, id = 0) {
 }
 
 function result(channel: string, gaps: string[]) {
-  return {
+  const response = {
     records: [],
-    channels: [{ name: channel, eventCount: 0, sourceType: "live" }],
+    channels: [{ name: channel, eventCount: 0, sourceType: "live" as const }],
     totalRecords: 0,
     parseErrors: gaps.length,
     errorMessages: gaps,
   };
+  setTimeout(() => emitTerminal(channel, 0, response.totalRecords), 0);
+  return response;
 }
 
 describe("coverage gaps through the store", () => {
@@ -170,6 +184,7 @@ describe("live batch delivery through initial and refresh loads", () => {
         return [{ name: "Application", eventCount: 1, sourceType: "live" }];
       }
       emitBatch("Application", 0, [streamedRecord("Application")]);
+      emitTerminal("Application", 1, 1);
       return {
         records: [],
         channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
@@ -191,6 +206,7 @@ describe("live batch delivery through initial and refresh loads", () => {
         return [{ name: "Application", eventCount: 2, sourceType: "live" }];
       }
       emitBatch("Application", 0, [streamedRecord("Application")]);
+      emitTerminal("Application", 1, 2);
       return {
         records: [],
         channels: [{ name: "Application", eventCount: 2, sourceType: "live" }],
@@ -219,6 +235,7 @@ describe("live batch delivery through initial and refresh loads", () => {
         throw new Error("transient query failure");
       }
       emitBatch("Application", 0, [streamedRecord("Application")]);
+      emitTerminal("Application", 1, 1);
       return {
         records: [],
         channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
@@ -242,6 +259,7 @@ describe("live batch delivery through initial and refresh loads", () => {
       loadedChannels: new Set(["Application"]),
     });
     invoke.mockImplementation(async () => {
+      emitTerminal("Application", 1, 1);
       emitBatch("Application", 0, [streamedRecord("Application")]);
       return {
         records: [],
@@ -267,6 +285,7 @@ describe("live batch delivery through initial and refresh loads", () => {
     let loadingAtInvoke = false;
     invoke.mockImplementation(async () => {
       loadingAtInvoke = useEvtxStore.getState().isLoading;
+      emitTerminal("Application", 1, 2);
       emitBatch("Application", 0, [streamedRecord("Application")]);
       return {
         records: [],
@@ -300,7 +319,7 @@ describe("a multi-channel query is delivered one channel at a time", () => {
   });
 
   function withRecords(channel: string, count: number) {
-    return {
+    const response = {
       records: Array.from({ length: count }, (_, i) => ({
         id: i,
         eventRecordId: i,
@@ -317,11 +336,13 @@ describe("a multi-channel query is delivered one channel at a time", () => {
         sourceLabel: "Live",
         mapped: null,
       })),
-      channels: [{ name: channel, eventCount: count, sourceType: "live" }],
+      channels: [{ name: channel, eventCount: count, sourceType: "live" as const }],
       totalRecords: count,
       parseErrors: 0,
       errorMessages: [],
     };
+    queueMicrotask(() => emitTerminal(channel, 0, count));
+    return response;
   }
 
   it("asks for each channel separately rather than all of them at once", async () => {
@@ -473,12 +494,15 @@ describe("the time window reaches the service", () => {
   it("drops a non-string gap the reader sent rather than rendering it", () => {
     // The guard normalizes, but only if callers use what it returns. Ignoring the return value
     // left the raw reply in place and stored 42 in coverageGaps.
-    invoke.mockResolvedValueOnce({
-      records: [],
-      channels: [],
-      totalRecords: 0,
-      parseErrors: 1,
-      errorMessages: ["real gap", 42, null],
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("Application", 0, 0);
+      return {
+        records: [],
+        channels: [],
+        totalRecords: 0,
+        parseErrors: 1,
+        errorMessages: ["real gap", 42, null],
+      };
     });
 
     return useEvtxStore
@@ -615,7 +639,7 @@ describe("records that arrive in batches while the query runs", () => {
   function streamedReply(channel: string, totalRecords: number) {
     return {
       records: [],
-      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" }],
+      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" as const }],
       totalRecords,
       parseErrors: 0,
       errorMessages: [],
@@ -626,6 +650,7 @@ describe("records that arrive in batches while the query runs", () => {
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1), record("System", 2)]);
       emitBatch("System", 1, [record("System", 3)]);
+      emitTerminal("System", 2, 3);
       return streamedReply("System", 3);
     });
 
@@ -635,7 +660,7 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.records).toHaveLength(3);
     expect(state.coverageGaps).toEqual([]);
   });
- 
+
   it("remaps the selected record when an earlier streamed event reorders rows", () => {
     const selected = { ...record("Selection", 100), id: 0 } as unknown as EvtxRecord;
     useEvtxStore.setState({ records: [selected], selectedRecordId: 0 });
@@ -648,11 +673,10 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("reports a batch that never arrived instead of showing a short list as complete", async () => {
-    // Sequence 1 is skipped. Its events are simply absent, and an absent event is indistinguishable
-    // from an event that never happened unless the gap is stated.
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1)]);
       emitBatch("System", 2, [record("System", 3)]);
+      emitTerminal("System", 3, 3);
       return streamedReply("System", 3);
     });
 
@@ -663,9 +687,9 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("reports a shortfall against the count the reader sent", async () => {
-    // Every batch arrived in order, but fewer events than the reader says it sent.
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1)]);
+      emitTerminal("System", 1, 9);
       return streamedReply("System", 9);
     });
 
@@ -676,10 +700,9 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("does not invent a shortfall when the reader gave no count", async () => {
-    // An absent count means completeness cannot be checked. Treating it as zero would report every
-    // arriving record as unexpected; treating it as a shortfall would cry wolf on every load.
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1)]);
+      emitTerminal("System", 1, 0);
       return { ...streamedReply("System", 0), totalRecords: "unknown" };
     });
 
@@ -690,13 +713,16 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("still works when the reader returned the records in the reply instead", async () => {
-    // Collecting callers exist, and a backend that did not stream must not look like a total loss.
-    invoke.mockResolvedValueOnce({
-      records: [record("System", 1), record("System", 2)],
-      channels: [{ name: "System", eventCount: 2, sourceType: "live" }],
-      totalRecords: 2,
-      parseErrors: 0,
-      errorMessages: [],
+    invoke.mockImplementationOnce(async () => {
+      const response = {
+        records: [record("System", 1), record("System", 2)],
+        channels: [{ name: "System", eventCount: 2, sourceType: "live" as const }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+      emitTerminal("System", 0, 2);
+      return response;
     });
 
     await useEvtxStore.getState().queryChannels(["System"]);
@@ -715,6 +741,7 @@ describe("records that arrive in batches while the query runs", () => {
     useEvtxStore.setState({ records: [], coverageGaps: [], loadedChannels: new Set<string>() });
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 5)]);
+      emitTerminal("System", 1, 1);
       return streamedReply("System", 1);
     });
     await useEvtxStore.getState().queryChannels(["System"]);
@@ -725,14 +752,12 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("finds the highest batch number without spreading every one", async () => {
-    // The highest sequence is found by reduction. Spreading the set into Math.max(...) arguments
-    // throws RangeError once a channel produces more batches than the engine accepts as arguments,
-    // which a reduced fetch batch makes reachable for a channel the size of Security.
     const batches = 200_000;
     invoke.mockImplementationOnce(async () => {
       for (let sequence = 0; sequence < batches; sequence++) {
         emitBatch("Huge", sequence, []);
       }
+      emitTerminal("Huge", batches, 0);
       return streamedReply("Huge", 0);
     });
 
@@ -742,10 +767,10 @@ describe("records that arrive in batches while the query runs", () => {
   });
 
   it("does not leave the workspace stuck loading when a reply is unreadable", async () => {
-    // assertParseResultShape throws by design on a reply this build cannot read. The processing
-    // loop was unguarded, so the throw rejected queryChannels before isLoading was cleared and the
-    // operator saw an endless spinner with no error.
-    invoke.mockResolvedValueOnce({ records: null, channels: [] });
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("Application", 0, 0);
+      return { records: null, channels: [] };
+    });
 
     await useEvtxStore.getState().queryChannels(["Application"]);
 
@@ -753,5 +778,141 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.isLoading).toBe(false);
     expect(state.loadError).toContain("Application");
     expect(state.coverageGaps.some((g) => g.includes("Application"))).toBe(true);
+  });
+  it("waits for a terminal-before-batch stream to drain before acknowledging it", async () => {
+    let resolveReply!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReply = () => resolve(streamedReply("Race", 1));
+        })
+    );
+
+    const query = useEvtxStore.getState().queryChannels(["Race"]);
+    await Promise.resolve();
+    emitTerminal("Race", 1, 1);
+    emitBatch("Race", 0, [record("Race", 1)]);
+    resolveReply(undefined);
+    await query;
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1]);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("reconciles a reply-before-terminal stream without using the reply as proof of coverage", async () => {
+    let resolveReply!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReply = resolve;
+        })
+    );
+
+    const query = useEvtxStore.getState().queryChannels(["Race"]);
+    await Promise.resolve();
+    resolveReply(streamedReply("Race", 1));
+    await Promise.resolve();
+    emitTerminal("Race", 1, 1);
+    emitBatch("Race", 0, [record("Race", 1)]);
+    await query;
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("accepts event-delivery lag after reply and terminal while the consumer is draining", async () => {
+    let resolveReply!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReply = resolve;
+        })
+    );
+
+    const query = useEvtxStore.getState().queryChannels(["Race"]);
+    await Promise.resolve();
+    emitTerminal("Race", 2, 2);
+    resolveReply(streamedReply("Race", 2));
+    await Promise.resolve();
+    emitBatch("Race", 0, [record("Race", 1)]);
+    emitBatch("Race", 1, [record("Race", 2)]);
+    await query;
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1, 2]);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("remaps selection when a query merge reorders records", async () => {
+    const selected = { ...record("Selection", 100), id: 1 } as unknown as EvtxRecord;
+    useEvtxStore.setState({ records: [selected], selectedRecordId: 1 });
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("Selection", 0, 2);
+      return {
+        records: [{ ...record("Selection", 1), id: 0 }],
+        channels: [{ name: "Selection", eventCount: 2, sourceType: "live" as const }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().queryChannels(["Selection"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.records.map((item) => item.eventRecordId)).toEqual([1, 100]);
+    expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
+  });
+
+  it("remaps selection when enumerate merges a refreshed channel", async () => {
+    const selected = { ...record("Application", 100), id: 1 } as unknown as EvtxRecord;
+    useEvtxStore.setState({ records: [selected], selectedRecordId: 1 });
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 2, sourceType: "live" as const }];
+      }
+      emitTerminal("Application", 0, 2);
+      return {
+        records: [
+          { ...record("Application", 1), id: 0 },
+          selected,
+        ],
+        channels: [{ name: "Application", eventCount: 2, sourceType: "live" as const }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
+  });
+
+  it("remaps selection when refresh merges a replacement channel", async () => {
+    const selected = { ...record("Application", 100), id: 1 } as unknown as EvtxRecord;
+    useEvtxStore.setState({
+      channels: [{ name: "Application", eventCount: 2, sourceType: "live" as const }],
+      loadedChannels: new Set(["Application"]),
+      records: [selected],
+      selectedRecordId: 1,
+    });
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("Application", 0, 2);
+      return {
+        records: [
+          { ...record("Application", 1), id: 0 },
+          selected,
+        ],
+        channels: [{ name: "Application", eventCount: 2, sourceType: "live" as const }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
   });
 });

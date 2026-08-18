@@ -58,6 +58,39 @@ function appendUniqueRecords(existing: EvtxRecord[], incoming: EvtxRecord[]): Ev
   });
   return [...existing, ...unique];
 }
+let preservedSelectedRecordKey: string | null = null;
+
+function mergeRecordsPreservingSelection(
+  existing: EvtxRecord[],
+  selectedRecordId: number | null,
+  incoming: EvtxRecord[],
+  selectedKey = preservedSelectedRecordKey
+): { records: EvtxRecord[]; selectedRecordId: number | null } {
+  const selected =
+    selectedKey === null
+      ? selectedRecordId === null
+        ? null
+        : existing.find((record) => record.id === selectedRecordId) ?? null
+      : existing.find((record) => recordKey(record) === selectedKey) ??
+        incoming.find((record) => recordKey(record) === selectedKey) ??
+        null;
+  const records = appendUniqueRecords(existing, incoming);
+  records.sort(compareStoredRecords);
+  for (let index = 0; index < records.length; index++) records[index].id = index;
+  const remappedSelectedRecordId =
+    selected === null
+      ? null
+      : records.findIndex((record) => recordKey(record) === recordKey(selected));
+  if (selected !== null || selectedKey === null) preservedSelectedRecordKey = null;
+  return { records, selectedRecordId: remappedSelectedRecordId };
+}
+function captureSelectedRecord(records: EvtxRecord[], selectedRecordId: number | null): void {
+  const selected =
+    selectedRecordId === null
+      ? null
+      : records.find((record) => record.id === selectedRecordId) ?? null;
+  preservedSelectedRecordKey = selected === null ? null : recordKey(selected);
+}
 function clearChannelReadGaps(gaps: string[], channel: string): string[] {
   return gaps.filter((gap) => !gap.startsWith(`${channel}: not read`));
 }
@@ -239,6 +272,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   parseFiles: async (paths) => {
     const previousTimeWindow = get().timeWindow;
     const generation = get().loadGeneration + 1;
+    preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(generation);
     refreshRequested = false;
     set({
@@ -265,6 +299,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
   enumerateChannels: async () => {
     const generation = get().loadGeneration + 1;
+    captureSelectedRecord(get().records, get().selectedRecordId);
     invalidateAllStreamedRecords(generation);
     set({
       loadGeneration: generation,
@@ -288,6 +323,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       // Show channels immediately, then load events in parallel
       const selectedNames = new Set(availableCore);
       const startTime = performance.now();
+      captureSelectedRecord(get().records, get().selectedRecordId);
       set({
         channels: updatedChannels,
         sourceMode: "live",
@@ -306,9 +342,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
         if (get().loadGeneration !== generation) return;
         const state = get();
-        const merged = appendUniqueRecords(state.records, result.records);
-        merged.sort(compareStoredRecords);
-        for (let i = 0; i < merged.length; i++) merged[i].id = i;
+        const merged = mergeRecordsPreservingSelection(
+          state.records,
+          state.selectedRecordId,
+          result.records
+        );
 
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const newChannels = state.channels.map((c) => ({
@@ -319,7 +357,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         newLoaded.add(ch);
 
         set({
-          records: merged,
+          ...merged,
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
@@ -330,9 +368,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         });
       };
       const promises = availableCore.map(async (ch) => {
-        if (get().loadGeneration !== generation) return;
+        resetStreamedRecords([ch], generation);
         try {
-          resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : null,
@@ -343,7 +380,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               get().filterLevels
             ),
           });
+          observeStreamReply(ch, generation, { kind: "success" });
           if (get().loadGeneration !== generation) return;
+          await waitForStreamReconciliation(ch, generation);
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch, generation);
           const arrived = [...streamed.records, ...result.records];
@@ -352,8 +391,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
               : [];
           const shortfallGaps =
-            typeof checked.totalRecords === "number" &&
-            arrived.length < checked.totalRecords
+            typeof checked.totalRecords === "number" && arrived.length < checked.totalRecords
               ? [
                   `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
                 ]
@@ -363,11 +401,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             { ...result, records: arrived },
             [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
           );
+          acknowledgeStreamedRecords(ch, generation);
         } catch (e) {
           if (get().loadGeneration !== generation) return;
           const msg = e instanceof Error ? e.message : String(e);
+          observeStreamReply(ch, generation, { kind: "error", message: msg });
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
           drainStreamedRecords(ch, generation);
+          acknowledgeStreamedRecords(ch, generation);
           set((s) => ({
             coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${msg})`]),
           }));
@@ -397,7 +438,6 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     set({
       isLoading: true,
       loadError: null,
-      selectedRecordId: null,
       loadGeneration: generation,
     });
 
@@ -413,11 +453,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
     // count a previous run's batches towards this one.
     invalidateAllStreamedRecords(generation);
+    for (const channel of channels) resetStreamedRecords([channel], generation);
 
     const results = await Promise.all(
       channels.map(async (ch) => {
         try {
-        resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             requestId: generation,
@@ -428,22 +468,24 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               get().filterLevels
             ),
           });
+          observeStreamReply(ch, generation, { kind: "success" });
           return { channel: ch, result, error: null as string | null };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
+          observeStreamReply(ch, generation, { kind: "error", message });
           console.warn(`[evtx] Failed to query ${ch}: ${message}`);
           if (!loadError) loadError = `${ch}: ${message}`;
           return { channel: ch, result: null, error: message };
         }
       })
     );
-    if (get().loadGeneration !== generation) return;
-
     for (const { channel, result, error } of results) {
       if (get().loadGeneration !== generation) return;
       try {
         if (!result) {
+          await waitForStreamReconciliation(channel, generation);
           drainStreamedRecords(channel, generation);
+          acknowledgeStreamedRecords(channel, generation);
           // A channel that could not be read is recorded as a gap, not merely as an error banner
           // that the next successful load replaces. The events it would have contributed are absent
           // from the view for as long as the view is on screen.
@@ -455,16 +497,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           continue;
         }
 
+        // Both the invoke reply and stream terminal are required before coverage is measured. The
+        // terminal may arrive on either side of the reply.
+        await waitForStreamReconciliation(channel, generation);
         const checked = assertParseResultShape(result);
-
-        // The records travel as batches while the query runs; the reply carries only whatever the
-        // backend did not stream. Both are taken, so this works whether or not streaming happened.
         const streamed = drainStreamedRecords(channel, generation);
         const arrived = [...streamed.records, ...result.records];
 
-        // The reply says how many records were sent. Silence is not agreement: if fewer arrived, or a
-        // batch number is missing from the run, those events are absent from the view and must be
-        // said so rather than left to look like events that never happened.
         const gapsFound: string[] = [];
         if (streamed.missingSequences.length > 0) {
           gapsFound.push(
@@ -479,25 +518,21 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
 
         const state = get();
-        // Streamed records are already published; the reply carries only its unstreamed tail.
-        // Merge the reply directly so a channel with both sources does not lose that tail.
-        const merged = appendUniqueRecords(state.records, result.records);
-        merged.sort(compareStoredRecords);
-        // Reassign IDs
-        for (let i = 0; i < merged.length; i++) merged[i].id = i;
-
-        // Update channel event counts
+        const merged = mergeRecordsPreservingSelection(
+          state.records,
+          state.selectedRecordId,
+          result.records
+        );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const updatedChannels = state.channels.map((c) => ({
           ...c,
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
-
         const newLoaded = new Set(state.loadedChannels);
         newLoaded.add(channel);
 
         set({
-          records: merged,
+          ...merged,
           channels: updatedChannels,
           loadedChannels: newLoaded,
           // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
@@ -507,8 +542,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             ...gapsFound,
           ]),
         });
+        acknowledgeStreamedRecords(channel, generation);
       } catch (processingError) {
         drainStreamedRecords(channel, generation);
+        acknowledgeStreamedRecords(channel, generation);
         // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
         // reply is not a reason to leave the workspace stuck on a spinner with no message.
         const message =
@@ -553,6 +590,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (loaded.length === 0) return;
     const generation = state.loadGeneration + 1;
     const startTime = performance.now();
+    captureSelectedRecord(get().records, get().selectedRecordId);
     invalidateAllStreamedRecords(generation);
     set({
       records: [],
@@ -565,27 +603,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadElapsedMs: null,
       coverageGaps: [],
     });
+    for (const channel of loaded) resetStreamedRecords([channel], generation);
 
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
       try {
-        resetStreamedRecords([ch], generation);
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
           maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : null,
           requestId: generation,
           // The window is a server-side predicate and a refetch is the only thing that applies it.
-          // Omitting it here made the time-window control a no-op: selecting 1h triggered this
-          // refresh, which then fetched the channel unbounded and replaced the view with events
-          // outside the window the toolbar was still showing as selected.
           filter: buildServerFilter(
             get().timeWindow,
             get().filterEventIds,
             get().filterLevels
           ),
         });
+        observeStreamReply(ch, generation, { kind: "success" });
         if (get().loadGeneration !== generation) return;
+        await waitForStreamReconciliation(ch, generation);
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch, generation);
         const arrived = [...streamed.records, ...result.records];
@@ -594,18 +631,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
             : [];
         const shortfallGaps =
-          typeof checked.totalRecords === "number" &&
-          arrived.length < checked.totalRecords
+          typeof checked.totalRecords === "number" && arrived.length < checked.totalRecords
             ? [
                 `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
               ]
             : [];
 
         const s = get();
-        const merged = appendUniqueRecords(s.records, arrived);
-        merged.sort(compareStoredRecords);
-        for (let i = 0; i < merged.length; i++) merged[i].id = i;
-
+        const merged = mergeRecordsPreservingSelection(
+          s.records,
+          s.selectedRecordId,
+          result.records
+        );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const newChannels = s.channels.map((c) => ({
           ...c,
@@ -615,7 +652,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         newLoaded.add(ch);
 
         set({
-          records: merged,
+          ...merged,
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
@@ -625,8 +662,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             ...shortfallGaps,
           ]),
         });
+        acknowledgeStreamedRecords(ch, generation);
       } catch (e) {
+        observeStreamReply(
+          ch,
+          generation,
+          { kind: "error", message: e instanceof Error ? e.message : String(e) }
+        );
         drainStreamedRecords(ch, generation);
+        acknowledgeStreamedRecords(ch, generation);
         const message = e instanceof Error ? e.message : String(e);
         console.warn(`[evtx] Refresh failed for ${ch}: ${message}`);
         // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
@@ -729,6 +773,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
   reset: () => {
     const loadGeneration = get().loadGeneration + 1;
+    preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(loadGeneration);
     set({
       records: [],
@@ -770,43 +815,124 @@ listen<{ channel: string; requestId: number; fetched: number }>("evtx-query-prog
     loadingProgress: event.payload.fetched,
   });
 });
+type StreamReply =
+  | { kind: "success" }
+  | { kind: "error"; message: string };
+
+interface PendingStream {
+  channel: string;
+  requestId?: number;
+  records: EvtxRecord[];
+  sequences: Set<number>;
+  terminal?: { sequenceCount: number; totalRecords: number };
+  terminalSynthetic: boolean;
+  reply?: StreamReply;
+  consumerAcknowledged: boolean;
+  settled: boolean;
+  settling: boolean;
+  terminalGraceTimer?: number;
+  waiters: Array<() => void>;
+}
 
 /**
- * Records arriving in batches while a query is still running.
- *
- * A channel can be most of a scan on its own: Security measured 286,401 of 404,769 events and 191.8
- * seconds of 267, so waiting for the reply meant three minutes of empty list. Batches are collected
- * here as they arrive and drained by the query that asked for them.
- *
- * Keyed by channel, and the sequence numbers are kept rather than discarded. An event channel makes
- * no delivery promise, so the query checks both the count and the sequence run before treating a
- * channel as complete. A batch that never arrived would otherwise be indistinguishable from events
- * that do not exist, which is the failure this workspace exists to avoid.
+ * A request may query more than one channel, so channel alone is not a stream identity. Keeping
+ * the request in the key also lets a late event from an older query be rejected after a refresh.
  */
-const pendingBatches = new Map<
-  string,
-  {
-    requestId?: number;
-    records: EvtxRecord[];
-    sequences: Set<number>;
-    terminal?: { sequenceCount: number; totalRecords: number };
-  }
->();
+const pendingBatches = new Map<string, PendingStream>();
 const activeRequestIds = new Map<string, number>();
-function retireCompletedStream(channel: string, pending: { requestId?: number; sequences: Set<number>; terminal?: { sequenceCount: number; totalRecords: number } }): void {
-  const terminal = pending.terminal;
-  if (!terminal || terminal.sequenceCount !== pending.sequences.size) return;
-  for (let sequence = 0; sequence < terminal.sequenceCount; sequence++) {
-    if (!pending.sequences.has(sequence)) return;
-  }
-  pendingBatches.delete(channel);
-  if (pending.requestId !== undefined && activeRequestIds.get(channel) === pending.requestId) {
-    activeRequestIds.delete(channel);
-  }
+
+function streamKey(channel: string, requestId?: number): string {
+  return `${requestId === undefined ? "legacy" : requestId}\u0000${channel}`;
 }
+
+function createPendingStream(channel: string, requestId?: number): PendingStream {
+  const pending: PendingStream = {
+    channel,
+    requestId,
+    records: [],
+    sequences: new Set<number>(),
+    terminalSynthetic: false,
+    consumerAcknowledged: false,
+    settled: false,
+    settling: false,
+    waiters: [],
+  };
+  pendingBatches.set(streamKey(channel, requestId), pending);
+  return pending;
+}
+
+function pendingFor(channel: string, requestId?: number): PendingStream | undefined {
+  if (requestId !== undefined) return pendingBatches.get(streamKey(channel, requestId));
+  const activeRequestId = activeRequestIds.get(channel);
+  if (activeRequestId === undefined) return pendingBatches.get(streamKey(channel));
+  return pendingBatches.get(streamKey(channel, activeRequestId));
+}
+
+function sequenceNumbers(pending: PendingStream): number[] {
+  if (!pending.terminal) return [];
+  const missing: number[] = [];
+  for (let sequence = 0; sequence < pending.terminal.sequenceCount; sequence++) {
+    if (!pending.sequences.has(sequence)) missing.push(sequence);
+  }
+  return missing;
+}
+
+const TERMINAL_BATCH_GRACE_MS = 25;
+
+function settlePendingStream(pending: PendingStream, allowMissing = false): void {
+  if (pending.settled || pending.settling || !pending.reply || !pending.terminal) return;
+  if (!allowMissing && sequenceNumbers(pending).length > 0) {
+    if (pending.terminalGraceTimer === undefined) {
+      pending.terminalGraceTimer = setTimeout(() => {
+        pending.terminalGraceTimer = undefined;
+        settlePendingStream(pending, true);
+      }, TERMINAL_BATCH_GRACE_MS);
+    }
+    return;
+  }
+  if (pending.terminalGraceTimer !== undefined) {
+    clearTimeout(pending.terminalGraceTimer);
+    pending.terminalGraceTimer = undefined;
+  }
+  pending.settling = true;
+  queueMicrotask(() => {
+    pending.settling = false;
+    if (pending.settled || !pending.reply || !pending.terminal) return;
+    pending.settled = true;
+    const waiters = pending.waiters.splice(0);
+    for (const resolve of waiters) resolve();
+  });
+}
+
+function observeStreamReply(channel: string, requestId: number, reply: StreamReply): void {
+  const pending = pendingFor(channel, requestId);
+  if (!pending || pending.requestId !== requestId || pending.consumerAcknowledged) return;
+  pending.reply = reply;
+  if (reply.kind === "error") {
+    // A rejected invoke is terminal from the consumer's point of view. It must not leave a waiter
+    // behind for an event the backend could not deliver.
+    let highest = -1;
+    for (const sequence of pending.sequences) highest = Math.max(highest, sequence);
+    pending.terminal = { sequenceCount: highest + 1, totalRecords: 0 };
+    pending.terminalSynthetic = true;
+    settlePendingStream(pending);
+    return;
+  }
+  if (pending.terminal) settlePendingStream(pending);
+}
+
+function waitForStreamReconciliation(channel: string, requestId: number): Promise<void> {
+  const pending = pendingFor(channel, requestId);
+  if (!pending || pending.requestId !== requestId || pending.settled) return Promise.resolve();
+  return new Promise<void>((resolve) => pending.waiters.push(resolve));
+}
+
 function invalidateAllStreamedRecords(requestId: number): void {
-  const channels = new Set([...pendingBatches.keys(), ...activeRequestIds.keys()]);
-  resetStreamedRecords([...channels], requestId);
+  const channels = new Set([
+    ...[...pendingBatches.values()].map((pending) => pending.channel),
+    ...activeRequestIds.keys(),
+  ]);
+  for (const channel of channels) resetStreamedRecords([channel], requestId);
 }
 
 listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRecord[] }>(
@@ -820,83 +946,107 @@ listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRec
     ) {
       return;
     }
-    let pending = pendingBatches.get(channel);
-    if (!pending || pending.requestId !== requestId) {
-      pending = { requestId, records: [], sequences: new Set<number>() };
-      pendingBatches.set(channel, pending);
-    }
-    if (pending.sequences.has(sequence)) return;
-    useEvtxStore.setState((state) => {
-      if (requestId !== undefined && state.loadGeneration !== requestId) return state;
-      const last = state.records[state.records.length - 1];
-      const ordered =
-        last === undefined ||
-        records.length === 0 ||
-        compareStoredRecords(last, records[0]) <= 0;
-      if (ordered) {
-        const merged = [...state.records, ...records];
-        for (let i = state.records.length; i < merged.length; i++) merged[i].id = i;
-        return { records: merged };
-      }
-      const selected =
-        state.selectedRecordId === null
-          ? null
-          : state.records.find((record) => record.id === state.selectedRecordId) ?? null;
-      const merged = appendUniqueRecords(state.records, records);
-      merged.sort(compareStoredRecords);
-      for (let i = 0; i < merged.length; i++) merged[i].id = i;
-      const selectedRecordId =
-        selected === null
-          ? state.selectedRecordId
-          : merged.findIndex((record) => recordKey(record) === recordKey(selected));
-      return { records: merged, selectedRecordId };
-    });
+    const pending =
+      pendingFor(channel, requestId) ??
+      (requestId === undefined ? createPendingStream(channel) : undefined);
+    if (!pending || pending.consumerAcknowledged || pending.sequences.has(sequence)) return;
+
     pending.sequences.add(sequence);
-    pending.records.push(...records);
-    retireCompletedStream(channel, pending);
+    pending.records = appendUniqueRecords(pending.records, records);
+
+    if (
+      requestId !== undefined &&
+      useEvtxStore.getState().loadGeneration !== requestId
+    ) {
+      return;
+    }
+
+    // Batches are visible while a request is running. Use the same identity-preserving merge as all
+    // reply/refresh paths so a late, out-of-order batch cannot move the operator's selection.
+    const state = useEvtxStore.getState();
+    const merged = mergeRecordsPreservingSelection(
+      state.records,
+      state.selectedRecordId,
+      records
+    );
+    useEvtxStore.setState(merged);
+
+    // A terminal can race the final batch. Keep the pending state until the consumer acknowledges
+    // the drain; the records above remain available even after reconciliation has resolved.
+    settlePendingStream(pending);
   }
 );
 
-listen<{ channel: string; requestId: number; sequenceCount: number; totalRecords: number }>(
+listen<{ channel: string; requestId?: number; sequenceCount: number; totalRecords: number }>(
   "evtx-record-stream-complete",
   (event) => {
     const { channel, requestId, sequenceCount, totalRecords } = event.payload;
-    let pending = pendingBatches.get(channel);
-    if (!pending || pending.requestId !== requestId) {
-      pending = { requestId, records: [], sequences: new Set<number>() };
-      pendingBatches.set(channel, pending);
+    const activeRequestId = activeRequestIds.get(channel);
+    if (
+      requestId !== undefined &&
+      (activeRequestId === undefined || activeRequestId !== requestId)
+    ) {
+      return;
     }
+    const pending = pendingFor(channel, requestId) ?? createPendingStream(channel, requestId);
+    if (pending.consumerAcknowledged) return;
     pending.terminal = { sequenceCount, totalRecords };
-    retireCompletedStream(channel, pending);
+    pending.terminalSynthetic = false;
+    settlePendingStream(pending);
   }
 );
+
 /** Takes everything received for `channel` so far, and reports whether it is contiguous. */
 export function drainStreamedRecords(channel: string, requestId?: number): {
   records: EvtxRecord[];
   missingSequences: number[];
 } {
-  const pending = pendingBatches.get(channel);
+  const pending = pendingFor(channel, requestId);
   if (
     !pending ||
     (requestId !== undefined && pending.requestId !== undefined && pending.requestId !== requestId)
   ) {
     return { records: [], missingSequences: [] };
   }
-  let highest = 0;
-  for (const sequence of pending.sequences) {
-    if (sequence > highest) highest = sequence;
-  }
-  const missingSequences: number[] = [];
-  for (let i = 0; i < highest; i++) {
-    if (!pending.sequences.has(i)) missingSequences.push(i);
-  }
-  return { records: pending.records, missingSequences };
+  return { records: pending.records, missingSequences: sequenceNumbers(pending) };
 }
 
-/** Discards anything buffered for channels a query is about to start. */
-export function resetStreamedRecords(channels: string[], requestId?: number) {
+/**
+ * A load path calls this only after merging the drained snapshot. Until then events may still
+ * arrive after the terminal marker and must remain available for exactly-once draining.
+ */
+export function acknowledgeStreamedRecords(channel: string, requestId?: number): void {
+  const pending = pendingFor(channel, requestId);
+  if (!pending) return;
+  pending.consumerAcknowledged = true;
+  clearTimeout(pending.terminalGraceTimer);
+  pending.terminalGraceTimer = undefined;
+  pending.waiters.length = 0;
+  pendingBatches.delete(streamKey(channel, pending.requestId));
+  if (pending.requestId !== undefined && activeRequestIds.get(channel) === pending.requestId) {
+    activeRequestIds.delete(channel);
+  }
+}
+
+/** Discards anything buffered for channels a query is about to start, and registers the request. */
+export function resetStreamedRecords(channels: string[], requestId?: number): void {
   for (const channel of channels) {
-    pendingBatches.delete(channel);
-    if (requestId !== undefined) activeRequestIds.set(channel, requestId);
+    const activeRequestId = activeRequestIds.get(channel);
+    if (activeRequestId !== undefined) pendingBatches.delete(streamKey(channel, activeRequestId));
+    const legacy = pendingBatches.get(streamKey(channel));
+    pendingBatches.delete(streamKey(channel, requestId));
+    if (requestId !== undefined) {
+      activeRequestIds.set(channel, requestId);
+      if (legacy) {
+        pendingBatches.delete(streamKey(channel));
+        legacy.requestId = requestId;
+        pendingBatches.set(streamKey(channel, requestId), legacy);
+      } else {
+        createPendingStream(channel, requestId);
+      }
+    } else {
+      activeRequestIds.delete(channel);
+      createPendingStream(channel);
+    }
   }
 }
