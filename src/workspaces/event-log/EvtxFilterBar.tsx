@@ -76,7 +76,9 @@ export function EvtxFilterBar() {
   // these controls with it. Clamped down a step because a toolbar control sits beside the list
   // rather than in it.
   const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const controlFontSize = `${Math.max(11, getLogListMetrics(logListFontSize).fontSize - 1)}px`;
+  const listMetrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const controlFontSize = `${Math.max(11, listMetrics.fontSize - 1)}px`;
+  const separatorHeight = `${listMetrics.rowLineHeight}px`;
   const records = useEvtxStore((s) => s.records);
   // Map columns are offered only when a loaded map actually produced them, so the chooser does not
   // fill with columns that are empty for the log in front of the operator.
@@ -206,6 +208,7 @@ export function EvtxFilterBar() {
         backgroundColor: tokens.colorNeutralBackground2,
         flexWrap: "wrap",
         flexShrink: 0,
+        fontSize: controlFontSize,
       }}
     >
       {sourceMode === "live" && (
@@ -235,7 +238,7 @@ export function EvtxFilterBar() {
           <div
             style={{
               width: "1px",
-              height: "20px",
+              height: separatorHeight,
               backgroundColor: tokens.colorNeutralStroke2,
             }}
           />
@@ -259,7 +262,7 @@ export function EvtxFilterBar() {
       <div
         style={{
           width: "1px",
-          height: "20px",
+          height: separatorHeight,
           backgroundColor: tokens.colorNeutralStroke2,
         }}
       />
@@ -289,7 +292,7 @@ export function EvtxFilterBar() {
       <div
         style={{
           width: "1px",
-          height: "20px",
+          height: separatorHeight,
           backgroundColor: tokens.colorNeutralStroke2,
         }}
       />

@@ -1,5 +1,7 @@
 import { memo, useMemo, useRef, useState, useEffect, useCallback } from "react";
 import { Button, Input, tokens } from "@fluentui/react-components";
+import { getLogListMetrics } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxChannelInfo } from "./types";
 
@@ -111,6 +113,9 @@ export function ChannelPicker() {
   const loadSelectedChannels = useEvtxStore((s) => s.loadSelectedChannels);
   const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const smallFontSize = Math.max(9, metrics.fontSize - 3);
 
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["Windows Logs"]));
@@ -227,7 +232,7 @@ export function ChannelPicker() {
         </div>
 
         {/* Tree */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", fontSize: "12px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", fontSize: `${metrics.fontSize}px` }}>
           {filteredChannels ? (
             // Flat search results
             filteredChannels.map((ch) => (
@@ -239,6 +244,8 @@ export function ChannelPicker() {
                 loaded={loadedChannels.has(ch.name)}
                 onToggle={() => toggleChannel(ch.name)}
                 depth={0}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
             ))
           ) : (
@@ -249,6 +256,8 @@ export function ChannelPicker() {
                 expanded={expanded.has("Windows Logs")}
                 onToggle={() => toggleExpand("Windows Logs")}
                 depth={0}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
               {expanded.has("Windows Logs") &&
                 windowsLogs.map((ch) => (
@@ -260,6 +269,8 @@ export function ChannelPicker() {
                     loaded={loadedChannels.has(ch.name)}
                     onToggle={() => toggleChannel(ch.name)}
                     depth={1}
+                    rowHeight={metrics.rowHeight}
+                    smallFontSize={smallFontSize}
                   />
                 ))}
 
@@ -270,6 +281,8 @@ export function ChannelPicker() {
                 onToggle={() => toggleExpand("AppServices")}
                 depth={0}
                 count={countLeaves(serviceTree)}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
               {expanded.has("AppServices") && (
                 <TreeNodeView
@@ -280,6 +293,8 @@ export function ChannelPicker() {
                   selectedChannels={selectedChannels}
                   loadedChannels={loadedChannels}
                   toggleChannel={toggleChannel}
+                  rowHeight={metrics.rowHeight}
+                  smallFontSize={smallFontSize}
                 />
               )}
             </>
@@ -287,7 +302,7 @@ export function ChannelPicker() {
           {filteredChannels && filteredChannels.length === 0 && (
             <div
               style={{
-                fontSize: "12px",
+                fontSize: `${smallFontSize}px`,
                 color: tokens.colorNeutralForeground4,
                 padding: "12px 8px",
                 textAlign: "center",
@@ -328,6 +343,8 @@ function TreeNodeView({
   selectedChannels,
   loadedChannels,
   toggleChannel,
+  rowHeight,
+  smallFontSize,
 }: {
   node: TreeNode;
   depth: number;
@@ -336,6 +353,8 @@ function TreeNodeView({
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
   toggleChannel: (name: string) => void;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
   const children = getSortedChildren(node);
 
@@ -357,6 +376,8 @@ function TreeNodeView({
               loaded={loadedChannels.has(child.channel.name)}
               onToggle={() => toggleChannel(child.channel!.name)}
               depth={depth}
+              rowHeight={rowHeight}
+              smallFontSize={smallFontSize}
             />
           );
         }
@@ -374,6 +395,8 @@ function TreeNodeView({
               selected={child.channel ? selectedChannels.has(child.channel.name) : undefined}
               loaded={child.channel ? loadedChannels.has(child.channel.name) : undefined}
               onChannelToggle={child.channel ? () => toggleChannel(child.channel!.name) : undefined}
+              rowHeight={rowHeight}
+              smallFontSize={smallFontSize}
             />
             {isExpanded && (
               <TreeNodeView
@@ -384,6 +407,8 @@ function TreeNodeView({
                 selectedChannels={selectedChannels}
                 loadedChannels={loadedChannels}
                 toggleChannel={toggleChannel}
+                rowHeight={rowHeight}
+                smallFontSize={smallFontSize}
               />
             )}
           </div>
@@ -402,6 +427,8 @@ const ChannelLeaf = memo(function ChannelLeaf({
   loaded,
   onToggle,
   depth,
+  rowHeight,
+  smallFontSize,
 }: {
   name: string;
   channel: EvtxChannelInfo;
@@ -409,6 +436,8 @@ const ChannelLeaf = memo(function ChannelLeaf({
   loaded: boolean;
   onToggle: () => void;
   depth: number;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
   return (
     <label
@@ -418,7 +447,7 @@ const ChannelLeaf = memo(function ChannelLeaf({
         gap: "4px",
         paddingLeft: `${4 + depth * 16}px`,
         paddingRight: "4px",
-        height: "22px",
+        height: `${rowHeight}px`,
         cursor: "pointer",
         color: tokens.colorNeutralForeground1,
         whiteSpace: "nowrap",
@@ -434,7 +463,7 @@ const ChannelLeaf = memo(function ChannelLeaf({
       />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
       {loaded && channel.eventCount > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})
         </span>
       )}
@@ -452,6 +481,8 @@ const FolderRow = memo(function FolderRow({
   selected,
   loaded,
   onChannelToggle,
+  rowHeight,
+  smallFontSize,
 }: {
   label: string;
   expanded: boolean;
@@ -462,6 +493,8 @@ const FolderRow = memo(function FolderRow({
   selected?: boolean;
   loaded?: boolean;
   onChannelToggle?: () => void;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
   return (
     <div
@@ -471,7 +504,7 @@ const FolderRow = memo(function FolderRow({
         gap: "4px",
         paddingLeft: `${4 + depth * 16}px`,
         paddingRight: "4px",
-        height: "22px",
+        height: `${rowHeight}px`,
         whiteSpace: "nowrap",
       }}
     >
@@ -485,7 +518,7 @@ const FolderRow = memo(function FolderRow({
           border: "none",
           cursor: "pointer",
           padding: 0,
-          fontSize: "8px",
+          fontSize: `${Math.max(8, smallFontSize - 2)}px`,
           color: tokens.colorNeutralForeground3,
           display: "flex",
           alignItems: "center",
@@ -516,12 +549,12 @@ const FolderRow = memo(function FolderRow({
         {label}
       </span>
       {count != null && count > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           {count}
         </span>
       )}
       {loaded && channel && channel.eventCount > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})
         </span>
       )}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -18,6 +19,10 @@ export function SourcePicker() {
   const [localError, setLocalError] = useState<string | null>(null);
 
   const isWindows = currentPlatform === "windows";
+  const metrics = getLogListMetrics(useUiStore((s) => s.logListFontSize));
+  const headingFontSize = metrics.fontSize + 5;
+  const secondaryFontSize = metrics.fontSize;
+  const errorFontSize = Math.max(10, metrics.fontSize - 1);
 
   const handleOpenFiles = async () => {
     setLocalError(null);
@@ -62,7 +67,7 @@ export function SourcePicker() {
     >
       <div
         style={{
-          fontSize: "18px",
+          fontSize: `${headingFontSize}px`,
           fontWeight: 600,
           color: tokens.colorNeutralForeground1,
         }}
@@ -71,7 +76,7 @@ export function SourcePicker() {
       </div>
       <div
         style={{
-          fontSize: "13px",
+          fontSize: `${secondaryFontSize}px`,
           color: tokens.colorNeutralForeground3,
           textAlign: "center",
           maxWidth: "400px",
@@ -85,11 +90,19 @@ export function SourcePicker() {
         <Spinner label="Loading..." />
       ) : (
         <div style={{ display: "flex", gap: "16px" }}>
-          <Button appearance="primary" onClick={() => void handleOpenFiles()}>
+          <Button
+            appearance="primary"
+            onClick={() => void handleOpenFiles()}
+            style={{ fontSize: `${secondaryFontSize}px` }}
+          >
             Open .evtx files...
           </Button>
           {isWindows && (
-            <Button appearance="secondary" onClick={() => void handleEnumerate()}>
+            <Button
+              appearance="secondary"
+              onClick={() => void handleEnumerate()}
+              style={{ fontSize: `${secondaryFontSize}px` }}
+            >
               This computer
             </Button>
           )}
@@ -99,7 +112,7 @@ export function SourcePicker() {
       {displayError && (
         <div
           style={{
-            fontSize: "12px",
+            fontSize: `${errorFontSize}px`,
             color: tokens.colorPaletteRedForeground1,
             maxWidth: "500px",
             textAlign: "center",
