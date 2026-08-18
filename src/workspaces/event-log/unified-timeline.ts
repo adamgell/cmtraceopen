@@ -26,6 +26,8 @@ export type TimelineOrigin =
     }
   | {
       kind: "event";
+      /** Stable source-collection identity; distinct even for reused channel record IDs. */
+      stableId: number;
       source: string;
       machine: string | null;
       bundle: string | null;
@@ -34,6 +36,7 @@ export type TimelineOrigin =
       processId: number | null;
       activityId: string | null;
       eventId: number;
+      /** EventRecordID, scoped to the event channel. */
       recordId: number;
     };
 
@@ -100,6 +103,7 @@ export function originDetail(origin: TimelineOrigin): string {
     origin.bundle ? `bundle ${origin.bundle}` : null,
     origin.processId !== null ? `process ${origin.processId}` : null,
     origin.activityId ? `activity ${origin.activityId}` : null,
+    `stable ${origin.stableId}`,
   ]
     .filter((part): part is string => part !== null)
     .join(" / ");

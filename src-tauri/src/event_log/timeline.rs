@@ -31,6 +31,7 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
 
 fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
     TimelineOrigin::Event {
+        stable_id: record.id,
         source: record.source_label.clone(),
         machine: (!record.computer.is_empty()).then(|| record.computer.clone()),
         bundle: bundle_from_source(&record.source_label),
@@ -299,6 +300,43 @@ mod tests {
             }
             other => panic!("expected event origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn same_basename_sources_with_reused_event_record_ids_keep_distinct_keys() {
+        let mut first = record(1_000, "first source", EvtxLevel::Information);
+        first.id = 101;
+        first.source_label = "capture.evtx".to_string();
+        first.computer = "HOST-A".to_string();
+
+        let mut second = record(1_000, "second source", EvtxLevel::Information);
+        second.id = 202;
+        second.source_label = "capture.evtx".to_string();
+        second.computer = "HOST-B".to_string();
+
+        let timeline = build(&[], &[first, second]);
+        let origins: Vec<_> = timeline
+            .items
+            .iter()
+            .map(|item| match &item.origin {
+                TimelineOrigin::Event {
+                    stable_id,
+                    source,
+                    machine,
+                    record_id,
+                    ..
+                } => (*stable_id, source.clone(), machine.clone(), *record_id),
+                other => panic!("expected event origin, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            origins,
+            vec![
+                (101, "capture.evtx".to_string(), Some("HOST-A".to_string()), 1234),
+                (202, "capture.evtx".to_string(), Some("HOST-B".to_string()), 1234),
+            ]
+        );
     }
 
     #[test]
