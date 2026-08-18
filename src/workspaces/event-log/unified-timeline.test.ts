@@ -215,7 +215,7 @@ describe("filterTimelineToRecords", () => {
     } as EvtxRecord;
     const origin: TimelineOrigin = {
       ...eventOrigin,
-      stableId: `${stableRecordIdentity(missingRecord)}-0`,
+      stableId: `${stableRecordIdentity(missingRecord)}-1`,
       source: "Live",
       machine: "HOST",
       channel: "Security",
