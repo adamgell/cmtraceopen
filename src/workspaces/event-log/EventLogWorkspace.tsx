@@ -34,9 +34,13 @@ export function EventLogWorkspace() {
   const isLoading = useEvtxStore((s) => s.isLoading);
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
+  const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const scopedLogEntries = useMemo(
-    () => logEntries.filter((entry) => logEntryBelongsToSource(entry, activeLogSource)),
-    [logEntries, activeLogSource]
+    () =>
+      logSourceOpenMode === "merged"
+        ? logEntries
+        : logEntries.filter((entry) => logEntryBelongsToSource(entry, activeLogSource)),
+    [logEntries, activeLogSource, logSourceOpenMode]
   );
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);

@@ -128,11 +128,20 @@ export function filterTimelineToRecords(
   records: EvtxRecord[]
 ): UnifiedTimeline {
   const { keys, unsafePrefixes } = stableRecordIdentities(records);
+  const unsafeOriginCounts = new Map<string, number>();
+  for (const item of [...timeline.items, ...timeline.unplaced]) {
+    if (item.origin.kind !== "event") continue;
+    const marker = item.origin.stableId.lastIndexOf("|record");
+    if (marker < 0) continue;
+    const prefix = item.origin.stableId.replace(/record\d+$/, "record");
+    unsafeOriginCounts.set(prefix, (unsafeOriginCounts.get(prefix) ?? 0) + 1);
+  }
   const keep = (origin: TimelineOrigin) => {
     if (origin.kind === "log") return true;
     if (keys.has(origin.stableId)) return true;
     const marker = origin.stableId.lastIndexOf("|record");
-    return marker >= 0 && unsafePrefixes.has(origin.stableId.replace(/record\d+$/, "record"));
+    const prefix = origin.stableId.replace(/record\d+$/, "record");
+    return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;
   };
   return {
     items: timeline.items.filter((item) => keep(item.origin)),

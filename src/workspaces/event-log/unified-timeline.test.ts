@@ -221,6 +221,33 @@ describe("filterTimelineToRecords", () => {
     expect(filtered.items.map((item) => item.message)).toEqual(["unsafe"]);
   });
 
+  it("does not leak hidden unsafe-ID rows sharing a source prefix", () => {
+    const visible = {
+      ...eventOrigin,
+      stableId: "source4:Live|machine4:HOST|channel8:Security|record9007199254740993",
+      machine: "HOST",
+      channel: "Security",
+      recordId: Number.MAX_SAFE_INTEGER + 2,
+    };
+    const hidden = { ...visible, stableId: visible.stableId.replace(/993$/, "994") };
+    const record = {
+      sourceLabel: "Live",
+      computer: "HOST",
+      channel: "Security",
+      eventRecordId: Number.MAX_SAFE_INTEGER + 2,
+    } as EvtxRecord;
+    const filtered = filterTimelineToRecords(
+      timeline({
+        items: [
+          { timestampMs: 1, severity: "info", message: "visible", origin: visible },
+          { timestampMs: 2, severity: "info", message: "hidden", origin: hidden },
+        ],
+      }),
+      [record]
+    );
+    expect(filtered.items).toEqual([]);
+  });
+
   it("filters a large event list without recomputing each record per item", () => {
     const records = Array.from({ length: 512 }, (_, index) => ({
       sourceLabel: "Live",
