@@ -566,17 +566,11 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
 
     let mut entries: Vec<FolderEntry> = Vec::new();
     let mut child_errors: Vec<String> = Vec::new();
+    let mut candidates = Vec::new();
+    let mut listing_truncated = false;
     for entry_result in read_dir {
-        if entries.len() >= MAX_FOLDER_LISTING_ENTRIES {
-            child_errors.push(format!(
-                "{}: folder listing reached the {} entry limit",
-                requested_path.display(),
-                MAX_FOLDER_LISTING_ENTRIES
-            ));
-            break;
-        }
-        let entry = match entry_result {
-            Ok(value) => value,
+        match entry_result {
+            Ok(entry) => candidates.push(entry),
             Err(error) => {
                 let source = normalize_path_string(&requested_path);
                 child_errors.push(format!("{source}: child directory entry could not be read: {error}"));
@@ -585,10 +579,15 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
                     requested_path.display(),
                     error
                 );
-                continue;
             }
-        };
-
+        }
+        if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
+            listing_truncated = true;
+            break;
+        }
+    }
+    candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+    for entry in candidates.into_iter().take(MAX_FOLDER_LISTING_ENTRIES) {
         let entry_path = entry.path();
         let metadata = match entry.metadata() {
             Ok(value) => value,
@@ -615,6 +614,13 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             },
             modified_unix_ms: metadata_modified_unix_ms(&metadata),
         });
+    }
+    if listing_truncated {
+        child_errors.push(format!(
+            "{}: folder listing reached the {} entry limit",
+            requested_path.display(),
+            MAX_FOLDER_LISTING_ENTRIES
+        ));
     }
 
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
