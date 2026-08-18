@@ -23,13 +23,19 @@ describe("FileAssociationsTab", () => {
     expect(
       screen.getByText(/File associations are only available on Windows/),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Re-register associations/ }),
+    ).not.toBeInTheDocument();
   });
 
-  it("offers Associate on Windows when not registered", () => {
+  it("offers Associate on Windows when not registered", async () => {
     useUiStore.setState({ currentPlatform: "windows" });
     render(<FileAssociationsTab />);
     expect(
-      screen.getByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
+      await screen.findByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
     ).toBeInTheDocument();
   });
 });

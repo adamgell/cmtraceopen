@@ -1,7 +1,22 @@
 import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
 import { listLogFolder } from "../../lib/commands";
 import { useTimelineStore } from "../../stores/timeline-store";
-import type { LogSource } from "../../types/log";
+import type { FolderEntry, LogSource } from "../../types/log";
+
+function incomingFromListing(folderPath: string, entries: FolderEntry[]): string[] {
+  const childPaths = entries.filter((entry) => !entry.isDir).map((entry) => entry.path);
+  if (childPaths.length === 0) {
+    return [];
+  }
+  const hasIme = childPaths.some((path) => {
+    const lower = path.toLowerCase();
+    return (
+      lower.endsWith("agentexecutor.log") ||
+      lower.endsWith("intunemanagementextension.log")
+    );
+  });
+  return hasIme ? [...childPaths, folderPath] : childPaths;
+}
 
 export async function openTimelineSource(source: LogSource): Promise<void> {
   const existing =
@@ -12,18 +27,16 @@ export async function openTimelineSource(source: LogSource): Promise<void> {
     incoming = [source.path];
   } else if (source.kind === "folder") {
     const listing = await listLogFolder(source.path);
-    incoming = listing.entries.filter((entry) => !entry.isDir).map((entry) => entry.path);
-    if (incoming.length === 0) {
-      incoming = [source.path];
-    }
+    incoming = incomingFromListing(source.path, listing.entries);
   } else if (source.pathKind === "file") {
     incoming = [source.defaultPath];
   } else {
     const listing = await listLogFolder(source.defaultPath);
-    incoming = listing.entries.filter((entry) => !entry.isDir).map((entry) => entry.path);
-    if (incoming.length === 0) {
-      incoming = [source.defaultPath];
-    }
+    incoming = incomingFromListing(source.defaultPath, listing.entries);
+  }
+
+  if (incoming.length === 0 && existing.length === 0) {
+    return;
   }
 
   const merged = Array.from(new Set([...existing, ...incoming])).map((path) => ({

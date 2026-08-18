@@ -405,6 +405,15 @@ export function useAppActions(): AppActionHandlers {
 
   const openPathForActiveWorkspace = useCallback(
     async (path: string) => {
+      if (activeWorkspace === "dsregcmd") {
+        useUiStore
+          .getState()
+          .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
+        await analyzeDsregcmdPath(path, { fallbackToFolder: true });
+        void recordRecentPath(path, "dsregcmd");
+        return;
+      }
+
       const workspaceDefinition = getWorkspace(activeWorkspace);
       if (workspaceDefinition.onOpenPath) {
         await workspaceDefinition.onOpenPath(path);
@@ -417,15 +426,6 @@ export function useAppActions(): AppActionHandlers {
             ? { kind: "folder", path }
             : { kind: "file", path };
         await workspaceDefinition.onOpenSource(source, "drag-drop.path-open");
-        return;
-      }
-
-      if (activeWorkspace === "dsregcmd") {
-        useUiStore
-          .getState()
-          .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
-        await analyzeDsregcmdPath(path, { fallbackToFolder: true });
-        void recordRecentPath(path, "dsregcmd");
         return;
       }
 
