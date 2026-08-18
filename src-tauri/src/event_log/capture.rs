@@ -153,14 +153,19 @@ mod windows_capture {
     fn base32(bytes: &[u8]) -> String {
         const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
         let mut output = String::new();
-        let mut buffer = 0u16;
+        let mut buffer = 0u64;
         let mut bits = 0u8;
         for &byte in bytes {
-            buffer = (buffer << 8) | u16::from(byte);
+            buffer = (buffer << 8) | u64::from(byte);
             bits += 8;
             while bits >= 5 {
                 bits -= 5;
                 output.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
+            }
+            if bits != 0 {
+                buffer &= (1u64 << bits) - 1;
+            } else {
+                buffer = 0;
             }
         }
         if bits != 0 {
@@ -456,11 +461,11 @@ mod windows_capture {
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
 
-        for (array_property, value_property, message_property, target) in [
-            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
-            (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
-            (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
-            (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
+        for (array_property, name_property, value_property, message_property, target) in [
+            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelName, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
+            (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskName, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
+            (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
+            (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
         ] {
             let array_values = get_publisher_variant(metadata_handle, array_property)?;
             let Some(OwnedVariant::Handle(array_handle)) = array_values else { continue };
@@ -474,6 +479,8 @@ mod windows_capture {
             }
             for index in 0..count {
                 let index = u32::try_from(index).map_err(|_| "metadata array index overflow".to_string())?;
+                let name = string(object_property(array_handle.0.0, index, name_property.0 as u32)?)
+                    .ok_or_else(|| format!("metadata array {} name has an invalid type", array_property.0))?;
                 let raw_value = number(object_property(array_handle.0.0, index, value_property.0 as u32)?)
                     .ok_or_else(|| format!("metadata array {} value has an invalid type", array_property.0))?;
                 let value = metadata_key_value(target, raw_value);
@@ -499,9 +506,7 @@ mod windows_capture {
                     2 => &mut metadata.keywords,
                     _ => &mut metadata.levels,
                 };
-                if let Some(message_text) = message_text {
-                    target_map.insert(value.to_string(), message_text);
-                }
+                target_map.insert(value.to_string(), message_text.unwrap_or(name));
             }
         }
 
@@ -586,9 +591,17 @@ mod windows_capture {
         if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
             return Err("publisher metadata has no identity fields for VersionKey".to_string());
         }
-        let resource_content = std::fs::read(&resource).unwrap_or_else(|_| vec![0]);
-        let parameter_content = std::fs::read(&parameter).unwrap_or_else(|_| vec![0]);
-        let message_content = std::fs::read(&message).unwrap_or_else(|_| vec![0]);
+        let read_content = |label: &str, path: &str| -> Result<Vec<u8>, String> {
+            if path.is_empty() {
+                Ok(Vec::new())
+            } else {
+                std::fs::read(path)
+                    .map_err(|error| format!("cannot read {label} identity file {path}: {error}"))
+            }
+        };
+        let resource_content = read_content("resource", &resource)?;
+        let parameter_content = read_content("parameter", &parameter)?;
+        let message_content = read_content("message", &message)?;
         Ok(canonical_version_key(&[
             ("guid", &guid, guid.as_bytes()),
             ("resource", &resource, resource_content.as_slice()),
@@ -701,6 +714,8 @@ mod windows_tests {
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || b"234567".contains(&byte)));
         assert_ne!(first, second, "same path with changed content needs a new version");
+        let high_bytes = base32(&[0xff; 32]);
+        assert_eq!(high_bytes.len(), 52);
     }
     #[test]
     fn zero_event_values_are_preserved_but_message_sentinel_is_absent() {
