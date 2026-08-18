@@ -565,18 +565,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.warn(`[evtx] Refresh failed for ${ch}: ${message}`);
+        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+        console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
         // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
         // here presents a view that is missing a whole channel as complete.
         set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${message})`]),
-          loadError: s.loadError ?? `${ch}: ${message}`,
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+            `${context}: not read (${message})`,
+          ]),
+          loadError: s.loadError ?? `${context}: ${message}`,
         }));
       }
     });
-
     await Promise.all(promises);
+    const finalState = get();
+    const remoteRefreshFailed =
+      remoteMachine !== null &&
+      finalState.loadedChannels.size === 0 &&
+      finalState.coverageGaps.length > 0;
     set({
+      sourceMode: remoteRefreshFailed ? null : finalState.sourceMode,
       isLoading: false,
       loadingChannel: null,
       loadingProgress: null,

@@ -143,6 +143,32 @@ describe("coverage gaps through the store", () => {
     expect(state.loadError).toContain("access denied");
     expect(state.isLoading).toBe(false);
   });
+  it("exposes remote recovery after every refreshed channel is denied", async () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      remoteMachine: "lab-host",
+      channels: [
+        {
+          name: "Security",
+          eventCount: 0,
+          sourceType: { remote: { machine: "lab-host" } },
+        },
+      ],
+      loadedChannels: new Set(["Security"]),
+      selectedChannels: new Set(["Security"]),
+      records: [],
+    });
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.sourceMode).toBeNull();
+    expect(state.coverageGaps).toEqual([
+      "lab-host/Security: not read (access denied)",
+    ]);
+    expect(state.loadError).toBe("lab-host/Security: access denied");
+  });
 });
 describe("live batch delivery through initial and refresh loads", () => {
   beforeEach(() => {
@@ -153,6 +179,8 @@ describe("live batch delivery through initial and refresh loads", () => {
       coverageGaps: [],
       loadedChannels: new Set<string>(),
       selectedChannels: new Set<string>(),
+      remoteMachine: null,
+      sourceMode: null,
     });
   });
 
