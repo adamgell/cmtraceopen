@@ -298,7 +298,23 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message });
+      const remoteMachine = get().remoteMachine;
+      const remoteGap = remoteMachine
+        ? message.startsWith(`${remoteMachine}:`)
+          ? message
+          : message.includes("access denied") || message.includes("credentials rejected")
+            ? `${remoteMachine}: remote source access denied (${message})`
+            : message.includes("unavailable")
+              ? `${remoteMachine}: remote source unavailable (${message})`
+              : `${remoteMachine}: remote source query failed (${message})`
+        : null;
+      set((state) => ({
+        isLoading: false,
+        loadError: message,
+        coverageGaps: remoteGap
+          ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
+          : state.coverageGaps,
+      }));
     }
   },
 

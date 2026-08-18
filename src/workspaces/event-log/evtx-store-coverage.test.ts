@@ -667,6 +667,19 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().loadError).toBe("Enter a valid remote computer name.");
   });
 
+  it("records remote enumeration denial or unavailability as coverage", async () => {
+    invoke.mockRejectedValueOnce(
+      new Error("lab-host: remote source unavailable (error 53)")
+    );
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([
+      "lab-host: remote source unavailable (error 53)",
+    ]);
+    expect(useEvtxStore.getState().loadError).toContain("remote source unavailable");
+  });
+
   it("keeps denied remote sources distinct from an empty source", async () => {
     invoke.mockResolvedValueOnce({
       records: [],
