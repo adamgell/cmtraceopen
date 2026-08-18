@@ -54,15 +54,14 @@ fn u64_vec_as_signed<S: Serializer>(values: &[u64], serializer: S) -> Result<S::
     sequence.end()
 }
 
-fn u32_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_i64(*value as i32 as i64)
+/// EventLogExpert stores the low message identifier as a signed Int16 even though the in-memory
+/// model keeps the complete low-word value as `u32`.
+fn short_id_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i64((*value as u16 as i16) as i64)
 }
 
-/// Reinterprets a signed integer as an unsigned 32-bit value.
-///
-/// Message identifiers above `0x7FFFFFFF` are written negative for the same reason.
-fn signed_as_u32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    Ok(i64::deserialize(deserializer)? as u32)
+fn signed_as_short_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok((i64::deserialize(deserializer)? as i16 as u16) as u32)
 }
 
 /// One event definition from a provider's manifest.
@@ -115,8 +114,8 @@ pub struct ProviderMessage {
     /// Low bits of `raw_id`, which is what most references use.
     #[serde(
         default,
-        deserialize_with = "signed_as_u32",
-        serialize_with = "u32_as_signed"
+        deserialize_with = "signed_as_short_id",
+        serialize_with = "short_id_as_signed"
     )]
     pub short_id: u32,
     /// Provider name owning this message row, when persisted by EventLogExpert.
@@ -483,11 +482,22 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_message_id_is_reinterpreted_rather_than_rejected() {
-        let json = r#"{"RawId":-2147221478,"ShortId":-2147221478,"Text":"x"}"#;
+    fn short_message_ids_use_signed_int16_wire_values() {
+        let json = r#"{"RawId":-2147221478,"ShortId":-32768,"Text":"x"}"#;
         let message: ProviderMessage = serde_json::from_str(json).expect("deserializes");
         assert_eq!(message.raw_id, (-2_147_221_478_i64) as u64);
-        assert_eq!(message.short_id, (-2_147_221_478_i64) as u32);
+        assert_eq!(message.short_id, 0x8000);
+        let encoded = serde_json::to_string(&message).expect("serializes");
+        assert!(encoded.contains(r#""ShortId":-32768"#));
+
+        let all_bits = ProviderMessage {
+            short_id: 0xffff,
+            ..ProviderMessage::default()
+        };
+        let encoded = serde_json::to_string(&all_bits).expect("serializes");
+        assert!(encoded.contains(r#""ShortId":-1"#));
+        let decoded: ProviderMessage = serde_json::from_str(&encoded).expect("round-trips");
+        assert_eq!(decoded.short_id, 0xffff);
     }
 
     #[test]
