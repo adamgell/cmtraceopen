@@ -5,7 +5,7 @@ use tauri::AppHandle;
 use tauri::Emitter;
 
 use super::models::{EvtxChannelInfo, EvtxParseResult};
-use super::parser;
+use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
 
 #[cfg(target_os = "windows")]
@@ -34,19 +34,25 @@ struct EvtxRecordBatch {
     records: Vec<super::models::EvtxRecord>,
 }
 
+/// Expands folder, wildcard, archive, and VSS selections before parsing.
+#[tauri::command]
+pub fn evtx_expand_sources(paths: Vec<String>) -> Result<EventLogSourceManifest, String> {
+    parser::build_source_manifest(&paths)
+}
+
 #[tauri::command]
 pub async fn evtx_parse_files(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
-    // Handles are cloned out before the blocking work starts. Parsing can run for a long time over
-    // a hundred thousand records, and holding a state lock across it would stall every other
-    // command.
     let maps = state.event_maps.clone();
     let providers = state.provider_store.clone();
-    tokio::task::spawn_blocking(move || parser::parse_evtx_files(&paths, &maps, &providers))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        let manifest = parser::build_source_manifest(&paths)?;
+        parser::parse_evtx_manifest(&manifest, &maps, &providers)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]

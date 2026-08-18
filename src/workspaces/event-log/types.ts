@@ -56,6 +56,25 @@ export interface EvtxParseResult {
   errorMessages: string[];
 }
 
+export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";
+
+export interface EventLogSourceManifestEntry {
+  sourceId: string;
+  path: string;
+  kind: EventLogSourceKind;
+}
+
+export type EventLogSourceCoverage =
+  | { kind: "unsupported"; path: string; reason: string }
+  | { kind: "accessDenied"; path: string; reason: string }
+  | { kind: "missing"; path: string; reason: string }
+  | { kind: "limitReached"; path: string; reason: string };
+
+export interface EventLogSourceManifest {
+  entries: EventLogSourceManifestEntry[];
+  coverage: EventLogSourceCoverage[];
+}
+
 /**
  * How far back a live query reaches.
  *

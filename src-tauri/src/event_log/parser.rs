@@ -1,8 +1,10 @@
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use cmtraceopen_parser::eventmap::MapRegistry;
 use evtx::EvtxParser;
+use serde::{Deserialize, Serialize};
 
 // `extract_event_data` sits in `event_node` alongside `extract_system_fields`: both read a parsed
 // tree, and both are needed by the live path as well as this one. Keeping the data extractor here
@@ -16,25 +18,317 @@ use super::models::{
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
+
+/// Maximum number of files a source selection may hand to the EVTX parser.
+///
+/// This is deliberately applied before parsing. A folder or wildcard is user input and must not
+/// turn into an unbounded parser workload.
+pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
+const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EventLogSourceKind {
+    File,
+    Folder,
+    Wildcard,
+    Archive,
+    Vss,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogSource {
+    pub source_id: String,
+    pub path: String,
+    pub kind: EventLogSourceKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SourceCoverage {
+    Unsupported { path: String, reason: String },
+    AccessDenied { path: String, reason: String },
+    Missing { path: String, reason: String },
+    LimitReached { path: String, reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogSourceManifest {
+    pub entries: Vec<EventLogSource>,
+    pub coverage: Vec<SourceCoverage>,
+}
+
+/// Expand files, folders, and wildcard selections into one bounded, deterministic manifest.
+///
+/// Expansion uses the existing bounded folder-listing command rather than walking arbitrary
+/// directories directly. Source IDs are lexical, separator-normalized, and case-folded so the
+/// same member selected through two paths is represented once.
+pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifest, String> {
+    let mut manifest = EventLogSourceManifest {
+        entries: Vec::new(),
+        coverage: Vec::new(),
+    };
+
+    for source in sources {
+        let is_wildcard = !is_vss_path(source) && (source.contains('*') || source.contains('?'));
+        let paths = if is_wildcard {
+            expand_wildcard(source, &mut manifest.coverage)
+        } else {
+            vec![PathBuf::from(source)]
+        };
+
+        if is_wildcard && paths.is_empty() {
+            manifest.coverage.push(SourceCoverage::Missing {
+                path: source.clone(),
+                reason: "wildcard did not match any filesystem path".to_string(),
+            });
+        }
+
+        for path in paths {
+            expand_path(
+                &path,
+                if is_wildcard {
+                    EventLogSourceKind::Wildcard
+                } else {
+                    EventLogSourceKind::File
+                },
+                0,
+                &mut manifest,
+            )?;
+        }
+    }
+
+    manifest.entries.sort_by(|left, right| {
+        left.source_id
+            .cmp(&right.source_id)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    manifest.coverage.sort_by(|left, right| coverage_path(left).cmp(coverage_path(right)));
+    Ok(manifest)
+}
+
+fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<PathBuf> {
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: false,
+        require_literal_leading_dot: false,
+    };
+    match glob::glob_with(pattern, options) {
+        Ok(matches) => matches
+            .filter_map(|result| match result {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    coverage.push(SourceCoverage::Missing {
+                        path: pattern.to_string(),
+                        reason: format!("wildcard entry could not be read: {error}"),
+                    });
+                    None
+                }
+            })
+            .collect(),
+        Err(error) => {
+            coverage.push(SourceCoverage::Missing {
+                path: pattern.to_string(),
+                reason: format!("invalid wildcard: {error}"),
+            });
+            Vec::new()
+        }
+    }
+}
+
+fn expand_path(
+    path: &Path,
+    requested_kind: EventLogSourceKind,
+    depth: usize,
+    manifest: &mut EventLogSourceManifest,
+) -> Result<(), String> {
+    if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+        manifest.coverage.push(SourceCoverage::LimitReached {
+            path: path.to_string_lossy().to_string(),
+            reason: format!(
+                "source selection exceeds the {} file manifest limit",
+                MAX_SOURCE_MANIFEST_ENTRIES
+            ),
+        });
+        return Ok(());
+    }
+
+    let path_string = path.to_string_lossy().to_string();
+    let kind = classify_source_kind(&path_string, requested_kind);
+    if let Some(gap) = gated_source(&path_string, kind) {
+        manifest.coverage.push(gap);
+        return Ok(());
+    }
+
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            manifest.coverage.push(SourceCoverage::Missing {
+                path: path_string,
+                reason: "source path does not exist".to_string(),
+            });
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            manifest.coverage.push(SourceCoverage::AccessDenied {
+                path: path_string,
+                reason: "source metadata access was denied".to_string(),
+            });
+            return Ok(());
+        }
+        Err(error) => return Err(format!("cannot inspect source {path_string}: {error}")),
+    };
+
+    if metadata.is_dir() {
+        if depth >= MAX_SOURCE_MANIFEST_DEPTH {
+            manifest.coverage.push(SourceCoverage::LimitReached {
+                path: path_string,
+                reason: format!("folder nesting exceeds {MAX_SOURCE_MANIFEST_DEPTH} levels"),
+            });
+            return Ok(());
+        }
+        let listing = match crate::commands::file_ops::list_log_folder(path_string.clone()) {
+            Ok(listing) => listing,
+            Err(crate::error::AppError::AccessDenied { .. }) => {
+                manifest.coverage.push(SourceCoverage::AccessDenied {
+                    path: path_string,
+                    reason: "folder listing access was denied".to_string(),
+                });
+                return Ok(());
+            }
+            Err(error) => {
+                manifest.coverage.push(SourceCoverage::Missing {
+                    path: path_string,
+                    reason: error.to_string(),
+                });
+                return Ok(());
+            }
+        };
+        for entry in listing.entries {
+            expand_path(
+                Path::new(&entry.path),
+                EventLogSourceKind::Folder,
+                depth + 1,
+                manifest,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if !is_evtx_candidate(path) {
+        return Ok(());
+    }
+
+    let normalized_path = normalize_source_path(path);
+    let source_id = normalized_path.to_lowercase();
+    if manifest.entries.iter().any(|entry| entry.source_id == source_id) {
+        return Ok(());
+    }
+    manifest.entries.push(EventLogSource {
+        source_id,
+        path: normalized_path,
+        kind,
+    });
+    Ok(())
+}
+
+fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
+    if is_vss_path(path) {
+        EventLogSourceKind::Vss
+    } else if Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase().starts_with("archive-"))
+        .unwrap_or(false)
+    {
+        EventLogSourceKind::Archive
+    } else {
+        requested_kind
+    }
+}
+
+fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> {
+    if !matches!(kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss) {
+        return None;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Some(SourceCoverage::Unsupported {
+            path: path.to_string(),
+            reason: "archived and VSS event-log sources are only available on Windows".to_string(),
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    if !crate::elevation::current_elevation_state().is_elevated {
+        return Some(SourceCoverage::AccessDenied {
+            path: path.to_string(),
+            reason: "archived and VSS event-log sources require an elevated process".to_string(),
+        });
+    }
+
+    None
+}
+
+fn is_vss_path(path: &str) -> bool {
+    let normalized = path.replace('/', "\\").to_lowercase();
+    normalized.contains("globalroot\\device\\harddiskvolumeshadowcopy")
+}
+
+fn is_evtx_candidate(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_lowercase();
+    lower.ends_with(".evtx")
+        || lower.contains(".evtx.")
+        || lower.ends_with(".evtx~")
+}
+
+fn normalize_source_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn coverage_path(coverage: &SourceCoverage) -> &str {
+    match coverage {
+        SourceCoverage::Unsupported { path, .. }
+        | SourceCoverage::AccessDenied { path, .. }
+        | SourceCoverage::Missing { path, .. }
+        | SourceCoverage::LimitReached { path, .. } => path,
+    }
+}
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
 
-/// Parse one or more .evtx files and return a unified result.
-///
-/// The map registry and provider store are passed in rather than reached for. They belong to the
-/// application state, so the caller decides which set is in effect; that is also what lets a test
-/// use its own without another test on a parallel thread replacing it.
+/// Parse source selections after bounded expansion into a deterministic manifest.
 pub fn parse_evtx_files(
     paths: &[String],
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
 ) -> Result<EvtxParseResult, String> {
+    let manifest = build_source_manifest(paths)?;
+    parse_evtx_manifest(&manifest, maps, providers)
+}
+
+pub fn parse_evtx_manifest(
+    manifest: &EventLogSourceManifest,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<EvtxParseResult, String> {
     let mut all_records = Vec::new();
     let mut channels = Vec::new();
-    let mut parse_errors = 0u32;
-    let mut error_messages = Vec::new();
+    let mut parse_errors = manifest.coverage.len() as u32;
+    let mut error_messages: Vec<String> = manifest
+        .coverage
+        .iter()
+        .map(|coverage| match coverage {
+            SourceCoverage::Unsupported { path, reason }
+            | SourceCoverage::AccessDenied { path, reason }
+            | SourceCoverage::Missing { path, reason }
+            | SourceCoverage::LimitReached { path, reason } => format!("{path}: {reason}"),
+        })
+        .collect();
 
-    for path_str in paths {
-        let path = Path::new(path_str);
+    for source in &manifest.entries {
+        let path = Path::new(&source.path);
         match parse_single_file(path, maps, providers) {
             Ok(file) => {
                 let records = file.records;
@@ -43,24 +337,20 @@ pub fn parse_evtx_files(
                 let source_label = path
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path_str.clone());
+                    .unwrap_or_else(|| source.path.clone());
 
-                // Build one EvtxChannelInfo per distinct channel string found in the records,
-                // so that ChannelPicker can match against r.channel values.
                 let mut channel_counts: std::collections::HashMap<String, u64> =
                     std::collections::HashMap::new();
-                for r in &records {
-                    *channel_counts.entry(r.channel.clone()).or_insert(0) += 1;
+                for record in &records {
+                    *channel_counts.entry(record.channel.clone()).or_insert(0) += 1;
                 }
 
                 if channel_counts.is_empty() {
-                    // No records — still emit an entry keyed by the file basename so the
-                    // file appears in the picker.
                     channels.push(EvtxChannelInfo {
-                        name: source_label.clone(),
+                        name: source_label,
                         event_count: 0,
                         source_type: ChannelSourceType::File {
-                            path: path_str.clone(),
+                            path: source.path.clone(),
                         },
                     });
                 } else {
@@ -69,40 +359,34 @@ pub fn parse_evtx_files(
                             name: channel_name,
                             event_count: count,
                             source_type: ChannelSourceType::File {
-                                path: path_str.clone(),
+                                path: source.path.clone(),
                             },
                         });
                     }
                 }
-
                 all_records.extend(records);
             }
-            Err(e) => {
+            Err(error) => {
                 log::warn!(
                     "event=evtx_parse_error file=\"{}\" error=\"{}\"",
-                    path_str,
-                    e
+                    source.path,
+                    error
                 );
                 parse_errors += 1;
-                // A file that could not be opened at all is reported by name. Counting it without
-                // saying which file, or why, leaves an operator with a number and no next step.
-                error_messages.push(format!("{path_str}: {e}"));
+                error_messages.push(format!("{}: {error}", source.path));
             }
         }
     }
 
-    // Sort all records by timestamp and reassign sequential IDs
-    all_records.sort_by_key(|r| r.timestamp_epoch);
-    for (i, record) in all_records.iter_mut().enumerate() {
-        record.id = i as u64;
+    all_records.sort_by_key(|record| record.timestamp_epoch);
+    for (index, record) in all_records.iter_mut().enumerate() {
+        record.id = index as u64;
     }
 
-    let total_records = all_records.len() as u64;
-
     Ok(EvtxParseResult {
+        total_records: all_records.len() as u64,
         records: all_records,
         channels,
-        total_records,
         parse_errors,
         error_messages,
     })
@@ -370,6 +654,87 @@ mod tests {
         assert_eq!(result.parse_errors, 0);
         assert!(result.error_messages.is_empty());
         assert_eq!(result.total_records, 0);
+    }
+    #[test]
+    fn source_manifest_recurses_matches_rotated_files_and_deduplicates_case_insensitively() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-source-manifest-{}",
+            std::process::id()
+        ));
+        let nested = root.join("Nested");
+        std::fs::create_dir_all(&nested).expect("create source tree");
+        std::fs::write(root.join("Application.EVTX"), b"not an evtx fixture").expect("write evtx");
+        std::fs::write(root.join("Application.evtx.1"), b"rotated").expect("write rotated");
+        std::fs::write(nested.join("System.evtx"), b"nested").expect("write nested");
+
+        let manifest = build_source_manifest(&[root.to_string_lossy().to_string()])
+            .expect("build manifest");
+        let paths: Vec<String> = manifest
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(paths.len(), 3);
+        assert!(paths.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(paths.iter().any(|path| path.ends_with("Application.evtx.1")));
+        assert!(manifest.coverage.is_empty());
+
+        let duplicate = build_source_manifest(&[
+            root.join("application.evtx").to_string_lossy().to_string(),
+            root.join("Application.EVTX").to_string_lossy().to_string(),
+        ])
+        .expect("build duplicate manifest");
+        assert_eq!(duplicate.entries.len(), 1);
+        assert_eq!(duplicate.entries[0].source_id, duplicate.entries[0].path.to_lowercase());
+
+        std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+
+    #[test]
+    fn source_manifest_wildcards_are_case_insensitive_and_deterministic() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-source-wildcard-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create source tree");
+        std::fs::write(root.join("Archive-Application.EVTX"), b"archive").expect("write archive");
+        std::fs::write(root.join("Application.evtx"), b"application").expect("write app");
+        std::fs::write(root.join("readme.txt"), b"ignored").expect("write text");
+
+        let pattern = root.join("*.evtx").to_string_lossy().to_string();
+        let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(manifest.entries.len(), 1);
+            assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Wildcard);
+            assert!(matches!(
+                manifest.coverage.as_slice(),
+                [SourceCoverage::Unsupported { .. }]
+            ));
+        }
+        #[cfg(target_os = "windows")]
+        assert_eq!(manifest.entries.len(), 2);
+
+        std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+
+    #[test]
+    fn source_manifest_reports_vss_as_unsupported_on_non_windows() {
+        let manifest = build_source_manifest(&[
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\winevt\Logs\Application.evtx"
+                .to_string(),
+        ])
+        .expect("build vss manifest");
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(manifest.entries.is_empty());
+            assert_eq!(manifest.coverage.len(), 1);
+            assert!(matches!(
+                manifest.coverage[0],
+                SourceCoverage::Unsupported { .. }
+            ));
+        }
     }
 
     #[test]

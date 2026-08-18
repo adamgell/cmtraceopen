@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openEventLogSource } from "./open-event-log-source";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -30,6 +31,18 @@ export function SourcePicker() {
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
       await parseFiles(paths);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalError(message);
+    }
+  };
+
+  const handleOpenFolder = async () => {
+    setLocalError(null);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected !== "string") return;
+      await openEventLogSource({ kind: "folder", path: selected });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
@@ -87,6 +100,9 @@ export function SourcePicker() {
         <div style={{ display: "flex", gap: "16px" }}>
           <Button appearance="primary" onClick={() => void handleOpenFiles()}>
             Open .evtx files...
+          </Button>
+          <Button appearance="secondary" onClick={() => void handleOpenFolder()}>
+            Open folder recursively...
           </Button>
           {isWindows && (
             <Button appearance="secondary" onClick={() => void handleEnumerate()}>
