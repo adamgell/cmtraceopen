@@ -289,10 +289,32 @@ fn expand_path(
             }
         };
         for child_error in &listing.child_errors {
-            manifest.coverage.push(SourceCoverage::Missing {
-                path: path_string.clone(),
-                reason: child_error.clone(),
-            });
+            let coverage = if child_error.contains("file limit") {
+                SourceCoverage::LimitReached {
+                    path: path_string.clone(),
+                    reason: child_error.clone(),
+                }
+            } else if child_error.contains("symbolic link")
+                || child_error.contains("reparse point")
+            {
+                SourceCoverage::Unsupported {
+                    path: path_string.clone(),
+                    reason: child_error.clone(),
+                }
+            } else if child_error.contains("denied")
+                || child_error.contains("Permission denied")
+            {
+                SourceCoverage::AccessDenied {
+                    path: path_string.clone(),
+                    reason: child_error.clone(),
+                }
+            } else {
+                SourceCoverage::Missing {
+                    path: path_string.clone(),
+                    reason: child_error.clone(),
+                }
+            };
+            manifest.coverage.push(coverage);
         }
 
         for entry in listing.entries {
