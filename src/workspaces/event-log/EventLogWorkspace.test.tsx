@@ -414,6 +414,30 @@ describe("event-viewer shared font metrics", () => {
       largeList.rowHeight + (largeList.rowHeight + 6) * 2
     );
   });
+  it("uses the connected DOM height for an empty hidden-level row", () => {
+    seedEventLog();
+    useEvtxStore.setState((state) => ({
+      records: [{ ...RECORD, message: "" }],
+      columnConfig: {
+        ...state.columnConfig,
+        order: state.columnConfig.order.filter((id) => id !== "level"),
+      },
+      groupBy: [],
+    }));
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    const row = timeline.getByRole("option");
+    Object.defineProperty(row, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ height: 5 }),
+    });
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(virtualizerState.resizedSizes.get(0)).toBe(5);
+    expect(virtualizerState.totalSize).toBe(5);
+  });
   it("uses the smaller record cache when the level column is hidden", () => {
     seedEventLog();
     useEvtxStore.setState((state) => ({

@@ -166,20 +166,38 @@ export function EvtxTimeline() {
     [virtualizer.measureElement]
   );
 
-  // Persisted font-size changes alter rendered row heights. Update every row's cached size,
-  // including rows currently outside the viewport, then refresh connected nodes for actual DOM
-  // measurements. Avoiding measure() preserves TanStack Virtual's valid item-size cache.
+  // Persisted font-size and row-shape changes alter rendered row heights. Estimates remain correct
+  // for offscreen rows, while connected rows must use their actual border-box height because
+  // TanStack's no-entry measurement path may return the existing cache.
+  const measureConnectedRow = useCallback(
+    (element: HTMLElement) => {
+      const height = element.getBoundingClientRect().height;
+      if (height > 0) {
+        virtualizer.resizeItem(Number(element.dataset.index), height);
+      } else {
+        virtualizer.measureElement(element);
+      }
+    },
+    [virtualizer.measureElement, virtualizer.resizeItem]
+  );
+
   useEffect(() => {
     rows.forEach((row, index) => {
       virtualizer.resizeItem(
         index,
-        row.kind === "group" ? metrics.rowHeight : metrics.rowHeight + recordRowExtra
+        row.kind === "group" ? metrics.rowHeight : rowEstimate
       );
     });
     for (const element of rowElementsRef.current.values()) {
-      if (element.isConnected) virtualizer.measureElement(element);
+      if (element.isConnected) measureConnectedRow(element);
     }
-  }, [metrics.rowHeight, recordRowExtra, rows, virtualizer.measureElement, virtualizer.resizeItem]);
+  }, [
+    metrics.rowHeight,
+    rowEstimate,
+    rows,
+    measureConnectedRow,
+    virtualizer.resizeItem,
+  ]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
