@@ -208,7 +208,8 @@ pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
         component: entry.component.clone(),
         line: entry.line_number,
         bundle: bundle_from_source(&source),
-        machine: entry.host_name.clone(),
+        // LogEntry::host_name is DHCP client payload, not the machine that emitted the log.
+        machine: None,
         record_id: entry.id,
         source,
     };
@@ -519,11 +520,11 @@ mod tests {
     }
 
     #[test]
-    fn log_origin_preserves_source_machine_bundle_and_record_identity() {
+    fn log_origin_does_not_treat_dhcp_client_name_as_machine_provenance() {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.id = 99;
-        entry.host_name = Some("HOST-B".into());
-        entry.source_file = Some("bundle/evidence/logs/app.log".into());
+        entry.host_name = Some("LEASED-CLIENT".into());
+        entry.source_file = Some("bundle/evidence/dhcp.log".into());
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
@@ -534,8 +535,8 @@ mod tests {
                 record_id,
                 ..
             } => {
-                assert_eq!(source, "bundle/evidence/logs/app.log");
-                assert_eq!(machine.as_deref(), Some("HOST-B"));
+                assert_eq!(source, "bundle/evidence/dhcp.log");
+                assert_eq!(machine, &None);
                 assert_eq!(bundle.as_deref(), Some("bundle"));
                 assert_eq!(*record_id, 99);
             }
