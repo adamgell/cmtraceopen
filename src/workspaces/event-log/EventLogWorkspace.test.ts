@@ -20,7 +20,7 @@ describe("scopeLogEntries", () => {
 
   it("scopes non-merged entries to the active source", () => {
     const entries = [
-      entry("C:\\logs\\first.log", "first source"),
+      entry("C:/logs/first.log", "first source"),
       entry("D:\\logs\\second.log", "second source"),
     ];
 

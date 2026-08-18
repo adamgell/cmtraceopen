@@ -13,13 +13,11 @@ import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
   if (source === null) return false;
   const root = source.kind === "known" ? source.defaultPath : source.path;
-  const normalizedRoot = root.replace(/[\\/]+$/, "").toLowerCase();
-  const normalizedEntry = entry.filePath.toLowerCase();
-  return (
-    normalizedEntry === normalizedRoot ||
-    normalizedEntry.startsWith(`${normalizedRoot}/`) ||
-    normalizedEntry.startsWith(`${normalizedRoot}\\`)
-  );
+  const normalize = (value: string) =>
+    value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+  const normalizedRoot = normalize(root);
+  const normalizedEntry = normalize(entry.filePath);
+  return normalizedEntry === normalizedRoot || normalizedEntry.startsWith(`${normalizedRoot}/`);
 }
 
 export function scopeLogEntries(
