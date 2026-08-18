@@ -182,10 +182,11 @@ export function EvtxTimeline() {
   );
 
   useEffect(() => {
+    virtualizer.measure();
     for (const element of rowElementsRef.current.values()) {
       if (element.isConnected) measureConnectedRow(element);
     }
-  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow]);
+  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
 
   const virtualRows = virtualizer.getVirtualItems();
 

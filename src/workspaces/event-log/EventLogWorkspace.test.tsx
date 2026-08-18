@@ -9,6 +9,7 @@ const virtualizerState = vi.hoisted(() => ({
   resizedSizes: new Map<number, number>(),
   measureCalls: 0,
   resizeObserverCalls: 0,
+  cacheResetCalls: 0,
   resizeItemCalls: 0,
   visibleCount: null as number | null,
   recalculate: () => undefined,
@@ -24,6 +25,12 @@ const virtualizerState = vi.hoisted(() => ({
     virtualizerState.resizeItemCalls += 1;
     virtualizerState.resizedSizes.set(index, size);
     virtualizerState.measuredSizes.set(index, size);
+    virtualizerState.recalculate();
+  },
+  measure: () => {
+    virtualizerState.cacheResetCalls += 1;
+    virtualizerState.measuredSizes.clear();
+    virtualizerState.resizedSizes.clear();
     virtualizerState.recalculate();
   },
   measureElement: (
@@ -120,6 +127,7 @@ vi.mock("@tanstack/react-virtual", () => ({
       getVirtualItems,
       measureElement: virtualizerState.measureElement,
       resizeItem: virtualizerState.resizeItem,
+      measure: virtualizerState.measure,
       scrollToIndex: vi.fn(),
     };
   },
@@ -195,6 +203,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measuredSizes.clear();
     virtualizerState.visibleCount = null;
     virtualizerState.measureCalls = 0;
+    virtualizerState.cacheResetCalls = 0;
     virtualizerState.resizeObserverCalls = 0;
     virtualizerState.resizeItemCalls = 0;
     virtualizerState.resizedSizes.clear();
@@ -428,6 +437,33 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + (largeList.rowHeight + 6) * 2
     );
+  });
+  it("clears a measured row cache when that row becomes offscreen", () => {
+    seedEventLog();
+    useEvtxStore.setState({
+      records: [RECORD, { ...RECORD, id: 2, eventRecordId: 2 }],
+      groupBy: [],
+    });
+    virtualizerState.visibleCount = 2;
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    expect(timeline.getAllByRole("option")).toHaveLength(2);
+    expect(virtualizerState.measuredSizes.has(1)).toBe(true);
+    const initialCacheResetCalls = virtualizerState.cacheResetCalls;
+
+    virtualizerState.visibleCount = 1;
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(virtualizerState.cacheResetCalls).toBeGreaterThan(initialCacheResetCalls);
+    expect(virtualizerState.measuredSizes.has(1)).toBe(false);
+    expect(virtualizerState.resizedSizes.has(1)).toBe(false);
+    expect(virtualizerState.items).toHaveLength(1);
+    expect(virtualizerState.totalSize).toBe(
+      largeList.rowHeight + 6 + largeList.rowHeight + 6
+    );
+    timeline.unmount();
   });
   it("uses the connected DOM height for an empty hidden-level row", () => {
     seedEventLog();
