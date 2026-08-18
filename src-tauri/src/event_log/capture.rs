@@ -77,6 +77,7 @@ mod windows_capture {
     use super::*;
     use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage, ProviderMetadata};
     use std::collections::BTreeMap;
+    use sha2::{Digest, Sha256};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS};
     use windows::Win32::System::EventLog::*;
@@ -124,9 +125,16 @@ mod windows_capture {
     fn optional_number(value: OwnedVariant) -> Result<Option<u64>, String> {
         match value {
             OwnedVariant::Null => Ok(None),
+            OwnedVariant::Number(0) => Ok(None),
             OwnedVariant::Number(value) => Ok(Some(value)),
             _ => Err("metadata value has an invalid type".to_string()),
         }
+    }
+    fn optional_message_id(value: OwnedVariant) -> Result<Option<u32>, String> {
+        Ok(optional_number(value)?.and_then(|value| {
+            let value = value as u32;
+            (value != u32::MAX).then_some(value)
+        }))
     }
     fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
         if target == 1 { (raw_value >> 16) & 0xFFFF } else { raw_value }
@@ -137,6 +145,11 @@ mod windows_capture {
             OwnedVariant::String(value) => Ok(Some(value)),
             _ => Err("metadata string has an invalid type".to_string()),
         }
+    }
+    fn decode_event_opcode(raw_value: u64) -> (u32, Option<u32>) {
+        let opcode = ((raw_value >> 16) & 0xFFFF) as u32;
+        let task = (raw_value & 0xFFFF) as u32;
+        (opcode, (task != 0).then_some(task))
     }
     fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
         channels.get(&(channel_id as u32)).cloned()
@@ -347,11 +360,11 @@ mod windows_capture {
         ids: &mut BTreeMap<u64, ProviderMessage>,
     ) -> Result<(), String> {
         let mut add = |value: OwnedVariant| -> Result<(), String> {
-            if let Some(raw_id) = optional_number(value)? {
-                let short_id = raw_id as u32;
-                let text = format_message(metadata, short_id)?;
-                ids.entry(raw_id).or_insert_with(|| ProviderMessage {
-                    raw_id,
+            if let Some(raw_id) = optional_message_id(value)? {
+                let short_id = (raw_id as u16) as u32;
+                let text = format_message(metadata, raw_id)?;
+                ids.entry(raw_id as u64).or_insert_with(|| ProviderMessage {
+                    raw_id: raw_id as u64,
                     short_id,
                     text,
                 });
@@ -362,16 +375,6 @@ mod windows_capture {
             get_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)?
         {
             add(value)?;
-        }
-        for property in [
-            EvtPublisherMetadataLevelMessageID,
-            EvtPublisherMetadataTaskMessageID,
-            EvtPublisherMetadataOpcodeMessageID,
-            EvtPublisherMetadataKeywordMessageID,
-        ] {
-            if let Some(value) = get_publisher_variant(metadata, property)? {
-                add(value)?;
-            }
         }
         Ok(())
     }
@@ -447,26 +450,29 @@ mod windows_capture {
                 let raw_value = number(object_property(array_handle.0.0, index, value_property.0 as u32)?)
                     .ok_or_else(|| format!("metadata array {} value has an invalid type", array_property.0))?;
                 let value = metadata_key_value(target, raw_value);
-                let message_id = optional_number(object_property(
+                let message_id = optional_message_id(object_property(
                     array_handle.0.0,
                     index,
                     message_property.0 as u32,
                 )?)?;
+                let message_text = if let Some(message_id) = message_id {
+                    let text = format_message(metadata_handle, message_id)?;
+                    messages.entry(message_id as u64).or_insert(ProviderMessage {
+                        raw_id: message_id as u64,
+                        short_id: message_id as u16 as u32,
+                        text: text.clone(),
+                    });
+                    text
+                } else {
+                    None
+                };
                 let target_map = match target {
                     0 => &mut metadata.tasks,
                     1 => &mut metadata.opcodes,
                     2 => &mut metadata.keywords,
                     _ => &mut metadata.levels,
                 };
-                target_map.insert(value.to_string(), name);
-                if let Some(message_id) = message_id {
-                    let text = format_message(metadata_handle, message_id as u32)?;
-                    messages.entry(message_id).or_insert(ProviderMessage {
-                        raw_id: message_id,
-                        short_id: message_id as u32,
-                        text,
-                    });
-                }
+                target_map.insert(value.to_string(), message_text.unwrap_or(name));
             }
         }
 
@@ -492,24 +498,30 @@ mod windows_capture {
             let log_name = channels.get(&(channel_index as u32)).cloned();
             let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
                 .map(|value| value as u32);
-            let task = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
+            let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
-            let opcode = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?
-                .map(|value| value as u32);
+            let opcode_raw = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
+            let (opcode, opcode_task) = opcode_raw
+                .map(decode_event_opcode)
+                .map(|(opcode, task)| (Some(opcode), task))
+                .unwrap_or((None, None));
+            let task = opcode_task.or(task_metadata);
             let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
                 .into_iter()
                 .collect();
             let template = optional_string(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
             let description = if let Some(message_id) =
-                optional_number(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
+                optional_message_id(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
             {
-                let text = format_message(metadata_handle, message_id as u32)?;
-                messages.entry(message_id).or_insert(ProviderMessage {
-                    raw_id: message_id,
-                    short_id: message_id as u32,
+                let text = format_message(metadata_handle, message_id)?;
+                messages.entry(message_id as u64).or_insert(ProviderMessage {
+                    raw_id: message_id as u64,
+                    short_id: message_id as u16 as u32,
                     text,
                 });
-                messages.get(&message_id).and_then(|message| message.text.clone())
+                messages
+                    .get(&(message_id as u64))
+                    .and_then(|message| message.text.clone())
             } else {
                 None
             };
@@ -538,15 +550,24 @@ mod windows_capture {
                 .and_then(string)
                 .unwrap_or_default())
         };
-        let guid = read(EvtPublisherMetadataPublisherGuid)?;
-        let resource = read(EvtPublisherMetadataResourceFilePath)?;
-        let parameter = read(EvtPublisherMetadataParameterFilePath)?;
-        let message = read(EvtPublisherMetadataMessageFilePath)?;
-        if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
+        let identity = [
+            read(EvtPublisherMetadataPublisherGuid)?,
+            read(EvtPublisherMetadataResourceFilePath)?,
+            read(EvtPublisherMetadataParameterFilePath)?,
+            read(EvtPublisherMetadataMessageFilePath)?,
+        ];
+        if identity.iter().all(String::is_empty) {
             return Err("publisher metadata has no identity fields for VersionKey".to_string());
         }
+        let mut digest = Sha256::new();
+        for part in &identity {
+            digest.update(part.as_bytes());
+            digest.update([0]);
+        }
+        let digest = digest.finalize();
         Ok(format!(
-            "guid={guid}|resource={resource}|parameter={parameter}|message={message}"
+            "vk1:{}",
+            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
         ))
     }
 
@@ -644,6 +665,24 @@ mod windows_tests {
         assert_eq!(optional_number(OwnedVariant::Null).expect("null is valid"), None);
         assert_eq!(optional_string(OwnedVariant::Null).expect("null is valid"), None);
     }
+    #[test]
+    fn zero_and_message_sentinel_values_are_absent() {
+        assert_eq!(optional_number(OwnedVariant::Number(0)).expect("zero is valid"), None);
+        assert_eq!(
+            optional_message_id(OwnedVariant::Number(u32::MAX as u64)).expect("sentinel is valid"),
+            None
+        );
+        assert_eq!(
+            optional_message_id(OwnedVariant::Number(0x1_0001)).expect("message id is valid"),
+            Some(0x1_0001)
+        );
+    }
+
+    #[test]
+    fn event_opcode_decodes_composite_opcode_and_task() {
+        assert_eq!(decode_event_opcode(0x000B_0002), (11, Some(2)));
+        assert_eq!(decode_event_opcode(0x000B_0000), (11, None));
+    }
 
     #[test]
     fn opcode_metadata_uses_high_word_while_task_keeps_low_word() {
@@ -696,7 +735,7 @@ mod tests {
         let rows: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM ProviderDetails \
-                 WHERE ProviderName <> '' AND instr(VersionKey, '|') > 0",
+                 WHERE ProviderName <> '' AND VersionKey LIKE 'vk1:%'",
                 [],
                 |row| row.get(0),
             )

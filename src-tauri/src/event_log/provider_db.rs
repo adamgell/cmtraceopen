@@ -179,7 +179,7 @@ impl ProviderDb {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT Events, Messages, Levels, Tasks, Keywords, Opcodes, SourceOsBuild \
+                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
                  ORDER BY SourceOsBuild DESC LIMIT 1",
             )
@@ -187,7 +187,7 @@ impl ProviderDb {
 
         let row = statement.query_row([name], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
@@ -197,17 +197,27 @@ impl ProviderDb {
             ))
         });
 
-        let (events, messages, levels, tasks, keywords, opcodes, build) = match row {
+        let (version_key, events, messages, tasks, keywords, opcodes, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
+        };
+        let levels = match self.connection.query_row(
+            "SELECT Levels FROM ProviderLevels WHERE ProviderName = ?1 AND VersionKey = ?2",
+            rusqlite::params![name, &version_key],
+            |row| row.get::<_, Vec<u8>>(0),
+        ) {
+            Ok(blob) => inflate_json(&blob)?,
+            Err(rusqlite::Error::QueryReturnedNoRows) => Default::default(),
+            Err(rusqlite::Error::SqliteFailure(_, _)) => Default::default(),
+            Err(error) => return Err(format!("cannot read provider levels {name}: {error}")),
         };
 
         Ok(Some(ProviderMetadata {
             provider_name: name.to_string(),
             events: inflate_json(&events)?,
             messages: inflate_json(&messages)?,
-            levels: inflate_json(&levels)?,
+            levels,
             tasks: inflate_json(&tasks)?,
             keywords: inflate_json(&keywords)?,
             opcodes: inflate_json(&opcodes)?,
@@ -220,10 +230,15 @@ impl ProviderDb {
 const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDetails" (
     "ProviderName" TEXT COLLATE NOCASE NOT NULL,
     "VersionKey" TEXT NOT NULL,
-    "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Levels" BLOB NOT NULL, "Maps" BLOB NOT NULL,
+    "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
     "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
     "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
-    PRIMARY KEY ("ProviderName","VersionKey"));"#;
+    PRIMARY KEY ("ProviderName","VersionKey"));
+CREATE TABLE IF NOT EXISTS "ProviderLevels" (
+    "ProviderName" TEXT COLLATE NOCASE NOT NULL,
+    "VersionKey" TEXT NOT NULL,
+    "Levels" BLOB NOT NULL,
+    PRIMARY KEY ("ProviderName","VersionKey")); "#;
 
 /// Serializes `value` to JSON and gzip-compresses it, the way EventLogExpert stores each section.
 fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
@@ -272,6 +287,9 @@ pub fn write_provider_database(
     connection
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
+    connection
+        .execute("DELETE FROM ProviderLevels", [])
+        .map_err(|error| format!("cannot clear provider levels: {error}"))?;
 
     let empty_object = serde_json::json!({});
     let empty_array = serde_json::json!([]);
@@ -295,15 +313,14 @@ pub fn write_provider_database(
         connection
             .execute(
                 r#"INSERT INTO ProviderDetails
-                   (ProviderName, VersionKey, Events, Keywords, Levels, Maps, Messages, Opcodes,
+                   (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
                     Parameters, Tasks, SourceOsBuild)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
                 rusqlite::params![
                     metadata.provider_name,
                     &captured.version_key,
                     events,
                     keywords,
-                    levels,
                     maps,
                     messages,
                     opcodes,
@@ -317,6 +334,17 @@ pub fn write_provider_database(
                     "cannot insert provider {} version {}: {error}",
                     metadata.provider_name,
                     captured.version_key
+                )
+            })?;
+        connection
+            .execute(
+                "INSERT INTO ProviderLevels (ProviderName, VersionKey, Levels) VALUES (?1, ?2, ?3)",
+                rusqlite::params![metadata.provider_name, &captured.version_key, levels],
+            )
+            .map_err(|error| {
+                format!(
+                    "cannot insert provider levels {} version {}: {error}",
+                    metadata.provider_name, captured.version_key
                 )
             })?;
     }
@@ -493,7 +521,7 @@ mod tests {
                 r#"CREATE TABLE "ProviderDetails" (
                      "ProviderName" TEXT COLLATE NOCASE NOT NULL,
                      "VersionKey" TEXT NOT NULL,
-                     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Levels" BLOB NOT NULL, "Maps" BLOB NOT NULL,
+                     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
                      "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
                      "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
                      PRIMARY KEY ("ProviderName","VersionKey"));"#,
@@ -504,9 +532,9 @@ mod tests {
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
-                       (ProviderName, VersionKey, Events, Keywords, Levels, Maps, Messages, Opcodes,
+                       (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
                         Parameters, Tasks, SourceOsBuild)
-                       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
                     rusqlite::params![
                         name,
                         format!("vk1:{build}"),
@@ -517,7 +545,6 @@ mod tests {
                         gzip("[]"),
                         gzip(r#"{"11":"Start"}"#),
                         gzip("[]"),
-                        gzip(r#"{"1":"Enrollment"}"#),
                         build,
                     ],
                 )
