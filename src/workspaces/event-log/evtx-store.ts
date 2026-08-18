@@ -193,7 +193,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         selectedRecordId: null,
       });
 
-      // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
+      // Live query records arrive through the batch event. This path invokes the backend directly
+      // rather than through queryChannels, so it must drain the same stream before merging.
       const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
         const state = get();
         const merged = [...state.records, ...result.records];
@@ -222,13 +223,31 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
       const promises = availableCore.map(async (ch) => {
         try {
+          resetStreamedRecords([ch]);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: null,
             filter: buildServerFilter(get().timeWindow),
           });
           const checked = assertParseResultShape(result);
-          mergeResult(ch, result, checked.errorMessages);
+          const streamed = drainStreamedRecords(ch);
+          const arrived = [...streamed.records, ...result.records];
+          const streamedGaps =
+            streamed.missingSequences.length > 0
+              ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+              : [];
+          const shortfallGaps =
+            typeof checked.totalRecords === "number" &&
+            arrived.length < checked.totalRecords
+              ? [
+                  `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                ]
+              : [];
+          mergeResult(
+            ch,
+            { ...result, records: arrived },
+            [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
+          );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
@@ -395,8 +414,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       coverageGaps: [],
     });
 
+    // Refresh invokes the streaming command directly, so drain its batch before merging the
+    // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
       try {
+        resetStreamedRecords([ch]);
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
           maxEvents: null,
@@ -407,9 +429,22 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           filter: buildServerFilter(get().timeWindow),
         });
         const checked = assertParseResultShape(result);
+        const streamed = drainStreamedRecords(ch);
+        const arrived = [...streamed.records, ...result.records];
+        const streamedGaps =
+          streamed.missingSequences.length > 0
+            ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+            : [];
+        const shortfallGaps =
+          typeof checked.totalRecords === "number" &&
+          arrived.length < checked.totalRecords
+            ? [
+                `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+              ]
+            : [];
 
         const s = get();
-        const merged = [...s.records, ...result.records];
+        const merged = [...s.records, ...arrived];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -426,7 +461,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, checked.errorMessages),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+            ...checked.errorMessages,
+            ...streamedGaps,
+            ...shortfallGaps,
+          ]),
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
