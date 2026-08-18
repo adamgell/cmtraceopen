@@ -9,6 +9,7 @@ const virtualizerState = vi.hoisted(() => ({
   resizedSizes: new Map<number, number>(),
   measureCalls: 0,
   resizeObserverCalls: 0,
+  resizeItemCalls: 0,
   visibleCount: null as number | null,
   recalculate: () => undefined,
   measureElementSize: (element: HTMLElement) => {
@@ -19,31 +20,41 @@ const virtualizerState = vi.hoisted(() => ({
       ? Number.parseFloat(element.style.height)
       : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
   },
-  measureElement: (element: HTMLElement | null) => {
+  resizeItem: (index: number, size: number) => {
+    virtualizerState.resizeItemCalls += 1;
+    virtualizerState.resizedSizes.set(index, size);
+    virtualizerState.measuredSizes.set(index, size);
+    virtualizerState.recalculate();
+  },
+  measureElement: (
+    element: HTMLElement | null,
+    entry?: { borderBoxSize?: Array<{ blockSize: number }> }
+  ) => {
     virtualizerState.measureCalls += 1;
     if (!element) return;
     const index = Number(element.dataset.index);
+    const observedSize = entry?.borderBoxSize?.[0]?.blockSize;
+    if (observedSize !== undefined) {
+      virtualizerState.resizeItem(index, observedSize);
+      return;
+    }
     if (virtualizerState.measuredSizes.has(index)) return;
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
     }
-    virtualizerState.measuredSizes.set(
+    virtualizerState.resizeItem(
       index,
       virtualizerState.measureElementSize(element)
     );
-    virtualizerState.recalculate();
-  },
-  resizeObserver: (index: number, size: number) => {
-    virtualizerState.resizeObserverCalls += 1;
-    virtualizerState.measuredSizes.set(index, size);
-    virtualizerState.recalculate();
   },
   notifyResize: () => {
     for (const element of virtualizerState.measured) {
-      virtualizerState.resizeObserver(
-        Number(element.dataset.index),
-        virtualizerState.measureElementSize(element)
-      );
+      virtualizerState.resizeObserverCalls += 1;
+      virtualizerState.measureElement(element, {
+        borderBoxSize: [
+          { blockSize: virtualizerState.measureElementSize(element) },
+        ],
+      });
     }
   },
 }));
@@ -103,10 +114,7 @@ vi.mock("@tanstack/react-virtual", () => ({
       getTotalSize,
       getVirtualItems,
       measureElement: virtualizerState.measureElement,
-      resizeItem: (index: number, size: number) => {
-        virtualizerState.resizedSizes.set(index, size);
-        virtualizerState.recalculate();
-      },
+      resizeItem: virtualizerState.resizeItem,
       scrollToIndex: vi.fn(),
     };
   },
@@ -183,6 +191,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.visibleCount = null;
     virtualizerState.measureCalls = 0;
     virtualizerState.resizeObserverCalls = 0;
+    virtualizerState.resizeItemCalls = 0;
     virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
@@ -365,11 +374,13 @@ describe("event-viewer shared font metrics", () => {
     );
     expect(virtualizerState.initialItems[0].size).toBe(smallList.rowHeight);
     const initialResizeObserverCalls = virtualizerState.resizeObserverCalls;
+    const initialResizeItemCalls = virtualizerState.resizeItemCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     virtualizerState.notifyResize();
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
     expect(virtualizerState.resizeObserverCalls).toBeGreaterThan(initialResizeObserverCalls);
+    expect(virtualizerState.resizeItemCalls).toBeGreaterThan(initialResizeItemCalls);
 
     expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
