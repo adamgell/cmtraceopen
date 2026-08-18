@@ -217,9 +217,14 @@ fn expand_wildcard(
     if root.as_os_str().is_empty() {
         root.push(".");
     }
-    let recursive = Path::new(pattern).components().any(|component| {
-        let value = component.as_os_str().to_string_lossy();
-        value == "**" || value.contains('*') || value.contains('?') || value.contains('[')
+    let pattern_components: Vec<String> = Path::new(pattern)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect();
+    let recursive = pattern_components.iter().enumerate().any(|(index, value)| {
+        value == "**"
+            || (index + 1 < pattern_components.len()
+                && (value.contains('*') || value.contains('?') || value.contains('[')))
     });
     if let Ok(metadata) = fs::symlink_metadata(&root) {
         if is_reparse_or_symlink(&metadata) {
