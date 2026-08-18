@@ -242,13 +242,17 @@ export function matchesQuickFilter(
   record: EvtxRecord,
   quickFilter: EvtxQuickFilter,
   visibleColumns?: readonly EvtxColumnId[],
-  timeZoneMode: EvtxTimeZoneMode = "local"
+  timeZoneMode: EvtxTimeZoneMode = "local",
+  parsedEventIdSelectors?: EvtxEventIdSelectorParseResult
 ): boolean {
   const query = quickFilter.query.trim();
   if (!query) return false;
 
   if (quickFilter.mode === "eventIds") {
-    return eventIdMatchesSelectors(record.eventId, parseEventIdSelectors(query));
+    return eventIdMatchesSelectors(
+      record.eventId,
+      parsedEventIdSelectors ?? parseEventIdSelectors(query)
+    );
   }
 
   const values = searchableValues(
@@ -292,11 +296,12 @@ export function recordMatchesVisibleFilter(
   > & {
     quickFilter?: EvtxQuickFilter;
     visibleColumns?: readonly EvtxColumnId[];
-    timeZoneMode?: EvtxTimeZoneMode;
+    eventIdSelectors?: EvtxEventIdSelectorParseResult;
+    quickEventIdSelectors?: EvtxEventIdSelectorParseResult;
     timeWindow?: EvtxTimeWindow;
+    timeZoneMode?: EvtxTimeZoneMode;
     nowEpoch?: number;
     eventIdSet?: Set<number> | null;
-    eventIdSelectors?: EvtxEventIdSelectorParseResult;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
@@ -333,7 +338,8 @@ export function recordMatchesVisibleFilter(
     record,
     quickFilter,
     input.visibleColumns,
-    input.timeZoneMode
+    input.timeZoneMode,
+    input.quickEventIdSelectors
   );
   return quickFilter.action === "hide" ? !matched : matched;
 }
@@ -352,6 +358,10 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
     eventIdSelectors: input.filterEventIds.trim()
       ? parseEventIdSelectors(input.filterEventIds)
       : undefined,
+    quickEventIdSelectors:
+      input.quickFilter?.mode === "eventIds" && input.quickFilter.query.trim()
+        ? parseEventIdSelectors(input.quickFilter.query)
+        : undefined,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
 }
