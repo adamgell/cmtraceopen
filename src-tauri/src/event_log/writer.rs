@@ -422,7 +422,7 @@ fn xml_formats_reject_records_without_raw_xml() {
 #[test]
 fn raw_xml_computer_and_subject_fields_are_redacted_without_consuming_tags() {
     let event = EvtxRecord {
-        raw_xml: "<Event><System><Computer>DESKTOP-JOHN</Computer><SubjectUserName>CONTOSO\\Jane Doe</SubjectUserName><SubjectDomainName>CONTOSO</SubjectDomainName></System><ns:RemoteHost>REMOTE-HOST-2</ns:RemoteHost><RemoteHost>REMOTE-HOST-3</RemoteHost><ns:Data Name=\"SubjectUserName\">\n <![CDATA[\n CONTOSO\\Bob Doe\n ]]>\n</ns:Data><ns:Data Name=\"RemoteHost\"><![CDATA[REMOTE-HOST]]></ns:Data><Data><![CDATA[TenantId=99999999-8888-4777-8666-555555555555]]></Data><Message><![CDATA[PASSWORD=hunter2]]></Message><!-- SubjectUserName=CONTOSO\\Comment User --><Next /></Event>".into(),
+        raw_xml: "<Event><System><Computer>DESKTOP-JOHN</Computer><ns:Computer>DESKTOP-NS</ns:Computer><SubjectUserName>CONTOSO\\Jane Doe</SubjectUserName><ns:SubjectUserName>CONTOSO\\Ns User</ns:SubjectUserName><SubjectDomainName>CONTOSO</SubjectDomainName></System><ns:RemoteHost>REMOTE-HOST-2</ns:RemoteHost><RemoteHost>REMOTE-HOST-3</RemoteHost><ns:Data Name=\"SubjectUserName\">\n <![CDATA[\n CONTOSO\\Bob Doe\n ]]>\n</ns:Data><ns:Data Name=\"TargetUserName\">CONTOSO\\Target User</ns:Data><ns:Data Name=\"RemoteHost\"><![CDATA[REMOTE-HOST]]></ns:Data><Data><![CDATA[TenantId=99999999-8888-4777-8666-555555555555]]></Data><Message><![CDATA[PASSWORD=hunter2]]></Message><!-- SubjectUserName=CONTOSO\\Comment User --><Next /></Event>".into(),
         ..record("safe")
     };
     let mut output = Cursor::new(Vec::new());
@@ -430,6 +430,9 @@ fn raw_xml_computer_and_subject_fields_are_redacted_without_consuming_tags() {
         .expect("raw XML succeeds");
     let output = String::from_utf8(output.into_inner()).expect("UTF-8");
     assert!(!output.contains("DESKTOP-JOHN"));
+    assert!(!output.contains("DESKTOP-NS"));
+    assert!(!output.contains("Ns User"));
+    assert!(!output.contains("Target User"));
     assert!(!output.contains("Jane Doe"));
     assert!(!output.contains("Bob Doe"));
     assert!(!output.contains("REMOTE-HOST"));
