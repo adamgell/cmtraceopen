@@ -22,7 +22,8 @@ use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
 const MAX_SOURCE_INPUTS: usize = 256;
 const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
-
+const MAX_SOURCE_RECORDS: usize = 1_000_000;
+const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum number of files a source selection may hand to the EVTX parser.
 ///
 /// This is deliberately applied before parsing. A folder or wildcard is user input and must not
@@ -62,6 +63,7 @@ pub enum SourceCoverage {
     Unsupported { path: String, reason: String },
     AccessDenied { path: String, reason: String },
     Missing { path: String, reason: String },
+    Empty { path: String, reason: String },
     InvalidPattern { path: String, reason: String },
     LimitReached { path: String, reason: String },
 }
@@ -107,7 +109,7 @@ pub fn build_source_manifest_for_selections(
         coverage: Vec::new(),
     };
     let mut inspected_work = 0usize;
-    for (index, selection) in sources.iter().enumerate() {
+    'selections: for (index, selection) in sources.iter().enumerate() {
         if index >= MAX_SOURCE_INPUTS {
             manifest.coverage.push(SourceCoverage::LimitReached {
                 path: "<source inputs>".to_string(),
@@ -138,6 +140,7 @@ pub fn build_source_manifest_for_selections(
                     SourceCoverage::Unsupported { .. }
                         | SourceCoverage::AccessDenied { .. }
                         | SourceCoverage::Missing { .. }
+                        | SourceCoverage::Empty { .. }
                         | SourceCoverage::InvalidPattern { .. }
                         | SourceCoverage::LimitReached { .. }
                 )
@@ -164,12 +167,30 @@ pub fn build_source_manifest_for_selections(
                 &mut manifest,
             )?;
         }
+        if manifest.coverage.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+            record_manifest_limit(
+                &mut manifest,
+                Path::new("<source coverage>"),
+                "source coverage limit reached while expanding selections",
+            );
+            break 'selections;
+        }
     }
 
     manifest.entries.sort_by(|left, right| {
         left.source_id
-            .cmp(&right.source_id)
+            .to_ascii_lowercase()
+            .cmp(&right.source_id.to_ascii_lowercase())
+            .then_with(|| left.source_id.cmp(&right.source_id))
             .then_with(|| left.path.cmp(&right.path))
+    });
+    deduplicate_coverage(&mut manifest.coverage);
+    manifest.coverage.sort_by(|left, right| {
+        coverage_path(left)
+            .to_ascii_lowercase()
+            .cmp(&coverage_path(right).to_ascii_lowercase())
+            .then_with(|| coverage_path(left).cmp(coverage_path(right)))
+            .then_with(|| coverage_reason(left).cmp(coverage_reason(right)))
     });
     if manifest.coverage.len() > MAX_SOURCE_MANIFEST_ENTRIES {
         manifest.coverage.truncate(MAX_SOURCE_MANIFEST_ENTRIES - 1);
@@ -179,10 +200,40 @@ pub fn build_source_manifest_for_selections(
             "source coverage limit reached",
         );
     }
-    manifest
-        .coverage
-        .sort_by(|left, right| coverage_path(left).cmp(coverage_path(right)));
     Ok(manifest)
+}
+
+fn deduplicate_coverage(coverage: &mut Vec<SourceCoverage>) {
+    let mut seen = std::collections::HashSet::new();
+    coverage.retain(|item| {
+        let key = (
+            coverage_kind(item),
+            normalize_source_path(Path::new(coverage_path(item))).to_ascii_lowercase(),
+        );
+        seen.insert(key)
+    });
+}
+
+fn coverage_kind(coverage: &SourceCoverage) -> u8 {
+    match coverage {
+        SourceCoverage::Unsupported { .. } => 0,
+        SourceCoverage::AccessDenied { .. } => 1,
+        SourceCoverage::Missing { .. } => 2,
+        SourceCoverage::Empty { .. } => 3,
+        SourceCoverage::InvalidPattern { .. } => 3,
+        SourceCoverage::LimitReached { .. } => 4,
+    }
+}
+
+fn coverage_reason(coverage: &SourceCoverage) -> &str {
+    match coverage {
+        SourceCoverage::Unsupported { reason, .. }
+        | SourceCoverage::AccessDenied { reason, .. }
+        | SourceCoverage::Empty { reason, .. }
+        | SourceCoverage::Missing { reason, .. }
+        | SourceCoverage::InvalidPattern { reason, .. }
+        | SourceCoverage::LimitReached { reason, .. } => reason,
+    }
 }
 
 fn expand_wildcard(
@@ -197,62 +248,102 @@ fn expand_wildcard(
         });
         return Vec::new();
     }
-    let match_pattern = pattern.replace('\\', "/");
-    let match_pattern = match_pattern.strip_prefix("./").unwrap_or(&match_pattern);
-    let matcher = match glob::Pattern::new(&match_pattern.to_ascii_lowercase()) {
-        Ok(matcher) => matcher,
-        Err(error) => {
-            coverage.push(SourceCoverage::InvalidPattern {
-                path: pattern.to_string(),
-                reason: format!("invalid wildcard pattern: {error}"),
-            });
-            return Vec::new();
-        }
+    let normalized = pattern.replace('\\', "/");
+    let trailing_directory = normalized.ends_with('/');
+    let components: Vec<String> = normalized
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .map(ToOwned::to_owned)
+        .collect();
+    let Some(first_wildcard) = components.iter().position(|component| {
+        component == "**"
+            || component.contains('*')
+            || component.contains('?')
+            || component.contains('[')
+    }) else {
+        coverage.push(SourceCoverage::InvalidPattern {
+            path: pattern.to_string(),
+            reason: "pattern does not contain a wildcard".to_string(),
+        });
+        return Vec::new();
     };
+    for component in &components {
+        if component != "**" {
+            if let Err(error) = glob::Pattern::new(&component.to_ascii_lowercase()) {
+                coverage.push(SourceCoverage::InvalidPattern {
+                    path: pattern.to_string(),
+                    reason: format!("invalid wildcard pattern: {error}"),
+                });
+                return Vec::new();
+            }
+        }
+    }
     let mut root = PathBuf::new();
-    for component in Path::new(pattern).components() {
-        let component = component.as_os_str().to_string_lossy();
-        if component.contains('*') || component.contains('?') || component.contains('[') {
+    for component in Path::new(&normalized).components() {
+        let value = component.as_os_str().to_string_lossy();
+        if value == "**"
+            || value.contains('*')
+            || value.contains('?')
+            || value.contains('[')
+        {
             break;
         }
-        root.push(component.as_ref());
+        root.push(component.as_os_str());
     }
     if root.as_os_str().is_empty() {
         root.push(".");
     }
-    let recursive = Path::new(pattern)
-        .components()
-        .any(|component| component.as_os_str() == "**");
-    if let Ok(metadata) = fs::symlink_metadata(&root) {
-        if is_reparse_or_symlink(&metadata) {
+    match first_reparse_component(&root) {
+        Ok(Some(component)) => {
             coverage.push(SourceCoverage::Unsupported {
-                path: root.to_string_lossy().to_string(),
-                reason: "symbolic links and reparse points are not followed during wildcard expansion"
+                path: component.to_string_lossy().to_string(),
+                reason: "symbolic link or reparse-point ancestor is not followed during wildcard expansion"
                     .to_string(),
             });
+            return Vec::new();
+        }
+        Ok(None) => {}
+        Err(error) => {
+            push_wildcard_io_coverage(coverage, &root, error);
             return Vec::new();
         }
     }
     let mut paths = Vec::new();
     collect_wildcard_dir(
         &root,
-        &matcher,
-        recursive,
+        pattern,
+        &components,
+        first_wildcard,
+        trailing_directory,
         0,
         coverage,
         inspected_work,
+        None,
         &mut paths,
     );
-    paths.sort_by(|left, right| normalize_source_path(left).cmp(&normalize_source_path(right)));
+    paths.sort_by(|left, right| {
+        let left_path = normalize_source_path(left);
+        let right_path = normalize_source_path(right);
+        left_path
+            .to_ascii_lowercase()
+            .cmp(&right_path.to_ascii_lowercase())
+            .then_with(|| left_path.cmp(&right_path))
+            .then_with(|| left.cmp(right))
+    });
     paths
 }
+
 fn collect_wildcard_dir(
     directory: &Path,
-    matcher: &glob::Pattern,
-    recursive: bool,
+    pattern: &str,
+    components: &[String],
+    component_index: usize,
+    trailing_directory: bool,
     depth: usize,
     coverage: &mut Vec<SourceCoverage>,
     inspected_work: &mut usize,
+    prefetched: Option<Vec<PathBuf>>,
     paths: &mut Vec<PathBuf>,
 ) {
     if depth >= MAX_SOURCE_MANIFEST_DEPTH {
@@ -262,113 +353,248 @@ fn collect_wildcard_dir(
         });
         return;
     }
+    if component_index >= components.len() {
+        return;
+    }
+    let component = &components[component_index];
+    let Some(mut entries) = (match prefetched {
+        Some(entries) => Some(entries),
+        None => read_wildcard_children(directory, coverage, inspected_work),
+    }) else {
+        return;
+    };
+    if component == "**" {
+        if component_index + 1 < components.len() {
+            collect_wildcard_dir(
+                directory,
+                pattern,
+                components,
+                component_index + 1,
+                trailing_directory,
+                depth + 1,
+                coverage,
+                inspected_work,
+                Some(entries.clone()),
+                paths,
+            );
+        }
+        for path in entries.drain(..) {
+            let Some(metadata) = wildcard_entry_metadata(&path, coverage) else {
+                continue;
+            };
+            if component_index + 1 == components.len() {
+                if !trailing_directory || metadata.is_dir() {
+                    if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+                        coverage.push(SourceCoverage::LimitReached {
+                            path: directory.to_string_lossy().to_string(),
+                            reason: format!(
+                                "wildcard matches exceed the {} file manifest limit",
+                                MAX_SOURCE_MANIFEST_ENTRIES
+                            ),
+                        });
+                        return;
+                    }
+                    paths.push(path.clone());
+                }
+            } else if metadata.is_dir() {
+                collect_wildcard_dir(
+                    &path,
+                    pattern,
+                    components,
+                    component_index,
+                    trailing_directory,
+                    depth + 1,
+                    coverage,
+                    inspected_work,
+                    None,
+                    paths,
+                );
+            }
+        }
+        return;
+    }
+    let matcher = match glob::Pattern::new(&component.to_ascii_lowercase()) {
+        Ok(matcher) => matcher,
+        Err(error) => {
+            coverage.push(SourceCoverage::InvalidPattern {
+                path: pattern.to_string(),
+                reason: format!("invalid wildcard pattern: {error}"),
+            });
+            return;
+        }
+    };
+    for path in entries.drain(..) {
+        let Some(metadata) = wildcard_entry_metadata(&path, coverage) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matcher.matches(&name) {
+            continue;
+        }
+        if component_index + 1 == components.len() {
+            if !trailing_directory || metadata.is_dir() {
+                if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+                    coverage.push(SourceCoverage::LimitReached {
+                        path: directory.to_string_lossy().to_string(),
+                        reason: format!(
+                            "wildcard matches exceed the {} file manifest limit",
+                            MAX_SOURCE_MANIFEST_ENTRIES
+                        ),
+                    });
+                    return;
+                }
+                paths.push(path);
+            }
+        } else if metadata.is_dir() {
+            collect_wildcard_dir(
+                &path,
+                pattern,
+                components,
+                component_index + 1,
+                trailing_directory,
+                depth + 1,
+                coverage,
+                inspected_work,
+                None,
+                paths,
+            );
+        }
+    }
+}
+
+fn read_wildcard_children(
+    directory: &Path,
+    coverage: &mut Vec<SourceCoverage>,
+    inspected_work: &mut usize,
+) -> Option<Vec<PathBuf>> {
+    match first_reparse_component(directory) {
+        Ok(Some(component)) => {
+            coverage.push(SourceCoverage::Unsupported {
+                path: component.to_string_lossy().to_string(),
+                reason: "symbolic link or reparse-point ancestor is not followed during wildcard expansion"
+                    .to_string(),
+            });
+            return None;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            push_wildcard_io_coverage(coverage, directory, error);
+            return None;
+        }
+    }
     *inspected_work = inspected_work.saturating_add(1);
     if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
         coverage.push(SourceCoverage::LimitReached {
             path: directory.to_string_lossy().to_string(),
             reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
         });
-        return;
+        return None;
     }
     let read_dir = match fs::read_dir(directory) {
-        Ok(read_dir) => read_dir,
+        Ok(value) => value,
         Err(error) => {
-            let path = directory.to_string_lossy().to_string();
-            if error.kind() == std::io::ErrorKind::PermissionDenied {
-                coverage.push(SourceCoverage::AccessDenied {
-                    path,
-                    reason: error.to_string(),
-                });
-            } else {
-                coverage.push(SourceCoverage::Missing {
-                    path,
-                    reason: error.to_string(),
-                });
-            }
-            return;
+            push_wildcard_io_coverage(coverage, directory, error);
+            return None;
         }
     };
     let mut entries = Vec::new();
+    let mut work_exhausted = false;
     for entry in read_dir {
         *inspected_work = inspected_work.saturating_add(1);
         if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
-            coverage.push(SourceCoverage::LimitReached {
-                path: directory.to_string_lossy().to_string(),
-                reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
-            });
+            work_exhausted = true;
             break;
         }
         match entry {
-            Ok(entry) => entries.push(entry),
-            Err(error) => coverage.push(SourceCoverage::Missing {
-                path: directory.to_string_lossy().to_string(),
-                reason: format!("wildcard child could not be read: {error}"),
-            }),
-        }
-        if entries.len() > MAX_SOURCE_MANIFEST_ENTRIES {
-            coverage.push(SourceCoverage::LimitReached {
-                path: directory.to_string_lossy().to_string(),
-                reason: format!("wildcard directory exceeds the {} entry limit", MAX_SOURCE_MANIFEST_ENTRIES),
-            });
-            break;
+            Ok(entry) => entries.push(entry.path()),
+            Err(error) => push_wildcard_io_coverage(coverage, directory, error),
         }
     }
-    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-    for entry in entries {
-        *inspected_work = inspected_work.saturating_add(1);
-        if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
-            coverage.push(SourceCoverage::LimitReached {
-                path: directory.to_string_lossy().to_string(),
-                reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
-            });
-            return;
-        }
-        let path = entry.path();
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                coverage.push(SourceCoverage::Missing {
-                    path: path.to_string_lossy().to_string(),
-                    reason: error.to_string(),
-                });
-                continue;
-            }
-        };
-        if is_reparse_or_symlink(&metadata) {
+    entries.sort_by(|left, right| {
+        let left_name = left
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let right_name = right
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        left_name
+            .to_ascii_lowercase()
+            .cmp(&right_name.to_ascii_lowercase())
+            .then_with(|| left_name.cmp(&right_name))
+            .then_with(|| left.cmp(right))
+    });
+    if entries.len() > MAX_SOURCE_MANIFEST_ENTRIES {
+        entries.truncate(MAX_SOURCE_MANIFEST_ENTRIES);
+        coverage.push(SourceCoverage::LimitReached {
+            path: directory.to_string_lossy().to_string(),
+            reason: format!(
+                "wildcard directory exceeds the {} entry limit",
+                MAX_SOURCE_MANIFEST_ENTRIES
+            ),
+        });
+    }
+    if work_exhausted {
+        coverage.push(SourceCoverage::LimitReached {
+            path: directory.to_string_lossy().to_string(),
+            reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
+        });
+    }
+    Some(entries)
+}
+
+fn wildcard_entry_metadata(
+    path: &Path,
+    coverage: &mut Vec<SourceCoverage>,
+) -> Option<fs::Metadata> {
+    match first_reparse_component(path) {
+        Ok(Some(component)) => {
             coverage.push(SourceCoverage::Unsupported {
-                path: path.to_string_lossy().to_string(),
-                reason: "symbolic links and reparse points are not followed during wildcard expansion"
+                path: component.to_string_lossy().to_string(),
+                reason: "symbolic link or reparse point is not followed during wildcard expansion"
                     .to_string(),
             });
-            continue;
+            return None;
         }
-        let candidate = path.to_string_lossy().replace('\\', "/");
-        let candidate = candidate.strip_prefix("./").unwrap_or(&candidate);
-        if matcher.matches(&candidate.to_ascii_lowercase()) {
-            if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
-                coverage.push(SourceCoverage::LimitReached {
-                    path: directory.to_string_lossy().to_string(),
-                    reason: format!(
-                        "wildcard matches exceed the {} file manifest limit",
-                        MAX_SOURCE_MANIFEST_ENTRIES
-                    ),
-                });
-                return;
-            }
-            paths.push(path.clone());
-        }
-        if recursive && metadata.is_dir() {
-            collect_wildcard_dir(
-                &path,
-                matcher,
-                recursive,
-                depth + 1,
-                coverage,
-                inspected_work,
-                paths,
-            );
+        Ok(None) => {}
+        Err(error) => {
+            push_wildcard_io_coverage(coverage, path, error);
+            return None;
         }
     }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if is_reparse_or_symlink(&metadata) => {
+            coverage.push(SourceCoverage::Unsupported {
+                path: path.to_string_lossy().to_string(),
+                reason: "symbolic link or reparse point is not followed during wildcard expansion"
+                    .to_string(),
+            });
+            None
+        }
+        Ok(metadata) => Some(metadata),
+        Err(error) => {
+            push_wildcard_io_coverage(coverage, path, error);
+            None
+        }
+    }
+}
+
+fn push_wildcard_io_coverage(
+    coverage: &mut Vec<SourceCoverage>,
+    path: &Path,
+    error: std::io::Error,
+) {
+    let path = path.to_string_lossy().to_string();
+    let reason = error.to_string();
+    coverage.push(match error.kind() {
+        std::io::ErrorKind::PermissionDenied => SourceCoverage::AccessDenied { path, reason },
+        std::io::ErrorKind::NotFound => SourceCoverage::Missing { path, reason },
+        _ => SourceCoverage::Unsupported { path, reason },
+    });
 }
 fn expand_path(
     path: &Path,
@@ -469,48 +695,73 @@ fn expand_path(
                 });
                 return Ok(());
             }
+            Err(crate::error::AppError::InvalidInput(reason))
+            | Err(crate::error::AppError::PlatformUnsupported(reason)) => {
+                manifest.coverage.push(SourceCoverage::Unsupported {
+                    path: path_string,
+                    reason,
+                });
+                return Ok(());
+            }
+            Err(crate::error::AppError::Io(error)) => {
+                let coverage = match error.kind() {
+                    std::io::ErrorKind::NotFound => SourceCoverage::Missing {
+                        path: path_string,
+                        reason: error.to_string(),
+                    },
+                    std::io::ErrorKind::PermissionDenied => SourceCoverage::AccessDenied {
+                        path: path_string,
+                        reason: error.to_string(),
+                    },
+                    _ => SourceCoverage::Unsupported {
+                        path: path_string,
+                        reason: error.to_string(),
+                    },
+                };
+                manifest.coverage.push(coverage);
+                return Ok(());
+            }
             Err(error) => {
-                manifest.coverage.push(SourceCoverage::Missing {
+                manifest.coverage.push(SourceCoverage::Unsupported {
                     path: path_string,
                     reason: error.to_string(),
                 });
                 return Ok(());
             }
         };
+        if listing.entries.is_empty() && listing.child_errors.is_empty() {
+            manifest.coverage.push(SourceCoverage::Empty {
+                path: path_string.clone(),
+                reason: "folder contains no EVTX files".to_string(),
+            });
+        }
         for child_error in &listing.child_errors {
-            let (coverage_path, coverage_reason) = child_error
-                .rsplit_once(": ")
-                .map_or((path_string.as_str(), child_error.as_str()), |(path, reason)| {
-                    (path, reason)
-                });
-            let coverage_path = coverage_path.to_string();
-            let coverage_reason = coverage_reason.to_string();
-            let coverage = if coverage_reason.contains("limit")
-                || coverage_reason.contains("truncated")
+            let coverage = if child_error.reason.contains("limit")
+                || child_error.reason.contains("truncated")
             {
                 SourceCoverage::LimitReached {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
-            } else if coverage_reason.contains("unsupported")
-                || coverage_reason.contains("symbolic link")
-                || coverage_reason.contains("reparse point")
+            } else if child_error.reason.contains("unsupported")
+                || child_error.reason.contains("symbolic link")
+                || child_error.reason.contains("reparse point")
             {
                 SourceCoverage::Unsupported {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
-            } else if coverage_reason.contains("denied")
-                || coverage_reason.contains("Permission denied")
+            } else if child_error.reason.contains("denied")
+                || child_error.reason.contains("Permission denied")
             {
                 SourceCoverage::AccessDenied {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
             } else {
                 SourceCoverage::Missing {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
             };
             manifest.coverage.push(coverage);
@@ -556,7 +807,7 @@ fn expand_path(
     }
 
     let normalized_path = normalize_source_path(path);
-    let source_id = normalized_path.to_lowercase();
+    let source_id = source_identity(&normalized_path);
     if manifest.entries.iter().any(|entry| entry.source_id == source_id) {
         return Ok(());
     }
@@ -656,14 +907,16 @@ fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> 
     }
 
     #[cfg(target_os = "windows")]
-    if !crate::elevation::current_elevation_state().is_elevated {
-        return Some(SourceCoverage::AccessDenied {
-            path: path.to_string(),
-            reason: "archived and VSS event-log sources require an elevated process".to_string(),
-        });
+    {
+        if !crate::elevation::current_elevation_state().is_elevated {
+            return Some(SourceCoverage::AccessDenied {
+                path: path.to_string(),
+                reason: "archived and VSS event-log sources require an elevated process"
+                    .to_string(),
+            });
+        }
+        None
     }
-
-    None
 }
 
 fn is_vss_path(path: &str) -> bool {
@@ -698,7 +951,15 @@ fn normalize_source_path(path: &Path) -> String {
     if windows_native {
         return normalize_windows_path(&raw);
     }
-    if !windows_native && raw.contains('\\') {
+    #[cfg(windows)]
+    if raw.contains('\\') {
+        let slash_normalized = raw.replace('\\', "/");
+        return normalize_source_path(Path::new(&slash_normalized));
+    }
+    #[cfg(not(windows))]
+    if raw.contains('\\')
+        && raw.split('\\').any(|component| component == "." || component == "..")
+    {
         let slash_normalized = raw.replace('\\', "/");
         return normalize_source_path(Path::new(&slash_normalized));
     }
@@ -743,7 +1004,7 @@ fn normalize_windows_path(raw: &str) -> String {
             .next()
             .is_some_and(|component| component.eq_ignore_ascii_case("UNC"))
     {
-        4
+        3
     } else if prefix == "\\\\?\\"
         && {
             let mut components = rest.split('\\');
@@ -789,6 +1050,16 @@ fn normalize_windows_path(raw: &str) -> String {
         return components.join("\\");
     }
     format!("{prefix}{}", components.join("\\"))
+}
+fn source_identity(path: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        path.to_ascii_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.to_string()
+    }
 }
 fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceManifest {
     let mut coverage: Vec<SourceCoverage> = input
@@ -867,7 +1138,7 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
             continue;
         }
         let normalized_path = normalize_source_path(path);
-        let source_id = normalized_path.to_lowercase();
+        let source_id = source_identity(&normalized_path);
         if validated.entries.iter().any(|entry| entry.source_id == source_id) {
             continue;
         }
@@ -892,6 +1163,7 @@ fn coverage_path(coverage: &SourceCoverage) -> &str {
         SourceCoverage::Unsupported { path, .. }
         | SourceCoverage::AccessDenied { path, .. }
         | SourceCoverage::Missing { path, .. }
+        | SourceCoverage::Empty { path, .. }
         | SourceCoverage::InvalidPattern { path, .. }
         | SourceCoverage::LimitReached { path, .. } => path,
     }
@@ -905,6 +1177,7 @@ fn coverage_gap_from_source_coverage(coverage: &SourceCoverage) -> EvtxCoverageG
             (path, EvtxCoverageGapKind::AccessDenied, reason)
         }
         SourceCoverage::Missing { path, reason } => (path, EvtxCoverageGapKind::Missing, reason),
+        SourceCoverage::Empty { path, reason } => (path, EvtxCoverageGapKind::Empty, reason),
         SourceCoverage::InvalidPattern { path, reason } => {
             (path, EvtxCoverageGapKind::InvalidPattern, reason)
         }
@@ -1000,9 +1273,21 @@ pub fn parse_evtx_manifest(
         .map(coverage_gap_from_source_coverage)
         .collect();
     let mut error_messages: Vec<String> = coverage_gaps.iter().map(format_coverage_gap).collect();
+    let mut total_source_bytes = 0u64;
+    let mut total_source_records = 0usize;
 
-    for source in &manifest.entries {
+    for (source_index, source) in manifest.entries.iter().enumerate() {
         let path = Path::new(&source.path);
+        let source_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+        if total_source_bytes.saturating_add(source_bytes) > MAX_SOURCE_BYTES {
+            parse_errors = parse_errors.saturating_add(1);
+            error_messages.push(format!(
+                "{}: source manifest byte budget of {} bytes was exhausted; later files were not parsed",
+                source.path, MAX_SOURCE_BYTES
+            ));
+            break;
+        }
+        total_source_bytes = total_source_bytes.saturating_add(source_bytes);
         match parse_single_file(path, maps, providers) {
             Ok(file) => {
                 let mut records = file.records;
@@ -1012,6 +1297,16 @@ pub fn parse_evtx_manifest(
                     // merged timeline can identify the originating source.
                     record.source_label = source.path.clone();
                 }
+                if records.len() > MAX_SOURCE_RECORDS.saturating_sub(total_source_records) {
+                    let remaining = MAX_SOURCE_RECORDS.saturating_sub(total_source_records);
+                    records.truncate(remaining);
+                    parse_errors = parse_errors.saturating_add(1);
+                    error_messages.push(format!(
+                        "{}: source manifest record budget of {} records was exhausted; later files were not parsed",
+                        source.path, MAX_SOURCE_RECORDS
+                    ));
+                }
+                total_source_records = total_source_records.saturating_add(records.len());
                 parse_errors += file.parse_errors;
                 coverage_gaps.extend(file.coverage_gaps.iter().cloned().map(|mut gap| {
                     gap.source = source.path.clone();
@@ -1070,6 +1365,17 @@ pub fn parse_evtx_manifest(
                 coverage_gaps.push(gap);
             }
         }
+        if source_index + 1 < manifest.entries.len()
+            && (total_source_records >= MAX_SOURCE_RECORDS
+                || total_source_bytes >= MAX_SOURCE_BYTES)
+        {
+            parse_errors = parse_errors.saturating_add(1);
+            error_messages.push(format!(
+                "{}: source manifest aggregate budget was exhausted; later files were not parsed",
+                source.path
+            ));
+            break;
+        }
     }
 
     all_records.sort_by_key(|record| record.timestamp_epoch);
@@ -1084,6 +1390,7 @@ pub fn parse_evtx_manifest(
         parse_errors,
         error_messages,
         coverage_gaps,
+        coverage: manifest.coverage,
     })
 }
 
@@ -1524,8 +1831,22 @@ mod tests {
             root.join("Application.EVTX").to_string_lossy().to_string(),
         ])
         .expect("build duplicate manifest");
-        assert_eq!(duplicate.entries.len(), 1);
-        assert_eq!(duplicate.entries[0].source_id, duplicate.entries[0].path.to_lowercase());
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(duplicate.entries.len(), 1);
+            assert_eq!(
+                duplicate.entries[0].source_id,
+                duplicate.entries[0].path.to_lowercase()
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(duplicate.entries.len(), 2);
+            assert!(duplicate
+                .entries
+                .iter()
+                .all(|entry| entry.source_id == entry.path));
+        }
 
         std::fs::remove_dir_all(root).expect("remove source tree");
     }

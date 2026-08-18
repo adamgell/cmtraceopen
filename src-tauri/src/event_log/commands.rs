@@ -225,6 +225,7 @@ pub async fn evtx_query_channels(
                 parse_errors,
                 error_messages,
                 coverage_gaps: Vec::new(),
+                coverage: Vec::new(),
             })
         })
         .await

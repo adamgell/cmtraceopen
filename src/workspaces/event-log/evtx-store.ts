@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import {
   assertParseResultShape,
+  formatCoverageGap,
   mergeCoverageGaps,
   mergeStructuredCoverageGaps,
+  sourceCoverageMessages,
 } from "./evtx-coverage";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +16,7 @@ import type {
   EvtxLevel,
   EvtxParseResult,
   EvtxTimeWindow,
+  EventLogSourceCoverage,
   EventLogSourceManifest,
   EventQueryFilterSubset,
 } from "./types";
@@ -121,16 +124,27 @@ interface EvtxState {
 
 function applyParseResult(
   result: EvtxParseResult,
-  sourceMode: EvtxSourceMode
+  sourceMode: EvtxSourceMode,
+  sourceCoverage: readonly EventLogSourceCoverage[] = [],
 ): Partial<EvtxState> {
   const channelNames = new Set(result.channels.map((c) => c.name));
+  const coverageMessages = [
+    ...sourceCoverageMessages(sourceCoverage),
+    ...sourceCoverageMessages(result.coverage ?? []),
+  ];
   return {
     records: result.records,
     channels: result.channels,
     sourceMode,
     isLoading: false,
     loadError: null,
-    coverageGaps: result.errorMessages,
+    coverageGaps: [
+      ...new Set([
+        ...result.errorMessages,
+        ...coverageMessages,
+        ...(result.coverageGaps ?? []).map(formatCoverageGap),
+      ]),
+    ],
     coverageDetails: result.coverageGaps ?? [],
     selectedChannels: channelNames,
     selectedRecordId: null,
@@ -171,8 +185,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const checked = assertParseResultShape(result);
       set(
         applyParseResult(
-          { ...result, errorMessages: checked.errorMessages, coverageGaps: checked.coverageGaps },
-          "files"
+          {
+            ...result,
+            errorMessages: checked.errorMessages,
+            coverageGaps: checked.coverageGaps,
+            coverage: checked.coverage,
+          },
+          "files",
         )
       );
     } catch (error) {
@@ -188,8 +207,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const checked = assertParseResultShape(result);
       set({
         ...applyParseResult(
-          { ...result, errorMessages: checked.errorMessages, coverageGaps: checked.coverageGaps },
-          "files"
+          {
+            ...result,
+            errorMessages: checked.errorMessages,
+            coverageGaps: checked.coverageGaps,
+            coverage: checked.coverage,
+          },
+          "files",
+          manifest.coverage,
+        )
         ),
         sourceManifest: manifest,
       });

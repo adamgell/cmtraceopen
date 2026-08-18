@@ -150,7 +150,10 @@ pub struct EvtxParseResult {
     /// limit are coverage gaps without being rejected records.
     #[serde(default)]
     pub coverage_gaps: Vec<EvtxCoverageGap>,
+    #[serde(default)]
+    pub coverage: Vec<super::parser::SourceCoverage>,
 }
+
 /// A provider that could not be captured while scanning the Windows publisher registry.
 ///
 /// Capture continues to the next publisher, but the aggregate operation remains unsuccessful so
