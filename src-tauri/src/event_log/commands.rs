@@ -153,6 +153,7 @@ pub async fn evtx_query_channels(
                             }
                         }
                     );
+                    let sequence_count = sequence;
                     let total_records = outcome.as_ref().map(|scan| scan.delivered).unwrap_or(0);
                     if let Err(error) = app_ref.emit(
                         "evtx-record-stream-complete",
