@@ -5,6 +5,20 @@ const virtualizerState = vi.hoisted(() => ({
   measuredSizes: new Map<number, number>(),
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
   totalSize: 0,
+  remeasure: () => undefined,
+  recalculate: () => undefined,
+  measureElement: (element: HTMLElement | null) => {
+    if (!element) return;
+    const index = Number(element.dataset.index);
+    const measured =
+      element.getAttribute("role") === "treeitem"
+        ? Number.parseFloat(element.style.height)
+        : Number.parseFloat(element.style.lineHeight) + 5;
+    if (!virtualizerState.measured.includes(element)) {
+      virtualizerState.measured.push(element);
+    }
+    virtualizerState.measuredSizes.set(index, measured);
+  },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
@@ -44,19 +58,19 @@ vi.mock("@tanstack/react-virtual", () => ({
       virtualizerState.items = items;
       return items;
     };
+    virtualizerState.remeasure = () => {
+      for (const element of virtualizerState.measured) {
+        virtualizerState.measureElement(element);
+      }
+    };
+    virtualizerState.recalculate = () => {
+      getTotalSize();
+      getVirtualItems();
+    };
     return {
       getTotalSize,
       getVirtualItems,
-      measureElement: (element: HTMLElement | null) => {
-        if (!element) return;
-        const index = Number(element.dataset.index);
-        const measured =
-          element.getAttribute("role") === "treeitem"
-            ? Number.parseFloat(element.style.height)
-            : Number.parseFloat(element.style.lineHeight) + 5;
-        virtualizerState.measured.push(element);
-        virtualizerState.measuredSizes.set(index, measured);
-      },
+      measureElement: virtualizerState.measureElement,
       scrollToIndex: vi.fn(),
     };
   },
@@ -179,9 +193,9 @@ describe("event-viewer shared font metrics", () => {
     const timeline = render(<EvtxTimeline />);
     const timelineRoot = screen.getByRole("tree");
     const groupRow = screen.getByRole("treeitem");
-    const virtualizerContent = timelineRoot.firstElementChild as HTMLElement;
     act(() => {
-      useEvtxStore.getState().setSortDirection("desc");
+      virtualizerState.remeasure();
+      virtualizerState.recalculate();
     });
     const recordRow = screen.getByRole("option");
     expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
@@ -192,10 +206,8 @@ describe("event-viewer shared font metrics", () => {
       size: smallList.rowHeight + 2,
       start: smallList.rowHeight,
     });
+    expect(virtualizerState.totalSize).toBe(smallList.rowHeight + smallList.rowHeight + 2);
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
-    expect(virtualizerContent.style.height).toBe(
-      `${smallList.rowHeight + smallList.rowHeight + 2}px`
-    );
     fireEvent.keyDown(timelineRoot, { key: "ArrowDown" });
     expect(timelineRoot).toHaveFocus();
     timeline.unmount();
@@ -250,7 +262,8 @@ describe("event-viewer shared font metrics", () => {
     const timelineRootLarge = screen.getByRole("tree");
     const recordRowLarge = screen.getByRole("option");
     act(() => {
-      useEvtxStore.getState().setSortDirection("asc");
+      virtualizerState.remeasure();
+      virtualizerState.recalculate();
     });
     expect(recordRowLarge.style.fontSize).toBe(`${largeList.fontSize}px`);
     expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
@@ -261,10 +274,9 @@ describe("event-viewer shared font metrics", () => {
       start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getByRole("treeitem");
-    const virtualizerContentLarge = timelineRootLarge.firstElementChild as HTMLElement;
     expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
-    expect(virtualizerContentLarge.style.height).toBe(
-      `${largeList.rowHeight + largeList.rowHeight + 2}px`
+    expect(virtualizerState.totalSize).toBe(
+      largeList.rowHeight + largeList.rowHeight + 2
     );
     fireEvent.keyDown(timelineRootLarge, { key: "ArrowDown" });
     expect(timelineRootLarge).toHaveFocus();
@@ -306,9 +318,7 @@ describe("event-viewer shared font metrics", () => {
     const filter = render(<EvtxFilterBar />);
     const filterButton = filter.getByRole("button", { name: "Crit" });
     const timeline = render(<EvtxTimeline />);
-    const timelineRoot = timeline.getByRole("tree");
     const recordRow = timeline.getByRole("option");
-    const virtualizerContent = timelineRoot.firstElementChild as HTMLElement;
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(
@@ -319,7 +329,8 @@ describe("event-viewer shared font metrics", () => {
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     act(() => {
-      useEvtxStore.getState().setSortDirection("desc");
+      virtualizerState.remeasure();
+      virtualizerState.recalculate();
     });
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
 
@@ -332,8 +343,8 @@ describe("event-viewer shared font metrics", () => {
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
-    expect(virtualizerContent.style.height).toBe(
-      `${largeList.rowHeight + largeList.rowHeight + 2}px`
+    expect(virtualizerState.totalSize).toBe(
+      largeList.rowHeight + largeList.rowHeight + 2
     );
   });
 });
