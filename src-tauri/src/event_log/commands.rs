@@ -30,6 +30,7 @@ struct EvtxQueryProgress {
 #[serde(rename_all = "camelCase")]
 struct EvtxRecordBatch {
     channel: String,
+    request_id: u64,
     sequence: usize,
     records: Vec<super::models::EvtxRecord>,
 }
@@ -68,6 +69,7 @@ pub async fn evtx_query_channels(
     channels: Vec<String>,
     max_events: Option<u64>,
     filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    request_id: Option<u64>,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
@@ -124,6 +126,7 @@ pub async fn evtx_query_channels(
                                 "evtx-record-batch",
                                 EvtxRecordBatch {
                                     channel: batch_channel.clone(),
+                                    request_id: request_id.unwrap_or_default(),
                                     sequence,
                                     records,
                                 },

@@ -157,13 +157,17 @@ function applyParseResult(
 
 export const useEvtxStore = create<EvtxState>()((set, get) => {
   let refreshScheduled = false;
+  let refreshRequested = false;
   const refreshBeforeLoad = () => {
+    refreshRequested = true;
     if (refreshScheduled) return;
     refreshScheduled = true;
     queueMicrotask(() => {
       refreshScheduled = false;
       const state = get();
+      if (state.isLoading) return;
       if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
+        refreshRequested = false;
         void state.refreshLoadedChannels();
       }
     });
@@ -341,7 +345,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
     // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
     // count a previous run's batches towards this one.
-    resetStreamedRecords(channels);
+    resetStreamedRecords(channels, generation);
 
     const results = await Promise.all(
       channels.map(async (ch) => {
@@ -349,6 +353,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: maxEvents ?? null,
+            requestId: generation,
             filter: buildServerFilter(
               get().timeWindow,
               get().filterEventIds,
@@ -479,10 +484,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
       try {
-        resetStreamedRecords([ch]);
+        resetStreamedRecords([ch], generation);
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
           maxEvents: null,
+          requestId: generation,
           // The window is a server-side predicate and a refetch is the only thing that applies it.
           // Omitting it here made the time-window control a no-op: selecting 1h triggered this
           // refresh, which then fetched the channel unbounded and replaced the view with events
@@ -538,6 +544,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         console.warn(`[evtx] Refresh failed for ${ch}: ${message}`);
         // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
         // here presents a view that is missing a whole channel as complete.
+        if (get().loadGeneration !== generation) return;
         set((s) => ({
           coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${message})`]),
           loadError: s.loadError ?? `${ch}: ${message}`,
@@ -552,6 +559,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadingProgress: null,
       loadElapsedMs: performance.now() - startTime,
     });
+    if (refreshRequested) refreshBeforeLoad();
   },
 
   setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
@@ -682,19 +690,25 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
  * channel as complete. A batch that never arrived would otherwise be indistinguishable from events
  * that do not exist, which is the failure this workspace exists to avoid.
  */
-const pendingBatches = new Map<string, { records: EvtxRecord[]; sequences: Set<number> }>();
+const pendingBatches = new Map<
+  string,
+  { requestId?: number; records: EvtxRecord[]; sequences: Set<number> }
+>();
+const activeRequestIds = new Map<string, number>();
 
-listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
+listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRecord[] }>(
   "evtx-record-batch",
   (event) => {
-    const { channel, sequence, records } = event.payload;
+    const { channel, requestId, sequence, records } = event.payload;
+    const activeRequestId = activeRequestIds.get(channel);
+    if (requestId !== undefined && activeRequestId !== undefined && requestId !== activeRequestId) {
+      return;
+    }
     let pending = pendingBatches.get(channel);
-    if (!pending) {
-      pending = { records: [], sequences: new Set<number>() };
+    if (!pending || pending.requestId !== requestId) {
+      pending = { requestId, records: [], sequences: new Set<number>() };
       pendingBatches.set(channel, pending);
     }
-    // A repeated sequence is counted once. Appending it twice would inflate the tally and hide a
-    // batch that really is missing.
     if (pending.sequences.has(sequence)) return;
     pending.sequences.add(sequence);
     pending.records.push(...records);
@@ -709,11 +723,6 @@ export function drainStreamedRecords(channel: string): {
   const pending = pendingBatches.get(channel);
   pendingBatches.delete(channel);
   if (!pending) return { records: [], missingSequences: [] };
-
-  // Batches are numbered from zero, so any number below the highest that never arrived is a batch
-  // whose records are simply absent. Reduced rather than spread: one argument per batch throws
-  // RangeError once a channel produces more batches than the engine accepts as arguments, which a
-  // reduced fetch batch makes reachable.
   let highest = 0;
   for (const sequence of pending.sequences) {
     if (sequence > highest) highest = sequence;
@@ -725,8 +734,10 @@ export function drainStreamedRecords(channel: string): {
   return { records: pending.records, missingSequences };
 }
 
-/** Discards anything buffered for channels a query is about to start, so a retry cannot double up. */
-export function resetStreamedRecords(channels: string[]) {
-  for (const channel of channels) pendingBatches.delete(channel);
+/** Discards anything buffered for channels a query is about to start. */
+export function resetStreamedRecords(channels: string[], requestId?: number) {
+  for (const channel of channels) {
+    pendingBatches.delete(channel);
+    if (requestId !== undefined) activeRequestIds.set(channel, requestId);
+  }
 }
-

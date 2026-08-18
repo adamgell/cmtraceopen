@@ -22,11 +22,18 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-const { useEvtxStore } = await import("./evtx-store");
+const { useEvtxStore, drainStreamedRecords, resetStreamedRecords } = await import("./evtx-store");
 
 /** Delivers a batch the way the backend emits one. */
-function emitBatch(channel: string, sequence: number, records: unknown[]) {
-  listeners.get("evtx-record-batch")?.({ payload: { channel, sequence, records } });
+function emitBatch(
+  channel: string,
+  sequence: number,
+  records: unknown[],
+  requestId?: number
+) {
+  listeners.get("evtx-record-batch")?.({
+    payload: { channel, sequence, records, requestId },
+  });
 }
 
 function streamedRecord(channel: string, id = 0) {
@@ -563,6 +570,15 @@ describe("the time window reaches the service", () => {
     await oldQuery;
 
     expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([99]);
+  });
+  it("rejects an old stream batch after a newer request resets the channel", () => {
+    resetStreamedRecords(["Application"], 2);
+    emitBatch("Application", 0, [streamedRecord("Application", 1)], 1);
+    emitBatch("Application", 0, [streamedRecord("Application", 2)], 2);
+
+    expect(drainStreamedRecords("Application").records.map((item) => item.eventRecordId)).toEqual([
+      2,
+    ]);
   });
 describe("records that arrive in batches while the query runs", () => {
   beforeEach(() => {
