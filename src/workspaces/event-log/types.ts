@@ -48,12 +48,58 @@ export interface EvtxChannelInfo {
   sourceType: "live" | { file: { path: string } };
 }
 
+export type EvtxCoverageGapKind =
+  | "unsupported"
+  | "accessDenied"
+  | "missing"
+  | "invalidPattern"
+  | "limitReached"
+  | "empty"
+  | "file"
+  | "chunk"
+  | "record"
+  | "xml"
+  | "limit";
+
+export interface EvtxCoverageGap {
+  source: string;
+  kind: EvtxCoverageGapKind;
+  reason: string;
+  chunkId?: number;
+  eventRecordId?: number;
+}
+
 export interface EvtxParseResult {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
   totalRecords: number;
   parseErrors: number;
   errorMessages: string[];
+  coverageGaps?: EvtxCoverageGap[];
+}
+
+export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";
+
+export interface EventLogSourceSelection {
+  path: string;
+  kind: EventLogSourceKind;
+}
+export interface EventLogSourceManifestEntry {
+  sourceId: string;
+  path: string;
+  kind: EventLogSourceKind;
+}
+
+export type EventLogSourceCoverage =
+  | { kind: "unsupported"; path: string; reason: string }
+  | { kind: "accessDenied"; path: string; reason: string }
+  | { kind: "missing"; path: string; reason: string }
+  | { kind: "invalidPattern"; path: string; reason: string }
+  | { kind: "limitReached"; path: string; reason: string };
+
+export interface EventLogSourceManifest {
+  entries: EventLogSourceManifestEntry[];
+  coverage: EventLogSourceCoverage[];
 }
 
 /**

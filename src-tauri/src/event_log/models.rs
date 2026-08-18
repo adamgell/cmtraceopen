@@ -1,5 +1,50 @@
 use serde::{Deserialize, Serialize};
 
+/// Identifies which part of an EVTX source could not be recovered.
+///
+/// A gap is not an empty result and is not evidence that the event did not occur. The parser
+/// reports the readable records it can recover and attaches one of these kinds to every rejected
+/// file, chunk, record, or rendered XML value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvtxCoverageGapKind {
+    Unsupported,
+    AccessDenied,
+    Missing,
+    InvalidPattern,
+    LimitReached,
+    Empty,
+    File,
+    Chunk,
+    Record,
+    Xml,
+    Limit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvtxCoverageGap {
+    pub source: String,
+    pub kind: EvtxCoverageGapKind,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_record_id: Option<u64>,
+}
+
+impl EvtxCoverageGap {
+    pub fn new(source: impl Into<String>, kind: EvtxCoverageGapKind, reason: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            kind,
+            reason: reason.into(),
+            chunk_id: None,
+            event_record_id: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvtxRecord {
@@ -100,6 +145,11 @@ pub struct EvtxParseResult {
     pub total_records: u64,
     pub parse_errors: u32,
     pub error_messages: Vec<String>,
+    /// Every rejected source region, including parser errors that still allowed other records to
+    /// be recovered. This is separate from `parse_errors` because an empty source and a reader
+    /// limit are coverage gaps without being rejected records.
+    #[serde(default)]
+    pub coverage_gaps: Vec<EvtxCoverageGap>,
 }
 /// A provider that could not be captured while scanning the Windows publisher registry.
 ///

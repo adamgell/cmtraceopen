@@ -17,7 +17,7 @@ use crate::watcher::tail::InitialLogicalRecord;
 
 use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
 use super::known_sources::KnownSourcePathKind;
-
+const MAX_FOLDER_LISTING_ENTRIES: usize = 4_096;
 // ── Types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +71,8 @@ pub struct FolderListingResult {
     pub source_kind: LogSourceKind,
     pub source: LogSource,
     pub entries: Vec<FolderEntry>,
+    #[serde(default)]
+    pub child_errors: Vec<String>,
     #[serde(default)]
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
@@ -563,24 +565,35 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     })?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
-
+    let mut child_errors: Vec<String> = Vec::new();
+    let mut candidates = Vec::new();
+    let mut listing_truncated = false;
     for entry_result in read_dir {
-        let entry = match entry_result {
-            Ok(value) => value,
+        match entry_result {
+            Ok(entry) => candidates.push(entry),
             Err(error) => {
+                let source = normalize_path_string(&requested_path);
+                child_errors.push(format!("{source}: child directory entry could not be read: {error}"));
                 log::warn!(
                     "event=list_log_folder_skip reason=read_dir_entry_error path=\"{}\" error=\"{}\"",
                     requested_path.display(),
                     error
                 );
-                continue;
             }
-        };
-
+        }
+        if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
+            listing_truncated = true;
+            break;
+        }
+    }
+    candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+    for entry in candidates.into_iter().take(MAX_FOLDER_LISTING_ENTRIES) {
         let entry_path = entry.path();
         let metadata = match entry.metadata() {
             Ok(value) => value,
             Err(error) => {
+                let source = normalize_path_string(&entry_path);
+                child_errors.push(format!("{source}: child metadata could not be read: {error}"));
                 log::warn!(
                     "event=list_log_folder_skip reason=metadata_error entry_path=\"{}\" error=\"{}\"",
                     entry_path.display(),
@@ -602,12 +615,21 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             modified_unix_ms: metadata_modified_unix_ms(&metadata),
         });
     }
+    if listing_truncated {
+        child_errors.push(format!(
+            "{}: folder listing reached the {} entry limit",
+            requested_path.display(),
+            MAX_FOLDER_LISTING_ENTRIES
+        ));
+    }
 
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
         // For evidence bundles, recursively collect all files from the entire
         // directory tree so that every nested artifact is loaded.
-        entries = collect_files_recursive(&requested_path);
+        let collected = collect_files_recursive(&requested_path);
+        entries = collected.entries;
+        child_errors.extend(collected.child_errors);
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
@@ -625,6 +647,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         source: LogSource::Folder {
             path: normalize_path_string(&requested_path),
         },
+        child_errors,
         entries,
         bundle_metadata,
     })
@@ -935,6 +958,20 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_manifest_folder_keeps_evtx_children_and_is_not_bundle() {
+        let dir = create_temp_dir("file-ops-ordinary-manifest");
+        fs::write(dir.join("manifest.json"), r#"{"notes":"ordinary folder"}"#)
+            .expect("write ordinary manifest");
+        fs::write(dir.join("Application.evtx"), b"evtx").expect("write evtx");
+
+        let result = list_log_folder(dir.to_string_lossy().to_string()).expect("list folder");
+        assert!(result.bundle_metadata.is_none());
+        assert!(result.entries.iter().any(|entry| entry.name == "Application.evtx"));
+
+        fs::remove_dir_all(&dir).expect("remove ordinary folder");
+    }
+
+    #[test]
     fn list_log_folder_marks_evidence_bundle_and_exposes_primary_entry_points() {
         let bundle_dir = create_temp_dir("file-ops-bundle");
         fs::create_dir_all(bundle_dir.join("evidence").join("logs")).expect("create logs dir");
@@ -981,6 +1018,7 @@ mod tests {
             list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list folder");
         let bundle_metadata = result.bundle_metadata.expect("bundle metadata");
 
+
         assert_eq!(bundle_metadata.primary_entry_points.len(), 2);
         assert!(bundle_metadata
             .primary_entry_points
@@ -999,6 +1037,57 @@ mod tests {
             ));
 
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+    #[test]
+    fn bundle_listing_includes_nested_evtx_and_bounds_recursive_entries() {
+        let bundle_dir = create_temp_dir("file-ops-bundle-eventlog-cap");
+        let nested = bundle_dir.join("evidence").join("logs").join("nested");
+        fs::create_dir_all(&nested).expect("create nested logs");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        let evtx = nested.join("Application.evtx");
+        fs::write(&evtx, b"evtx").expect("write event log");
+        for index in 0..4100 {
+            fs::write(nested.join(format!("artifact-{index}.log")), b"log")
+                .expect("write artifact");
+        }
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result.entries.len() <= 4096);
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.path == evtx.to_string_lossy()));
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bundle_listing_rejects_symlinked_directories_with_child_coverage() {
+        use std::os::unix::fs::symlink;
+
+        let bundle_dir = create_temp_dir("file-ops-bundle-symlink");
+        let outside = create_temp_dir("file-ops-bundle-symlink-target");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        fs::create_dir_all(bundle_dir.join("evidence")).expect("create evidence");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        symlink(&outside, bundle_dir.join("evidence").join("linked"))
+            .expect("create directory symlink");
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result
+            .child_errors
+            .iter()
+            .any(|error| error.contains("symbolic link")));
+        assert!(!result
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("outside.log")));
+
+        fs::remove_dir_all(&bundle_dir).expect("remove bundle");
+        fs::remove_dir_all(&outside).expect("remove target");
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {

@@ -8,6 +8,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventLogSourceManifest } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -65,6 +66,7 @@ describe("coverage gaps through the store", () => {
       records: [],
       channels: [],
       coverageGaps: [],
+      sourceManifest: null,
       loadedChannels: new Set<string>(),
       selectedChannels: new Set<string>(),
     });
@@ -79,6 +81,32 @@ describe("coverage gaps through the store", () => {
     expect(useEvtxStore.getState().coverageGaps).toEqual([
       "Application: 3 records unreadable",
     ]);
+  });
+
+  it("retains structured parser locations alongside the banner text", async () => {
+    invoke.mockResolvedValueOnce({
+      ...result("Application", ["Application: malformed XML"]),
+      coverageGaps: [
+        {
+          source: "Application.evtx",
+          kind: "xml",
+          reason: "event XML could not be parsed",
+          eventRecordId: 42,
+        },
+      ],
+    });
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(useEvtxStore.getState().coverageDetails).toEqual([
+      {
+        source: "Application.evtx",
+        kind: "xml",
+        reason: "event XML could not be parsed",
+        eventRecordId: 42,
+      },
+    ]);
+    expect(useEvtxStore.getState().coverageGaps).toContain("Application: malformed XML");
   });
 
   it("accumulates gaps as channels load one at a time", async () => {
@@ -144,6 +172,44 @@ describe("coverage gaps through the store", () => {
     expect(state.isLoading).toBe(false);
   });
 });
+it("preserves source manifest provenance and coverage through manifest loading", async () => {
+  const manifest: EventLogSourceManifest = {
+    entries: [
+      {
+        sourceId: "/logs/first/application.evtx",
+        path: "/logs/first/Application.evtx",
+        kind: "folder",
+      },
+    ],
+    coverage: [
+      {
+        kind: "missing",
+        path: "/logs/second/System.evtx",
+        reason: "source path does not exist",
+      },
+    ],
+  };
+  invoke.mockResolvedValueOnce({
+    records: [
+      {
+        ...streamedRecord("Application"),
+        sourceLabel: "/logs/first/Application.evtx",
+      },
+    ],
+    channels: [{ name: "Application", eventCount: 1, sourceType: { file: "/logs/first/Application.evtx" } }],
+    totalRecords: 1,
+    parseErrors: 1,
+    errorMessages: ["/logs/second/System.evtx: source path does not exist"],
+  });
+
+  await useEvtxStore.getState().parseManifest(manifest);
+
+  const state = useEvtxStore.getState();
+  expect(state.sourceManifest).toEqual(manifest);
+  expect(state.coverageGaps).toContain("/logs/second/System.evtx: source path does not exist");
+  expect(state.records[0].sourceLabel).toBe("/logs/first/Application.evtx");
+});
+
 describe("live batch delivery through initial and refresh loads", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -151,6 +217,7 @@ describe("live batch delivery through initial and refresh loads", () => {
       records: [],
       channels: [],
       coverageGaps: [],
+      sourceManifest: null,
       loadedChannels: new Set<string>(),
       selectedChannels: new Set<string>(),
     });

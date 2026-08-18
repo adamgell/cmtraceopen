@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openEventLogSource, openEventLogSources } from "./open-event-log-source";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -10,16 +11,30 @@ const EVTX_FILE_DIALOG_FILTERS = [
 ];
 
 export function SourcePicker() {
-  const parseFiles = useEvtxStore((s) => s.parseFiles);
   const enumerateChannels = useEvtxStore((s) => s.enumerateChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isOpening, setIsOpening] = useState(false);
+  const openingRef = useRef(false);
+
+  const beginOpening = () => {
+    if (openingRef.current) return false;
+    openingRef.current = true;
+    setIsOpening(true);
+    return true;
+  };
+
+  const finishOpening = () => {
+    openingRef.current = false;
+    setIsOpening(false);
+  };
 
   const isWindows = currentPlatform === "windows";
 
   const handleOpenFiles = async () => {
+    if (!beginOpening()) return;
     setLocalError(null);
     try {
       const selected = await open({
@@ -29,10 +44,26 @@ export function SourcePicker() {
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
-      await parseFiles(paths);
+      await openEventLogSources(paths.map((path) => ({ kind: "file" as const, path })));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
+    } finally {
+      finishOpening();
+    }
+  };
+  const handleOpenFolder = async () => {
+    if (!beginOpening()) return;
+    setLocalError(null);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected !== "string") return;
+      await openEventLogSource({ kind: "folder", path: selected });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalError(message);
+    } finally {
+      finishOpening();
     }
   };
 
@@ -85,8 +116,11 @@ export function SourcePicker() {
         <Spinner label="Loading..." />
       ) : (
         <div style={{ display: "flex", gap: "16px" }}>
-          <Button appearance="primary" onClick={() => void handleOpenFiles()}>
+          <Button appearance="primary" disabled={isOpening} onClick={() => void handleOpenFiles()}>
             Open .evtx files...
+          </Button>
+          <Button appearance="secondary" disabled={isOpening} onClick={() => void handleOpenFolder()}>
+            Open folder recursively...
           </Button>
           {isWindows && (
             <Button appearance="secondary" onClick={() => void handleEnumerate()}>

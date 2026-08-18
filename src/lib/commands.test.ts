@@ -13,6 +13,8 @@ import {
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   openLogFile,
+  parseEventLogManifest,
+  expandEventLogSources,
   revealInFileManager,
 } from "./commands";
 import { readAccessDenied } from "./source-error";
@@ -703,5 +705,31 @@ describe("Access Denied classification", () => {
     // are discarded and no elevation offer can be manufactured.
     expect(readAccessDenied(error)).toBeNull();
     expect(getterCalls).toBeGreaterThan(0);
+  });
+});
+
+describe("event-log manifest commands", () => {
+  const invokeMock = vi.mocked(invoke);
+  it("keeps expansion and parse commands on the event-log wire contract", async () => {
+    const manifest = {
+      entries: [
+        { sourceId: "/logs/application.evtx", path: "/logs/Application.evtx", kind: "file" as const },
+      ],
+      coverage: [],
+    };
+    const result = {
+      records: [],
+      channels: [],
+      totalRecords: 0,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+    invokeMock.mockResolvedValueOnce(manifest).mockResolvedValueOnce(result);
+
+    const sources = [{ path: "/logs", kind: "file" as const }];
+    await expect(expandEventLogSources(sources)).resolves.toEqual(manifest);
+    await expect(parseEventLogManifest(manifest)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "evtx_expand_sources", { sources });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "evtx_parse_manifest", { manifest });
   });
 });

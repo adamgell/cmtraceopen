@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
 use serde::Serialize;
 use super::models::{EvtxChannelInfo, EvtxParseResult};
-use super::parser;
+use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
 use tauri::{AppHandle, Manager};
 #[cfg(target_os = "windows")]
@@ -33,17 +33,38 @@ struct EvtxRecordBatch {
     records: Vec<super::models::EvtxRecord>,
 }
 
+/// Expands folder, wildcard, archive, and VSS selections before parsing.
+#[tauri::command]
+pub fn evtx_expand_sources(
+    sources: Vec<parser::EventLogSourceSelection>,
+) -> Result<EventLogSourceManifest, String> {
+    parser::build_source_manifest_for_selections(&sources)
+}
+
 #[tauri::command]
 pub async fn evtx_parse_files(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
-    // Handles are cloned out before the blocking work starts. Parsing can run for a long time over
-    // a hundred thousand records, and holding a state lock across it would stall every other
-    // command.
     let maps = state.event_maps.clone();
     let providers = state.provider_store.clone();
-    tokio::task::spawn_blocking(move || parser::parse_evtx_files(&paths, &maps, &providers))
+    tokio::task::spawn_blocking(move || {
+        let manifest = parser::build_source_manifest(&paths)?;
+        parser::parse_evtx_manifest(&manifest, &maps, &providers)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Parses an already-expanded manifest without rebuilding it from paths.
+#[tauri::command]
+pub async fn evtx_parse_manifest(
+    manifest: EventLogSourceManifest,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxParseResult, String> {
+    let maps = state.event_maps.clone();
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(move || parser::parse_evtx_manifest(&manifest, &maps, &providers))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
@@ -203,6 +224,7 @@ pub async fn evtx_query_channels(
                 total_records,
                 parse_errors,
                 error_messages,
+                coverage_gaps: Vec::new(),
             })
         })
         .await

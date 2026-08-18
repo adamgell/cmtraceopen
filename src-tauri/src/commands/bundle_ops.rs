@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -167,8 +168,13 @@ pub struct EvidenceArtifactPreview {
 // ── Constants ───────────────────────────────────────────────────────────
 
 /// File extensions that are binary / non-parseable as text logs.
-/// These are skipped during recursive bundle collection.
-const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx"];
+/// Event-log exports are retained because the event-log source path parses them.
+const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que"];
+/// Maximum directory entries inspected while recursively collecting a bundle.
+const MAX_BUNDLE_INSPECTED: usize = 8_192;
+
+/// Maximum number of files materialized by recursive bundle collection.
+const MAX_BUNDLE_ENTRIES: usize = 4096;
 
 /// Maximum file size (in bytes) to include in batch aggregate parsing.
 /// Files larger than this are still listed in the sidebar but excluded from
@@ -196,44 +202,84 @@ pub fn inspect_evidence_artifact(
 
 // ── Public helpers (used by file_ops::list_log_folder) ──────────────────
 
+/// A bounded recursive listing plus explicit traversal diagnostics.
+pub(crate) struct RecursiveCollection {
+    pub entries: Vec<FolderEntry>,
+    pub child_errors: Vec<String>,
+}
+
 /// Recursively collects all **text-parseable files** under `root`, returning
-/// them as flat `FolderEntry` items (no directory entries).  Used when opening
-/// an evidence bundle so that every nested artifact is included in the listing.
+/// them as flat `FolderEntry` items (no directory entries). Used when opening
+/// an evidence bundle so every nested artifact is included in the listing.
 ///
 /// Files with known binary extensions and files exceeding
 /// `BUNDLE_BATCH_MAX_FILE_SIZE` are excluded from the listing and logged as
-/// skipped.  They remain accessible from the sidebar for individual opening.
-pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
+/// skipped. They remain accessible from the sidebar for individual opening.
+pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     let mut out = Vec::new();
+    let mut child_errors = Vec::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
+    let mut inspected = 0usize;
+    let mut truncated = false;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut visited = HashSet::new();
 
-    while let Some(dir) = stack.pop() {
-        let read_dir = match fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(e) => {
-                log::warn!(
-                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{e}\"",
-                    dir.display()
-                );
+    'walk: while let Some(dir) = stack.pop() {
+        let identity = match fs::canonicalize(&dir) {
+            Ok(path) => path,
+            Err(error) => {
+                child_errors.push(format!("{}: {error}", dir.display()));
                 continue;
             }
         };
-
+        if !visited.insert(identity) {
+            child_errors.push(format!("{}: directory already visited", dir.display()));
+            continue;
+        }
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(error) => {
+                log::warn!(
+                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{error}\"",
+                    dir.display()
+                );
+                child_errors.push(format!("{}: {error}", dir.display()));
+                continue;
+            }
+        };
+        let mut candidates = Vec::new();
         for entry_result in read_dir {
-            let entry = match entry_result {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!(
-                        "event=collect_files_recursive_skip reason=entry_error dir=\"{}\" error=\"{e}\"",
-                        dir.display()
-                    );
+            match entry_result {
+                Ok(entry) => candidates.push(entry),
+                Err(error) => {
+                    child_errors.push(format!("{}: {error}", dir.display()));
+                }
+            }
+            if candidates.len() > MAX_BUNDLE_INSPECTED {
+                truncated = true;
+                break;
+            }
+        }
+        candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+        for entry in candidates {
+            if inspected >= MAX_BUNDLE_INSPECTED || out.len() >= MAX_BUNDLE_ENTRIES {
+                truncated = true;
+                break 'walk;
+            }
+            inspected += 1;
+            let entry_path = entry.path();
+            match unsafe_entry_reason(&entry_path) {
+                Ok(Some(reason)) => {
+                    child_errors.push(format!("{}: {reason}", entry_path.display()));
                     continue;
                 }
-            };
-
-            let entry_path = entry.path();
+                Ok(None) => {}
+                Err(error) => {
+                    child_errors.push(format!("{}: {error}", entry_path.display()));
+                    continue;
+                }
+            }
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
@@ -241,6 +287,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
                         "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
                         entry_path.display()
                     );
+                    child_errors.push(format!("{}: {e}", entry_path.display()));
                     continue;
                 }
             };
@@ -257,6 +304,10 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
                     .any(|b| b.eq_ignore_ascii_case(ext))
                 {
                     skipped_binary += 1;
+                    child_errors.push(format!(
+                        "{}: binary bundle member is unsupported for event-log parsing",
+                        entry_path.display()
+                    ));
                     log::debug!(
                         "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
                         entry_path.display()
@@ -269,6 +320,11 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
             let size = metadata.len();
             if size > BUNDLE_BATCH_MAX_FILE_SIZE {
                 skipped_large += 1;
+                child_errors.push(format!(
+                    "{}: file exceeds the {} byte bundle limit",
+                    entry_path.display(),
+                    BUNDLE_BATCH_MAX_FILE_SIZE
+                ));
                 log::debug!(
                     "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
                     entry_path.display()
@@ -286,13 +342,38 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
         }
     }
 
+    if truncated {
+        child_errors.push(format!(
+            "{}: recursive listing truncated after inspecting {} entries",
+            root.display(),
+            inspected
+        ));
+    }
     log::info!(
         "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
         root.display(),
         out.len()
     );
 
-    out
+    RecursiveCollection {
+        entries: out,
+        child_errors,
+    }
+}
+
+fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(Some("symbolic link or reparse point is not followed"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Ok(Some("symbolic link or reparse point is not followed"));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBundleMetadata> {
@@ -303,6 +384,20 @@ pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBun
 
     let manifest_content = fs::read_to_string(&manifest_path).ok()?;
     let manifest = serde_json::from_str::<Value>(&manifest_content).ok()?;
+    let bundle = manifest.get("bundle")?.as_object()?;
+    if bundle
+        .get("bundleId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+        && bundle
+            .get("bundleLabel")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+    {
+        return None;
+    }
 
     let mut primary_entry_points = resolve_bundle_primary_entry_points(path, &manifest);
     if primary_entry_points.is_empty() {
