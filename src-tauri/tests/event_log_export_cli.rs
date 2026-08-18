@@ -77,10 +77,48 @@ fn binary_returns_nonzero_and_surfaces_writer_errors() {
         .output()
         .expect("run event-log-export");
     assert!(!output.status.success());
-    assert!(String::from_utf8(output.stdout).expect("stdout").starts_with("<?xml"));
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr");
     assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=0 parseErrors=1 gaps=1"));
     assert!(stderr.contains("coverage-gap: damaged.evtx: truncated"));
     assert!(stderr.contains("export failed"));
     assert!(stderr.contains("record is missing raw XML"));
+    let destination = directory.path().join("events.xml");
+    fs::write(&destination, "sentinel").expect("seed destination");
+    let file_output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path"),
+            "--format",
+            "xml",
+            "--output",
+            destination.to_str().expect("destination path"),
+        ])
+        .output()
+        .expect("run event-log-export");
+    assert!(!file_output.status.success());
+    assert_eq!(fs::read_to_string(destination).expect("destination"), "sentinel");
+}
+
+#[test]
+fn binary_rejects_malformed_raw_xml_without_creating_an_artifact() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let manifest = manifest(&directory, "<Event><Message></Event>", "safe");
+    let destination = directory.path().join("malformed.xml");
+    let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path"),
+            "--format",
+            "xml",
+            "--output",
+            destination.to_str().expect("destination path"),
+        ])
+        .output()
+        .expect("run event-log-export");
+    assert!(!output.status.success());
+    assert!(!destination.exists());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("raw XML is malformed"));
+    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=0"));
 }

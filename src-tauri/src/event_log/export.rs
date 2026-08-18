@@ -380,6 +380,7 @@ fn redact_raw_xml(xml: &str) -> String {
 
 /// Renders records in `format`.
 pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<String, String> {
+    super::writer::validate_raw_xml(records, format).map_err(|error| error.to_string())?;
     let mut output = Vec::new();
     super::writer::write_record_stream(
         &mut output,

@@ -97,6 +97,19 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
             "record is missing raw XML",
         ));
     }
+    let mut reader = quick_xml::Reader::from_str(raw_xml);
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("raw XML is malformed: {error}"),
+                ));
+            }
+        }
+    }
     Ok(raw_xml)
 }
 
@@ -211,16 +224,25 @@ where
     })
 }
 
-/// Streams a slice through the shared writer, discovering map columns without
-/// retaining another copy of the records.
+pub(crate) fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> io::Result<()> {
+    if matches!(format, ExportFormat::Xml | ExportFormat::RawXml) {
+        for record in records {
+            required_raw_xml(record)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn write_records<W: Write + ?Sized>(
     writer: &mut W,
     format: ExportFormat,
     records: &[EvtxRecord],
 ) -> io::Result<ExportStats> {
+    validate_raw_xml(records, format)?;
     let mapped = super::export::mapped_columns(records);
     write_record_stream(writer, format, records.iter(), &mapped)
 }
+
 
 /// Writes to a path, or to stdout when `destination` is `None` or `-`.
 pub fn write_records_to_destination(
@@ -228,6 +250,7 @@ pub fn write_records_to_destination(
     format: ExportFormat,
     destination: Option<&Path>,
 ) -> Result<ExportStats, String> {
+    validate_raw_xml(records, format).map_err(|error| error.to_string())?;
     if destination.is_some_and(|path| path.as_os_str() == "-") || destination.is_none() {
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
@@ -235,7 +258,8 @@ pub fn write_records_to_destination(
     }
 
     let path = destination.expect("destination checked above");
-    let mut file = File::create(path).map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+    let mut file = File::create(path)
+        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
     write_records(&mut file, format, records)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
