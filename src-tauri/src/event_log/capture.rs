@@ -108,7 +108,7 @@ fn provider_file_paths(value: &str) -> Vec<String> {
 mod windows_capture {
     use super::*;
     use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage, ProviderMetadata};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use sha2::{Digest, Sha256};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{
@@ -359,15 +359,15 @@ mod windows_capture {
     unsafe fn optional_publisher_variant(
         metadata: EVT_HANDLE,
         property: EVT_PUBLISHER_METADATA_PROPERTY_ID,
-    ) -> Result<Option<OwnedVariant>, String> {
+    ) -> Result<(Option<OwnedVariant>, bool), String> {
         match get_publisher_variant(metadata, property) {
-            Ok(value) => Ok(value),
+            Ok(value) => Ok((value, false)),
             Err(error)
                 if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
                     || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
                     || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
             {
-                Ok(None)
+                Ok((None, true))
             }
             Err(error) => Err(error),
         }
@@ -492,7 +492,7 @@ mod windows_capture {
             }
             Ok(())
         };
-        if let Some(value) =
+        if let (Some(value), _) =
             optional_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)?
         {
             add(value)?;
@@ -500,11 +500,11 @@ mod windows_capture {
         Ok(())
     }
 
-    unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<BTreeMap<u32, String>, String> {
-        let Some(OwnedVariant::Handle(array_handle)) =
-            optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?
-        else {
-            return Ok(BTreeMap::new());
+    unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<(BTreeMap<u32, String>, bool), String> {
+        let (channel_value, unavailable) =
+            optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?;
+        let Some(OwnedVariant::Handle(array_handle)) = channel_value else {
+            return Ok((BTreeMap::new(), unavailable));
         };
         let array_handle = EvtHandle(array_handle);
         let mut count = 0u32;
@@ -531,7 +531,7 @@ mod windows_capture {
             .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
             names.insert(channel_id as u32, path);
         }
-        Ok(names)
+        Ok((names, unavailable))
     }
 
     unsafe fn capture_provider(
@@ -544,7 +544,10 @@ mod windows_capture {
             source_os_build,
             ..ProviderMetadata::default()
         };
-        let channels = channel_names(metadata_handle)?;
+        let (channels, channels_unavailable) = channel_names(metadata_handle)?;
+        if channels_unavailable {
+            metadata.unavailable_categories.insert("channels".to_string());
+        }
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
 
@@ -554,9 +557,18 @@ mod windows_capture {
             (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
             (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
         ] {
-            let Some(OwnedVariant::Handle(array_handle)) =
-                optional_publisher_variant(metadata_handle, array_property)?
-            else {
+            let (array_value, unavailable) =
+                optional_publisher_variant(metadata_handle, array_property)?;
+            if unavailable {
+                let category = match target {
+                    0 => "tasks",
+                    1 => "opcodes",
+                    2 => "keywords",
+                    _ => "levels",
+                };
+                metadata.unavailable_categories.insert(category.to_string());
+            }
+            let Some(OwnedVariant::Handle(array_handle)) = array_value else {
                 continue;
             };
             let array_handle = EvtHandle(array_handle);

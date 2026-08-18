@@ -13,7 +13,7 @@
 //! The format was reverse engineered from a real database built on Windows 11; the full spec is in
 //! issue #539.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -149,6 +149,11 @@ pub struct ProviderMetadata {
     /// Opcode value to name.
     #[serde(default)]
     pub opcodes: BTreeMap<String, String>,
+    /// Categories that were unavailable in the source publisher metadata.
+    ///
+    /// An absent category is distinct from a present category with zero entries.
+    #[serde(default)]
+    pub unavailable_categories: BTreeSet<String>,
     /// Windows build the metadata was captured from, so a mismatch is visible rather than assumed.
     #[serde(default)]
     pub source_os_build: Option<u32>,

@@ -20,7 +20,7 @@
 //! Every BLOB is gzip-compressed JSON. A real database holds about 1,180 providers in 16 MB, so
 //! rows are read on demand and cached rather than loaded eagerly.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -181,7 +181,7 @@ impl ProviderDb {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, Maps, SourceOsBuild \
+                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, Maps, Parameters, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
                  ORDER BY SourceOsBuild DESC, VersionKey ASC LIMIT 1",
             )
@@ -196,16 +196,18 @@ impl ProviderDb {
                 row.get::<_, Vec<u8>>(4)?,
                 row.get::<_, Vec<u8>>(5)?,
                 row.get::<_, Vec<u8>>(6)?,
-                row.get::<_, Option<u32>>(7)?,
+                row.get::<_, Vec<u8>>(7)?,
+                row.get::<_, Option<u32>>(8)?,
             ))
         });
 
-        let (version_key, events, messages, tasks, keywords, opcodes, maps, build) = match row {
+        let (version_key, events, messages, tasks, keywords, opcodes, maps, parameters, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
         };
         let levels = levels_from_maps(&maps)?;
+        let unavailable_categories = unavailable_categories_from_parameters(&parameters)?;
 
         Ok(Some(ProviderMetadata {
             provider_name: name.to_string(),
@@ -215,6 +217,7 @@ impl ProviderDb {
             tasks: inflate_json(&tasks)?,
             keywords: inflate_json(&keywords)?,
             opcodes: inflate_json(&opcodes)?,
+            unavailable_categories,
             source_os_build: build,
         }))
     }
@@ -252,6 +255,16 @@ fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
         .transpose()
         .map_err(|error| format!("provider levels are not a map: {error}"))?
         .map_or_else(|| Ok(BTreeMap::new()), Ok)
+}
+fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String>, String> {
+    let parameters: serde_json::Value = inflate_json(blob)?;
+    parameters
+        .get("unavailableCategories")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("provider unavailable categories are not a set: {error}"))?
+        .map_or_else(|| Ok(BTreeSet::new()), Ok)
 }
 
 
@@ -298,13 +311,10 @@ pub fn write_provider_database(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("cannot begin provider database transaction: {error}"))?;
-    // Writing a database is a full replacement, not an append: a stale provider row from an earlier
-    // capture at the same path must not survive into the new set.
     transaction
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
 
-    let empty_array = serde_json::json!([]);
     for captured in providers {
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
@@ -312,9 +322,10 @@ pub fn write_provider_database(
         let maps = gzip_json(&serde_json::json!({ "levels": metadata.levels }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
-        let parameters = gzip_json(&empty_array)?;
         let tasks = gzip_json(&metadata.tasks)?;
-
+        let parameters = gzip_json(&serde_json::json!({
+            "unavailableCategories": metadata.unavailable_categories
+        }))?;
         transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
@@ -751,6 +762,7 @@ mod tests {
             keywords: [("1".to_string(), "Error".to_string())]
                 .into_iter()
                 .collect(),
+            unavailable_categories: ["keywords".to_string()].into_iter().collect(),
             opcodes: [("11".to_string(), "Start".to_string())]
                 .into_iter()
                 .collect(),
@@ -780,6 +792,7 @@ mod tests {
             .expect("present");
         assert_eq!(read, metadata);
         assert_eq!(read.levels.get("2").map(String::as_str), Some("Information"));
+        assert!(read.unavailable_categories.contains("keywords"));
         let version_key: String = database
             .connection
             .query_row(
