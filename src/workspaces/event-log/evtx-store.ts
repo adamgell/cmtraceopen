@@ -58,6 +58,9 @@ function appendUniqueRecords(existing: EvtxRecord[], incoming: EvtxRecord[]): Ev
   });
   return [...existing, ...unique];
 }
+function clearChannelReadGaps(gaps: string[], channel: string): string[] {
+  return gaps.filter((gap) => !gap.startsWith(`${channel}: not read`));
+}
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -498,7 +501,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           loadedChannels: newLoaded,
           // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
           // backend reported here would show a complete view of a partly unreadable set.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
+          coverageGaps: mergeCoverageGaps(clearChannelReadGaps(state.coverageGaps, channel), [
             ...checked.errorMessages,
             ...gapsFound,
           ]),
@@ -614,7 +617,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+          coverageGaps: mergeCoverageGaps(clearChannelReadGaps(s.coverageGaps, ch), [
             ...checked.errorMessages,
             ...streamedGaps,
             ...shortfallGaps,
@@ -804,10 +807,28 @@ listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRec
     if (pending.sequences.has(sequence)) return;
     useEvtxStore.setState((state) => {
       if (requestId !== undefined && state.loadGeneration !== requestId) return state;
+      const last = state.records[state.records.length - 1];
+      const ordered =
+        last === undefined ||
+        records.length === 0 ||
+        compareStoredRecords(last, records[0]) <= 0;
+      if (ordered) {
+        const merged = [...state.records, ...records];
+        for (let i = state.records.length; i < merged.length; i++) merged[i].id = i;
+        return { records: merged };
+      }
+      const selected =
+        state.selectedRecordId === null
+          ? null
+          : state.records.find((record) => record.id === state.selectedRecordId) ?? null;
       const merged = appendUniqueRecords(state.records, records);
       merged.sort(compareStoredRecords);
       for (let i = 0; i < merged.length; i++) merged[i].id = i;
-      return { records: merged };
+      const selectedRecordId =
+        selected === null
+          ? state.selectedRecordId
+          : merged.findIndex((record) => recordKey(record) === recordKey(selected));
+      return { records: merged, selectedRecordId };
     });
     pending.sequences.add(sequence);
     pending.records.push(...records);
@@ -827,9 +848,6 @@ export function drainStreamedRecords(channel: string, requestId?: number): {
     return { records: [], missingSequences: [] };
   }
   pendingBatches.delete(channel);
-  if (requestId !== undefined && activeRequestIds.get(channel) === requestId) {
-    activeRequestIds.delete(channel);
-  }
   let highest = 0;
   for (const sequence of pending.sequences) {
     if (sequence > highest) highest = sequence;

@@ -8,6 +8,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -633,6 +634,17 @@ describe("records that arrive in batches while the query runs", () => {
     const state = useEvtxStore.getState();
     expect(state.records).toHaveLength(3);
     expect(state.coverageGaps).toEqual([]);
+  });
+ 
+  it("remaps the selected record when an earlier streamed event reorders rows", () => {
+    const selected = { ...record("System", 100), id: 0 } as unknown as EvtxRecord;
+    useEvtxStore.setState({ records: [selected], selectedRecordId: 0 });
+    emitBatch("System", 0, [{ ...record("System", 1), id: 1 }]);
+
+    const state = useEvtxStore.getState();
+    expect(state.records.map((item) => item.eventRecordId)).toEqual([1, 100]);
+    expect(state.selectedRecordId).toBe(1);
+    expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
   });
 
   it("reports a batch that never arrived instead of showing a short list as complete", async () => {
