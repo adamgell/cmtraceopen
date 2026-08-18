@@ -35,7 +35,7 @@ export async function openTimelineSource(source: LogSource): Promise<void> {
     incoming = incomingFromListing(source.defaultPath, listing.entries);
   }
 
-  if (incoming.length === 0 && existing.length === 0) {
+  if (incoming.length === 0) {
     return;
   }
 

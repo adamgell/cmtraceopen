@@ -76,6 +76,9 @@ describe("openTimelineSource", () => {
   });
 
   it("does not treat an empty folder as an IntuneEvents source", async () => {
+    useTimelineStore.setState({
+      bundle: { sources: [{ path: "/tmp/existing.log" }] },
+    } as never);
     vi.mocked(listLogFolder).mockResolvedValue({
       sourceKind: "folder",
       source: { kind: "folder", path: "/tmp/empty" },
