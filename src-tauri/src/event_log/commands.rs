@@ -248,23 +248,22 @@ pub async fn evtx_export_records(
     records: Vec<super::models::EvtxRecord>,
     format: super::export::ExportFormat,
     destination: String,
+    source_paths: Vec<String>,
 ) -> Result<u64, String> {
     let record_count = records.len();
-    // Rendered on a blocking thread, like every other heavy command here. The XML format
-    // concatenates raw_xml for up to a hundred thousand records into one String, which can occupy
-    // a runtime worker for seconds and stall unrelated IPC.
-    let rendered =
-        tokio::task::spawn_blocking(move || super::export::export_records(&records, format))
-            .await
-            .map_err(|error| format!("export task failed: {error}"))??;
-    let byte_count = rendered.len() as u64;
-    tokio::fs::write(&destination, rendered)
-        .await
-        .map_err(|error| format!("cannot write {destination}: {error}"))?;
+    let destination_path = std::path::PathBuf::from(&destination);
+    super::writer::reject_source_destination(&source_paths, Some(&destination_path))?;
+    let destination_for_log = destination.clone();
+    let rendered = tokio::task::spawn_blocking(move || {
+        super::writer::write_records_to_destination(&records, format, Some(&destination_path))
+            .map(|stats| stats.bytes)
+    })
+    .await
+    .map_err(|error| format!("export task failed: {error}"))??;
     log::info!(
-        "event=evtx_export destination=\"{destination}\" records={record_count} bytes={byte_count}"
+        "event=evtx_export destination=\"{destination_for_log}\" records={record_count} bytes={rendered}"
     );
-    Ok(byte_count)
+    Ok(rendered)
 }
 
 /// Loads EvtxECmd `.map` files from `directory` into the application's registry.

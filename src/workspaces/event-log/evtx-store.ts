@@ -56,6 +56,8 @@ interface EvtxState {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
   sourceMode: EvtxSourceMode;
+  /** Paths currently represented by `records`; used to protect export destinations. */
+  sourcePaths: string[];
   isLoading: boolean;
   loadingChannel: string | null;
   loadingProgress: number | null;
@@ -155,6 +157,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   records: [],
   channels: [],
   sourceMode: null,
+  sourcePaths: [],
   isLoading: false,
   loadError: null,
   loadingChannel: null,
@@ -183,8 +186,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       const checked = assertParseResultShape(result);
-      set(
-        applyParseResult(
+      set({
+        ...applyParseResult(
           {
             ...result,
             errorMessages: checked.errorMessages,
@@ -192,8 +195,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             coverage: checked.coverage,
           },
           "files",
-        )
-      );
+        ),
+        sourcePaths: [...paths],
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -246,6 +250,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       set({
         channels: updatedChannels,
         sourceMode: "live",
+        sourcePaths: [],
         isLoading: true,
         loadError: null,
         coverageGaps: [],
@@ -628,6 +633,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       records: [],
       channels: [],
       sourceMode: null,
+      sourcePaths: [],
       isLoading: false,
       loadError: null,
       selectedChannels: new Set<string>(),

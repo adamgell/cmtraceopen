@@ -8,8 +8,13 @@
 //! Formatting is deliberately separate from writing files, so the rules below are unit-testable
 //! without touching the filesystem.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use cmtraceopen_parser::intune::apps::windows::common::redact_text;
 
+
+const MAX_RAW_XML_BYTES: usize = 256 * 1024;
 use super::models::EvtxRecord;
 
 /// A supported export format.
@@ -20,10 +25,14 @@ pub enum ExportFormat {
     Csv,
     /// Tab-separated, one row per event, with a header line.
     Tsv,
-    /// A JSON array of the full records.
+    /// A JSON array of the redacted normalized records.
     Json,
-    /// The provider's own event XML, concatenated under a single root.
+    /// Redacted provider event XML concatenated under a single root.
     Xml,
+    /// An escaped HTML table of the redacted normalized fields.
+    Html,
+    /// Redacted provider event XML without an added document root.
+    RawXml,
 }
 
 impl ExportFormat {
@@ -33,11 +42,11 @@ impl ExportFormat {
             Self::Csv => "csv",
             Self::Tsv => "tsv",
             Self::Json => "json",
-            Self::Xml => "xml",
+            Self::Xml | Self::RawXml => "xml",
+            Self::Html => "html",
         }
     }
-
-    fn delimiter(&self) -> char {
+    pub(crate) fn delimiter(&self) -> char {
         match self {
             Self::Tsv => '\t',
             _ => ',',
@@ -45,11 +54,12 @@ impl ExportFormat {
     }
 }
 
+
 /// Columns every delimited export carries, in order.
 ///
 /// `User SID` is here because it is a primary pivot for event triage; leaving it out meant an
 /// analyst who exported the grid got fewer columns than the grid had shown them.
-const COLUMNS: [&str; 14] = [
+pub(crate) const COLUMNS: [&str; 15] = [
     "Event Time",
     "Record ID",
     "Event ID",
@@ -64,6 +74,7 @@ const COLUMNS: [&str; 14] = [
     "User SID",
     "Keywords",
     "Description",
+    "Source Label",
 ];
 
 /// Map-derived column names present across `records`, in first-seen order.
@@ -71,7 +82,7 @@ const COLUMNS: [&str; 14] = [
 /// Appended after the fixed columns so a delimited export carries the same map values the grid
 /// renders. Discovered from the records rather than declared, because which properties exist
 /// depends on which maps matched.
-fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
+pub(crate) fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for record in records {
         for column in &record.mapped {
@@ -89,7 +100,7 @@ fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
 /// descriptions and command lines routinely begin with those characters, and an attacker who can
 /// influence event content can otherwise get code to run when an analyst opens the export. A
 /// leading apostrophe forces the cell to be read as text.
-fn neutralize_formula(value: &str) -> String {
+pub(crate) fn neutralize_formula(value: &str) -> String {
     match value.chars().next() {
         Some('=') | Some('+') | Some('-') | Some('@') => format!("'{value}"),
         // Tab and carriage return are also treated as formula leads by some spreadsheet readers.
@@ -102,7 +113,7 @@ fn neutralize_formula(value: &str) -> String {
 ///
 /// Always quoting would be simpler, but unquoted values keep exports diffable, so quoting is
 /// applied only where the value would otherwise break the row.
-fn escape_delimited(value: &str, delimiter: char) -> String {
+pub(crate) fn escape_delimited(value: &str, delimiter: char) -> String {
     let value = neutralize_formula(value);
     let needs_quotes = value.contains(delimiter)
         || value.contains('"')
@@ -119,7 +130,7 @@ fn escape_delimited(value: &str, delimiter: char) -> String {
 ///
 /// Returns the input unchanged when there is none, and leaves everything after the declaration
 /// exactly as the source wrote it.
-fn strip_xml_declaration(xml: &str) -> &str {
+pub(crate) fn strip_xml_declaration(xml: &str) -> &str {
     let trimmed = xml.trim_start();
     let Some(rest) = trimmed.strip_prefix("<?xml") else {
         return xml;
@@ -135,7 +146,7 @@ fn optional(value: Option<impl ToString>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 
-fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
+pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
     let mut row: Vec<String> = vec![
         record.timestamp.clone(),
         record.event_record_id.to_string(),
@@ -151,6 +162,7 @@ fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
         record.user_sid.clone().unwrap_or_default(),
         record.keywords.clone().unwrap_or_default(),
         record.message.clone(),
+        record.source_label.clone(),
     ];
     for property in mapped {
         // An incomplete mapping renders empty here for the same reason it does in the grid: a
@@ -160,67 +172,298 @@ fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
             .iter()
             .find(|column| &column.property == property)
             .filter(|column| column.complete)
+
             .map(|column| column.text.clone())
             .unwrap_or_default();
         row.push(value);
     }
     row
 }
+/// Produces the default-safe projection used by every export format.
+///
+/// Redaction is performed immediately before serialization so the interactive
+/// record remains useful in memory while neither normalized fields nor provider
+/// XML can bypass the export boundary.
+pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
+    let mut redacted = record.clone();
+    redacted.timestamp = redact_text(&record.timestamp);
+    redacted.provider = redact_text(&record.provider);
+    redacted.channel = redact_text(&record.channel);
+    redacted.message = redact_text(&record.message);
+    redacted.computer = redact_labeled_value("ComputerName", &record.computer);
+    redacted.raw_xml = redact_raw_xml(&record.raw_xml);
+    redacted.source_label = redact_text(&record.source_label);
+    redacted.event_data = record
+        .event_data
+        .iter()
+        .map(|field| super::models::EvtxField {
+            name: field.name.clone(),
+            value: redact_labeled_value(&field.name, &field.value),
+        })
+        .collect();
+    redacted.user_sid = record.user_sid.as_deref().map(redact_text);
+    redacted.mapped = record
+        .mapped
+        .iter()
+        .map(|column| super::maps::MappedColumn {
+            property: column.property.clone(),
+            text: redact_labeled_value(&column.property, &column.text),
+            complete: column.complete,
+        })
+        .collect();
+    redacted
+}
+fn redact_labeled_value(label: &str, value: &str) -> String {
+    let prefix = format!("{label}=");
+    let redacted = redact_text(&format!("{prefix}{value}"));
+    redacted
+        .strip_prefix(&prefix)
+        .unwrap_or(&redacted)
+        .to_owned()
+}
+
+fn redact_xml_value(label: &str, value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return value.to_owned();
+    }
+    let start = value.find(trimmed).expect("trimmed value is present");
+    let end = start + trimmed.len();
+    format!(
+        "{}{}{}",
+        &value[..start],
+        redact_labeled_value(label, trimmed),
+        &value[end..]
+    )
+}
+
+fn event_data_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
+        )
+        .expect("event data redaction pattern must compile")
+    })
+}
+
+fn cdata_event_data_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<leading>\s*)<!\[CDATA\[(?P<value>.*?)\]\]>(?P<trailing>\s*)(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
+        )
+        .expect("CDATA event data redaction pattern must compile")
+    })
+}
+
+fn labeled_xml_field_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><(?:[\w.-]+:)?(?P<label>Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?(?:Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\s*>)"#,
+        )
+        .expect("labeled XML field redaction pattern must compile")
+    })
+}
+
+fn xml_name_attribute(tag: &str) -> Option<String> {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)\bName\s*=\s*["']([^"']+)["']"#)
+            .expect("XML Name attribute pattern must compile")
+    })
+    .captures(tag)
+    .map(|captures| captures[1].to_owned())
+}
+
+fn redact_xml_tag(tag: &str) -> String {
+    let mut output = String::with_capacity(tag.len());
+    let mut cursor = 0;
+    let context_label = xml_name_attribute(tag).map(|label| {
+        if label.eq_ignore_ascii_case("Computer") {
+            "ComputerName".to_owned()
+        } else {
+            label
+        }
+    });
+    let mut pending_label: Option<String> = None;
+    while cursor < tag.len() {
+        let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
+        else {
+            output.push_str(&tag[cursor..]);
+            break;
+        };
+        let opening = cursor + relative;
+        output.push_str(&tag[cursor..=opening]);
+        let quote = tag.as_bytes()[opening];
+        let Some(relative_end) = tag[opening + 1..].find(quote as char) else {
+            output.push_str(&tag[opening + 1..]);
+            break;
+        };
+        let end = opening + 1 + relative_end;
+        let before = tag[..opening].trim_end();
+        let attr_name = before
+            .rfind('=')
+            .and_then(|equals| before[..equals].trim_end().rsplit(|c: char| c == ' ' || c == '\t').next())
+            .unwrap_or("")
+            .trim_start_matches(|c: char| c == '<' || c == '/');
+        let value = &tag[opening + 1..end];
+        let label = if attr_name.eq_ignore_ascii_case("value") {
+            pending_label
+                .as_deref()
+                .or(context_label.as_deref())
+                .unwrap_or(attr_name)
+        } else if attr_name.eq_ignore_ascii_case("computer") {
+            "ComputerName"
+        } else {
+            attr_name
+        };
+        if attr_name.eq_ignore_ascii_case("name") {
+            pending_label = Some(value.to_owned());
+            output.push_str(value);
+        } else {
+            output.push_str(&redact_xml_value(label, value));
+            if attr_name.eq_ignore_ascii_case("value") {
+                pending_label = None;
+            }
+        }
+        output.push(quote as char);
+
+        cursor = end + 1;
+    }
+    output
+}
+fn redact_xml_text(text: &str) -> String {
+    if let Ok(decoded) = quick_xml::escape::unescape(text) {
+        let redacted = redact_text(&decoded);
+        if redacted != decoded {
+            return redacted;
+        }
+    }
+    redact_text(text)
+}
+
+fn redact_raw_xml(xml: &str) -> String {
+    if xml.len() > MAX_RAW_XML_BYTES {
+        return "<Event><Redaction>[redacted: oversized text omitted]</Redaction></Event>".to_owned();
+    }
+    let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
+        let label = if captures["label"].eq_ignore_ascii_case("Computer") {
+            "ComputerName"
+        } else {
+            &captures["label"]
+        };
+        format!(
+            "{}{}{}",
+            &captures["open"],
+            redact_xml_value(label, &captures["value"]),
+            &captures["close"],
+        )
+    });
+    let labeled = labeled_xml_field_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
+        let label = if captures["label"].eq_ignore_ascii_case("Computer") {
+            "ComputerName"
+        } else {
+            &captures["label"]
+        };
+        format!(
+            "{}{}{}",
+            &captures["open"],
+            redact_xml_value(label, &captures["value"]),
+            &captures["close"],
+        )
+    });
+    let labeled = cdata_event_data_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
+        format!(
+            "{}{}<![CDATA[{}]]>{}{}",
+            &captures["open"],
+            &captures["leading"],
+            redact_xml_value(&captures["label"], &captures["value"]),
+            &captures["trailing"],
+            &captures["close"],
+        )
+    });
+    let mut output = String::with_capacity(labeled.len());
+    let mut cursor = 0;
+    while cursor < labeled.len() {
+        let Some(relative_open) = labeled[cursor..].find('<') else {
+            output.push_str(&redact_xml_text(&labeled[cursor..]));
+            break;
+        };
+        let opening = cursor + relative_open;
+        output.push_str(&redact_xml_text(&labeled[cursor..opening]));
+        let tail = &labeled[opening..];
+        if let Some(content) = tail.strip_prefix("<?") {
+            if let Some(end) = content.find("?>") {
+                output.push_str("<?");
+                output.push_str(&redact_xml_text(&content[..end]));
+                output.push_str("?>");
+                cursor = opening + 2 + end + 2;
+                continue;
+            }
+            output.push_str("<?");
+            output.push_str(&redact_xml_text(content));
+            break;
+        }
+        if let Some(content) = tail.strip_prefix("<!--") {
+            if let Some(end) = content.find("-->") {
+                output.push_str("<!--");
+                output.push_str(&redact_xml_text(&content[..end]));
+                output.push_str("-->");
+                cursor = opening + 4 + end + 3;
+                continue;
+            }
+            output.push_str("<!--");
+            output.push_str(&redact_xml_text(content));
+            break;
+        }
+        if let Some(content) = tail.strip_prefix("<![CDATA[") {
+            if let Some(end) = content.find("]]>") {
+                output.push_str("<![CDATA[");
+                output.push_str(&redact_text(&content[..end]));
+                output.push_str("]]>");
+                cursor = opening + 9 + end + 3;
+                continue;
+            }
+            output.push_str("<![CDATA[");
+            output.push_str(&redact_text(content));
+            break;
+        }
+        let mut end = opening + 1;
+        let mut quote = None;
+        while end < labeled.len() {
+            let byte = labeled.as_bytes()[end];
+            if let Some(expected) = quote {
+                if byte == expected {
+                    quote = None;
+                }
+            } else if byte == b'"' || byte == b'\'' {
+                quote = Some(byte);
+            } else if byte == b'>' {
+                end += 1;
+                break;
+            }
+            end += 1;
+        }
+        output.push_str(&redact_xml_tag(&labeled[opening..end]));
+        cursor = end;
+    }
+    output
+}
 
 /// Renders records in `format`.
 pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<String, String> {
-    match format {
-        ExportFormat::Csv | ExportFormat::Tsv => {
-            let delimiter = format.delimiter();
-            let mapped = mapped_columns(records);
-
-            // Written straight into the output. Collecting each row into a Vec and joining it
-            // allocated a vector and a fresh separator String per record, on an export that can
-            // run to a hundred thousand of them.
-            let mut out = String::new();
-            let write_row = |out: &mut String, cells: &mut dyn Iterator<Item = &str>| {
-                let mut first = true;
-                for cell in cells {
-                    if !first {
-                        out.push(delimiter);
-                    }
-                    first = false;
-                    out.push_str(&escape_delimited(cell, delimiter));
-                }
-                out.push('\n');
-            };
-
-            write_row(
-                &mut out,
-                &mut COLUMNS
-                    .iter()
-                    .copied()
-                    .chain(mapped.iter().map(String::as_str)),
-            );
-            for record in records {
-                let row = row_of(record, &mapped);
-                write_row(&mut out, &mut row.iter().map(String::as_str));
-            }
-            Ok(out)
-        }
-        ExportFormat::Json => {
-            serde_json::to_string_pretty(records).map_err(|error| error.to_string())
-        }
-        ExportFormat::Xml => {
-            let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Events>\n");
-            for record in records {
-                // The provider's own XML is passed through otherwise untouched: re-encoding it
-                // would risk changing what the source actually said, which matters when an export
-                // is evidence. Only the per-record declaration is removed, because the evtx reader
-                // prefixes every record with one and a declaration is legal only at the very start
-                // of a document. Concatenating them produced a file no XML parser would open.
-                out.push_str(strip_xml_declaration(record.raw_xml.trim()));
-                out.push('\n');
-            }
-            out.push_str("</Events>\n");
-            Ok(out)
-        }
-    }
+    super::writer::validate_raw_xml(records, format).map_err(|error| error.to_string())?;
+    let mut output = Vec::new();
+    super::writer::write_record_stream(
+        &mut output,
+        format,
+        records.iter(),
+        &mapped_columns(records),
+    )
+    .map_err(|error| error.to_string())?;
+    String::from_utf8(output).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -380,6 +623,7 @@ mod tests {
     fn tsv_uses_tabs_and_quotes_values_containing_them() {
         let out = export_records(&[record("a\tb")], ExportFormat::Tsv).expect("exports");
         assert!(out.starts_with("Event Time\tRecord ID"));
+        assert!(out.contains("Live"));
         assert!(out.contains("\"a\tb\""));
     }
 
@@ -506,10 +750,109 @@ mod tests {
     }
 
     #[test]
+    fn raw_xml_attributes_and_processing_instructions_are_redacted() {
+        let mut event = record("safe");
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><SerialNumber>ABC123456</SerialNumber><TargetUserName>CONTOSO\Jane Doe</TargetUserName><TenantId>99999999-8888-4777-8666-555555555555</TenantId><Password>hunter2</Password><Data Value="REMOTE-HOST" Name="RemoteHost" /><Data Name="Computer" Value="DESKTOP-JOHN" /><Encoded>PASSWORD&#x3D;encoded-secret</Encoded><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
+        for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
+            let output = export_records(&[event.clone()], format).expect("export");
+            assert!(!output.contains("DESKTOP-JOHN"));
+            assert!(!output.contains("REMOTE-HOST"));
+            assert!(!output.contains("ABC123456"));
+            assert!(!output.contains("Jane Doe"));
+            assert!(!output.contains("99999999-8888"));
+            assert!(!output.contains("hunter2"));
+            assert!(output.contains("<?provider"));
+        }
+    }
+    #[test]
+    fn json_rejects_malformed_raw_xml_before_serializing_it() {
+        let mut event = record("safe");
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN">"#.into();
+        let error = export_records(&[event], ExportFormat::Json).expect_err("malformed XML rejected");
+        assert!(error.contains("malformed") || error.contains("incomplete"));
+    }
+
+    #[test]
+    fn every_serialized_field_and_raw_xml_uses_the_shared_redaction_projection() {
+        let mut event = record(r#"RunAsUser=CONTOSO\John Doe PASSWORD=hunter2"#);
+        event.computer = "DESKTOP-JOHN".into();
+        event.event_data = vec![
+            crate::event_log::models::EvtxField {
+                name: "SerialNumber".into(),
+                value: "ABC123456".into(),
+            },
+            crate::event_log::models::EvtxField {
+                name: "TargetUserName".into(),
+                value: "CONTOSO\\Jane Doe".into(),
+            },
+            crate::event_log::models::EvtxField {
+                name: "SubjectUserName".into(),
+                value: "CONTOSO\\Alice Doe".into(),
+            },
+            crate::event_log::models::EvtxField {
+                name: "SubjectDomainName".into(),
+                value: "CONTOSO".into(),
+            },
+        ];
+        event.raw_xml = "<Event><Data>TenantId=99999999-8888-4777-8666-555555555555</Data><Message><![CDATA[PASSWORD=hunter2]]></Message><!-- SubjectUserName=CONTOSO\\Comment User --></Event>".into();
+        event.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "RemoteHost".into(),
+            text: "REMOTE-HOST".into(),
+            complete: true,
+        }];
+
+        let json = export_records(&[event.clone()], ExportFormat::Json).expect("JSON export");
+        assert!(!json.contains("John Doe"));
+        assert!(!json.contains("DESKTOP-JOHN"));
+        assert!(!json.contains("Jane Doe"));
+        assert!(!json.contains("Alice Doe"));
+        assert!(!json.contains("\"value\":\"CONTOSO\""));
+        assert!(!json.contains("hunter2"));
+        assert!(!json.contains("ABC123456"));
+        assert!(!json.contains("REMOTE-HOST"));
+        assert!(!json.contains("Comment User"));
+        let xml = export_records(&[event.clone()], ExportFormat::Xml).expect("XML export");
+        assert!(!xml.contains("John Doe"));
+        assert!(!xml.contains("Jane Doe"));
+        assert!(!xml.contains("Alice Doe"));
+        assert!(!xml.contains("\"value\":\"CONTOSO\""));
+        assert!(!xml.contains("hunter2"));
+        assert!(!xml.contains("REMOTE-HOST"));
+        assert!(!xml.contains("Comment User"));
+        assert!(!xml.contains("ABC123456"));
+        assert!(!xml.contains("99999999-8888"));
+
+        let raw = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
+        assert!(!raw.contains("Comment User"));
+        assert!(!raw.contains("hunter2"));
+        assert!(!raw.contains("99999999-8888"));
+        assert!(raw.contains("[tenant:") || raw.contains("[sensitive:"));
+    }
+
+    #[test]
+    fn oversized_raw_xml_is_replaced_before_tag_processing() {
+        let mut event = record("safe");
+        event.raw_xml = format!("<Event>{}</Event>", "safe ".repeat(60_000));
+        let output = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
+        assert_eq!(output, "<Event><Redaction>[redacted: oversized text omitted]</Redaction></Event>\n");
+        let mut reader = quick_xml::Reader::from_str(output.trim());
+        while !matches!(reader.read_event().expect("valid marker"), quick_xml::events::Event::Eof) {}
+    }
+    #[test]
+    fn oversized_normalized_content_is_explicitly_replaced() {
+        let event = record(&"secret-user@example.com ".repeat(20_000));
+        let output = export_records(&[event], ExportFormat::Json).expect("JSON export");
+        assert!(output.contains("[redacted: oversized text omitted]"));
+        assert!(!output.contains("secret-user@example.com"));
+    }
+
+    #[test]
     fn extensions_match_the_format() {
         assert_eq!(ExportFormat::Csv.extension(), "csv");
         assert_eq!(ExportFormat::Tsv.extension(), "tsv");
         assert_eq!(ExportFormat::Json.extension(), "json");
         assert_eq!(ExportFormat::Xml.extension(), "xml");
+        assert_eq!(ExportFormat::Html.extension(), "html");
+        assert_eq!(ExportFormat::RawXml.extension(), "xml");
     }
 }

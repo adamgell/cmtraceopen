@@ -11,6 +11,8 @@
 //! visibly mention the same user. The projection is idempotent: replacement
 //! tokens cannot themselves match a rule.
 
+const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
+const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -98,10 +100,80 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
+            r#"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS)\s*["']?\s*[:=]\s*)(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)"#,
         )
         .expect("msi property regex must compile")
     })
+}
+
+/// Organization-owned identifiers and device inventory values are sensitive
+/// when they occur in an explicitly labelled field. Bare GUIDs remain visible
+/// because they are often correlation keys rather than tenant identity.
+fn sensitive_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|tenant(?:id)?|aadtenantid)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+        )
+        .expect("sensitive field redaction pattern must compile")
+    })
+}
+/// JSON properties written with HTML entity delimiters.
+///
+/// Exported event messages sometimes pass through an HTML/XML layer before
+/// reaching JSON. Restricting this rule to an explicit property name and a
+/// quoted value catches those encoded records without treating `&quot;` in
+/// ordinary prose as a credential boundary.
+fn entity_encoded_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)&quot;(?P<field>RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName|ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost|Password|Pwd|Passphrase|LicenseKey|License_Key|ProductKey|Product_Key|SerialKey|Serial|ApiKey|Api_Key|ApiSecret|Api_Secret|AccessToken|Access_Token|Token|Secret|ClientSecret|Client_Secret|Credential|Credentials|Authorization)&quot;\s*:\s*&quot;(?P<value>.*?)&quot;"#,
+        )
+        .expect("entity-encoded field redaction pattern must compile")
+    })
+}
+
+fn redact_entity_encoded_fields(value: &str) -> String {
+    entity_encoded_field_re()
+        .replace_all(value, |caps: &regex::Captures<'_>| {
+            let prefix = format!("{}: ", &caps["field"]);
+            let redacted = redact_text(&format!("{prefix}{}", &caps["value"]));
+            let redacted = redacted
+                .strip_prefix(&prefix)
+                .unwrap_or(&caps["value"]);
+            format!(
+                "&quot;{}&quot;:&quot;{}&quot;",
+                &caps["field"], redacted
+            )
+        })
+        .into_owned()
+}
+
+fn is_redaction_token(value: &str) -> bool {
+    let value = value.trim_matches(|character| character == '"' || character == '\'');
+    let Some(body) = value.strip_prefix('[').and_then(|value| value.strip_suffix(']')) else {
+        return false;
+    };
+    let Some((kind, hash)) = body.split_once(':') else {
+        return false;
+    };
+    !kind.is_empty()
+        && kind.chars().all(|character| character.is_ascii_lowercase())
+        && hash.len() == 16
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn redact_sensitive_field(value: &str) -> String {
+    let quote = value.chars().next().filter(|character| *character == '"' || *character == '\'');
+    let inner = quote
+        .and_then(|quote| value.strip_prefix(quote).and_then(|value| value.strip_suffix(quote)))
+        .unwrap_or(value);
+    if is_redaction_token(inner) {
+        return value.to_owned();
+    }
+    let redacted = stable_token("sensitive", inner);
+    quote.map_or(redacted.clone(), |quote| format!("{quote}{redacted}{quote}"))
 }
 
 /// An account named in an explicit field.
@@ -128,7 +200,7 @@ fn account_field_re() -> &'static Regex {
         // masked — see `split_leading_token`), while a malformed
         // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
+            r#"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)"#,
         )
         .expect("account field regex must compile")
     })
@@ -148,7 +220,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>]+)"#,
         )
         .expect("host field regex must compile")
     })
@@ -175,7 +247,7 @@ fn tenant_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)",
+            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)"#,
         )
         .expect("tenant field regex must compile")
     })
@@ -285,6 +357,9 @@ fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
 
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
+    if value.len() > MAX_REDACTION_INPUT_BYTES {
+        return REMOVED_OVERSIZE.to_owned();
+    }
     let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
         stable_token("upn", &caps[0])
     });
@@ -307,15 +382,27 @@ pub fn redact_text(value: &str) -> String {
         format!("{}{}", &caps["field"], stable_token("tenant", &caps["value"]))
     });
 
+    let masked = sensitive_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        format!(
+            "{}{}",
+            &caps["field"],
+            redact_sensitive_field(&caps["value"])
+        )
+    });
+
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         let value = &caps["value"];
-        if already_masked(value) {
+        let quote = value.chars().next().filter(|character| *character == '"' || *character == '\'');
+        let inner = quote
+            .and_then(|quote| value.strip_prefix(quote).and_then(|value| value.strip_suffix(quote)))
+            .unwrap_or(value);
+        if already_masked(inner) {
             return format!("{}{}", &caps["field"], value);
         }
-        if let Some(projected) = preserve_token_mask_tail(value, "host") {
-            return format!("{}{}", &caps["field"], projected);
-        }
-        format!("{}{}", &caps["field"], stable_token("host", value))
+        let projected = preserve_token_mask_tail(inner, "host")
+            .unwrap_or_else(|| stable_token("host", inner));
+        let projected = quote.map_or(projected.clone(), |quote| format!("{quote}{projected}{quote}"));
+        format!("{}{}", &caps["field"], projected)
     });
 
     let masked = unc_host_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
@@ -359,7 +446,7 @@ pub fn redact_text(value: &str) -> String {
         format!("{}{}", &caps["flag"], stable_token("command", value))
     });
 
-    sid_re()
+    let masked = sid_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
             // Hashed from the uppercase form. A SID is case-insensitive, so the
             // two spellings name one identity and must reach one token; hashing
@@ -367,9 +454,9 @@ pub fn redact_text(value: &str) -> String {
             // account and break the correlation these tokens exist to provide.
             stable_token("sid", &caps[0].to_ascii_uppercase())
         })
-        .into_owned()
+        .into_owned();
+    redact_entity_encoded_fields(&masked)
 }
-
 #[cfg(test)]
 mod tests {
     use super::{redact_text, sid_occurrences};
@@ -387,6 +474,22 @@ mod tests {
     fn a_json_escaped_path_mask_is_idempotent() {
         let once = redact_text(r#"{"Path":"C:\\Users\\John Doe\\AppData"}"#);
         assert_eq!(once, redact_text(&once));
+    }
+    #[test]
+    fn encoded_json_identity_and_credential_fields_are_masked_without_masking_prose() {
+        let entity = redact_text(
+            r#"&quot;Password&quot;:&quot;hunter2&quot; &quot;UserName&quot;:&quot;CONTOSO\John Doe&quot; &quot;Message&quot;:&quot;Password is required&quot;"#,
+        );
+        assert!(!entity.contains("hunter2"), "got {entity:?}");
+        assert!(!entity.contains("John Doe"), "got {entity:?}");
+        assert!(entity.contains("Password is required"), "got {entity:?}");
+
+        let escaped =
+            redact_text(r#"{\"Password\":\"hunter2\",\"UserName\":\"CONTOSO\\John Doe\",\"ComputerName\":\"DESKTOP-JOHN\"}"#);
+        assert!(!escaped.contains("hunter2"), "got {escaped:?}");
+        assert!(!escaped.contains("John Doe"), "got {escaped:?}");
+        assert!(!escaped.contains("DESKTOP-JOHN"), "got {escaped:?}");
+        assert_eq!(escaped, redact_text(&escaped));
     }
 
     #[test]
@@ -705,10 +808,62 @@ mod tests {
     }
 
     #[test]
+    fn labeled_serial_hardware_and_tenant_values_are_masked() {
+        let redacted = redact_text(
+            r#"serialNumber: ABC123456 hardwareHash=AA-BB-CC tenantId={99999999-8888-4777-8666-555555555555}"#,
+        );
+        assert!(!redacted.contains("ABC123456"), "got {redacted:?}");
+        assert!(!redacted.contains("AA-BB-CC"), "got {redacted:?}");
+        assert!(!redacted.contains("99999999-8888"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn oversized_text_is_replaced_instead_of_partially_exported() {
+        let input = format!("prefix {}", "secret-user@example.com ".repeat(20_000));
+        let redacted = redact_text(&input);
+        assert!(redacted.contains("[redacted: oversized text omitted]"));
+        assert!(!redacted.contains("secret-user@example.com"));
+    }
+
+    #[test]
     fn the_extended_projection_is_idempotent() {
         let once = redact_text(
             r"ComputerName: DESKTOP-AB12CD RunAsUser = CONTOSO\John Doe, S-1-5-21-397955417-626881126-188441444-1010 ran msiexec PASSWORD=hunter2 from \\FILESRV01\share for adele.vance@contoso.example TenantId: 99999999-8888-4777-8666-555555555555",
         );
         assert_eq!(once, redact_text(&once));
+    }
+
+    #[test]
+    fn labeled_multiword_identity_fields_mask_the_entire_value() {
+        let redacted = redact_text(
+            r"TargetUserName=CONTOSO\Jane Doe, SubjectUserName=CONTOSO\Alice Smith, SubjectDomainName=CONTOSO",
+        );
+        assert!(!redacted.contains("Jane"));
+        assert!(!redacted.contains("Doe"));
+        assert!(!redacted.contains("Alice"));
+        assert!(!redacted.contains("Smith"));
+        assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn quoted_json_field_names_are_redacted() {
+        let redacted = redact_text(
+            r#"{"serialNumber":"ABC123456","tenantId":"99999999-8888-4777-8666-555555555555","TargetUserName":"CONTOSO\Jane Doe"}"#,
+        );
+        assert!(!redacted.contains("ABC123456"));
+        assert!(!redacted.contains("99999999-8888"));
+        assert!(!redacted.contains("Jane Doe"));
+        assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn credential_labels_and_quoted_computer_values_are_redacted() {
+        let redacted = redact_text(
+            r#"ApiSecret=hunter2 AccessToken=abc123 Credential=topsecret {"Computer":"DESKTOP-JOHN"}"#,
+        );
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("abc123"));
+        assert!(!redacted.contains("topsecret"));
+        assert!(!redacted.contains("DESKTOP-JOHN"));
     }
 }

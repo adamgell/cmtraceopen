@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseEventIdFilter } from "./evtx-filter";
-
+import { parseEventIdFilter, sortRecords } from "./evtx-filter";
+import type { EvtxRecord } from "./types";
 describe("parseEventIdFilter", () => {
   it("returns null when the box constrains nothing", () => {
     expect(parseEventIdFilter("")).toBeNull();
@@ -33,8 +33,8 @@ describe("parseEventIdFilter", () => {
     expect(parseEventIdFilter("4624, abc")).toEqual(new Set([4624]));
   });
 
-  it("returns null when nothing in the box parsed", () => {
-    expect(parseEventIdFilter("abc, def")).toBeNull();
+  it("returns an empty set when a nonempty selector has no valid IDs", () => {
+    expect(parseEventIdFilter("abc, def")).toEqual(new Set());
   });
 });
 
@@ -52,12 +52,37 @@ describe("event id range bounds", () => {
     expect(ids!.has(65536)).toBe(false);
   });
 
-  it("yields nothing for a range entirely above the id space", () => {
-    expect(parseEventIdFilter("100000-200000")).toBeNull();
+  it("clamps the first value beyond the bounded range", () => {
+    const ids = parseEventIdFilter("1-65536");
+    expect(ids?.size).toBe(65535);
+    expect(ids?.has(1)).toBe(true);
+    expect(ids?.has(65535)).toBe(true);
+    expect(ids?.has(65536)).toBe(false);
+  });
+
+  it("preserves the complete 16-bit event ID space", () => {
+    expect(parseEventIdFilter("0-65535")?.size).toBe(65536);
+    expect(parseEventIdFilter("1-65535,0")?.size).toBe(65536);
+  });
+
+  it("yields an empty set for a range entirely above the id space", () => {
+    expect(parseEventIdFilter("100000-200000")).toEqual(new Set());
   });
 
   it("still expands an ordinary range", () => {
     const ids = parseEventIdFilter("4624-4626");
     expect([...ids!].sort((a, b) => a - b)).toEqual([4624, 4625, 4626]);
+  });
+});
+
+
+describe("sortRecords", () => {
+  it("preserves the active timeline order for exports", () => {
+    const records = [
+      { eventId: 2, timestampEpoch: 20, level: "Information", provider: "P", channel: "C" },
+      { eventId: 1, timestampEpoch: 10, level: "Error", provider: "P", channel: "C" },
+    ] as EvtxRecord[];
+    expect(sortRecords(records, "time", "asc").map((record) => record.eventId)).toEqual([1, 2]);
+    expect(sortRecords(records, "time", "desc").map((record) => record.eventId)).toEqual([2, 1]);
   });
 });
