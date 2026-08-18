@@ -200,6 +200,52 @@ describe("coverage gaps through the store", () => {
 
     expect(useEvtxStore.getState().records).toEqual([]);
   });
+
+  it("clears stale data and rejects late batches on an invalid source switch", async () => {
+    let oldRequestId: string | undefined;
+    let resolveOld: ((value: unknown) => void) | undefined;
+    invoke.mockImplementationOnce((_name: string, args: { requestId: string }) => {
+      oldRequestId = args.requestId;
+      return new Promise((resolve) => {
+        resolveOld = resolve;
+      });
+    });
+
+    const oldQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    await Promise.resolve();
+    const invalidSwitch = useEvtxStore.getState().enumerateRemoteChannels("bad\0host");
+    emitBatch("Application", 0, [streamedRecord("Application")], oldRequestId);
+    resolveOld?.(result("Application", []));
+    await oldQuery;
+    await invalidSwitch;
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toEqual([]);
+    expect(state.channels).toEqual([]);
+    expect(state.sourceMode).toBeNull();
+    expect(state.loadError).toBe("Enter a valid remote computer name.");
+  });
+
+  it("clears remote state before a file parse failure", async () => {
+    useEvtxStore.setState({
+      remoteMachine: "old-host",
+      sourceMode: "live",
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      records: [streamedRecord("Application")],
+      loadedChannels: new Set(["Application"]),
+    });
+    invoke.mockRejectedValueOnce(new Error("file read failed"));
+
+    await useEvtxStore.getState().parseFiles(["missing.evtx"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.remoteMachine).toBeNull();
+    expect(state.sourceMode).toBeNull();
+    expect(state.channels).toEqual([]);
+    expect(state.records).toEqual([]);
+    expect(state.loadedChannels).toEqual(new Set());
+    expect(state.loadError).toBe("file read failed");
+  });
 });
 describe("live batch delivery through initial and refresh loads", () => {
   beforeEach(() => {
@@ -925,5 +971,6 @@ describe("remote event sources", () => {
       "empty-host: remote source is empty (no channels available)",
     ]);
     expect(useEvtxStore.getState().remoteMachine).toBe("empty-host");
+    expect(useEvtxStore.getState().sourceMode).toBeNull();
   });
 });

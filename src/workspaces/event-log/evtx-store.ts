@@ -188,7 +188,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   selectedRecordId: null,
   parseFiles: async (paths) => {
     const requestId = beginRequest();
-    set({ isLoading: true, loadError: null, remoteMachine: null });
+    set({
+      records: [],
+      channels: [],
+      sourceMode: null,
+      remoteMachine: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: true,
+      loadError: null,
+    });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       if (!isCurrentRequest(requestId)) return;
@@ -321,16 +332,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           }));
         }
       });
-
       await Promise.all(promises);
       if (!isCurrentRequest(requestId)) return;
-
       const finalState = get();
       const remoteQueryFailed =
         remoteMachine !== null &&
-        availableCore.length > 0 &&
-        finalState.loadedChannels.size === 0 &&
-        finalState.coverageGaps.length > 0;
+        (availableCore.length === 0
+          ? channels.length === 0
+          : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
       set({
         sourceMode: remoteQueryFailed ? null : "live",
         isLoading: false,
@@ -376,12 +385,23 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     });
     await get().enumerateChannels();
   },
-
   enumerateRemoteChannels: async (machine) => {
+    beginRequest();
+    set({
+      remoteMachine: null,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: false,
+      loadError: null,
+    });
     const normalized = machine.trim().replace(/^[/\\]+/, "");
     if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) {
       set({
-        remoteMachine: null,
         isLoading: false,
         loadError: "Enter a valid remote computer name.",
       });
