@@ -388,6 +388,7 @@ fn query_channel_inner(
     let mut unrenderable = 0usize;
     let mut message_failures = 0usize;
     let mut metadata_failures = HashSet::<String>::new();
+    let mut gaps = Vec::new();
     let mut batch = EVENT_FETCH_BATCH;
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
