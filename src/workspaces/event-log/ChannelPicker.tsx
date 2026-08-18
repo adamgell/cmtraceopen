@@ -1,5 +1,15 @@
 import { memo, useMemo, useRef, useState, useEffect, useCallback } from "react";
-import { Button, Input, tokens } from "@fluentui/react-components";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Input,
+  tokens,
+} from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
@@ -103,6 +113,13 @@ const DEFAULT_SIDEBAR_WIDTH = 300;
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function ChannelPicker() {
+  const tailMode = useEvtxStore((s) => s.tailMode);
+  const startLiveTail = useEvtxStore((s) => s.startLiveTail);
+  const stopLiveTail = useEvtxStore((s) => s.stopLiveTail);
+  const clearChannel = useEvtxStore((s) => s.clearChannel);
+  const [clearTarget, setClearTarget] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
   const channels = useEvtxStore((s) => s.channels);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const toggleChannel = useEvtxStore((s) => s.toggleChannel);
@@ -241,7 +258,94 @@ export function ChannelPicker() {
               </Button>
             </div>
           )}
+          {sourceMode === "live" && loadedChannels.size > 0 && (
+            <>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <Button
+                  size="small"
+                  appearance={tailMode ? "secondary" : "subtle"}
+                  disabled={isLoading}
+                  onClick={() => {
+                    void (tailMode ? stopLiveTail() : startLiveTail());
+                  }}
+                >
+                  {tailMode ? "Stop live tail" : "Start live tail"}
+                </Button>
+                {tailMode && (
+                  <span
+                    aria-label={`Live tail mode: ${tailMode}`}
+                    style={{ fontSize: "10px", color: tokens.colorNeutralForeground3 }}
+                  >
+                    {tailMode}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <select
+                  aria-label="Channel to clear"
+                  value={clearTarget ?? ""}
+                  onChange={(event) => setClearTarget(event.target.value || null)}
+                  style={{ flex: 1, minWidth: 0, fontSize: "11px" }}
+                >
+                  <option value="">Select channel to clear…</option>
+                  {[...loadedChannels].sort().map((channel) => (
+                    <option key={channel} value={channel}>
+                      {channel}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  onClick={() => {
+                    if (clearTarget) setConfirmClear(true);
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            </>
+          )}
         </div>
+        <Dialog
+          open={confirmClear}
+          onOpenChange={(_, data) => {
+            if (!data.open) setConfirmClear(false);
+          }}
+        >
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Clear event channel?</DialogTitle>
+              <DialogContent>
+                This permanently removes every event currently stored in{" "}
+                <strong>{clearTarget}</strong>. The action requires an already elevated
+                application and cannot be undone.
+                {clearError && (
+                  <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: "8px" }}>
+                    {clearError}
+                  </div>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={() => {
+                    if (!clearTarget) return;
+                    const channel = clearTarget;
+                    setConfirmClear(false);
+                    void clearChannel(channel, true).then((result) => {
+                      if (result.status === "cleared") setClearTarget(null);
+                      else if ("detail" in result) setClearError(result.detail);
+                    });
+                  }}
+                >
+                  Clear channel
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {/* Tree */}
         <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", fontSize: `${metrics.fontSize}px` }}>

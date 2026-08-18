@@ -5,6 +5,16 @@ use crate::state::app_state::AppState;
 use serde::Serialize;
 #[cfg(target_os = "windows")]
 use tauri::Emitter;
+use super::models::{
+    EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxParseResult,
+    EvtxTailStatus,
+};
+use super::parser::{self, EventLogSourceManifest};
+use crate::state::app_state::AppState;
+#[cfg(target_os = "windows")]
+use serde::Serialize;
+#[cfg(target_os = "windows")]
+use tauri::Emitter;
 use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "windows")]
@@ -338,6 +348,117 @@ pub async fn evtx_query_remote_channels(
     .await
 }
 
+/// Start a live tail for one channel. Windows prefers EvtSubscribe and reports polling only when
+/// the service does not expose subscription support.
+#[tauri::command]
+pub async fn evtx_start_tail(
+    channel: String,
+    request_id: String,
+    filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    remote_machine: Option<String>,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxTailStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let remote_machine = remote_machine
+            .as_deref()
+            .map(super::live::normalize_remote_machine_name)
+            .transpose()?;
+        let maps = state.event_maps.clone();
+        let query_filter = filter.unwrap_or_default();
+        tokio::task::spawn_blocking(move || {
+            super::live::start_channel_tail(
+                app,
+                request_id,
+                channel,
+                query_filter,
+                maps,
+                remote_machine,
+            )
+        })
+        .await
+        .map_err(|error| format!("Task join error: {error}"))?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (filter, remote_machine, app, state);
+        Ok(EvtxTailStatus {
+            request_id,
+            channel,
+            mode: EvtxLiveMode::Unsupported,
+            active: false,
+            next_sequence: 0,
+            coverage_gaps: vec!["Live event log tails are only available on Windows.".to_string()],
+        })
+    }
+}
+
+/// Stop a live tail and release any subscription or polling worker.
+#[tauri::command]
+pub async fn evtx_stop_tail(request_id: String, channel: String) -> Result<EvtxTailStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let request_for_task = request_id.clone();
+        let channel_for_task = channel.clone();
+        tokio::task::spawn_blocking(move || {
+            super::live::stop_channel_tail(&request_for_task, &channel_for_task).unwrap_or(
+                EvtxTailStatus {
+                    request_id: request_for_task,
+                    channel: channel_for_task,
+                    mode: EvtxLiveMode::Unsupported,
+                    active: false,
+                    next_sequence: 0,
+                    coverage_gaps: Vec::new(),
+                },
+            )
+        })
+        .await
+        .map_err(|error| format!("Task join error: {error}"))?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(EvtxTailStatus {
+            request_id,
+            channel,
+            mode: EvtxLiveMode::Unsupported,
+            active: false,
+            next_sequence: 0,
+            coverage_gaps: vec!["Live event log tails are only available on Windows.".to_string()],
+        })
+    }
+}
+
+/// Clear one live channel after an explicit frontend confirmation. The backend repeats the
+/// confirmation guard and requires the existing process to be elevated before EvtClearLog.
+#[tauri::command]
+pub async fn evtx_clear_channel(
+    channel: String,
+    confirmed: bool,
+) -> Result<EvtxClearResult, String> {
+    if !confirmed {
+        return Ok(EvtxClearResult {
+            channel,
+            result: EvtxClearStatus::Cancelled,
+        });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        tokio::task::spawn_blocking(move || super::live::clear_channel(&channel, confirmed))
+            .await
+            .map_err(|error| format!("Task join error: {error}"))?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(EvtxClearResult {
+            channel,
+            result: EvtxClearStatus::Unsupported {
+                detail: "Clearing event channels is only available on Windows.".to_string(),
+            },
+        })
+    }
+}
+
 /// Writes `records` to `destination` in `format`.
 ///
 /// The records travel from the frontend rather than being re-queried, so what is exported is
@@ -573,5 +694,32 @@ mod tests {
             result.expect_err("remote enumeration must be unsupported"),
             "Remote event log queries are only available on Windows."
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn channel_clear_reports_structured_unsupported_result() {
+        let result = tauri::async_runtime::block_on(super::evtx_clear_channel(
+            "Application".to_string(),
+            true,
+        ))
+        .expect("portable clear command should return a structured result");
+        assert!(matches!(
+            result.result,
+            super::super::models::EvtxClearStatus::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn channel_clear_never_runs_without_confirmation() {
+        let result = tauri::async_runtime::block_on(super::evtx_clear_channel(
+            "Application".to_string(),
+            false,
+        ))
+        .expect("cancelled clear should be a result, not an IPC failure");
+        assert!(matches!(
+            result.result,
+            super::super::models::EvtxClearStatus::Cancelled
+        ));
     }
 }

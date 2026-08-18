@@ -185,3 +185,53 @@ pub struct ProviderCaptureFailure {
     pub provider_name: String,
     pub error: String,
 }
+/// Delivery path used by a live channel tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvtxLiveMode {
+    Subscription,
+    Polling,
+    Unsupported,
+}
+
+/// State returned when a live tail is started or stopped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvtxTailStatus {
+    pub request_id: String,
+    pub channel: String,
+    pub mode: EvtxLiveMode,
+    pub active: bool,
+    pub next_sequence: u64,
+    pub coverage_gaps: Vec<String>,
+}
+
+/// Structured result for a destructive channel clear request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum EvtxClearStatus {
+    Cleared,
+    Cancelled,
+    Denied { detail: String },
+    Unavailable { detail: String },
+    Empty,
+    Unsupported { detail: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvtxClearResult {
+    pub channel: String,
+    pub result: EvtxClearStatus,
+}
+/// A normalized batch emitted by an active live tail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvtxTailBatch {
+    pub request_id: String,
+    pub channel: String,
+    pub sequence: u64,
+    pub mode: EvtxLiveMode,
+    pub records: Vec<EvtxRecord>,
+    pub coverage_gaps: Vec<String>,
+}

@@ -18,11 +18,12 @@ import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
 export function EvtxCoverageBanner() {
   const legacyGaps = useEvtxStore((s) => s.coverageGaps);
   const structuredGaps = useEvtxStore((s) => s.coverageDetails);
+  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
   const gaps = [
-    ...new Set([...legacyGaps, ...structuredGaps.map(formatCoverageGap)]),
+    ...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)]),
   ];
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary = summarizeCoverageGaps(gaps);

@@ -19,6 +19,10 @@ import type {
   EventLogSourceCoverage,
   EventLogSourceManifest,
   EventQueryFilterSubset,
+  EvtxClearResult,
+  EvtxLiveMode,
+  EvtxTailBatch,
+  EvtxTailStatus,
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
 import type { LogEntry } from "../../types/log";
@@ -71,13 +75,41 @@ function appendUniqueRecords(existing: EvtxRecord[], incoming: EvtxRecord[]): Ev
 }
 let preservedSelectedRecordKey: string | null = null;
 
+const tailSequences = new Map<string, Set<number>>();
+
+function tailSequenceKey(requestId: string, channel: string): string {
+  return `${requestId}\u0000${channel}`;
+}
+
+function aggregateTailMode(modes: EvtxLiveMode[]): EvtxLiveMode {
+  const unique = new Set(modes);
+  if (unique.size === 0) return "unsupported";
+  if (unique.size > 1) return "mixed";
+  return modes[0];
+}
+
 
 let requestGeneration = 0;
 let activeRequestId = "initial";
+let activeTailRequestId: string | null = null;
+let activeTailChannels = new Set<string>();
 
 function beginRequest(): string {
+  const staleTailRequestId = activeTailRequestId;
+  const staleTailChannels = activeTailChannels;
+  activeTailRequestId = null;
+  activeTailChannels = new Set<string>();
+  if (staleTailRequestId) {
+    for (const channel of staleTailChannels) {
+      void invoke("evtx_stop_tail", {
+        requestId: staleTailRequestId,
+        channel,
+      }).catch(() => undefined);
+    }
+  }
   activeRequestId = `event-log-${++requestGeneration}`;
   pendingBatches.clear();
+  tailSequences.clear();
   return activeRequestId;
 }
 
@@ -219,13 +251,6 @@ interface EvtxState {
   loadStartTime: number | null;
   loadElapsedMs: number | null;
   loadError: string | null;
-  /**
-   * What is missing from the loaded set, and why.
-   *
-   * Separate from loadError because these are not failures: the events that did load are real and
-   * usable. They are gaps, and a gap that only reaches the console reads to an operator as a
-   * complete picture, which is how absent events get mistaken for evidence that nothing happened.
-   */
   coverageGaps: string[];
   sourceManifest: EventLogSourceManifest | null;
   selectedChannels: Set<string>;
@@ -249,7 +274,11 @@ interface EvtxState {
   sortField: EvtxSortField;
   sortDirection: EvtxSortDirection;
   selectedRecordId: number | null;
-  loadGeneration: number;
+loadGeneration: number;
+  tailMode: EvtxLiveMode | null;
+  tailRequestId: string | null;
+  tailChannels: Set<string>;
+  tailCoverageGaps: string[];
   parseFiles: (paths: string[]) => Promise<void>;
   parseManifest: (manifest: EventLogSourceManifest) => Promise<void>;
   enumerateChannels: () => Promise<void>;
@@ -258,6 +287,9 @@ interface EvtxState {
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
+  startLiveTail: () => Promise<EvtxTailStatus[]>;
+  stopLiveTail: () => Promise<void>;
+  clearChannel: (channel: string, confirmed: boolean) => Promise<EvtxClearResult>;
   setTimeZoneMode: (mode: EvtxTimeZoneMode) => void;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
@@ -307,6 +339,10 @@ function applyParseResult(
     coverageDetails: result.coverageGaps ?? [],
     selectedChannels: channelNames,
     selectedRecordId: null,
+    tailMode: null,
+    tailRequestId: null,
+    tailChannels: new Set<string>(),
+    tailCoverageGaps: [],
   };
 }
 
@@ -360,11 +396,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   sortField: "time",
   sortDirection: "asc",
   selectedRecordId: null,
+  tailMode: null,
+  tailRequestId: null,
+  tailChannels: new Set<string>(),
+  tailCoverageGaps: [],
   parseFiles: async (paths) => {
     const previousTimeWindow = get().timeWindow;
     const generation = get().loadGeneration + 1;
     const requestId = beginRequest();
-    preservedSelectedRecordKey = null;
+preservedSelectedRecordKey = null;
     invalidateAllStreamedRecords(requestId);
     refreshRequested = false;
     set({
@@ -376,6 +416,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
       coverageGaps: [],
+      tailMode: null,
+      tailRequestId: null,
+      tailChannels: new Set<string>(),
+      tailCoverageGaps: [],
       timeWindow: "all",
       isLoading: true,
       loadError: null,
@@ -672,7 +716,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       isLoading: true,
       loadError: null,
       selectedRecordId: null,
-      loadGeneration: generation,
+loadGeneration: generation,
+      tailMode: null,
+      tailRequestId: null,
+      tailChannels: new Set<string>(),
+      tailCoverageGaps: [],
     });
     const remoteMachine = get().remoteMachine;
     // One request per channel rather than one request for all of them. The backend collects a
@@ -955,6 +1003,100 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     });
     if (refreshRequested) refreshBeforeLoad();
   },
+  startLiveTail: async () => {
+    const state = get();
+    if (state.sourceMode !== "live") return [];
+    const channels = [...state.loadedChannels];
+    if (channels.length === 0) return [];
+    const requestId = activeRequestId;
+    const remoteMachine = state.remoteMachine;
+    activeTailRequestId = requestId;
+    activeTailChannels = new Set(channels);
+    const statuses = await Promise.all(
+      channels.map(async (channel) => {
+        try {
+          return await invoke<EvtxTailStatus>("evtx_start_tail", {
+            channel,
+            requestId,
+            filter: buildServerFilter(get().timeWindow),
+            remoteMachine,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            requestId,
+            channel,
+            mode: "unsupported" as const,
+            active: false,
+            nextSequence: 0,
+            coverageGaps: [`${channel}: live tail unavailable (${message})`],
+          };
+        }
+      })
+    );
+    if (!isCurrentRequest(requestId)) return [];
+    const modes = statuses.map((status) => status.mode);
+    const gaps = statuses.flatMap((status) => status.coverageGaps);
+    activeTailChannels = new Set(
+      statuses.filter((status) => status.active).map((status) => status.channel)
+    );
+    set({
+      tailMode: aggregateTailMode(modes),
+      tailRequestId: requestId,
+      tailChannels: activeTailChannels,
+      tailCoverageGaps: mergeCoverageGaps([], gaps),
+    });
+    return statuses;
+  },
+  stopLiveTail: async () => {
+    const state = get();
+    const requestId = state.tailRequestId;
+    if (!requestId) return;
+    const channels = [...state.tailChannels];
+    activeTailRequestId = null;
+    activeTailChannels = new Set<string>();
+    set({
+      tailMode: null,
+      tailRequestId: null,
+      tailChannels: new Set<string>(),
+    });
+    await Promise.all(
+      channels.map((channel) =>
+        invoke<EvtxTailStatus>("evtx_stop_tail", {
+          requestId,
+          channel,
+        }).catch(() => undefined)
+      )
+    );
+  },
+
+  clearChannel: async (channel, confirmed) => {
+    const state = get();
+    const requestId = state.tailRequestId;
+    const wasTailing = requestId !== null && state.tailChannels.has(channel);
+    if (wasTailing) {
+      await invoke("evtx_stop_tail", { requestId, channel }).catch(() => undefined);
+      activeTailChannels.delete(channel);
+    }
+    const result = await invoke<EvtxClearResult>("evtx_clear_channel", { channel, confirmed });
+    if (result.status === "cleared") {
+      set((current) => ({
+        records: current.records.filter((record) => record.channel !== channel),
+        loadedChannels: new Set([...current.loadedChannels].filter((name) => name !== channel)),
+        channels: current.channels.map((info) =>
+          info.name === channel ? { ...info, eventCount: 0 } : info
+        ),
+        coverageGaps: current.coverageGaps.filter((gap) => !gap.startsWith(`${channel}:`)),
+        tailChannels: new Set([...current.tailChannels].filter((name) => name !== channel)),
+      }));
+    } else if (wasTailing && get().tailRequestId === requestId) {
+      // A denied, unavailable, or cancelled clear must leave the live view in the state the
+      // operator was using before confirmation.
+      await get().startLiveTail();
+    }
+    return result;
+  },
+
 
   setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
 
@@ -1072,6 +1214,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,
+      tailMode: null,
+      tailRequestId: null,
+      tailChannels: new Set<string>(),
+      tailCoverageGaps: [],
     });
   },
 });
@@ -1244,6 +1390,64 @@ listen<{ channel: string; requestId: string; sequenceCount: number; totalRecords
     settlePendingStream(pending);
   }
 );
+
+listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
+  const payload = event.payload;
+  if (
+    !isCurrentRequest(payload.requestId) ||
+    activeTailRequestId !== payload.requestId ||
+    !activeTailChannels.has(payload.channel)
+  ) {
+    return;
+  }
+  const key = tailSequenceKey(payload.requestId, payload.channel);
+  let sequences = tailSequences.get(key);
+  if (!sequences) {
+    sequences = new Set<number>();
+    tailSequences.set(key, sequences);
+  }
+  if (sequences.has(payload.sequence)) return;
+
+  const missing: string[] = [];
+  let highest = -1;
+  for (const sequence of sequences) highest = Math.max(highest, sequence);
+  for (let sequence = highest + 1; sequence < payload.sequence; sequence++) {
+    if (!sequences.has(sequence)) {
+      missing.push(`${payload.channel}: live tail batch ${sequence} was not received`);
+    }
+  }
+  sequences.add(payload.sequence);
+  if (payload.coverageGaps.length > 0) missing.push(...payload.coverageGaps);
+
+  useEvtxStore.setState((state) => {
+    const known = new Set(
+      state.records.map((record) => `${record.channel}\u0000${record.eventRecordId}`)
+    );
+    const appended = payload.records.filter((record) => {
+      const identity = `${record.channel}\u0000${record.eventRecordId}`;
+      if (known.has(identity)) return false;
+      known.add(identity);
+      return true;
+    });
+    const records = [...state.records, ...appended];
+    records.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+    for (let index = 0; index < records.length; index++) records[index].id = index;
+    const existingMode = state.tailMode;
+    const mode =
+      existingMode === null || existingMode === payload.mode
+        ? payload.mode
+        : existingMode === "unsupported"
+          ? payload.mode
+          : "mixed";
+    return {
+      records,
+      tailMode: mode,
+      tailRequestId: payload.requestId,
+      tailChannels: new Set([...state.tailChannels, payload.channel]),
+      tailCoverageGaps: mergeCoverageGaps(state.tailCoverageGaps, missing),
+    };
+  });
+});
 
 /** Takes everything received for `channel`, and reports whether it is contiguous. */
 export function drainStreamedRecords(channel: string, requestId: string): {

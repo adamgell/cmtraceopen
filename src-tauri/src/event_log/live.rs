@@ -1,19 +1,37 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::{Arc, LazyLock, Mutex};
+#[cfg(target_os = "windows")]
+use std::thread;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
+
 use super::event_node::{extract_system_fields, parse_event_xml};
-use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxRecord};
+use super::models::{
+    ChannelSourceType, EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode,
+    EvtxRecord, EvtxTailBatch, EvtxTailStatus,
+};
 use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 use cmtraceopen_parser::eventmap::MapRegistry;
+
+#[cfg(target_os = "windows")]
+use tauri::{AppHandle, Emitter};
+
 
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
-    EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
-    EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
-    EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml, EVT_HANDLE, EVT_RPC_LOGIN,
-    EvtRpcLogin, EvtRpcLoginAuthDefault,
+    EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
+    EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EvtSubscribe,
+    EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml, EvtSubscribeActionDeliver,
+    EvtSubscribeActionError, EvtSubscribeToFutureEvents, EvtSubscribeTolerateQueryErrors,
+    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EvtRpcLogin,
+    EvtRpcLoginAuthDefault,
 };
 
 /// Event handles fetched per `EvtNext` call.
@@ -584,6 +602,500 @@ fn query_channel_inner(
         delivered: produced,
         gaps,
     })
+}
+
+#[cfg(target_os = "windows")]
+const POLL_INTERVAL: Duration = Duration::from_millis(750);
+
+#[cfg(target_os = "windows")]
+struct TailContext {
+    app: AppHandle,
+    request_id: String,
+    channel: String,
+    source_label: String,
+    session: Option<EVT_HANDLE>,
+    maps: Arc<std::sync::RwLock<MapRegistry>>,
+    sequence: AtomicU64,
+    publisher_metadata: Mutex<HashMap<String, PublisherMetadata>>,
+}
+
+#[cfg(target_os = "windows")]
+struct ActiveTail {
+    request_id: String,
+    channel: String,
+    mode: EvtxLiveMode,
+    stop: Arc<AtomicBool>,
+    sequence: Arc<AtomicU64>,
+    subscription: Option<OwnedEvtHandle>,
+    context: Option<Box<TailContext>>,
+    session: Option<OwnedEvtHandle>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ActiveTail {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        // EvtClose waits for callbacks that are already in flight. Keeping the context boxed until
+        // after this point prevents a late service callback from dereferencing freed state.
+        self.subscription.take();
+        self.context.take();
+        self.session.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+#[cfg(target_os = "windows")]
+static ACTIVE_TAILS: LazyLock<Mutex<HashMap<String, ActiveTail>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(target_os = "windows")]
+fn active_tails() -> &'static Mutex<HashMap<String, ActiveTail>> {
+    &ACTIVE_TAILS
+}
+
+#[cfg(target_os = "windows")]
+fn emit_tail_batch(context: &TailContext, mode: EvtxLiveMode, records: Vec<EvtxRecord>, gaps: Vec<String>) {
+    let sequence = context.sequence.fetch_add(1, Ordering::AcqRel);
+    if let Err(error) = context.app.emit(
+        "evtx-tail-batch",
+        EvtxTailBatch {
+            request_id: context.request_id.clone(),
+            channel: context.channel.clone(),
+            sequence,
+            mode,
+            records,
+            coverage_gaps: gaps,
+        },
+    ) {
+        // The next sequence exposes this dropped batch to the frontend; logging is still useful
+        // when the subscription has no later event to make the gap visible.
+        log::warn!(
+            "event=evtx_tail_batch_dropped channel=\"{}\" sequence={} error=\"{}\"",
+            context.channel,
+            sequence,
+            error
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<EvtxRecord, String> {
+    let xml = render_event_xml(event).map_err(|error| {
+        format_source_error(
+            "EvtRender",
+            &error,
+            context.source_label.starts_with("Remote:"),
+        )
+    })?;
+    let parsed = parse_event_xml(&xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
+    let system = extract_system_fields(&parsed);
+    let rendered_message = match system.provider.as_deref() {
+        Some(provider) => {
+            let mut metadata = context
+                .publisher_metadata
+                .lock()
+                .map_err(|_| "publisher metadata lock was poisoned".to_string())?;
+            format_event_message(
+                event,
+                provider,
+                context.session,
+                &mut metadata,
+            )
+            .map_err(|error| {
+                format_source_error(
+                    "EvtFormatMessage",
+                    &error,
+                    context.source_label.starts_with("Remote:"),
+                )
+            })?
+        }
+        None => None,
+    };
+    let mut record = {
+        let maps = context
+            .maps
+            .read()
+            .map_err(|_| "event map registry lock was poisoned".to_string())?;
+        super::rendered::record_from_parts(
+            &parsed,
+            system,
+            &xml,
+            &context.channel,
+            &maps,
+            rendered_message.as_deref(),
+        )
+    };
+    record.source_label = context.source_label.clone();
+    Ok(record)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn evt_subscribe_callback(
+    action: EVT_SUBSCRIBE_NOTIFY_ACTION,
+    user_context: *const c_void,
+    event: EVT_HANDLE,
+) -> u32 {
+    if user_context.is_null() {
+        return 1;
+    }
+    let context = &*(user_context as *const TailContext);
+    if action == EvtSubscribeActionDeliver {
+        let result = render_tail_event(context, event);
+        unsafe {
+            let _ = EvtClose(event);
+        }
+        match result {
+            Ok(record) => emit_tail_batch(context, EvtxLiveMode::Subscription, vec![record], Vec::new()),
+            Err(error) => emit_tail_batch(
+                context,
+                EvtxLiveMode::Subscription,
+                Vec::new(),
+                vec![format!("{}: {error}", context.channel)],
+            ),
+        }
+    } else if action == EvtSubscribeActionError {
+        emit_tail_batch(
+            context,
+            EvtxLiveMode::Subscription,
+            Vec::new(),
+            vec![format!("{}: subscription callback reported an error", context.channel)],
+        );
+    }
+    0
+}
+
+#[cfg(target_os = "windows")]
+fn subscription_unavailable(error: &Error) -> bool {
+    // These are platform/service capability failures. Access denied and missing channels are
+    // returned to the operator instead of silently changing acquisition semantics.
+    matches!(win32_code(error), 1 | 50 | 120 | 127)
+}
+
+#[cfg(target_os = "windows")]
+fn clear_error_status(channel: &str, error: &Error) -> EvtxClearResult {
+    let detail = format_source_error("EvtClearLog", error, false);
+    if win32_code(error) == 5 {
+        EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Denied { detail },
+        }
+    } else if win32_code(error) == 2 || win32_code(error) == 15007 {
+        EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Unavailable { detail },
+        }
+    } else {
+        EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Unavailable { detail },
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn start_polling_tail(
+    app: AppHandle,
+    request_id: String,
+    channel: String,
+    filter: EventQueryFilter,
+    maps: Arc<std::sync::RwLock<MapRegistry>>,
+    remote_machine: Option<String>,
+    fallback_gap: String,
+) -> Result<EvtxTailStatus, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let sequence = Arc::new(AtomicU64::new(0));
+    let worker_stop = Arc::clone(&stop);
+    let worker_sequence = Arc::clone(&sequence);
+    let worker_request = request_id.clone();
+    let worker_channel = channel.clone();
+    let worker_fallback_gap = fallback_gap.clone();
+    let worker = thread::spawn(move || {
+        let mut seen = HashSet::<u64>::new();
+        let mut first_poll = true;
+        while !worker_stop.load(Ordering::Acquire) {
+            let outcome = if let Some(machine) = remote_machine.as_deref() {
+                query_remote_channel_streamed(
+                    machine,
+                    &worker_channel,
+                    &filter,
+                    &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    Some(EVENT_FETCH_BATCH as u64),
+                    |_, _| {},
+                    |_| {},
+                )
+            } else {
+                query_channel_streamed(
+                    &worker_channel,
+                    &filter,
+                    &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    Some(EVENT_FETCH_BATCH as u64),
+                    |_, _| {},
+                    |_| {},
+                )
+            };
+
+            match outcome {
+                Ok(scan) => {
+                    let mut records = scan.records;
+                    records.retain(|record| seen.insert(record.event_record_id));
+                    if seen.len() > 8192 {
+                        let mut ids = seen.iter().copied().collect::<Vec<_>>();
+                        ids.sort_unstable();
+                        for id in ids.into_iter().take(4096) {
+                            seen.remove(&id);
+                        }
+                    }
+                    let mut gaps = scan.gaps;
+                    if first_poll && !worker_fallback_gap.is_empty() {
+                        gaps.push(worker_fallback_gap.clone());
+                    }
+                    first_poll = false;
+                    if !records.is_empty() || !gaps.is_empty() {
+                        let sequence_number = worker_sequence.fetch_add(1, Ordering::AcqRel);
+                        let _ = app.emit(
+                            "evtx-tail-batch",
+                            EvtxTailBatch {
+                                request_id: worker_request.clone(),
+                                channel: worker_channel.clone(),
+                                sequence: sequence_number,
+                                mode: EvtxLiveMode::Polling,
+                                records,
+                                coverage_gaps: gaps,
+                            },
+                        );
+                    }
+                }
+                Err(error) => {
+                    let sequence_number = worker_sequence.fetch_add(1, Ordering::AcqRel);
+                    let _ = app.emit(
+                        "evtx-tail-batch",
+                        EvtxTailBatch {
+                            request_id: worker_request.clone(),
+                            channel: worker_channel.clone(),
+                            sequence: sequence_number,
+                            mode: EvtxLiveMode::Polling,
+                            records: Vec::new(),
+                            coverage_gaps: vec![format!("{}: {error}", worker_channel)],
+                        },
+                    );
+                }
+            }
+            let mut waited = Duration::ZERO;
+            while waited < POLL_INTERVAL && !worker_stop.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(50));
+                waited += Duration::from_millis(50);
+            }
+        }
+        log::debug!(
+            "event=evtx_tail_polling_stopped request_id=\"{}\" channel=\"{}\"",
+            worker_request,
+            worker_channel
+        );
+    });
+
+    let status = EvtxTailStatus {
+        request_id: request_id.clone(),
+        channel: channel.clone(),
+        mode: EvtxLiveMode::Polling,
+        active: true,
+        next_sequence: 0,
+        coverage_gaps: vec![fallback_gap],
+    };
+    active_tails()
+        .lock()
+        .map_err(|_| "live tail state lock was poisoned".to_string())?
+        .insert(
+            tail_key(&request_id, &channel),
+            ActiveTail {
+                request_id,
+                channel,
+                mode: EvtxLiveMode::Polling,
+                stop,
+                sequence,
+                subscription: None,
+                context: None,
+                session: None,
+                worker: Some(worker),
+            },
+        );
+    Ok(status)
+}
+
+/// Start a push subscription, falling back to polling only when the service does not expose
+/// EvtSubscribe on this Windows build.
+#[cfg(target_os = "windows")]
+pub fn start_channel_tail(
+    app: AppHandle,
+    request_id: String,
+    channel: String,
+    filter: EventQueryFilter,
+    maps: Arc<std::sync::RwLock<MapRegistry>>,
+    remote_machine: Option<String>,
+) -> Result<EvtxTailStatus, String> {
+    let _ = stop_channel_tail(&request_id, &channel);
+    let fallback_app = app.clone();
+    let fallback_maps = maps.clone();
+    let remote_session = remote_machine
+        .as_deref()
+        .map(open_remote_session)
+        .transpose()?;
+    let session_handle = remote_session.as_ref().map(|(session, _)| session.raw());
+    let source_label = remote_session
+        .as_ref()
+        .map(|(_, machine)| format!("Remote: {machine}"))
+        .unwrap_or_else(|| "Live".to_string());
+    let compiled = build_query(&filter)
+        .map_err(|error| format!("cannot compile event query for {channel}: {error}"))?;
+    let channel_hstring = HSTRING::from(channel.as_str());
+    let query_hstring = HSTRING::from(compiled.as_str());
+    let context = Box::new(TailContext {
+        app,
+        request_id: request_id.clone(),
+        channel: channel.clone(),
+        source_label,
+        session: session_handle,
+        maps,
+        sequence: AtomicU64::new(0),
+        publisher_metadata: Mutex::new(HashMap::new()),
+    });
+    let context_ptr = (&*context) as *const TailContext as *const c_void;
+    let callback: EVT_SUBSCRIBE_CALLBACK = Some(evt_subscribe_callback);
+    let subscription = unsafe {
+        EvtSubscribe(
+            session_handle,
+            None,
+            &channel_hstring,
+            &query_hstring,
+            None,
+            Some(context_ptr),
+            callback,
+            EvtSubscribeToFutureEvents.0 | EvtSubscribeTolerateQueryErrors.0,
+        )
+    };
+    match subscription {
+        Ok(handle) => {
+            let status = EvtxTailStatus {
+                request_id: request_id.clone(),
+                channel: channel.clone(),
+                mode: EvtxLiveMode::Subscription,
+                active: true,
+                next_sequence: 0,
+                coverage_gaps: Vec::new(),
+            };
+            active_tails()
+                .lock()
+                .map_err(|_| "live tail state lock was poisoned".to_string())?
+                .insert(
+                    tail_key(&request_id, &channel),
+                    ActiveTail {
+                        request_id,
+                        channel,
+                        mode: EvtxLiveMode::Subscription,
+                        stop: Arc::new(AtomicBool::new(false)),
+                        sequence: Arc::new(AtomicU64::new(0)),
+                        subscription: Some(OwnedEvtHandle::new(handle)),
+                        context: Some(context),
+                        session: remote_session,
+                        worker: None,
+                    },
+                );
+            Ok(status)
+        }
+        Err(error) if subscription_unavailable(&error) => {
+            let fallback_gap = format!(
+                "{}: EvtSubscribe unavailable; polling fallback is active ({})",
+                channel,
+                format_source_error("EvtSubscribe", &error, remote_machine.is_some()),
+            );
+            drop(context);
+            start_polling_tail(
+                fallback_app,
+                request_id,
+                channel,
+                filter,
+                fallback_maps,
+                remote_machine,
+                fallback_gap,
+            )
+        }
+        Err(error) => {
+            drop(context);
+            Err(format_source_error("EvtSubscribe", &error, remote_machine.is_some()))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+/// Stop a tail and synchronously release its subscription/session resources.
+#[cfg(target_os = "windows")]
+pub fn stop_channel_tail(request_id: &str, channel: &str) -> Option<EvtxTailStatus> {
+    let key = tail_key(request_id, channel);
+    let tail = active_tails().lock().ok()?.remove(&key)?;
+    let next_sequence = tail.sequence.load(Ordering::Acquire);
+    Some(EvtxTailStatus {
+        request_id: tail.request_id.clone(),
+        channel: tail.channel.clone(),
+        mode: tail.mode,
+        active: false,
+        next_sequence,
+        coverage_gaps: Vec::new(),
+    })
+}
+fn tail_key(request_id: &str, channel: &str) -> String {
+    format!("{request_id}\u{0}{channel}")
+}
+
+/// Clear a live channel only from an already-elevated application process.
+#[cfg(target_os = "windows")]
+pub fn clear_channel(channel: &str, confirmed: bool) -> EvtxClearResult {
+    if !confirmed {
+        return EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Cancelled,
+        };
+    }
+    let elevation = crate::elevation::current_elevation_state();
+    if !elevation.platform_supported {
+        return EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Unsupported {
+                detail: elevation
+                    .detail
+                    .unwrap_or_else(|| "channel clearing is only available on Windows".to_string()),
+            },
+        };
+    }
+    if !elevation.is_elevated {
+        return EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Denied {
+                detail: "clearing an event channel requires the application to run elevated".to_string(),
+            },
+        };
+    }
+    let channel_hstring = HSTRING::from(channel);
+    let result = unsafe { EvtClearLog(None, &channel_hstring, PCWSTR::null(), 0) };
+    let result = match result {
+        Ok(()) => EvtxClearResult {
+            channel: channel.to_string(),
+            result: EvtxClearStatus::Cleared,
+        },
+        Err(error) => clear_error_status(channel, &error),
+    };
+    // Re-probe after the operation. The clear path must not claim that an elevation transition
+    // happened or leave the frontend believing the process changed privilege.
+    let after = crate::elevation::current_elevation_state();
+    if elevation.is_elevated != after.is_elevated {
+        log::warn!(
+            "event=evtx_clear_elevation_changed channel=\"{}\" before={} after={}",
+            channel,
+            elevation.is_elevated,
+            after.is_elevated
+        );
+    }
+    result
 }
 
 // ── Non-Windows stubs ───────────────────────────────────────────────────────

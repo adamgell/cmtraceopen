@@ -105,6 +105,30 @@ export interface EventLogSourceManifest {
   entries: EventLogSourceManifestEntry[];
   coverage: EventLogSourceCoverage[];
 }
+export type EvtxLiveMode = "subscription" | "polling" | "mixed" | "unsupported";
+
+export interface EvtxTailStatus {
+  requestId: string;
+  channel: string;
+  mode: EvtxLiveMode;
+  active: boolean;
+  nextSequence: number;
+  coverageGaps: string[];
+}
+
+export interface EvtxTailBatch {
+  requestId: string;
+  channel: string;
+  sequence: number;
+  mode: EvtxLiveMode;
+  records: EvtxRecord[];
+  coverageGaps: string[];
+}
+
+export type EvtxClearResult =
+  | { status: "cleared" | "cancelled" | "empty"; channel: string }
+  | { status: "denied" | "unavailable" | "unsupported"; channel: string; detail: string };
+
 
 /**
  * How far back a live query reaches.

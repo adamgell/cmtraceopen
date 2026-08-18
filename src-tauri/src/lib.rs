@@ -364,6 +364,12 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_remote_channels,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_start_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_stop_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_clear_channel,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_export_records,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
