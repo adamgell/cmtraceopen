@@ -549,6 +549,20 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         }
     };
 
+
+    let root_metadata = fs::symlink_metadata(&requested_path).map_err(|error| {
+        crate::error::AppError::from_source_io(
+            error,
+            crate::error::SourceOperation::ListFolder,
+            Some(&path),
+        )
+    })?;
+    if root_metadata.file_type().is_symlink() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "symbolic-link folder roots are not followed: {}",
+            requested_path.display()
+        )));
+    }
     if !metadata.is_dir() {
         return Err(crate::error::AppError::InvalidInput(format!(
             "path is not a folder: {}",
@@ -563,12 +577,17 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             Some(&path),
         )
     })?;
-
     let mut entries: Vec<FolderEntry> = Vec::new();
     let mut child_errors: Vec<String> = Vec::new();
     let mut candidates = Vec::new();
+    let mut listing_work = 0usize;
     let mut listing_truncated = false;
     for entry_result in read_dir {
+        listing_work += 1;
+        if listing_work > MAX_FOLDER_LISTING_ENTRIES {
+            listing_truncated = true;
+            break;
+        }
         match entry_result {
             Ok(entry) => candidates.push(entry),
             Err(error) => {
@@ -629,12 +648,12 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         // directory tree so that every nested artifact is loaded.
         let collected = collect_files_recursive(&requested_path);
         entries = collected.entries;
-        child_errors.extend(collected.child_errors);
+        child_errors = collected.child_errors;
+        listing_truncated = false;
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
     }
-
     log::info!(
         "event=list_log_folder_complete path=\"{}\" entry_count={} is_bundle={}",
         requested_path.display(),
