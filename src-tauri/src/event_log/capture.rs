@@ -84,7 +84,7 @@ fn expand_windows_environment(value: &str) -> String {
         output.push_str(&remainder[..start]);
         let after_start = &remainder[start + 1..];
         let Some(end) = after_start.find('%') else {
-            output.push_str(remainder);
+            output.push_str(&remainder[start..]);
             return output;
         };
         let name = &after_start[..end];
@@ -580,7 +580,7 @@ mod windows_capture {
                     message_property.0 as u32,
                 )?)?;
                 let message_text = if let Some(message_id) = message_id {
-                    let text = format_message(metadata_handle, message_id)?;
+                    let text = format_message(metadata_handle, message_id).unwrap_or(None);
                     messages.entry(message_id as u64).or_insert(ProviderMessage {
                         raw_id: message_id as u64,
                         short_id: message_id as u16 as u32,
@@ -617,14 +617,14 @@ mod windows_capture {
                 .ok_or_else(|| "event metadata is missing EventID".to_string())? as u32;
             let version = optional_number(get_event_variant(event_handle.0, EventMetadataEventVersion)?)?
                 .unwrap_or(0) as u32;
-            let channel_index = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
+            let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
                 .unwrap_or(0);
             let log_name = channels.get(&(channel_index as u32)).cloned();
-            let level = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
+            let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
                 .map(|value| value as u32);
-            let task_metadata = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
+            let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
-            let opcode_raw = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
+            let opcode_raw = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
             let (opcode, opcode_task) = opcode_raw
                 .map(decode_event_opcode)
                 .map(|(opcode, task)| (Some(opcode), task))
@@ -637,7 +637,7 @@ mod windows_capture {
             let description = if let Some(message_id) =
                 optional_message_id(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
             {
-                let text = format_message(metadata_handle, message_id)?;
+                let text = format_message(metadata_handle, message_id).unwrap_or(None);
                 messages.entry(message_id as u64).or_insert(ProviderMessage {
                     raw_id: message_id as u64,
                     short_id: message_id as u16 as u32,
@@ -645,9 +645,8 @@ mod windows_capture {
                 });
                 messages
                     .get(&(message_id as u64))
-                    .and_then(|message| message.text.clone())
             } else {
-                None
+                Some(String::new())
             };
             metadata.events.push(ProviderEvent {
                 description,
