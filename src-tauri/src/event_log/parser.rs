@@ -91,7 +91,8 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
             break;
         }
         let is_wildcard = is_wildcard_source(source)
-            && !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.is_file());
+            && !fs::symlink_metadata(source)
+                .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir());
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage)
         } else {
@@ -297,31 +298,39 @@ fn expand_path(
             }
         };
         for child_error in &listing.child_errors {
+            let (coverage_path, coverage_reason) = child_error
+                .split_once(": ")
+                .map_or((path_string.as_str(), child_error.as_str()), |(path, reason)| {
+                    (path, reason)
+                });
+            let coverage_path = coverage_path.to_string();
+            let coverage_reason = coverage_reason.to_string();
             let coverage = if child_error.contains("limit")
                 || child_error.contains("truncated")
             {
                 SourceCoverage::LimitReached {
-                    path: path_string.clone(),
-                    reason: child_error.clone(),
+                    path: coverage_path,
+                    reason: coverage_reason,
                 }
-            } else if child_error.contains("symbolic link")
+            } else if child_error.contains("unsupported")
+                || child_error.contains("symbolic link")
                 || child_error.contains("reparse point")
             {
                 SourceCoverage::Unsupported {
-                    path: path_string.clone(),
-                    reason: child_error.clone(),
+                    path: coverage_path,
+                    reason: coverage_reason,
                 }
             } else if child_error.contains("denied")
                 || child_error.contains("Permission denied")
             {
                 SourceCoverage::AccessDenied {
-                    path: path_string.clone(),
-                    reason: child_error.clone(),
+                    path: coverage_path,
+                    reason: coverage_reason,
                 }
             } else {
                 SourceCoverage::Missing {
-                    path: path_string.clone(),
-                    reason: child_error.clone(),
+                    path: coverage_path,
+                    reason: coverage_reason,
                 }
             };
             manifest.coverage.push(coverage);
@@ -502,7 +511,10 @@ fn normalize_source_path(path: &Path) -> String {
     if windows_native {
         return normalize_windows_path(&raw);
     }
-
+    if !windows_native && raw.contains('\\') {
+        let slash_normalized = raw.replace('\\', "/");
+        return normalize_source_path(Path::new(&slash_normalized));
+    }
     let is_absolute = raw.starts_with('/');
     let mut components: Vec<&str> = Vec::new();
     for component in raw.split('/') {
@@ -1120,6 +1132,14 @@ mod tests {
             r"C:\Application.evtx"
         );
         assert_eq!(
+            normalize_source_path(Path::new(r"logs\.\nested\..\Application.evtx")),
+            "logs/Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new("logs/nested/../Application.evtx")),
+            "logs/Application.evtx"
+        );
+        assert_eq!(
             normalize_source_path(Path::new(r"\\?\C:\logs\..\Application.evtx")),
             r"\\?\C:\Application.evtx"
         );
@@ -1127,6 +1147,23 @@ mod tests {
         assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
         assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
         assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
+    }
+    #[test]
+    fn existing_glob_metacharacter_directory_is_treated_as_literal() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-literal-[dir]-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create literal glob directory");
+        let event = root.join("Application.evtx");
+        std::fs::write(&event, b"evtx").expect("write event log");
+
+        let manifest =
+            build_source_manifest(&[root.to_string_lossy().to_string()]).expect("build manifest");
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].path, normalize_source_path(&event));
+
+        std::fs::remove_dir_all(root).expect("remove literal glob directory");
     }
 
     #[cfg(unix)]

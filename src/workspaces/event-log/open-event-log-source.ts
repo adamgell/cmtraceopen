@@ -13,7 +13,7 @@ export async function openEventLogSources(sources: EventLogOpenSource[]): Promis
   const manifest = await expandEventLogSources(sources.map((source) => source.path));
   const explicitKinds = new Map(
     sources
-      .filter((source) => source.kind !== "folder" && source.kind !== "wildcard")
+      .filter((source) => source.kind === "archive" || source.kind === "vss")
       .map((source) => [source.path.replaceAll("/", "\\").toLowerCase(), source.kind] as const)
   );
   manifest.entries = manifest.entries.map((entry) => ({

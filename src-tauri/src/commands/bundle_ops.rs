@@ -304,6 +304,10 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                     .any(|b| b.eq_ignore_ascii_case(ext))
                 {
                     skipped_binary += 1;
+                    child_errors.push(format!(
+                        "{}: binary bundle member is unsupported for event-log parsing",
+                        entry_path.display()
+                    ));
                     log::debug!(
                         "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
                         entry_path.display()
