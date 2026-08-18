@@ -87,9 +87,10 @@ export const useSavedFilterStore = create<SavedFilterState>()(
     }),
     {
       name: "cmtraceopen-evtx-saved-filters",
-      // Persisted data outlives the build that wrote it, so it is revalidated on load rather than
-      // trusted. A filter that no longer validates is dropped, not repaired into something the
-      // operator never chose.
+      version: 2,
+      // Persisted data from schema 1 used flat criteria and must not be repaired into layered
+      // criteria, because that would silently broaden a filter.
+      migrate: () => ({ savedFilters: [] }),
       merge: (persisted, current) => {
         const raw = persisted as { savedFilters?: unknown } | undefined;
         const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];

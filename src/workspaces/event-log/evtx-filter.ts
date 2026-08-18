@@ -191,6 +191,10 @@ export interface VisibleRecordsInput {
   visibleColumns?: readonly EvtxColumnId[];
   /** Timezone used by the rendered timestamp column. */
   timeZoneMode?: EvtxTimeZoneMode;
+  /** Before-load time criterion retained for local/file evaluation. */
+  timeWindow?: EvtxTimeWindow;
+  /** Injectable clock for deterministic boundary tests; production uses Date.now(). */
+  nowEpoch?: number;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -252,19 +256,19 @@ export function matchesQuickFilter(
       return contains(normalizedQuery);
     case "multipleWords": {
       const words = queryParts(query, /\s+/, quickFilter.caseSensitive);
-      return words.some(contains);
+      return words.length > 0 && words.some(contains);
     }
     case "multipleStrings": {
       const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
-      return strings.some(contains);
+      return strings.length > 0 && strings.some(contains);
     }
     case "allWords": {
       const words = queryParts(query, /\s+/, quickFilter.caseSensitive);
-      return words.every(contains);
+      return words.length > 0 && words.every(contains);
     }
     case "allStrings": {
       const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
-      return strings.every(contains);
+      return strings.length > 0 && strings.every(contains);
     }
   }
 }
@@ -272,13 +276,24 @@ export function matchesQuickFilter(
 /** A record's final visibility after all filter stages have been evaluated. */
 export function recordMatchesVisibleFilter(
   record: EvtxRecord,
-  input: Pick<VisibleRecordsInput, "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"> & {
+  input: Pick<
+    VisibleRecordsInput,
+    "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"
+  > & {
     quickFilter?: EvtxQuickFilter;
     visibleColumns?: readonly EvtxColumnId[];
     timeZoneMode?: EvtxTimeZoneMode;
+    timeWindow?: EvtxTimeWindow;
+    nowEpoch?: number;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
+  if (
+    input.timeWindow &&
+    !isWithinTimeWindow(record.timestampEpoch, input.timeWindow, input.nowEpoch)
+  ) {
+    return false;
+  }
   if (!input.filterLevels.has(record.level)) return false;
   const eventIdSet = parseEventIdFilter(input.filterEventIds);
   if (eventIdSet && !eventIdSet.has(record.eventId)) return false;

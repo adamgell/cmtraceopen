@@ -66,7 +66,7 @@ function buildServerFilter(
 
   if (filterLevels.size > 0 && filterLevels.size < ALL_LEVELS.length) {
     filter.levels = [...filterLevels].flatMap((level) =>
-      level === "Information" ? [0, 4] : [ALL_LEVELS.indexOf(level) + 1]
+      level === "Information" ? [0, 4, 255] : [ALL_LEVELS.indexOf(level) + 1]
     );
   }
   return filter;
@@ -108,6 +108,7 @@ interface EvtxState {
   sortField: EvtxSortField;
   sortDirection: EvtxSortDirection;
   selectedRecordId: number | null;
+  loadGeneration: number;
 
   parseFiles: (paths: string[]) => Promise<void>;
   enumerateChannels: () => Promise<void>;
@@ -193,6 +194,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   sortField: "time",
   sortDirection: "asc",
   selectedRecordId: null,
+  loadGeneration: 0,
 
   parseFiles: async (paths) => {
     set({ isLoading: true, loadError: null });
@@ -320,7 +322,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   queryChannels: async (channels, maxEvents) => {
-    set({ isLoading: true, loadError: null, selectedRecordId: null });
+    const generation = get().loadGeneration + 1;
+    set({
+      isLoading: true,
+      loadError: null,
+      selectedRecordId: null,
+      loadGeneration: generation,
+    });
 
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
@@ -356,8 +364,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
       })
     );
+    if (get().loadGeneration !== generation) return;
 
     for (const { channel, result, error } of results) {
+      if (get().loadGeneration !== generation) return;
       try {
         if (!result) {
           // A channel that could not be read is recorded as a gap, not merely as an error banner
@@ -439,31 +449,29 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
     set({ isLoading: false, loadError });
   },
-
   loadSelectedChannels: async () => {
     const state = get();
     const unloaded = [...state.selectedChannels].filter(
-      (ch) => !state.loadedChannels.has(ch)
+      (channel) => !state.loadedChannels.has(channel)
     );
     if (unloaded.length === 0) return;
     await get().queryChannels(unloaded);
   },
-
   refreshLoadedChannels: async () => {
     const state = get();
     const loaded = [...state.loadedChannels];
     if (loaded.length === 0) return;
+    const generation = state.loadGeneration + 1;
     const startTime = performance.now();
     set({
       records: [],
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
+      loadGeneration: generation,
       isLoading: true,
       loadError: null,
       loadStartTime: startTime,
       loadElapsedMs: null,
-      // Cleared with the records they describe. Keeping them would report gaps from a set that is
-      // no longer on screen, while the new results' own gaps went unreported.
       coverageGaps: [],
     });
 
@@ -485,6 +493,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             get().filterLevels
           ),
         });
+        if (get().loadGeneration !== generation) return;
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
         const arrived = [...streamed.records, ...result.records];
@@ -535,8 +544,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }));
       }
     });
-
     await Promise.all(promises);
+    if (get().loadGeneration !== generation) return;
     set({
       isLoading: false,
       loadingChannel: null,
@@ -620,7 +629,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSelectedRecordId: (id) => set({ selectedRecordId: id }),
 
-  reset: () =>
+  reset: () => {
+    const loadGeneration = get().loadGeneration + 1;
     set({
       records: [],
       channels: [],
@@ -633,6 +643,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadingProgress: null,
       loadStartTime: null,
       loadElapsedMs: null,
+      loadGeneration,
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
@@ -646,7 +657,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,
-    }),
+    });
+  },
 });
 });
 

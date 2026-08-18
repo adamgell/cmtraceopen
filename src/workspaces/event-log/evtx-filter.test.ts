@@ -149,6 +149,9 @@ describe("quick filter semantics", () => {
   it("does not constrain an empty quick filter", () => {
     expect(visible(quick())).toHaveLength(1);
   });
+  it("rejects separator-only all-strings queries", () => {
+    expect(visible(quick({ mode: "allStrings", query: ",,,; ;" }))).toHaveLength(0);
+  });
 });
 
 describe("event id range bounds", () => {
@@ -180,5 +183,22 @@ describe("time-window boundaries", () => {
     expect(isWithinTimeWindow(now - 60 * 60 * 1000, "1h", now)).toBe(true);
     expect(isWithinTimeWindow(now - 60 * 60 * 1000 - 1, "1h", now)).toBe(false);
     expect(isWithinTimeWindow(now - 1, "all", now)).toBe(true);
+  });
+  it("applies the before-load window in the production visible predicate", () => {
+    const now = Date.parse("2026-08-18T12:00:00.000Z");
+    const inWindow = record({ timestampEpoch: now - 60 * 60 * 1000 });
+    const old = record({ timestampEpoch: now - 60 * 60 * 1000 - 1 });
+    const visibleRecords = selectVisibleRecords({
+      records: [inWindow, old],
+      selectedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Information"]),
+      filterEventIds: "",
+      filterSearch: "",
+      visibleColumns: ["timestamp"],
+      timeZoneMode: "utc",
+      timeWindow: "1h",
+      nowEpoch: now,
+    });
+    expect(visibleRecords).toEqual([inWindow]);
   });
 });

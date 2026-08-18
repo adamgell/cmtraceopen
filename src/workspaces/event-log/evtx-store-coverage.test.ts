@@ -498,7 +498,7 @@ describe("the time window reaches the service", () => {
         (call) =>
           JSON.stringify(
             (call[1] as { filter?: { levels?: number[] } })?.filter?.levels
-          ) === JSON.stringify([2, 0, 4])
+          ) === JSON.stringify([2, 0, 4, 255])
       )
     ).toBe(true);
     await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
@@ -544,6 +544,25 @@ describe("the time window reaches the service", () => {
         ).includes('"low":4624')
       )
     ).toBe(true);
+  });
+  it("ignores stale query results after a newer filter query starts", async () => {
+    let resolveOld!: (value: unknown) => void;
+    const oldResult = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    const fresh = {
+      ...result("Application", []),
+      records: [streamedRecord("Application", 99)],
+    };
+    invoke.mockImplementationOnce(() => oldResult).mockResolvedValueOnce(fresh);
+
+    const oldQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    const freshQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    await freshQuery;
+    resolveOld({ ...result("Application", []), records: [streamedRecord("Application", 1)] });
+    await oldQuery;
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([99]);
   });
 describe("records that arrive in batches while the query runs", () => {
   beforeEach(() => {

@@ -63,6 +63,7 @@ export function EvtxTimeline() {
   const groupBy = useEvtxStore((s) => s.groupBy);
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
@@ -86,6 +87,7 @@ export function EvtxTimeline() {
           quickFilter,
           visibleColumns: columnConfig.order,
           timeZoneMode,
+          timeWindow,
         })
       ),
     [
@@ -97,6 +99,7 @@ export function EvtxTimeline() {
       quickFilter,
       columnConfig.order,
       timeZoneMode,
+      timeWindow,
     ]
   );
 
