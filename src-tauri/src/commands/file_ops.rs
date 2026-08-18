@@ -17,7 +17,7 @@ use crate::watcher::tail::InitialLogicalRecord;
 
 use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
 use super::known_sources::KnownSourcePathKind;
-
+const MAX_FOLDER_LISTING_ENTRIES: usize = 4_096;
 // ── Types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,6 +567,14 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     let mut entries: Vec<FolderEntry> = Vec::new();
     let mut child_errors: Vec<String> = Vec::new();
     for entry_result in read_dir {
+        if entries.len() >= MAX_FOLDER_LISTING_ENTRIES {
+            child_errors.push(format!(
+                "{}: folder listing reached the {} entry limit",
+                requested_path.display(),
+                MAX_FOLDER_LISTING_ENTRIES
+            ));
+            break;
+        }
         let entry = match entry_result {
             Ok(value) => value,
             Err(error) => {

@@ -170,6 +170,8 @@ pub struct EvidenceArtifactPreview {
 /// File extensions that are binary / non-parseable as text logs.
 /// Event-log exports are retained because the event-log source path parses them.
 const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que"];
+/// Maximum directory entries inspected while recursively collecting a bundle.
+const MAX_BUNDLE_INSPECTED: usize = 8_192;
 
 /// Maximum number of files materialized by recursive bundle collection.
 const MAX_BUNDLE_ENTRIES: usize = 4096;
@@ -218,6 +220,8 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     let mut child_errors = Vec::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
+    let mut inspected = 0usize;
+    let mut truncated = false;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     let mut visited = HashSet::new();
 
@@ -235,29 +239,35 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
         }
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
-            Err(e) => {
+            Err(error) => {
                 log::warn!(
-                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{e}\"",
+                    "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{error}\"",
                     dir.display()
                 );
+                child_errors.push(format!("{}: {error}", dir.display()));
                 continue;
             }
         };
-
+        let mut candidates = Vec::new();
         for entry_result in read_dir {
-            if out.len() >= MAX_BUNDLE_ENTRIES {
+            match entry_result {
+                Ok(entry) => candidates.push(entry),
+                Err(error) => {
+                    child_errors.push(format!("{}: {error}", dir.display()));
+                }
+            }
+            if candidates.len() > MAX_BUNDLE_INSPECTED {
+                truncated = true;
+                break;
+            }
+        }
+        candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+        for entry in candidates {
+            if inspected >= MAX_BUNDLE_INSPECTED || out.len() >= MAX_BUNDLE_ENTRIES {
+                truncated = true;
                 break 'walk;
             }
-            let entry = match entry_result {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!(
-                        "event=collect_files_recursive_skip reason=entry_error dir=\"{}\" error=\"{e}\"",
-                        dir.display()
-                    );
-                    continue;
-                }
-            };
+            inspected += 1;
             let entry_path = entry.path();
             match unsafe_entry_reason(&entry_path) {
                 Ok(Some(reason)) => {
@@ -323,11 +333,11 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
         }
     }
 
-    if out.len() >= MAX_BUNDLE_ENTRIES {
+    if truncated {
         child_errors.push(format!(
-            "{}: recursive listing reached the {} file limit",
+            "{}: recursive listing truncated after inspecting {} entries",
             root.display(),
-            MAX_BUNDLE_ENTRIES
+            inspected
         ));
     }
     log::info!(

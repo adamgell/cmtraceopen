@@ -24,6 +24,7 @@ use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 /// This is deliberately applied before parsing. A folder or wildcard is user input and must not
 /// turn into an unbounded parser workload.
 pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
+const MAX_SOURCE_INPUTS: usize = 4_096;
 const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,9 +82,16 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
         entries: Vec::new(),
         coverage: Vec::new(),
     };
-
-    for source in sources {
-        let is_wildcard = is_wildcard_source(source);
+    for (index, source) in sources.iter().enumerate() {
+        if index >= MAX_SOURCE_INPUTS {
+            manifest.coverage.push(SourceCoverage::LimitReached {
+                path: "<source inputs>".to_string(),
+                reason: format!("source input count exceeds {MAX_SOURCE_INPUTS}"),
+            });
+            break;
+        }
+        let is_wildcard = is_wildcard_source(source)
+            && !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.is_file());
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage)
         } else {
@@ -289,7 +297,9 @@ fn expand_path(
             }
         };
         for child_error in &listing.child_errors {
-            let coverage = if child_error.contains("file limit") {
+            let coverage = if child_error.contains("limit")
+                || child_error.contains("truncated")
+            {
                 SourceCoverage::LimitReached {
                     path: path_string.clone(),
                     reason: child_error.clone(),
@@ -535,7 +545,10 @@ fn normalize_windows_path(raw: &str) -> String {
             .is_some_and(|component| component.eq_ignore_ascii_case("UNC"))
     {
         4
-    } else if prefix.len() == 3 && prefix.as_bytes()[1] == b':' {
+    } else if prefix == "\\\\?\\"
+        && rest.len() >= 2
+        && rest.as_bytes()[1] == b':'
+    {
         1
     } else {
         0
@@ -1101,6 +1114,14 @@ mod tests {
         assert_eq!(
             normalize_source_path(Path::new(r"\\server\share\..\Application.evtx")),
             r"\\server\share\Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new(r"C:\logs\..\Application.evtx")),
+            r"C:\Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new(r"\\?\C:\logs\..\Application.evtx")),
+            r"\\?\C:\Application.evtx"
         );
         assert!(!is_vss_path(r"C:\logs\harddiskvolumeshadowcopy1\Application.evtx"));
         assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));

@@ -5,17 +5,21 @@ export type EventLogOpenSource =
   | { kind: "file"; path: string }
   | { kind: "folder"; path: string }
   | { kind: "wildcard"; path: string }
+  | { kind: "archive"; path: string }
   | { kind: "vss"; path: string };
 
 /** Expand selected sources once and hand the complete manifest to the store. */
 export async function openEventLogSources(sources: EventLogOpenSource[]): Promise<void> {
   const manifest = await expandEventLogSources(sources.map((source) => source.path));
-  if (manifest.entries.length === 0) {
-    const details = manifest.coverage
-      .map((gap) => `${gap.path}: ${gap.reason}`)
-      .join("; ");
-    throw new Error(details || "No .evtx files were found for this source.");
-  }
+  const explicitKinds = new Map(
+    sources
+      .filter((source) => source.kind !== "folder" && source.kind !== "wildcard")
+      .map((source) => [source.path.replaceAll("/", "\\").toLowerCase(), source.kind] as const)
+  );
+  manifest.entries = manifest.entries.map((entry) => ({
+    ...entry,
+    kind: explicitKinds.get(entry.path.replaceAll("/", "\\").toLowerCase()) ?? entry.kind,
+  }));
 
   await useEvtxStore.getState().parseManifest(manifest);
 }
