@@ -61,13 +61,24 @@ export interface UnifiedTimeline {
 
 const utf8Encoder = new TextEncoder();
 
+function missingRecordDigest(record: EvtxRecord): string {
+  const input = `${record.timestampEpoch}|${record.eventId}|${record.provider}|${record.message}|${record.rawXml}`;
+  let first = 2_166_136_261;
+  let second = (first ^ 0x9e37_79b9) >>> 0;
+  for (const byte of utf8Encoder.encode(input)) {
+    first = Math.imul(first ^ byte, 16_777_619) >>> 0;
+    second = Math.imul(second ^ (byte ^ 0xa5), 16_777_619) >>> 0;
+  }
+  return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
+}
+
 function stableRecordIdentity(record: EvtxRecord): string {
   const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
   const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
   if (record.eventRecordId !== 0) {
     return `${source}|${channel}|record${record.eventRecordId}`;
   }
-  return `${source}|${channel}|missing|timestamp${record.timestampEpoch}|event${record.eventId}|provider${utf8Encoder.encode(record.provider).length}:${record.provider}|message${utf8Encoder.encode(record.message).length}:${record.message}|xml${utf8Encoder.encode(record.rawXml).length}:${record.rawXml}`;
+  return `${source}|${channel}|missing${missingRecordDigest(record)}`;
 }
 
 /**

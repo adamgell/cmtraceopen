@@ -29,6 +29,20 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
         EvtxLevel::Information => TimelineSeverity::Info,
     }
 }
+fn missing_record_digest(record: &EvtxRecord) -> String {
+    let input = format!(
+        "{}|{}|{}|{}|{}",
+        record.timestamp_epoch, record.event_id, record.provider, record.message, record.raw_xml
+    );
+    let mut first = 2_166_136_261_u32;
+    let mut second = first ^ 0x9e37_79b9;
+    for byte in input.bytes() {
+        first = (first ^ u32::from(byte)).wrapping_mul(16_777_619);
+        second = (second ^ u32::from(byte ^ 0xa5)).wrapping_mul(16_777_619);
+    }
+    format!("{first:08x}{second:08x}")
+}
+
 fn stable_event_id(record: &EvtxRecord) -> String {
     let source = format!("source{}:{}", record.source_label.len(), record.source_label);
     let channel = format!("channel{}:{}", record.channel.len(), record.channel);
@@ -36,17 +50,7 @@ fn stable_event_id(record: &EvtxRecord) -> String {
         return format!("{source}|{channel}|record{}", record.event_record_id);
     }
 
-    format!(
-        "{source}|{channel}|missing|timestamp{}|event{}|provider{}:{}|message{}:{}|xml{}:{}",
-        record.timestamp_epoch,
-        record.event_id,
-        record.provider.len(),
-        record.provider,
-        record.message.len(),
-        record.message,
-        record.raw_xml.len(),
-        record.raw_xml
-    )
+    format!("{source}|{channel}|missing{}", missing_record_digest(record))
 }
 
 fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
@@ -358,15 +362,19 @@ mod tests {
 
     #[test]
     fn missing_record_ids_and_delimiter_like_sources_keep_distinct_stable_keys() {
-        let mut first = record(1, "first", EvtxLevel::Information);
+        let mut first = record(1, "secret-token", EvtxLevel::Information);
         first.event_record_id = 0;
         first.source_label = "a/b#c".to_string();
         first.channel = "d/e#f".to_string();
-        first.raw_xml = "<Event><System><EventRecordID>0</EventRecordID></System></Event>".to_string();
+        first.message = "secret-token".repeat(100);
+        first.raw_xml = "<Event><System><EventRecordID>0</EventRecordID></System></Event>"
+            .repeat(100);
 
         let mut second = first.clone();
-        second.message = "second".to_string();
-        second.raw_xml = "<Event><System><EventRecordID>0</EventRecordID><Level>2</Level></System></Event>".to_string();
+        second.message = "other-secret".repeat(100);
+        second.raw_xml =
+            "<Event><System><EventRecordID>0</EventRecordID><Level>2</Level></System></Event>"
+                .repeat(100);
 
         let timeline = build(&[], &[first, second]);
         let ids: Vec<_> = timeline
@@ -380,7 +388,9 @@ mod tests {
 
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1]);
-        assert!(ids[0].starts_with("source5:a/b#c|channel5:d/e#f|missing|"));
+        assert!(ids[0].starts_with("source5:a/b#c|channel5:d/e#f|missing"));
+        assert!(ids.iter().all(|id| id.len() < 128));
+        assert!(ids.iter().all(|id| !id.contains("secret")));
     }
 
     #[test]
