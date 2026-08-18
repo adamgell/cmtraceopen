@@ -191,7 +191,9 @@ fn expand_wildcard(
         });
         return Vec::new();
     }
-    let matcher = match glob::Pattern::new(&pattern.to_lowercase()) {
+    let match_pattern = pattern.replace('\\', "/");
+    let match_pattern = match_pattern.strip_prefix("./").unwrap_or(&match_pattern);
+    let matcher = match glob::Pattern::new(&match_pattern.to_ascii_lowercase()) {
         Ok(matcher) => matcher,
         Err(error) => {
             coverage.push(SourceCoverage::InvalidPattern {
@@ -212,7 +214,9 @@ fn expand_wildcard(
     if root.as_os_str().is_empty() {
         root.push(".");
     }
-    let recursive = pattern.contains("**");
+    let recursive = Path::new(pattern)
+        .components()
+        .any(|component| component.as_os_str() == "**");
     if let Ok(metadata) = fs::symlink_metadata(&root) {
         if is_reparse_or_symlink(&metadata) {
             coverage.push(SourceCoverage::Unsupported {
@@ -332,8 +336,9 @@ fn collect_wildcard_dir(
             });
             continue;
         }
-        if matcher.matches_path(Path::new(&path.to_string_lossy().to_lowercase())) {
-            paths.push(path.clone());
+        let candidate = path.to_string_lossy().replace('\\', "/");
+        let candidate = candidate.strip_prefix("./").unwrap_or(&candidate);
+        if matcher.matches(&candidate.to_ascii_lowercase()) {
             if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
                 coverage.push(SourceCoverage::LimitReached {
                     path: directory.to_string_lossy().to_string(),
@@ -344,6 +349,7 @@ fn collect_wildcard_dir(
                 });
                 return;
             }
+            paths.push(path.clone());
         }
         if recursive && metadata.is_dir() {
             collect_wildcard_dir(
