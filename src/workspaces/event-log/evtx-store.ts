@@ -295,6 +295,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
               get().filterLevels
             ),
           });
+          if (get().loadGeneration !== generation) return;
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
           const arrived = [...streamed.records, ...result.records];
