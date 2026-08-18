@@ -188,6 +188,9 @@ mod windows_capture {
     fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
         channels.get(&(channel_id as u32)).cloned()
     }
+    fn insert_named_metadata(map: &mut BTreeMap<String, String>, key: u64, value: String) {
+        map.entry(key.to_string()).or_insert(value);
+    }
 
     fn string(value: OwnedVariant) -> Option<String> {
         match value {
@@ -506,7 +509,7 @@ mod windows_capture {
                     2 => &mut metadata.keywords,
                     _ => &mut metadata.levels,
                 };
-                target_map.insert(value.to_string(), message_text.unwrap_or(name));
+                insert_named_metadata(target_map, value, message_text.unwrap_or(name));
             }
         }
 
@@ -747,6 +750,13 @@ mod windows_tests {
         assert_eq!(metadata_key_value(2, 0x8000_0000_0000_0001), 0x8000_0000_0000_0001);
     }
 
+    #[test]
+    fn opcode_name_collision_keeps_first_display_name() {
+        let mut names = BTreeMap::new();
+        insert_named_metadata(&mut names, 11, "first".to_string());
+        insert_named_metadata(&mut names, 11, "second".to_string());
+        assert_eq!(names.get("11").map(String::as_str), Some("first"));
+    }
     #[test]
     fn channel_resolution_uses_reference_id_not_array_position() {
         let channels = BTreeMap::from([(7, "Admin".to_string()), (42, "Operational".to_string())]);
