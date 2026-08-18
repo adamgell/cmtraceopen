@@ -43,7 +43,9 @@ type DropHandler = (event: {
 }) => Promise<void> | void;
 
 function latestHandler(): DropHandler {
-  const handler = onDragDropEventMock.mock.calls.at(-1)?.[0] as DropHandler | undefined;
+  const handler = onDragDropEventMock.mock.calls[onDragDropEventMock.mock.calls.length - 1]?.[0] as
+    | DropHandler
+    | undefined;
   if (!handler) {
     throw new Error("onDragDropEvent was not registered");
   }

@@ -51,7 +51,7 @@ export function FileAssociationsTab() {
     return (
       <div>
         <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, lineHeight: 1.5 }}>
-          File associations are only available on Windows. On macOS and Linux, use your system settings to associate .log files with CMTrace Open.
+          File associations are only available on Windows. On macOS and Linux, use your system settings to associate .log, .log_, .lo_, and .cmtlog files with CMTrace Open.
         </div>
       </div>
     );
@@ -73,7 +73,7 @@ export function FileAssociationsTab() {
   return (
     <div>
       <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
-        Register CMTrace Open as the default handler for .log files on Windows.
+        Register CMTrace Open as the default handler for .log, .log_, .lo_, and .cmtlog files on Windows.
       </div>
 
       {isAssociated === true ? (

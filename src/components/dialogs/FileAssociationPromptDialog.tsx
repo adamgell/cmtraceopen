@@ -120,9 +120,9 @@ export function FileAssociationPromptDialog({
         </div>
 
         <div style={{ fontSize: "12px", lineHeight: 1.5, marginBottom: "12px" }}>
-          This standalone copy of CMTrace Open can associate <strong>.log</strong>{" "}
-          and <strong>.lo_</strong> files so they open directly in the app, similar
-          to classic CMTrace.exe.
+          This standalone copy of CMTrace Open can associate <strong>.log</strong>,{" "}
+          <strong>.log_</strong>, <strong>.lo_</strong>, and <strong>.cmtlog</strong>{" "}
+          files so they open directly in the app, similar to classic CMTrace.exe.
         </div>
 
         <div

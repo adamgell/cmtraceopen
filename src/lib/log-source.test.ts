@@ -6,6 +6,7 @@ import type {
   LogSource,
   ParseResult,
 } from "../types/log";
+import type { ColumnId } from "./column-config";
 import { useLogStore, setCachedTabSnapshot, clearAllTabSnapshots } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { loadLogSource, switchToTab } from "./log-source";
@@ -155,7 +156,7 @@ function snapshotFor(filePath: string, message: string) {
     byteOffset: 0,
     selectedSourceFilePath: filePath,
     sourceOpenMode: "single-file" as const,
-    activeColumns: ["severity", "dateTime", "message"] as const,
+    activeColumns: ["severity", "dateTime", "message"] as ColumnId[],
   };
 }
 
@@ -187,13 +188,21 @@ describe("switchToTab", () => {
       activeSource: { kind: "file", path: fileA },
     });
 
-    const listing = Promise.withResolvers<{
+    let resolveListing!: (value: {
       sourceKind: "folder";
       source: LogSource;
       entries: FolderEntry[];
       bundleMetadata: null;
-    }>();
-    commands.listLogSourceFolder.mockReturnValue(listing.promise);
+    }) => void;
+    const listing = new Promise<{
+      sourceKind: "folder";
+      source: LogSource;
+      entries: FolderEntry[];
+      bundleMetadata: null;
+    }>((resolve) => {
+      resolveListing = resolve;
+    });
+    commands.listLogSourceFolder.mockReturnValue(listing);
 
     const pending = switchToTab(fileB, {
       sourceKind: "folder",
@@ -208,7 +217,7 @@ describe("switchToTab", () => {
       ]);
     });
 
-    listing.resolve({
+    resolveListing({
       sourceKind: "folder",
       source: folderSource,
       entries: [],

@@ -57,6 +57,7 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
   it("forwards graphApiEnabled and does not include live event logs for a file source", async () => {
     useUiStore.setState({ graphApiEnabled: true });
     const onOpen = createIntuneOnOpenSource("intune");
+    if (!onOpen) throw new Error("Intune workspace must expose an open handler");
 
     await onOpen({ kind: "file", path: "C:/Logs/IME/AppWorkload.log" }, "test.open-file");
 
@@ -70,6 +71,7 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
   it("includes live event logs only for the known windows-intune-ime-logs source", async () => {
     useUiStore.setState({ graphApiEnabled: false });
     const onOpen = createIntuneOnOpenSource("new-intune");
+    if (!onOpen) throw new Error("New Intune workspace must expose an open handler");
 
     await onOpen(
       {

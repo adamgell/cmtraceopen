@@ -120,6 +120,16 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.getByText("JSON")).toBeInTheDocument();
     expect(screen.getByText("Event XML")).toBeInTheDocument();
   });
+  it("EVTX-004 gives level filters descriptive state to keyboard and screen-reader users", () => {
+    seedEvents();
+    render(<EventLogWorkspace />);
+
+    const errorToggle = screen.getByRole("button", { name: "Toggle Error events" });
+    expect(errorToggle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(errorToggle);
+    expect(errorToggle).toHaveAttribute("aria-pressed", "false");
+  });
 
   it("EVTX-007 shows event detail, Event Data, and Show/Hide Raw XML", () => {
     seedEvents();

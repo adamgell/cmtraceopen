@@ -88,6 +88,11 @@ export function KeyTree() {
   return (
     <div
       ref={parentRef}
+      role="tree"
+      aria-label="Registry keys"
+      aria-activedescendant={
+        selectedIndex >= 0 ? `registry-tree-item-${selectedIndex}` : undefined
+      }
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{
@@ -112,6 +117,11 @@ export function KeyTree() {
           return (
             <div
               key={row.node.fullPath}
+              id={`registry-tree-item-${virtualRow.index}`}
+              role="treeitem"
+              aria-level={row.depth + 1}
+              aria-selected={isSelected}
+              aria-expanded={hasChildren ? isExpanded : undefined}
               style={{
                 position: "absolute",
                 top: 0,

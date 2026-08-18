@@ -48,6 +48,7 @@ describe("FileAssociationPromptDialog", () => {
   it("offers Associate, Don't Ask Again, and Ask Later", () => {
     render(<FileAssociationPromptDialog isOpen onClose={vi.fn()} />);
     expect(screen.getByText(/Associate log files with CMTrace Open/)).toBeInTheDocument();
+    expect(screen.getByText(/\.cmtlog/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Associate" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Don't Ask Again" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask Later" })).toBeInTheDocument();

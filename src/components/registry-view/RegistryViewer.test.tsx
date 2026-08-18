@@ -68,4 +68,16 @@ describe("RegistryViewer", () => {
     expect(screen.getByText("AvailableUpdates")).toBeInTheDocument();
     expect(screen.getByText("0x2")).toBeInTheDocument();
   });
+  it("exposes registry keys as a navigable tree", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const treeItems = screen.getAllByRole("treeitem");
+    expect(tree).toBeInTheDocument();
+    expect(treeItems.length).toBeGreaterThan(0);
+    expect(treeItems[0]).toHaveAttribute("aria-level", "1");
+
+    fireEvent.click(treeItems[0]);
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+  });
 });
