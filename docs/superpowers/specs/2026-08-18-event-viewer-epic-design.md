@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-18  
 **Issue:** [#539 Event Viewer: become best in class](https://github.com/adamgell/cmtraceopen/issues/539)  
-**Status:** Review requested
+**Status:** Approved for implementation
 
 ## Goal
 

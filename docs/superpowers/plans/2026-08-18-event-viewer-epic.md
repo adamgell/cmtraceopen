@@ -12,7 +12,7 @@
 
 ## Execution boundary
 
-This plan is drafted after the approved design sections. The committed design remains `Review requested` until the user reviews it. Do not edit implementation files, create child PRs, or dispatch code-writing agents until that review gate is satisfied.
+The design and plan are approved for execution. Implementation work may now begin in isolated child worktrees. The current root checkout on `qa/user-story-tracker` remains untouched.
 
 The implementation must not use the Windows 11 CDW VM. Use the Parallels VM through `prlctl exec "Windows 11" ...` or its SSH endpoint. The current root checkout on `qa/user-story-tracker` remains untouched. Implementation work starts from the isolated orchestration branch and creates one worktree per child lane.
 
