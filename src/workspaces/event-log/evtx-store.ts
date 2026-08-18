@@ -230,14 +230,22 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           });
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
+          const arrived = [...streamed.records, ...result.records];
           const streamedGaps =
             streamed.missingSequences.length > 0
               ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
               : [];
+          const shortfallGaps =
+            typeof checked.totalRecords === "number" &&
+            arrived.length < checked.totalRecords
+              ? [
+                  `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                ]
+              : [];
           mergeResult(
             ch,
-            { ...result, records: [...streamed.records, ...result.records] },
-            [...checked.errorMessages, ...streamedGaps]
+            { ...result, records: arrived },
+            [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -396,6 +404,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       records: [],
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
+      isLoading: true,
+      loadError: null,
       loadStartTime: startTime,
       loadElapsedMs: null,
       // Cleared with the records they describe. Keeping them would report gaps from a set that is
@@ -418,13 +428,21 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         });
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
+        const arrived = [...streamed.records, ...result.records];
         const streamedGaps =
           streamed.missingSequences.length > 0
             ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
             : [];
+        const shortfallGaps =
+          typeof checked.totalRecords === "number" &&
+          arrived.length < checked.totalRecords
+            ? [
+                `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+              ]
+            : [];
 
         const s = get();
-        const merged = [...s.records, ...streamed.records, ...result.records];
+        const merged = [...s.records, ...arrived];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -444,6 +462,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           coverageGaps: mergeCoverageGaps(s.coverageGaps, [
             ...checked.errorMessages,
             ...streamedGaps,
+            ...shortfallGaps,
           ]),
         });
       } catch (e) {

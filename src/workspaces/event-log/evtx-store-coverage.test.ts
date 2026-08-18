@@ -177,6 +177,28 @@ describe("live batch delivery through initial and refresh loads", () => {
     expect(useEvtxStore.getState().records[0].channel).toBe("Application");
   });
 
+  it("reports an initial-query trailing batch shortfall", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 2, sourceType: "live" }];
+      }
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 2, sourceType: "live" }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Application: 1 of 2 events did not reach the view"
+    );
+  });
+
   it("assembles streamed batches during refresh", async () => {
     useEvtxStore.setState({
       channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
@@ -197,6 +219,34 @@ describe("live batch delivery through initial and refresh loads", () => {
 
     expect(useEvtxStore.getState().records).toHaveLength(1);
     expect(useEvtxStore.getState().records[0].channel).toBe("Application");
+  });
+
+  it("reports a refresh trailing batch shortfall and sets loading state", async () => {
+    useEvtxStore.setState({
+      channels: [{ name: "Application", eventCount: 2, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      loadError: "stale error",
+    });
+    let loadingAtInvoke = false;
+    invoke.mockImplementation(async () => {
+      loadingAtInvoke = useEvtxStore.getState().isLoading;
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 2, sourceType: "live" }],
+        totalRecords: 2,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    expect(loadingAtInvoke).toBe(true);
+    expect(useEvtxStore.getState().loadError).toBeNull();
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Application: 1 of 2 events did not reach the view"
+    );
   });
 });
 
