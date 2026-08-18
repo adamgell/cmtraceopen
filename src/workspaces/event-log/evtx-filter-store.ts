@@ -108,19 +108,6 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       name: "cmtraceopen-evtx-saved-filters",
       version: 2,
       migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
-      merge: (persisted, current) => {
-        if (persisted === undefined) return current;
-        const raw = persisted as { savedFilters?: unknown };
-        if (!Array.isArray(raw.savedFilters)) {
-          throw new Error("Malformed saved-filter storage envelope");
-        }
-        return {
-          ...current,
-          savedFilters: raw.savedFilters
-            .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
-            .filter((filter): filter is EvtxSavedFilter => filter !== null),
-        };
-      },
     }
   )
 );

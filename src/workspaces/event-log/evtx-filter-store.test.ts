@@ -118,18 +118,11 @@ describe("useSavedFilterStore", () => {
   });
 
   it("drops persisted entries that no longer validate rather than repairing them", () => {
-    // Persisted data outlives the build that wrote it. Repairing a filter into something the
-    // operator never chose would be worse than losing it.
-    const merged = (
-      useSavedFilterStore.persist.getOptions().merge as (
-        persisted: unknown,
-        current: unknown
-      ) => { savedFilters: unknown[] }
-    )(
+    const migrated = migratePersistedSavedFilters(
       { savedFilters: [{ name: "Good" }, { noName: true }, "nonsense"] },
-      { savedFilters: [] }
+      2
     );
-    expect(merged.savedFilters).toHaveLength(1);
+    expect(migrated.savedFilters).toHaveLength(1);
   });
 
   it("refuses a whitespace-only name instead of storing one that vanishes", () => {
