@@ -215,9 +215,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   enumerateChannels: async () => {
-    set({ isLoading: true, loadError: null });
+    const generation = get().loadGeneration + 1;
+    set({ loadGeneration: generation, isLoading: true, loadError: null });
     try {
-      // Step 1: Enumerate all channels
       const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
 
       // Step 2: Auto-query the core Windows Logs channels immediately
@@ -276,10 +276,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
       const promises = availableCore.map(async (ch) => {
         try {
-          resetStreamedRecords([ch]);
+          resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: null,
+            requestId: generation,
             filter: buildServerFilter(
               get().timeWindow,
               get().filterEventIds,
