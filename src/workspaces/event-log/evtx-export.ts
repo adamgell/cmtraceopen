@@ -13,13 +13,13 @@ export type EvtxExportFormat = (typeof EVTX_EXPORT_FORMATS)[number];
 
 /**
  * Raw XML and event data dominate the IPC payload but are not read by delimited
- * writers. Keep the full normalized record for HTML and lossless formats.
+ * or HTML writers. Keep the full normalized record only for lossless formats.
  */
 export function exportPayload(
   format: EvtxExportFormat["value"],
   records: readonly EvtxRecord[]
 ): EvtxRecord[] {
-  if (format !== "csv" && format !== "tsv") return [...records];
+  if (format !== "csv" && format !== "tsv" && format !== "html") return [...records];
   return records.map(({ rawXml: _rawXml, eventData: _eventData, ...rest }) => rest as EvtxRecord);
 }
 

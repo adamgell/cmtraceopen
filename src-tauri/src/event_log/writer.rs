@@ -11,6 +11,17 @@ use std::io::Cursor;
 #[cfg(test)]
 use super::models::EvtxLevel;
 
+fn replace_destination(temporary: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "atomic replacement of an existing destination is unavailable on Windows",
+        ));
+    }
+    fs::rename(temporary, destination)
+}
+
 /// Counts bytes and records while forwarding writes to the selected sink.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExportStats {
@@ -133,7 +144,10 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
-                    if has_illegal_xml_control(&attribute.value) {
+                    let value = attribute.unescape_value().map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML attribute is malformed: {error}"))
+                    })?;
+                    if has_illegal_xml_control(value.as_bytes()) {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                     }
                 }
@@ -150,7 +164,10 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
-                    if has_illegal_xml_control(&attribute.value) {
+                    let value = attribute.unescape_value().map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML attribute is malformed: {error}"))
+                    })?;
+                    if has_illegal_xml_control(value.as_bytes()) {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                     }
                 }
@@ -177,6 +194,28 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 if has_illegal_xml_control(&bytes) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                 }
+            }
+            quick_xml::events::Event::GeneralRef(reference) => {
+                let name = reference.into_inner();
+                let valid_named = matches!(name.as_ref(), b"amp" | b"lt" | b"gt" | b"apos" | b"quot");
+                let valid_numeric = name
+                    .strip_prefix(b"#x")
+                    .and_then(|value| u32::from_str_radix(std::str::from_utf8(value).ok()?, 16).ok())
+                    .or_else(|| {
+                        name.strip_prefix(b"#")
+                            .and_then(|value| std::str::from_utf8(value).ok()?.parse::<u32>().ok())
+                    })
+                    .map(|value| value <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&value))
+                    .unwrap_or(false);
+                if !valid_named && !valid_numeric {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML contains an unknown entity reference"));
+                }
+            }
+            quick_xml::events::Event::DocType(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "raw XML doctype is not allowed",
+                ));
             }
             quick_xml::events::Event::Comment(comment) => {
                 if invalid_comment(comment) {
@@ -359,7 +398,7 @@ pub fn write_records_to_destination(
         .map_err(|error| format!("cannot write {}: {error}", path.display()));
     drop(file);
     match result {
-        Ok(stats) => match fs::rename(&temporary, path) {
+        Ok(stats) => match replace_destination(&temporary, path) {
             Ok(()) => Ok(stats),
             Err(error) => {
                 let _ = fs::remove_file(&temporary);
@@ -519,6 +558,8 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
     for raw_xml in [
         r#"<Event id="1" id="2"/>"#,
         r#"<Event><!-- invalid--comment --></Event>"#,
+        r#"<Event><!DOCTYPE Event [ <!ENTITY x "y"> ] /></Event>"#,
+        r#"<Event attr="&#x1;"/>"#,
         r#"<Event /><?xml version="1.0"?>"#,
         "<Event>bad\u{0001}</Event>",
     ] {
@@ -531,6 +572,7 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
                 || error.to_string().contains("invalid")
                 || error.to_string().contains("prolog")
                 || error.to_string().contains("control")
+                || error.to_string().contains("doctype")
         );
     }
 }

@@ -35,11 +35,12 @@ describe("event export invocation", () => {
     ]);
   });
 
-  it("omits payload-heavy fields only for formats that do not serialize them", () => {
+  it("omits payload-heavy fields for row-projection formats", () => {
     const input = [record()];
     expect(exportPayload("csv", input)[0]).not.toHaveProperty("rawXml");
     expect(exportPayload("csv", input)[0]).not.toHaveProperty("eventData");
-    expect(exportPayload("html", input)[0]).toHaveProperty("rawXml");
+    expect(exportPayload("html", input)[0]).not.toHaveProperty("rawXml");
+    expect(exportPayload("html", input)[0]).not.toHaveProperty("eventData");
     expect(exportPayload("rawXml", input)[0]).toHaveProperty("rawXml");
   });
 

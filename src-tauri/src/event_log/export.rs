@@ -187,8 +187,10 @@ pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
 pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
     let mut redacted = record.clone();
     redacted.timestamp = redact_text(&record.timestamp);
-    redacted.computer = redact_labeled_value("ComputerName", &record.computer);
+    redacted.provider = redact_text(&record.provider);
+    redacted.channel = redact_text(&record.channel);
     redacted.message = redact_text(&record.message);
+    redacted.computer = redact_labeled_value("ComputerName", &record.computer);
     redacted.raw_xml = redact_raw_xml(&record.raw_xml);
     redacted.source_label = redact_text(&record.source_label);
     redacted.event_data = record
@@ -259,7 +261,7 @@ fn labeled_xml_field_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?is)(?P<open><(?:[\w.-]+:)?(?P<label>Computer|SubjectUserName|SubjectDomainName|RemoteHost)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?(?:Computer|SubjectUserName|SubjectDomainName|RemoteHost)\s*>)"#,
+            r#"(?is)(?P<open><(?:[\w.-]+:)?(?P<label>Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?(?:Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\s*>)"#,
         )
         .expect("labeled XML field redaction pattern must compile")
     })
@@ -278,7 +280,13 @@ fn xml_name_attribute(tag: &str) -> Option<String> {
 fn redact_xml_tag(tag: &str) -> String {
     let mut output = String::with_capacity(tag.len());
     let mut cursor = 0;
-    let context_label = xml_name_attribute(tag);
+    let context_label = xml_name_attribute(tag).map(|label| {
+        if label.eq_ignore_ascii_case("Computer") {
+            "ComputerName".to_owned()
+        } else {
+            label
+        }
+    });
     let mut pending_label: Option<String> = None;
     while cursor < tag.len() {
         let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
@@ -331,10 +339,15 @@ fn redact_raw_xml(xml: &str) -> String {
         return "[redacted: oversized text omitted]".to_owned();
     }
     let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
+        let label = if captures["label"].eq_ignore_ascii_case("Computer") {
+            "ComputerName"
+        } else {
+            &captures["label"]
+        };
         format!(
             "{}{}{}",
             &captures["open"],
-            redact_xml_value(&captures["label"], &captures["value"]),
+            redact_xml_value(label, &captures["value"]),
             &captures["close"],
         )
     });
@@ -729,11 +742,14 @@ mod tests {
     #[test]
     fn raw_xml_attributes_and_processing_instructions_are_redacted() {
         let mut event = record("safe");
-        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><Data Value="REMOTE-HOST" Name="RemoteHost" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><SerialNumber>ABC123456</SerialNumber><TargetUserName>CONTOSO\Jane Doe</TargetUserName><TenantId>99999999-8888-4777-8666-555555555555</TenantId><Password>hunter2</Password><Data Value="REMOTE-HOST" Name="RemoteHost" /><Data Name="Computer" Value="DESKTOP-JOHN" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
         for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
             let output = export_records(&[event.clone()], format).expect("export");
             assert!(!output.contains("DESKTOP-JOHN"));
             assert!(!output.contains("REMOTE-HOST"));
+            assert!(!output.contains("ABC123456"));
+            assert!(!output.contains("Jane Doe"));
+            assert!(!output.contains("99999999-8888"));
             assert!(!output.contains("hunter2"));
             assert!(output.contains("<?provider"));
         }

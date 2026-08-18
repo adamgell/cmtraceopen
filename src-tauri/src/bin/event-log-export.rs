@@ -202,28 +202,32 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
     let mut event_ids = BTreeSet::new();
     for part in input.split([',', ' ', '\t', '\r', '\n']).filter(|part| !part.is_empty()) {
         if let Some((low, high)) = part.split_once('-') {
-            let Ok(low) = low.parse::<u32>() else {
+            if low.is_empty()
+                || high.is_empty()
+                || !low.bytes().all(|byte| byte.is_ascii_digit())
+                || !high.bytes().all(|byte| byte.is_ascii_digit())
+            {
                 continue;
-            };
-            let Ok(high) = high.parse::<u32>() else {
-                continue;
-            };
+            }
+            let low = low.parse::<u64>().unwrap_or(u64::MAX);
+            let high = high.parse::<u64>().unwrap_or(u64::MAX);
             let from = low.min(high);
-            let to = high.max(low).min(MAX_EVENT_ID);
+            let to = high.max(low).min(MAX_EVENT_ID as u64);
             if from <= to {
-                for value in from..=to {
+                for value in (from as u32)..=(to as u32) {
                     if event_ids.len() >= MAX_EVENT_ID_FILTER_VALUES {
                         break;
                     }
                     event_ids.insert(value);
                 }
             }
-        } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES {
-            let Ok(value) = part.parse::<f64>() else {
-                continue;
-            };
-            if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
-                event_ids.insert(value as u32);
+        } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            if let Ok(value) = part.parse::<u64>() {
+                if value <= u32::MAX as u64 {
+                    event_ids.insert(value as u32);
+                }
             }
         }
     }
@@ -233,8 +237,10 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
 fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
     let event_id_filter_active = !filter.event_ids.trim().is_empty();
     let event_ids = parse_event_ids(&filter.event_ids)?;
-    let search = filter
-        .search
+    if event_id_filter_active && event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let search = filter.search
         .as_deref()
         .map(str::trim)
         .filter(|search| !search.is_empty())
@@ -551,8 +557,16 @@ mod tests {
 
     #[test]
     fn clamps_event_id_ranges_like_the_frontend_filter() {
+        assert_eq!(
+            parse_event_ids("1-999999999999999999999999")
+                .expect("saturating range")
+                .len(),
+            65_535
+        );
         assert_eq!(parse_event_ids("1-65535").expect("range").len(), 65_535);
         assert_eq!(parse_event_ids("1-65536").expect("clamped range").len(), 65_535);
+        assert!(parse_event_ids("1.5-2").expect("decimal range").is_empty());
+        assert!(parse_event_ids("1-1e400").expect("exponent range").is_empty());
         assert_eq!(parse_event_ids("100000-200000").expect("out-of-space range"), Vec::<u32>::new());
         assert_eq!(parse_event_ids("0-65535").expect("full range").len(), 65_536);
         assert_eq!(
@@ -568,21 +582,23 @@ mod tests {
             65_535
         );
         assert_eq!(parse_event_ids("326,abc").expect("mixed tokens"), vec![326]);
-        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![1, 326]);
+        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![326]);
         assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
     }
 
     #[test]
     fn invalid_nonempty_event_id_selector_matches_no_records() {
-        let selected = filtered_records(
-            vec![make_record()],
-            &Filter {
-                event_ids: "not-an-id".into(),
-                ..Filter::default()
-            },
-        )
-        .expect("filter succeeds");
-        assert!(selected.is_empty());
+        for event_ids in ["not-an-id", "1.0", "-1", "999999999999999999999999"] {
+            let selected = filtered_records(
+                vec![make_record()],
+                &Filter {
+                    event_ids: event_ids.into(),
+                    ..Filter::default()
+                },
+            )
+            .expect("filter succeeds");
+            assert!(selected.is_empty(), "invalid selector {event_ids:?} must match no records");
+        }
     }
 
     #[test]

@@ -100,7 +100,7 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
+            r#"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS)\s*["']?\s*[:=]\s*)(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)"#,
         )
         .expect("msi property regex must compile")
     })
