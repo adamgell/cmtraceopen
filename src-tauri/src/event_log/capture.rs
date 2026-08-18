@@ -116,6 +116,7 @@ mod windows_capture {
         ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS,
         ERROR_NOT_FOUND,
     };
+    use windows::Win32::System::EventLog::*;
 
     use winreg::enums::HKEY_LOCAL_MACHINE;
     const MAX_PUBLISHERS: usize = 100_000;
@@ -158,6 +159,12 @@ mod windows_capture {
             _ => None,
         }
     }
+    fn string(value: OwnedVariant) -> Option<String> {
+        match value {
+            OwnedVariant::String(value) => Some(value),
+            _ => None,
+        }
+    }
     fn optional_number(value: OwnedVariant) -> Result<Option<u64>, String> {
         match value {
             OwnedVariant::Null => Ok(None),
@@ -191,16 +198,6 @@ mod windows_capture {
         let opcode = ((raw_value >> 16) & 0xFFFF) as u32;
         let task = (raw_value & 0xFFFF) as u32;
         (opcode, (task != 0).then_some(task))
-    }
-    fn keyword_bits(mask: u64) -> Vec<u64> {
-        let mut bits = Vec::new();
-        let mut remaining = mask;
-        while remaining != 0 {
-            let bit = remaining & remaining.wrapping_neg();
-            bits.push(bit);
-            remaining &= !bit;
-        }
-        bits
     }
     fn base32(bytes: &[u8]) -> String {
         const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
@@ -652,12 +649,11 @@ mod windows_capture {
                 messages.entry(message_id as u64).or_insert(ProviderMessage {
                     raw_id: message_id as u64,
                     short_id: message_id as u16 as u32,
-                    text,
+                    text: text.clone(),
                 });
-                messages
-                    .get(&(message_id as u64))
+                text
             } else {
-                Some(String::new())
+                None
             };
             metadata.events.push(ProviderEvent {
                 description,
