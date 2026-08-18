@@ -6,6 +6,15 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { useMarkerStore } from "../../stores/marker-store";
+import {
+  evtxMarkerLineId,
+  getEvtxMarker,
+  loadEvtxMarkers,
+  matchesEvtxQuickFilter,
+  toggleEvtxBookmark,
+  toggleEvtxTag,
+} from "./evtx-marker-adapter";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
   selectVisibleRecords,
@@ -50,7 +59,6 @@ function compareRecords(
   }
   return direction === "asc" ? cmp : -cmp;
 }
-
 export function EvtxTimeline() {
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
@@ -68,6 +76,7 @@ export function EvtxTimeline() {
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
+  const markersByFile = useMarkerStore((s) => s.markersByFile);
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [nowEpoch, setNowEpoch] = useState(() => Date.now());
@@ -131,6 +140,22 @@ export function EvtxTimeline() {
     () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
     [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
   );
+  const sourceLabels = useMemo(
+    () => [...new Set(records.map((record) => record.sourceLabel).filter(Boolean))],
+    [records]
+  );
+
+  useEffect(() => {
+    loadEvtxMarkers(sourceLabels);
+  }, [sourceLabels]);
+
+  const handleTag = useCallback((record: EvtxRecord) => {
+    toggleEvtxTag(record);
+  }, []);
+
+  const handleBookmark = useCallback((record: EvtxRecord) => {
+    toggleEvtxBookmark(record);
+  }, []);
 
   // Keyboard navigation moves between records, skipping headers, because a header is not a
   // selectable event.
@@ -161,7 +186,11 @@ export function EvtxTimeline() {
       rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
     getItemKey: (index) => {
       const row = rows[index];
-      return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
+      return row?.kind === "group"
+        ? `group:${row.key}`
+        : row?.record
+          ? `event:${evtxMarkerLineId(row.record)}`
+          : index;
     },
     overscan: 10,
   });
@@ -366,6 +395,10 @@ export function EvtxTimeline() {
             }
 
             const record = row.record;
+            const marker = getEvtxMarker(record, markersByFile);
+            const quickFilterMatch =
+              Boolean(quickFilter.query.trim()) &&
+              matchesEvtxQuickFilter(record, quickFilter, columnConfig.order, timeZoneMode);
             return (
               <EvtxTimelineRow
                 key={virtualRow.key}
@@ -381,6 +414,11 @@ export function EvtxTimeline() {
                 columns={columns}
                 timeZoneMode={timeZoneMode}
                 onSelect={setSelectedRecordId}
+                marker={marker}
+                quickFilter={quickFilter}
+                quickFilterMatch={quickFilterMatch}
+                onTag={handleTag}
+                onBookmark={handleBookmark}
               />
             );
           })}

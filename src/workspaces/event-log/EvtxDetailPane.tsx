@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -6,10 +6,18 @@ import {
   clampLogDetailsFontSize,
   getLogDetailsLineHeight,
 } from "../../lib/log-accessibility";
+import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
+import {
+  getEvtxMarker,
+  loadEvtxMarkers,
+  toggleEvtxBookmark,
+  toggleEvtxTag,
+} from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
 
 export function EvtxDetailPane() {
+  const markersByFile = useMarkerStore((s) => s.markersByFile);
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const [showRawXml, setShowRawXml] = useState(false);
@@ -24,6 +32,14 @@ export function EvtxDetailPane() {
     if (selectedRecordId == null) return null;
     return records.find((r) => r.id === selectedRecordId) ?? null;
   }, [records, selectedRecordId]);
+  const marker = useMemo(
+    () => (record ? getEvtxMarker(record, markersByFile) : null),
+    [record, markersByFile]
+  );
+
+  useEffect(() => {
+    if (record) loadEvtxMarkers([record.sourceLabel]);
+  }, [record?.sourceLabel]);
 
   if (!record) {
     return (
@@ -90,6 +106,40 @@ export function EvtxDetailPane() {
         >
           {record.level}
         </span>
+        <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
+          <button
+            type="button"
+            aria-label={marker?.category === "bookmark" ? "Tag event" : marker ? "Remove event tag" : "Tag event"}
+            aria-pressed={Boolean(marker && marker.category !== "bookmark")}
+            onClick={() => toggleEvtxTag(record)}
+            style={{
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "4px",
+              padding: "3px 7px",
+              cursor: "pointer",
+              background: "transparent",
+              color: tokens.colorNeutralForeground1,
+            }}
+          >
+            {marker && marker.category !== "bookmark" ? `Tagged: ${marker.category}` : "Tag"}
+          </button>
+          <button
+            type="button"
+            aria-label={marker?.category === "bookmark" ? "Remove bookmark" : "Bookmark event"}
+            aria-pressed={marker?.category === "bookmark"}
+            onClick={() => toggleEvtxBookmark(record)}
+            style={{
+              border: `1px solid ${tokens.colorNeutralStroke1}`,
+              borderRadius: "4px",
+              padding: "3px 7px",
+              cursor: "pointer",
+              background: "transparent",
+              color: marker?.category === "bookmark" ? "#8b5cf6" : tokens.colorNeutralForeground1,
+            }}
+          >
+            {marker?.category === "bookmark" ? "Bookmarked" : "Bookmark"}
+          </button>
+        </div>
       </div>
 
       {/* Message */}

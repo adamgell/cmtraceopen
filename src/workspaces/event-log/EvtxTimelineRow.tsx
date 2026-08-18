@@ -1,9 +1,15 @@
-import { memo, forwardRef } from "react";
+import { Fragment, memo, forwardRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
 } from "../../lib/log-accessibility";
+import type { Marker } from "../../types/markers";
 import type { EvtxRecord, EvtxLevel } from "./types";
+import {
+  evtxQuickFilterTerms,
+  isEvtxBookmark,
+  type EvtxQuickFilterLike,
+} from "./evtx-marker-adapter";
 import {
   columnValue,
   columnWidth,
@@ -28,6 +34,52 @@ const LEVEL_SHORT: Record<EvtxLevel, string> = {
   Verbose: "VERB",
 };
 
+export type EvtxRowVisualState = "selected" | "marker" | "severity" | "match" | "default";
+
+export function resolveEvtxRowVisualState(input: {
+  isSelected: boolean;
+  marker: Marker | null;
+  level: EvtxLevel;
+  quickFilterMatch: boolean;
+}): EvtxRowVisualState {
+  if (input.isSelected) return "selected";
+  if (input.marker) return "marker";
+  if (input.level) return "severity";
+  if (input.quickFilterMatch) return "match";
+  return "default";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightValue(
+  value: string,
+  terms: readonly string[],
+  caseSensitive: boolean
+) {
+  if (terms.length === 0) return value;
+  const pattern = terms.map(escapeRegExp).join("|");
+  if (!pattern) return value;
+  const matcher = new RegExp(`(${pattern})`, caseSensitive ? "g" : "gi");
+  return value.split(matcher).map((part, index) => {
+    const matched = terms.some(
+      (term) =>
+        term.length > 0 &&
+        part.localeCompare(term, undefined, {
+          sensitivity: caseSensitive ? "case" : "base",
+        }) === 0
+    );
+    return matched ? (
+      <mark key={`${part}-${index}`} aria-label="Quick-filter match">
+        {part}
+      </mark>
+    ) : (
+      <Fragment key={`${part}-${index}`}>{part}</Fragment>
+    );
+  });
+}
+
 export interface EvtxTimelineRowProps {
   record: EvtxRecord;
   dataIndex: number;
@@ -42,6 +94,11 @@ export interface EvtxTimelineRowProps {
   /** Passed rather than read from the store, so a memoized row re-renders when the clock changes. */
   timeZoneMode: EvtxTimeZoneMode;
   onSelect: (id: number | null) => void;
+  marker?: Marker | null;
+  quickFilter?: EvtxQuickFilterLike;
+  quickFilterMatch?: boolean;
+  onTag?: (record: EvtxRecord) => void;
+  onBookmark?: (record: EvtxRecord) => void;
 }
 
 export const EvtxTimelineRow = memo(
@@ -58,23 +115,57 @@ export const EvtxTimelineRow = memo(
       columns,
       timeZoneMode,
       onSelect,
+      marker = null,
+      quickFilter = undefined,
+      quickFilterMatch = false,
+      onTag,
+      onBookmark,
     },
     ref
   ) {
     const levelColor = LEVEL_COLORS[record.level];
+    const bookmark = isEvtxBookmark(marker);
+    const highlightEnabled = Boolean(quickFilter?.highlight && quickFilterMatch);
+    const highlightTerms = highlightEnabled && quickFilter
+      ? evtxQuickFilterTerms(quickFilter)
+      : [];
+    const visualState = resolveEvtxRowVisualState({
+      isSelected,
+      marker,
+      level: record.level,
+      quickFilterMatch: highlightEnabled,
+    });
+    const ariaDescription = [
+      isSelected ? "Selected" : null,
+      marker ? `Tagged ${marker.category}` : null,
+      bookmark ? "Bookmarked" : null,
+      highlightEnabled ? "Quick-filter match" : null,
+      `${record.level} severity`,
+    ].filter(Boolean).join("; ");
 
     return (
       <div
         data-index={dataIndex}
+        data-evtx-marker-key={`${record.sourceLabel}:${record.channel}:${record.eventRecordId}`}
+        data-quick-filter-match={highlightEnabled ? "true" : "false"}
+        data-marker-category={marker?.category}
         ref={ref}
         onClick={() => onSelect(isSelected ? null : record.id)}
         role="option"
         aria-selected={isSelected}
+        aria-description={ariaDescription}
         tabIndex={0}
         onKeyDown={(e) => {
+          if (e.target instanceof HTMLButtonElement) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect(isSelected ? null : record.id);
+          } else if (e.key.toLowerCase() === "t" && onTag) {
+            e.preventDefault();
+            onTag(record);
+          } else if (e.key.toLowerCase() === "b" && onBookmark) {
+            e.preventDefault();
+            onBookmark(record);
           }
         }}
         style={{
@@ -84,10 +175,14 @@ export const EvtxTimelineRow = memo(
           cursor: "pointer",
           backgroundColor: isSelected
             ? tokens.colorNeutralBackground1Selected
-            : dataIndex % 2 === 0
-              ? tokens.colorNeutralBackground1
-              : tokens.colorNeutralBackground2,
-          borderLeft: `4px solid ${levelColor}`,
+            : marker
+              ? `${marker.color}20`
+              : dataIndex % 2 === 0
+                ? tokens.colorNeutralBackground1
+                : tokens.colorNeutralBackground2,
+          borderLeft: `4px solid ${
+            visualState === "marker" && marker ? marker.color : levelColor
+          }`,
           borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
           height: "100%",
           boxSizing: "border-box",
@@ -97,6 +192,56 @@ export const EvtxTimelineRow = memo(
           minWidth: 0,
         }}
       >
+        <div
+          role="group"
+          aria-label="Event markers"
+          style={{ display: "flex", gap: "4px", flexShrink: 0 }}
+        >
+          <button
+            type="button"
+            aria-label={marker && !bookmark ? "Remove event tag" : "Tag event"}
+            aria-pressed={Boolean(marker && !bookmark)}
+            title={marker && !bookmark ? `Remove ${marker.category} tag` : "Tag event"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onTag?.(record);
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+            style={{
+              border: 0,
+              borderRadius: "3px",
+              padding: "1px 4px",
+              cursor: "pointer",
+              color: marker && !bookmark ? marker.color : tokens.colorNeutralForeground3,
+              background: "transparent",
+              fontSize: `${smallFontSize}px`,
+            }}
+          >
+            {marker && !bookmark ? "Tagged" : "Tag"}
+          </button>
+          <button
+            type="button"
+            aria-label={bookmark ? "Remove bookmark" : "Bookmark event"}
+            aria-pressed={bookmark}
+            title={bookmark ? "Remove bookmark" : "Bookmark event"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onBookmark?.(record);
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+            style={{
+              border: 0,
+              borderRadius: "3px",
+              padding: "1px 4px",
+              cursor: "pointer",
+              color: bookmark ? "#8b5cf6" : tokens.colorNeutralForeground3,
+              background: "transparent",
+              fontSize: `${smallFontSize}px`,
+            }}
+          >
+            {bookmark ? "Bookmarked" : "Bookmark"}
+          </button>
+        </div>
         {columns.map((column) => {
           const width = columnWidth(columnConfig, column);
           const value = columnValue(record, column.id, timeZoneMode);
@@ -162,7 +307,9 @@ export const EvtxTimelineRow = memo(
               }
               title={value}
             >
-              {value}
+              {highlightEnabled
+                ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
+                : value}
             </div>
           );
         })}
