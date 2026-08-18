@@ -153,6 +153,20 @@ describe("quick filter semantics", () => {
     expect(visible(quick({ mode: "allStrings", query: ",,,; ;" }))).toHaveLength(0);
   });
 });
+describe("ordinary Event ID invalid input", () => {
+  it.each(["70000", "-1", "not-an-id"])("matches no records for %s", (filterEventIds) => {
+    expect(
+      selectVisibleRecords({
+        records: [record()],
+        selectedChannels: new Set(["Application"]),
+        filterLevels: new Set(["Information"]),
+        filterEventIds,
+        filterSearch: "",
+      })
+    ).toHaveLength(0);
+  });
+});
+
 
 describe("event id range bounds", () => {
   it("does not expand past the 16-bit event id space", () => {
