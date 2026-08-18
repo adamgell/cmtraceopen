@@ -102,7 +102,7 @@ export const useSavedFilterStore = create<SavedFilterState>()(
     {
       name: "cmtraceopen-evtx-saved-filters",
       version: 2,
-      migrate: (persisted) => migratePersistedSavedFilters(persisted, 2),
+      migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
       merge: (persisted, current) => ({
         ...current,
         ...migratePersistedSavedFilters(persisted, 2),
