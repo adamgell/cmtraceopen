@@ -8,7 +8,7 @@ import {
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
-  recordMatchesVisibleFilter,
+  selectVisibleRecords,
   buildGroupedRows,
   type EvtxRow,
 } from "./evtx-filter";
@@ -63,6 +63,7 @@ export function EvtxTimeline() {
   const groupBy = useEvtxStore((s) => s.groupBy);
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
@@ -74,22 +75,21 @@ export function EvtxTimeline() {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-
   const rowEstimate = metrics.rowHeight + 2;
+
   const filteredRecords = useMemo(
     () =>
-      records.filter((record) =>
-        recordMatchesVisibleFilter(record, {
-          selectedChannels,
-          filterLevels,
-          filterEventIds,
-          filterSearch,
-          quickFilter,
-          visibleColumns: columnConfig.order,
-          timeZoneMode,
-          timeWindow,
-        })
-      ),
+      selectVisibleRecords({
+        records,
+        selectedChannels,
+        filterLevels,
+        filterEventIds,
+        filterSearch,
+        quickFilter,
+        visibleColumns: columnConfig.order,
+        timeZoneMode,
+        timeWindow: sourceMode === "live" ? timeWindow : undefined,
+      }),
     [
       records,
       selectedChannels,
@@ -99,6 +99,7 @@ export function EvtxTimeline() {
       quickFilter,
       columnConfig.order,
       timeZoneMode,
+      sourceMode,
       timeWindow,
     ]
   );

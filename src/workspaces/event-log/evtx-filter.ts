@@ -145,19 +145,24 @@ export function parseEventIdSelectors(raw: string): EvtxEventIdSelectorParseResu
   }
   return { selectors, invalid };
 }
+function eventIdMatchesSelectors(eventId: number, parsed: EvtxEventIdSelectorParseResult): boolean {
+  return !parsed.invalid && parsed.selectors.some((selector) =>
+    selector.kind === "single"
+      ? selector.id === eventId
+      : eventId >= (selector.low ?? 0) && eventId <= (selector.high ?? 0)
+  );
+}
+
 
 
 /**
- * Largest value a Windows Event ID can hold.
- *
- * The field is 16 bits, so nothing above this can match an event and expanding past it only costs
- * time. Used to bound range expansion rather than to reject input: an operator mid-way through
- * typing a number should see no result, not an error.
+ * Largest unsigned 32-bit Event ID accepted by the Event Log query contract.
+ * Range expansion is separately capped below; valid IDs must not be rejected due to a 16-bit
+ * assumption.
  */
-const MAX_EVENT_ID = 65535;
-/**
- * Parses the Event ID filter box into a set, or null when it constrains nothing.
- */
+const MAX_EVENT_ID = 0xffffffff;
+const MAX_EXPANDED_EVENT_IDS = 65536;
+/** Parses the Event ID filter box into a bounded set for legacy callers. */
 export function parseEventIdFilter(raw: string): Set<number> | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -168,8 +173,12 @@ export function parseEventIdFilter(raw: string): Set<number> | null {
       const low = Number(range[1]);
       const high = Number(range[2]);
       const [from, to] = low <= high ? [low, high] : [high, low];
-      if (from > MAX_EVENT_ID) continue;
-      for (let id = from; id <= Math.min(to, MAX_EVENT_ID); id += 1) ids.add(id);
+      if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to)) continue;
+      const boundedFrom = Math.max(0, from);
+      const boundedTo = Math.min(to, MAX_EXPANDED_EVENT_IDS - 1);
+      if (boundedFrom <= boundedTo) {
+        for (let id = boundedFrom; id <= boundedTo; id += 1) ids.add(id);
+      }
       continue;
     }
     if (!/^\d+$/.test(token)) continue;
@@ -197,6 +206,8 @@ export interface VisibleRecordsInput {
   nowEpoch?: number;
   /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
   eventIdSet?: Set<number> | null;
+  /** Parsed once by selectVisibleRecords for bounded, non-expanding range matching. */
+  eventIdSelectors?: EvtxEventIdSelectorParseResult;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -237,10 +248,7 @@ export function matchesQuickFilter(
   if (!query) return false;
 
   if (quickFilter.mode === "eventIds") {
-    const parsed = parseEventIdSelectors(query);
-    if (parsed.invalid || parsed.selectors.length === 0) return false;
-    const ids = parseEventIdFilter(query);
-    return ids !== null && ids.has(record.eventId);
+    return eventIdMatchesSelectors(record.eventId, parseEventIdSelectors(query));
   }
 
   const values = searchableValues(
@@ -288,6 +296,7 @@ export function recordMatchesVisibleFilter(
     timeWindow?: EvtxTimeWindow;
     nowEpoch?: number;
     eventIdSet?: Set<number> | null;
+    eventIdSelectors?: EvtxEventIdSelectorParseResult;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
@@ -297,10 +306,17 @@ export function recordMatchesVisibleFilter(
   ) {
     return false;
   }
-  if (!input.filterLevels.has(record.level)) return false;
-  const eventIdSet =
-    input.eventIdSet === undefined ? parseEventIdFilter(input.filterEventIds) : input.eventIdSet;
-  if (eventIdSet && !eventIdSet.has(record.eventId)) return false;
+  if (input.eventIdSelectors) {
+    if (!eventIdMatchesSelectors(record.eventId, input.eventIdSelectors)) return false;
+  } else if (input.eventIdSet && !input.eventIdSet.has(record.eventId)) {
+    return false;
+  } else if (
+    !input.eventIdSet &&
+    input.filterEventIds.trim() &&
+    !eventIdMatchesSelectors(record.eventId, parseEventIdSelectors(input.filterEventIds))
+  ) {
+    return false;
+  }
   const search = input.filterSearch.trim().toLocaleLowerCase();
   if (
     search &&
@@ -331,7 +347,10 @@ export function recordMatchesVisibleFilter(
 export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
   const predicateInput = {
     ...input,
-    eventIdSet: parseEventIdFilter(input.filterEventIds),
+    eventIdSet: undefined,
+    eventIdSelectors: input.filterEventIds.trim()
+      ? parseEventIdSelectors(input.filterEventIds)
+      : undefined,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
 }

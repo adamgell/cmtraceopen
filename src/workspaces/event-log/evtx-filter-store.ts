@@ -30,7 +30,10 @@ export function migratePersistedSavedFilters(
   persisted: unknown,
   version: number
 ): { savedFilters: EvtxSavedFilter[] } {
-  if (version !== 2) return { savedFilters: [] };
+  if (version > 2) {
+    throw new Error(`Unsupported saved-filter schema version ${version}`);
+  }
+  if (version < 2) return { savedFilters: [] };
   const raw = persisted as { savedFilters?: unknown } | undefined;
   const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
   return {

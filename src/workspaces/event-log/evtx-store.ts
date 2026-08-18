@@ -66,7 +66,9 @@ function buildServerFilter(
 
   if (filterLevels.size > 0 && filterLevels.size < ALL_LEVELS.length) {
     filter.levels = [...filterLevels].flatMap((level) =>
-      level === "Information" ? [0, 4, 255] : [ALL_LEVELS.indexOf(level) + 1]
+      level === "Information"
+        ? [0, 4, ...Array.from({ length: 250 }, (_, index) => index + 6)]
+        : [ALL_LEVELS.indexOf(level) + 1]
     );
   }
   return filter;
@@ -319,6 +321,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         loadElapsedMs: performance.now() - startTime,
         loadError,
       });
+      if (refreshRequested) refreshBeforeLoad();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
