@@ -38,13 +38,13 @@ vi.mock("@tanstack/react-virtual", () => ({
     getItemKey,
   }: {
     count: number;
-    estimateSize: () => number;
+    estimateSize: (index: number) => number;
     getItemKey?: (index: number) => string | number;
   }) => {
     const measuredSize = (index: number) =>
       virtualizerState.resizedSizes.get(index) ??
       virtualizerState.measuredSizes.get(index) ??
-      estimateSize();
+      estimateSize(index);
     const getTotalSize = () => {
       virtualizerState.totalSize = Array.from({ length: count }, (_, index) =>
         measuredSize(index)
@@ -342,6 +342,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelRow.style.height).toBe(
       `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight}px`
     );
+    expect(virtualizerState.initialItems[0].size).toBe(smallList.rowHeight);
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);

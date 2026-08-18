@@ -144,7 +144,8 @@ export function EvtxTimeline() {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowEstimate,
+    estimateSize: (index) =>
+      rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
     getItemKey: (index) => {
       const row = rows[index];
       return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
