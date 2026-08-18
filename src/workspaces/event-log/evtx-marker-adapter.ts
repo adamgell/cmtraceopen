@@ -1,7 +1,6 @@
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
 import type { EvtxColumnId } from "./evtx-columns";
-import { columnValue } from "./evtx-columns";
 import * as filterModule from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
