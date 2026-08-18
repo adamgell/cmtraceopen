@@ -206,12 +206,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   loadGeneration: 0,
 
   parseFiles: async (paths) => {
-    set({ isLoading: true, loadError: null });
+    const generation = get().loadGeneration + 1;
+    set({ loadGeneration: generation, isLoading: true, loadError: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
+      if (get().loadGeneration !== generation) return;
       const checked = assertParseResultShape(result);
-      set(applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"));
+      set({ ...applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"), loadGeneration: generation });
     } catch (error) {
+      if (get().loadGeneration !== generation) return;
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
