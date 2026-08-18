@@ -12,14 +12,15 @@
 //!   "ProviderName" TEXT COLLATE NOCASE, "VersionKey" TEXT,
 //!   "Events" BLOB, "Keywords" BLOB, "Maps" BLOB, "Messages" BLOB,
 //!   "Opcodes" BLOB, "Parameters" BLOB, "Tasks" BLOB,
-//!   "SourceOsBuild" INTEGER, "SourceOsEdition" TEXT, ...
 //!   PRIMARY KEY ("ProviderName","VersionKey"))
-//! ```
+//!
+//! Captured level maps are carried in the canonical `Maps` JSON BLOB under a `levels` member;
+//! databases produced by EventLogExpert without that member read as having no named levels.
 //!
 //! Every BLOB is gzip-compressed JSON. A real database holds about 1,180 providers in 16 MB, so
 //! rows are read on demand and cached rather than loaded eagerly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,7 +29,7 @@ use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// What a database contributed, so an operator can see coverage rather than guess at it.
@@ -180,36 +181,47 @@ impl ProviderDb {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT Events, Messages, Tasks, Keywords, Opcodes, SourceOsBuild \
+                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, Maps, Parameters, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
-                 ORDER BY SourceOsBuild DESC LIMIT 1",
+                 ORDER BY SourceOsBuild DESC, VersionKey ASC LIMIT 1",
             )
             .map_err(|error| format!("cannot prepare provider query: {error}"))?;
 
         let row = statement.query_row([name], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(0)?,
                 row.get::<_, Vec<u8>>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
                 row.get::<_, Vec<u8>>(4)?,
-                row.get::<_, Option<u32>>(5)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, Vec<u8>>(7)?,
+                row.get::<_, Option<u32>>(8)?,
             ))
         });
 
-        let (events, messages, tasks, keywords, opcodes, build) = match row {
+        let (version_key, events, messages, tasks, keywords, opcodes, maps, _parameters, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
         };
+        let levels = levels_from_maps(&maps)?;
+        let mut unavailable_categories =
+            unavailable_categories_from_state(&self.connection, name, &version_key)?;
+        if unavailable_categories.is_empty() {
+            unavailable_categories = unavailable_categories_from_parameters(&_parameters)?;
+        }
 
         Ok(Some(ProviderMetadata {
             provider_name: name.to_string(),
             events: inflate_json(&events)?,
             messages: inflate_json(&messages)?,
+            levels,
             tasks: inflate_json(&tasks)?,
             keywords: inflate_json(&keywords)?,
             opcodes: inflate_json(&opcodes)?,
+            unavailable_categories,
             source_os_build: build,
         }))
     }
@@ -222,7 +234,15 @@ const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDet
     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
     "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
     "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
-    PRIMARY KEY ("ProviderName","VersionKey"));"#;
+    "ResolvedFromOwningPublisher" TEXT,
+    "SourceOsRevision" INTEGER, "SourceOsEdition" TEXT,
+    "SourceOsDisplayVersion" TEXT, "MessageFileVersion" TEXT,
+    PRIMARY KEY ("ProviderName","VersionKey"));
+CREATE TABLE IF NOT EXISTS "ProviderCaptureState" (
+    "ProviderName" TEXT COLLATE NOCASE NOT NULL,
+    "VersionKey" TEXT NOT NULL,
+    "UnavailableCategories" BLOB NOT NULL,
+    PRIMARY KEY ("ProviderName","VersionKey")); "#;
 
 /// Serializes `value` to JSON and gzip-compresses it, the way EventLogExpert stores each section.
 fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
@@ -235,6 +255,77 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     encoder
         .finish()
         .map_err(|error| format!("cannot finish compressing provider metadata: {error}"))
+}
+fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    let maps: serde_json::Value = inflate_json(blob)?;
+    if let Some(levels) = maps.get("levels") {
+        if let Some(values) = levels.get("Entries").or_else(|| levels.get("Values")) {
+            return serde_json::from_value(values.clone())
+                .map_err(|error| format!("provider level values are not a map: {error}"));
+        }
+        return serde_json::from_value(levels.clone())
+            .map_err(|error| format!("provider levels are not a map: {error}"));
+    }
+    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_object) {
+        if let Some(levels) = definitions.get("levels") {
+            let values = levels.get("Values").unwrap_or(levels);
+            return serde_json::from_value(values.clone())
+                .map_err(|error| format!("provider level values are not a map: {error}"));
+        }
+    }
+    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_array) {
+        for definition in definitions {
+            if definition.get("Name").and_then(serde_json::Value::as_str) == Some("levels") {
+                if let Some(values) = definition.get("Values") {
+                    return serde_json::from_value(values.clone())
+                        .map_err(|error| format!("provider level values are not a map: {error}"));
+                }
+            }
+        }
+    }
+    Ok(BTreeMap::new())
+}
+fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String>, String> {
+    let parameters: serde_json::Value = inflate_json(blob)?;
+    parameters
+        .get("unavailableCategories")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("provider unavailable categories are not a set: {error}"))?
+        .map_or_else(|| Ok(BTreeSet::new()), Ok)
+}
+
+fn unavailable_categories_from_state(
+    connection: &Connection,
+    provider_name: &str,
+    version_key: &str,
+) -> Result<BTreeSet<String>, String> {
+    let has_table = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ProviderCaptureState'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("cannot inspect provider capture state: {error}"))?
+        .is_some();
+    if !has_table {
+        return Ok(BTreeSet::new());
+    }
+    let Some(blob) = connection
+        .query_row(
+            "SELECT UnavailableCategories FROM ProviderCaptureState \
+             WHERE ProviderName = ?1 AND VersionKey = ?2",
+            rusqlite::params![provider_name, version_key],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("cannot read provider capture state: {error}"))?
+    else {
+        return Ok(BTreeSet::new());
+    };
+    inflate_json(&blob)
 }
 
 
@@ -251,13 +342,25 @@ pub struct CapturedProviderMetadata {
 ///
 /// This is the write side of the capture pipeline (issue #539): the Windows capture walk builds
 /// [`CapturedProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the
-/// result back. The round-trip through those two is how a curated database ships. `Maps` and
-/// `Parameters` are written empty because neither the reader nor the capture model consumes them.
+/// result back. The round-trip through those two is how a curated database ships. `Parameters`
+/// remains empty because neither the reader nor the capture model consumes it; named levels are
+/// carried in the canonical `Maps` JSON object.
 pub fn write_provider_database(
     path: &Path,
     providers: &[CapturedProviderMetadata],
 ) -> Result<usize, String> {
-    let connection = Connection::open(path).map_err(|error| {
+    if providers.is_empty() {
+        return Err("cannot write provider database without captured providers".to_string());
+    }
+    for captured in providers {
+        if captured.version_key.is_empty() {
+            return Err(format!(
+                "provider {} is missing its captured version key",
+                captured.metadata.provider_name
+            ));
+        }
+    }
+    let mut connection = Connection::open(path).map_err(|error| {
         format!(
             "cannot create provider database {}: {error}",
             path.display()
@@ -266,31 +369,30 @@ pub fn write_provider_database(
     connection
         .execute_batch(PROVIDER_DETAILS_SCHEMA)
         .map_err(|error| format!("cannot create provider database schema: {error}"))?;
-    // Writing a database is a full replacement, not an append: a stale provider row from an earlier
-    // capture at the same path must not survive into the new set.
-    connection
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("cannot begin provider database transaction: {error}"))?;
+    transaction
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
-
-    let empty_object = serde_json::json!({});
-    let empty_array = serde_json::json!([]);
+    transaction
+        .execute("DELETE FROM ProviderCaptureState", [])
+        .map_err(|error| format!("cannot clear provider capture state: {error}"))?;
     for captured in providers {
-        if captured.version_key.is_empty() {
-            return Err(format!(
-                "provider {} is missing its captured version key",
-                captured.metadata.provider_name
-            ));
-        }
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
-        let maps = gzip_json(&empty_object)?;
+        let maps = gzip_json(&serde_json::json!({
+            "levels": {
+                "Entries": metadata.levels.clone(),
+                "IsBitMap": false
+            }
+        }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
-        let parameters = gzip_json(&empty_array)?;
         let tasks = gzip_json(&metadata.tasks)?;
-
-        connection
+        let parameters = gzip_json(&metadata.messages)?;
+        transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
                    (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
@@ -316,7 +418,27 @@ pub fn write_provider_database(
                     captured.version_key
                 )
             })?;
+        let unavailable_categories = gzip_json(&metadata.unavailable_categories)?;
+        transaction
+            .execute(
+                "INSERT INTO ProviderCaptureState \
+                 (ProviderName, VersionKey, UnavailableCategories) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    &metadata.provider_name,
+                    &captured.version_key,
+                    unavailable_categories
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "cannot insert provider capture state {} version {}: {error}",
+                    metadata.provider_name, captured.version_key
+                )
+            })?;
     }
+    transaction
+        .commit()
+        .map_err(|error| format!("cannot commit provider database transaction: {error}"))?;
     Ok(providers.len())
 }
 
@@ -497,7 +619,7 @@ mod tests {
             )
             .expect("schema");
 
-        for (name, build, events_json) in providers {
+        for (index, (name, build, events_json)) in providers.iter().enumerate() {
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
@@ -506,10 +628,10 @@ mod tests {
                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
                     rusqlite::params![
                         name,
-                        format!("vk1:{build}"),
+                        format!("vk1:{build}:{index}"),
                         gzip(events_json),
                         gzip(r#"{"1":"Error"}"#),
-                        gzip("{}"),
+                        gzip(r#"{"2":"Information"}"#),
                         gzip("[]"),
                         gzip(r#"{"11":"Start"}"#),
                         gzip("[]"),
@@ -549,6 +671,7 @@ mod tests {
         assert_eq!(metadata.task_name(1), Some("Enrollment"));
         assert_eq!(metadata.opcode_name(11), Some("Start"));
         assert_eq!(metadata.keyword_names(1), vec!["Error"]);
+        assert!(metadata.levels.is_empty(), "canonical DBs have no fabricated levels");
     }
 
     #[test]
@@ -603,6 +726,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn same_build_versions_use_a_deterministic_version_key_tie_break() {
+        let dir = temp_dir("same-build-versions");
+        let path = dir.join("base.db");
+        build_db(
+            &path,
+            &[
+                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"first"}]"#),
+                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"second"}]"#),
+            ],
+        );
+        let metadata = ProviderDb::open(&path)
+            .expect("opens")
+            .provider("Dup")
+            .expect("query")
+            .expect("present");
+        assert_eq!(metadata.events[0].description.as_deref(), Some("first"));
+    }
     #[test]
     fn a_merged_database_reports_no_single_source_build() {
         let dir = temp_dir("merged");
@@ -692,15 +833,23 @@ mod tests {
             }],
             messages: vec![ProviderMessage {
                 raw_id: 0x8000_0002,
-                short_id: 2,
+                short_id: 0x8000_0002,
+                provider_name: Some("Round-Trip-Provider".to_string()),
+                template: Some("<template />".to_string()),
+                tag: Some("Enrollment".to_string()),
+                log_link: Some("https://example.invalid/event/2".to_string()),
                 text: Some("Enroll failed: (%1).".to_string()),
             }],
+            levels: [("2".to_string(), "Information".to_string())]
+                .into_iter()
+                .collect(),
             tasks: [("1".to_string(), "Enrollment".to_string())]
                 .into_iter()
                 .collect(),
             keywords: [("1".to_string(), "Error".to_string())]
                 .into_iter()
                 .collect(),
+            unavailable_categories: ["keywords".to_string()].into_iter().collect(),
             opcodes: [("11".to_string(), "Start".to_string())]
                 .into_iter()
                 .collect(),
@@ -722,13 +871,16 @@ mod tests {
         let written =
             write_provider_database(&path, &[captured.clone(), older]).expect("write");
         assert_eq!(written, 2);
-
         let database = ProviderDb::open(&path).expect("opens");
         let read = database
             .provider("Round-Trip-Provider")
             .expect("query")
             .expect("present");
         assert_eq!(read, metadata);
+        assert_eq!(
+            read.unavailable_categories,
+            ["keywords".to_string()].into_iter().collect()
+        );
         let version_key: String = database
             .connection
             .query_row(
@@ -739,6 +891,57 @@ mod tests {
             )
             .expect("version key");
         assert_eq!(version_key, "publisher-version-key");
+        let maps_blob: Vec<u8> = database
+            .connection
+            .query_row(
+                "SELECT Maps FROM ProviderDetails WHERE ProviderName = ?1 AND VersionKey = ?2",
+                rusqlite::params!["Round-Trip-Provider", "publisher-version-key"],
+                |row| row.get(0),
+            )
+            .expect("maps blob");
+        let maps: serde_json::Value = inflate_json(&maps_blob).expect("maps JSON");
+        assert_eq!(
+            maps["levels"]["IsBitMap"],
+            serde_json::Value::Bool(false)
+        );
+        assert!(maps["levels"]["Entries"].get("2").is_some());
+        for column in [
+            "ResolvedFromOwningPublisher",
+            "SourceOsRevision",
+            "SourceOsEdition",
+            "SourceOsDisplayVersion",
+            "MessageFileVersion",
+        ] {
+            let present: i64 = database
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('ProviderDetails') WHERE name = ?1",
+                    [column],
+                    |row| row.get(0),
+                )
+                .expect("canonical nullable column query");
+            assert_eq!(present, 1, "missing canonical column {column}");
+        }
+    }
+    #[test]
+    fn failed_replacement_does_not_wipe_previous_database() {
+        let dir = temp_dir("atomic");
+        let path = dir.join("base.db");
+        let metadata = ProviderMetadata {
+            provider_name: "Atomic".to_string(),
+            ..ProviderMetadata::default()
+        };
+        let captured = CapturedProviderMetadata {
+            metadata,
+            version_key: "version".to_string(),
+        };
+        write_provider_database(&path, std::slice::from_ref(&captured)).expect("initial write");
+        assert!(write_provider_database(&path, &[captured.clone(), captured]).is_err());
+        assert!(ProviderDb::open(&path)
+            .expect("database remains readable")
+            .provider("Atomic")
+            .expect("provider query")
+            .is_some());
     }
 }
 

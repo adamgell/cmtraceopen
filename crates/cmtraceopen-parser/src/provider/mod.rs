@@ -13,7 +13,7 @@
 //! The format was reverse engineered from a real database built on Windows 11; the full spec is in
 //! issue #539.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -119,6 +119,18 @@ pub struct ProviderMessage {
         serialize_with = "u32_as_signed"
     )]
     pub short_id: u32,
+    /// Provider name owning this message row, when persisted by EventLogExpert.
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    /// Manifest template associated with this message, when present.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// EventLogExpert message tag, when present.
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// EventLogExpert log-link metadata, when present.
+    #[serde(default)]
+    pub log_link: Option<String>,
     /// The message text.
     #[serde(default)]
     pub text: Option<String>,
@@ -137,6 +149,9 @@ pub struct ProviderMetadata {
     /// Message table.
     #[serde(default)]
     pub messages: Vec<ProviderMessage>,
+    /// Level value to name.
+    #[serde(default)]
+    pub levels: BTreeMap<String, String>,
     /// Task value to name.
     #[serde(default)]
     pub tasks: BTreeMap<String, String>,
@@ -146,6 +161,11 @@ pub struct ProviderMetadata {
     /// Opcode value to name.
     #[serde(default)]
     pub opcodes: BTreeMap<String, String>,
+    /// Categories that were unavailable in the source publisher metadata.
+    ///
+    /// An absent category is distinct from a present category with zero entries.
+    #[serde(default)]
+    pub unavailable_categories: BTreeSet<String>,
     /// Windows build the metadata was captured from, so a mismatch is visible rather than assumed.
     #[serde(default)]
     pub source_os_build: Option<u32>,

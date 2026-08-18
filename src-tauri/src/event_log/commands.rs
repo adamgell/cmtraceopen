@@ -326,11 +326,17 @@ pub async fn evtx_provider_databases(
 pub async fn evtx_capture_provider_databases(
     db_path: String,
     _state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<(), super::capture::CaptureError> {
     let path = std::path::PathBuf::from(db_path);
-    super::capture::capture_providers_to_db(&path).map_err(|error| error.to_string())
-}
+    tokio::task::spawn_blocking(move || super::capture::capture_providers_to_db(&path))
+        .await
+        .map_err(|error| super::capture::CaptureError {
+            kind: super::capture::CaptureErrorKind::Traversal,
+            message: format!("provider capture task failed: {error}"),
+            failures: Vec::new(),
+        })?
 
+}
 /// Merges already-loaded log entries and event records into one chronological timeline.
 ///
 /// Both sides arrive from the frontend rather than being re-read, so the timeline covers exactly
