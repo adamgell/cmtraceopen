@@ -247,6 +247,7 @@ mod tests {
             id: 0,
             // Distinct from event_id below, so a test cannot pass while reading the wrong one.
             event_record_id: 1234,
+            event_record_id_text: None,
             timestamp: String::new(),
             timestamp_epoch,
             provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider"

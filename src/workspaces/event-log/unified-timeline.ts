@@ -85,14 +85,17 @@ function eventIdentityPrefix(record: EvtxRecord): string {
 
 function stableRecordBase(record: EvtxRecord): string {
   const prefix = eventIdentityPrefix(record);
+  if (record.eventRecordIdText) {
+    return `${prefix}|record${record.eventRecordIdText}`;
+  }
   if (record.eventRecordId !== 0) {
     return Number.isSafeInteger(record.eventRecordId)
       ? `${prefix}|record${record.eventRecordId}`
       : `${prefix}|record`;
   }
   return `${prefix}|missing${missingRecordDigest(record)}`;
-}
 
+}
 function compareRustStrings(left: string, right: string): number {
   const leftBytes = utf8Encoder.encode(left);
   const rightBytes = utf8Encoder.encode(right);
@@ -120,7 +123,7 @@ function stableRecordIdentities(records: EvtxRecord[]): {
   for (const record of orderedRecords) {
     const base = stableRecordBase(record);
     if (record.eventRecordId !== 0) {
-      if (Number.isSafeInteger(record.eventRecordId)) {
+      if (record.eventRecordIdText || Number.isSafeInteger(record.eventRecordId)) {
         keys.add(base);
       } else {
         unsafePrefixes.add(base);

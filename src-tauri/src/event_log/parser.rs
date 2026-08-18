@@ -239,6 +239,7 @@ fn parse_single_file(
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
+            event_record_id_text: Some(event_record_id.to_string()),
             timestamp: timestamp_str,
             timestamp_epoch,
             provider,

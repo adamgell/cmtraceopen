@@ -118,6 +118,7 @@ pub fn record_from_parts(
     EvtxRecord {
         id: 0, // assigned by commands.rs after sorting
         event_record_id,
+        event_record_id_text: Some(event_record_id.to_string()),
         timestamp,
         timestamp_epoch,
         provider,

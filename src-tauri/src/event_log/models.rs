@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct EvtxRecord {
     pub id: u64,
     pub event_record_id: u64,
+    /// Lossless decimal EventRecordID for IPC consumers that cannot represent all u64 values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_record_id_text: Option<String>,
     pub timestamp: String,
     pub timestamp_epoch: i64,
     pub provider: String,

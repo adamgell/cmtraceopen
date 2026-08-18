@@ -95,4 +95,21 @@ describe("buildUnifiedTimeline", () => {
     await expect(buildUnifiedTimeline([unsafe])).rejects.toThrow("safe integer");
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it("forwards an unsafe numeric ID only with its lossless decimal representation", async () => {
+    const exactId = "9007199254740993";
+    const lossless = {
+      ...record,
+      eventRecordId: Number(exactId),
+      eventRecordIdText: exactId,
+    };
+    vi.mocked(invoke).mockResolvedValue({ items: [], unplaced: [] });
+
+    await buildUnifiedTimeline([lossless]);
+
+    expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
+      entries: [],
+      records: [lossless],
+    });
+  });
 });
