@@ -110,9 +110,15 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
       merge: (persisted, current) => {
         if (persisted === undefined) return current;
+        const raw = persisted as { savedFilters?: unknown };
+        if (!Array.isArray(raw.savedFilters)) {
+          throw new Error("Malformed saved-filter storage envelope");
+        }
         return {
           ...current,
-          ...migratePersistedSavedFilters(persisted, 2),
+          savedFilters: raw.savedFilters
+            .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
+            .filter((filter): filter is EvtxSavedFilter => filter !== null),
         };
       },
     }
