@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use super::event_node::{extract_system_fields, parse_event_xml};
@@ -387,7 +387,7 @@ fn query_channel_inner(
     let mut unparsable = 0usize;
     let mut unrenderable = 0usize;
     let mut message_failures = 0usize;
-    let mut gaps = Vec::new();
+    let mut metadata_failures = HashSet::<String>::new();
     let mut batch = EVENT_FETCH_BATCH;
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
@@ -518,10 +518,12 @@ fn query_channel_inner(
                     Ok(message) => message,
                     Err(error) => {
                         message_failures += 1;
-                        gaps.push(format!(
-                            "{coverage_channel}: event message could not be formatted ({})",
-                            format_source_error("EvtFormatMessage", &error, remote)
-                        ));
+                        if metadata_failures.insert(provider.to_string()) {
+                            gaps.push(format!(
+                                "{coverage_channel}: event message could not be formatted ({})",
+                                format_source_error("EvtFormatMessage", &error, remote)
+                            ));
+                        }
                         log::warn!(
                             "event=evtx_metadata_failed channel=\"{channel}\" error=\"{}\"",
                             format_source_error("EvtFormatMessage", &error, remote)
