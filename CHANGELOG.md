@@ -32,6 +32,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **Dialog landmarks**: Filter, Collect Diagnostics, Collection Complete, Update, and first-run file-association overlays expose `role="dialog"` / `aria-modal` so they are reachable as dialog landmarks.
+- **Tab switch restores the selected log**: Cached tab switches apply the file snapshot before the sidebar folder listing, so swapping tabs no longer leaves the previous file on screen while the listing is in flight.
 
 - **Unicode decimal digit panics (#413 / #502)**: Reject non-ASCII Unicode decimal fields in CCM and related time grammars so multi-byte digits cannot panic the parser mid-slice.
 - **Signless CCM timestamp display (#410 / #504)**: Treat signless fractional tails as milliseconds (not fabricated timezone offsets); short fractions pad correctly for public `LogEntry` projection.

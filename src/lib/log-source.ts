@@ -704,19 +704,14 @@ export async function switchToTab(
   if (cached) {
     console.info("[log-source] tab switch from cache (instant)", { filePath });
 
-    // Restore sidebar folder context if switching between sources
-    if (sourceContext && sourceContext.sourceKind !== "file") {
-      await restoreFolderContext(logState, sourceContext);
-    } else if (sourceContext?.sourceKind === "file") {
-      // Standalone file — clear folder sidebar state
+    if (sourceContext?.sourceKind === "file") {
       logState.setActiveSource(sourceContext.source);
       logState.setSourceEntries([]);
       logState.setBundleMetadata(null);
     }
 
-    // Swap parsed entries into the store — this is the fast path
     logState.setEntries(cached.entries);
-    logState.setSelectedSourceFilePath(cached.selectedSourceFilePath);
+    logState.setOpenFilePath(filePath);
     logState.setSourceOpenMode(cached.sourceOpenMode);
     logState.setFormatDetected(cached.formatDetected);
     logState.setParserSelection(cached.parserSelection);
@@ -730,6 +725,17 @@ export async function switchToTab(
       kind: "loaded",
       message: `Loaded ${getBaseName(filePath)}.`,
     });
+
+    if (sourceContext && sourceContext.sourceKind !== "file") {
+      try {
+        await restoreFolderContext(useLogStore.getState(), sourceContext);
+      } catch (error) {
+        console.warn("[log-source] folder context restore failed after tab switch", {
+          filePath,
+          error,
+        });
+      }
+    }
     return;
   }
 

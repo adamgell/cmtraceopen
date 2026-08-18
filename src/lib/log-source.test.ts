@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   FolderEntry,
   KnownSourceMetadata,
+  LogEntry,
   LogSource,
   ParseResult,
 } from "../types/log";
-import { useLogStore } from "../stores/log-store";
-import { loadLogSource } from "./log-source";
+import { useLogStore, setCachedTabSnapshot, clearAllTabSnapshots } from "../stores/log-store";
+import { useUiStore } from "../stores/ui-store";
+import { loadLogSource, switchToTab } from "./log-source";
 
 const commands = vi.hoisted(() => ({
   getKnownLogSources: vi.fn(),
@@ -117,4 +119,126 @@ describe("Device Inventory known-source routing", () => {
       expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
     }
   );
+});
+
+function makeEntry(id: number, filePath: string, message: string): LogEntry {
+  return {
+    id,
+    lineNumber: id,
+    message,
+    component: "AppEnforce",
+    timestamp: id,
+    timestampDisplay: `2026-07-26 12:00:0${id}.000`,
+    severity: "Info",
+    thread: null,
+    threadDisplay: null,
+    sourceFile: null,
+    format: "Ccm",
+    filePath,
+    timezoneOffset: null,
+  };
+}
+
+function snapshotFor(filePath: string, message: string) {
+  return {
+    entries: [makeEntry(1, filePath, message)],
+    formatDetected: "Ccm" as const,
+    parserSelection: {
+      parser: "ccm" as const,
+      implementation: "ccm" as const,
+      provenance: "dedicated" as const,
+      parseQuality: "structured" as const,
+      recordFraming: "physicalLine" as const,
+      dateOrder: null,
+    },
+    totalLines: 1,
+    byteOffset: 0,
+    selectedSourceFilePath: filePath,
+    sourceOpenMode: "single-file" as const,
+    activeColumns: ["severity", "dateTime", "message"] as const,
+  };
+}
+
+describe("switchToTab", () => {
+  const fileA = "C:/Windows/CCM/Logs/AppEnforce.log";
+  const fileB = "C:/Windows/CCM/Logs/CIAgent.log";
+  const folderSource: LogSource = { kind: "folder", path: "C:/Windows/CCM/Logs" };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLogStore.getState().clear();
+    useUiStore.getState().clearTabs();
+    clearAllTabSnapshots();
+    commands.listLogSourceFolder.mockResolvedValue({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: [],
+      bundleMetadata: null,
+    });
+  });
+
+  it("swaps the list to the cached file before folder restore finishes", async () => {
+    setCachedTabSnapshot(fileA, snapshotFor(fileA, "AppEnforce line"));
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    useLogStore.setState({
+      openFilePath: fileA,
+      selectedSourceFilePath: fileA,
+      entries: snapshotFor(fileA, "AppEnforce line").entries,
+      activeSource: { kind: "file", path: fileA },
+    });
+
+    const listing = Promise.withResolvers<{
+      sourceKind: "folder";
+      source: LogSource;
+      entries: FolderEntry[];
+      bundleMetadata: null;
+    }>();
+    commands.listLogSourceFolder.mockReturnValue(listing.promise);
+
+    const pending = switchToTab(fileB, {
+      sourceKind: "folder",
+      sourcePath: folderSource.path,
+      source: folderSource,
+    });
+
+    await vi.waitFor(() => {
+      expect(useLogStore.getState().openFilePath).toBe(fileB);
+      expect(useLogStore.getState().entries.map((entry) => entry.message)).toEqual([
+        "CIAgent line",
+      ]);
+    });
+
+    listing.resolve({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: [],
+      bundleMetadata: null,
+    });
+    await pending;
+    expect(commands.openLogFile).not.toHaveBeenCalled();
+  });
+
+  it("restores each cached file when switching back and forth", async () => {
+    setCachedTabSnapshot(fileA, snapshotFor(fileA, "AppEnforce line"));
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    useLogStore.setState({
+      openFilePath: fileA,
+      selectedSourceFilePath: fileA,
+      entries: snapshotFor(fileA, "AppEnforce line").entries,
+      activeSource: folderSource,
+    });
+    const ctx = {
+      sourceKind: "folder" as const,
+      sourcePath: folderSource.path,
+      source: folderSource,
+    };
+
+    await switchToTab(fileB, ctx);
+    expect(useLogStore.getState().openFilePath).toBe(fileB);
+    expect(useLogStore.getState().entries[0]?.message).toBe("CIAgent line");
+
+    await switchToTab(fileA, ctx);
+    expect(useLogStore.getState().openFilePath).toBe(fileA);
+    expect(useLogStore.getState().entries[0]?.message).toBe("AppEnforce line");
+  });
 });
