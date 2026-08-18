@@ -733,39 +733,32 @@ fn expand_path(
             });
         }
         for child_error in &listing.child_errors {
-            let (coverage_path, coverage_reason) = child_error
-                .rsplit_once(": ")
-                .map_or((path_string.as_str(), child_error.as_str()), |(path, reason)| {
-                    (path, reason)
-                });
-            let coverage_path = coverage_path.to_string();
-            let coverage_reason = coverage_reason.to_string();
-            let coverage = if coverage_reason.contains("limit")
-                || coverage_reason.contains("truncated")
+            let coverage = if child_error.reason.contains("limit")
+                || child_error.reason.contains("truncated")
             {
                 SourceCoverage::LimitReached {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
-            } else if coverage_reason.contains("unsupported")
-                || coverage_reason.contains("symbolic link")
-                || coverage_reason.contains("reparse point")
+            } else if child_error.reason.contains("unsupported")
+                || child_error.reason.contains("symbolic link")
+                || child_error.reason.contains("reparse point")
             {
                 SourceCoverage::Unsupported {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
-            } else if coverage_reason.contains("denied")
-                || coverage_reason.contains("Permission denied")
+            } else if child_error.reason.contains("denied")
+                || child_error.reason.contains("Permission denied")
             {
                 SourceCoverage::AccessDenied {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
             } else {
                 SourceCoverage::Missing {
-                    path: coverage_path,
-                    reason: coverage_reason,
+                    path: child_error.path.clone(),
+                    reason: child_error.reason.clone(),
                 }
             };
             manifest.coverage.push(coverage);
@@ -1307,6 +1300,7 @@ pub fn parse_evtx_manifest(
         channels,
         parse_errors,
         error_messages,
+        coverage: manifest.coverage,
     })
 }
 

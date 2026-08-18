@@ -54,6 +54,7 @@ export interface EvtxParseResult {
   totalRecords: number;
   parseErrors: number;
   errorMessages: string[];
+  coverage?: EventLogSourceCoverage[];
 }
 
 export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";
@@ -72,6 +73,7 @@ export type EventLogSourceCoverage =
   | { kind: "unsupported"; path: string; reason: string }
   | { kind: "accessDenied"; path: string; reason: string }
   | { kind: "missing"; path: string; reason: string }
+  | { kind: "empty"; path: string; reason: string }
   | { kind: "invalidPattern"; path: string; reason: string }
   | { kind: "limitReached"; path: string; reason: string };
 

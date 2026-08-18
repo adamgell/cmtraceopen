@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { assertParseResultShape, mergeCoverageGaps } from "./evtx-coverage";
+import {
+  assertParseResultShape,
+  mergeCoverageGaps,
+  sourceCoverageMessages,
+} from "./evtx-coverage";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,6 +13,7 @@ import type {
   EvtxLevel,
   EvtxParseResult,
   EvtxTimeWindow,
+  EventLogSourceCoverage,
   EventLogSourceManifest,
   EventQueryFilterSubset,
 } from "./types";
@@ -111,16 +116,21 @@ interface EvtxState {
 
 function applyParseResult(
   result: EvtxParseResult,
-  sourceMode: EvtxSourceMode
+  sourceMode: EvtxSourceMode,
+  sourceCoverage: readonly EventLogSourceCoverage[] = [],
 ): Partial<EvtxState> {
   const channelNames = new Set(result.channels.map((c) => c.name));
+  const coverageMessages = [
+    ...sourceCoverageMessages(sourceCoverage),
+    ...sourceCoverageMessages(result.coverage ?? []),
+  ];
   return {
     records: result.records,
     channels: result.channels,
     sourceMode,
     isLoading: false,
     loadError: null,
-    coverageGaps: result.errorMessages,
+    coverageGaps: [...new Set([...result.errorMessages, ...coverageMessages])],
     selectedChannels: channelNames,
     selectedRecordId: null,
   };
@@ -157,7 +167,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       const checked = assertParseResultShape(result);
-      set(applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"));
+      set(
+        applyParseResult(
+          { ...result, errorMessages: checked.errorMessages, coverage: checked.coverage },
+          "files",
+        ),
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -170,7 +185,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const result = await invoke<EvtxParseResult>("evtx_parse_manifest", { manifest });
       const checked = assertParseResultShape(result);
       set({
-        ...applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"),
+        ...applyParseResult(
+          { ...result, errorMessages: checked.errorMessages, coverage: checked.coverage },
+          "files",
+          manifest.coverage,
+        ),
         sourceManifest: manifest,
       });
     } catch (error) {

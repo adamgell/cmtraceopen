@@ -10,7 +10,7 @@ use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
 use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
 use crate::models::log_entry::{
-    ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization,
+    ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization, PathDiagnostic,
 };
 use crate::parser;
 
@@ -204,12 +204,12 @@ pub fn inspect_evidence_artifact(
 /// A bounded recursive listing plus explicit traversal diagnostics.
 pub(crate) struct RecursiveCollection {
     pub entries: Vec<FolderEntry>,
-    pub child_errors: Vec<String>,
+    pub child_errors: Vec<PathDiagnostic>,
 }
 
 pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     let mut out = Vec::new();
-    let mut child_errors = Vec::new();
+    let mut child_errors: Vec<PathDiagnostic> = Vec::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
     let mut inspected = 0usize;
@@ -390,11 +390,12 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
         if child_errors.len() >= MAX_BUNDLE_ERRORS {
             child_errors.truncate(MAX_BUNDLE_ERRORS - 1);
         }
-        child_errors.push(format!(
-            "{}: recursive listing truncated after inspecting {} entries",
-            root.display(),
-            inspected
-        ));
+        push_collection_error(
+            &mut child_errors,
+            &mut truncated,
+            root,
+            &format!("recursive listing truncated after inspecting {inspected} entries"),
+        );
     }
     out.sort_by(|left, right| {
         left.name
@@ -415,13 +416,16 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
 }
 
 fn push_collection_error(
-    errors: &mut Vec<String>,
+    errors: &mut Vec<PathDiagnostic>,
     truncated: &mut bool,
     path: &Path,
     reason: &str,
 ) {
     if errors.len() < MAX_BUNDLE_ERRORS {
-        errors.push(format!("{}: {reason}", path.display()));
+        errors.push(PathDiagnostic {
+            path: normalize_path_string(path),
+            reason: reason.to_string(),
+        });
     } else {
         *truncated = true;
     }

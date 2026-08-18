@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::intune::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
-    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult,
+    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
@@ -76,7 +76,7 @@ pub struct FolderListingResult {
     pub source: LogSource,
     pub entries: Vec<FolderEntry>,
     #[serde(default)]
-    pub child_errors: Vec<String>,
+    pub child_errors: Vec<PathDiagnostic>,
     #[serde(default)]
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
@@ -363,10 +363,10 @@ fn open_log_folder_aggregate_impl(
 
     let mut aggregate_entries: Vec<LogEntry> = Vec::new();
     let mut aggregate_files = Vec::with_capacity(file_entries.len());
+    let mut aggregate_child_errors = listing.child_errors.clone();
     let mut open_file_states = Vec::with_capacity(file_entries.len());
     let mut total_lines = 0u32;
     let mut parse_errors = 0u32;
-
     for entry in file_entries {
         // Skip files we can't read (permission denied, missing, etc.) so a
         // single inaccessible file doesn't abort the whole folder load.
@@ -377,6 +377,11 @@ fn open_log_folder_aggregate_impl(
                     "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
                     entry.path
                 );
+                aggregate_child_errors.push(PathDiagnostic {
+                    path: entry.path.clone(),
+                    reason: error.to_string(),
+                });
+                parse_errors = parse_errors.saturating_add(1);
                 continue;
             }
         };
@@ -462,6 +467,7 @@ fn open_log_folder_aggregate_impl(
         parse_errors,
         folder_path: path,
         files: aggregate_files,
+        child_errors: aggregate_child_errors,
     })
 }
 
@@ -584,7 +590,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         )
     })?;
     let mut entries: Vec<FolderEntry> = Vec::new();
-    let mut child_errors: Vec<String> = Vec::new();
+    let mut child_errors: Vec<PathDiagnostic> = Vec::new();
     let mut candidates = Vec::new();
     let mut listing_work = 0usize;
     let mut listing_truncated = false;
@@ -668,11 +674,15 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         if child_errors.len() >= MAX_FOLDER_LISTING_ERRORS {
             child_errors.truncate(MAX_FOLDER_LISTING_ERRORS - 1);
         }
-        child_errors.push(format!(
-            "{}: folder listing reached the {} entry/work limit",
-            requested_path.display(),
-            MAX_FOLDER_LISTING_ENTRIES
-        ));
+        push_folder_error(
+            &mut child_errors,
+            &mut listing_truncated,
+            &requested_path,
+            &format!(
+                "folder listing reached the {} entry/work limit",
+                MAX_FOLDER_LISTING_ENTRIES
+            ),
+        );
     }
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
@@ -716,9 +726,17 @@ pub(crate) fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> 
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
-fn push_folder_error(errors: &mut Vec<String>, truncated: &mut bool, path: &Path, reason: &str) {
+fn push_folder_error(
+    errors: &mut Vec<PathDiagnostic>,
+    truncated: &mut bool,
+    path: &Path,
+    reason: &str,
+) {
     if errors.len() < MAX_FOLDER_LISTING_ERRORS {
-        errors.push(format!("{}: {reason}", path.display()));
+        errors.push(PathDiagnostic {
+            path: normalize_path_string(path),
+            reason: reason.to_string(),
+        });
     } else {
         *truncated = true;
     }
@@ -1139,7 +1157,7 @@ mod tests {
         assert!(result
             .child_errors
             .iter()
-            .any(|error| error.contains("symbolic link")));
+            .any(|error| error.reason.contains("symbolic link")));
         assert!(!result
             .entries
             .iter()

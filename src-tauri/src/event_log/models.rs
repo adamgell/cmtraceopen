@@ -100,4 +100,6 @@ pub struct EvtxParseResult {
     pub total_records: u64,
     pub parse_errors: u32,
     pub error_messages: Vec<String>,
+    #[serde(default)]
+    pub coverage: Vec<super::parser::SourceCoverage>,
 }

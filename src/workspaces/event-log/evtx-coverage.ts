@@ -1,3 +1,5 @@
+import type { EventLogSourceCoverage } from "./types";
+
 /**
  * Accumulating the report of what is missing from a loaded set of events.
  *
@@ -29,11 +31,24 @@ export function summarizeCoverageGaps(gaps: readonly string[]): string {
 }
 
 /**
+ * Converts typed source coverage into the stable operator-facing banner wording.
+ *
+ * The backend keeps coverage structured so source kind and path survive IPC. The banner remains
+ * textual because it is a compact list, but this conversion is the only boundary where that
+ * structure is flattened.
+ */
+export function sourceCoverageMessages(
+  coverage: readonly EventLogSourceCoverage[],
+): string[] {
+  return coverage.map(({ path, reason }) => `${path}: ${reason}`);
+}
+
+/**
  * The parts of an event-log IPC reply the store reads, verified once.
  *
- * Not a schema validator, and deliberately not per-handler checks: it guards the three fields the
- * store destructures and iterates. If a future backend change dropped `errorMessages`, spreading
- * it would throw somewhere unrelated and surface as a confusing load error; this fails at the
+ * Not a schema validator, and deliberately not per-handler checks: it guards the fields the store
+ * destructures and iterates. If a future backend change dropped `errorMessages`, spreading it
+ * would throw somewhere unrelated and surface as a confusing load error; this fails at the
  * boundary with a message that names the contract.
  *
  * Throws rather than returning a default, because a reply the store cannot read is not a reply
@@ -43,17 +58,22 @@ export function assertParseResultShape(value: unknown): {
   records: unknown[];
   channels: unknown[];
   errorMessages: string[];
+  coverage: EventLogSourceCoverage[];
   totalRecords: number | null;
 } {
   const reply = value as {
     records?: unknown;
     channels?: unknown;
     errorMessages?: unknown;
+    coverage?: unknown;
     totalRecords?: unknown;
   };
   if (!Array.isArray(reply?.records) || !Array.isArray(reply?.channels)) {
     throw new Error("the event log reader returned a reply this build cannot read");
   }
+  const coverage = Array.isArray(reply.coverage)
+    ? reply.coverage.filter(isEventLogSourceCoverage)
+    : [];
   return {
     records: reply.records,
     channels: reply.channels,
@@ -61,6 +81,7 @@ export function assertParseResultShape(value: unknown): {
     errorMessages: Array.isArray(reply.errorMessages)
       ? reply.errorMessages.filter((entry): entry is string => typeof entry === "string")
       : [],
+    coverage,
     // How many records the reader says it sent, counting any streamed separately from this reply.
     // `null` when the reader did not say, which must stay distinguishable from zero: treating an
     // absent count as zero would turn "I cannot check completeness" into "nothing was missing".
@@ -72,4 +93,19 @@ export function assertParseResultShape(value: unknown): {
         ? reply.totalRecords
         : null,
   };
+}
+
+function isEventLogSourceCoverage(value: unknown): value is EventLogSourceCoverage {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    (candidate.kind === "unsupported" ||
+      candidate.kind === "accessDenied" ||
+      candidate.kind === "missing" ||
+      candidate.kind === "empty" ||
+      candidate.kind === "invalidPattern" ||
+      candidate.kind === "limitReached") &&
+    typeof candidate.path === "string" &&
+    typeof candidate.reason === "string"
+  );
 }
