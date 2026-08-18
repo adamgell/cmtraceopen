@@ -195,6 +195,8 @@ export interface VisibleRecordsInput {
   timeWindow?: EvtxTimeWindow;
   /** Injectable clock for deterministic boundary tests; production uses Date.now(). */
   nowEpoch?: number;
+  /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
+  eventIdSet?: Set<number> | null;
 }
 
 function normalizeText(value: string, caseSensitive: boolean): string {
@@ -285,6 +287,7 @@ export function recordMatchesVisibleFilter(
     timeZoneMode?: EvtxTimeZoneMode;
     timeWindow?: EvtxTimeWindow;
     nowEpoch?: number;
+    eventIdSet?: Set<number> | null;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
@@ -295,7 +298,8 @@ export function recordMatchesVisibleFilter(
     return false;
   }
   if (!input.filterLevels.has(record.level)) return false;
-  const eventIdSet = parseEventIdFilter(input.filterEventIds);
+  const eventIdSet =
+    input.eventIdSet === undefined ? parseEventIdFilter(input.filterEventIds) : input.eventIdSet;
   if (eventIdSet && !eventIdSet.has(record.eventId)) return false;
   const search = input.filterSearch.trim().toLocaleLowerCase();
   if (
@@ -325,7 +329,11 @@ export function recordMatchesVisibleFilter(
  * worse than no export at all.
  */
 export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
-  return input.records.filter((record) => recordMatchesVisibleFilter(record, input));
+  const predicateInput = {
+    ...input,
+    eventIdSet: parseEventIdFilter(input.filterEventIds),
+  };
+  return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
 }
 
 /** A field the event list can group by. */

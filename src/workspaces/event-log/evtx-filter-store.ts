@@ -26,6 +26,20 @@ interface SavedFilterState {
   importFilters: (imported: EvtxSavedFilter[]) => void;
   ordered: () => EvtxSavedFilter[];
 }
+export function migratePersistedSavedFilters(
+  persisted: unknown,
+  version: number
+): { savedFilters: EvtxSavedFilter[] } {
+  if (version !== 2) return { savedFilters: [] };
+  const raw = persisted as { savedFilters?: unknown } | undefined;
+  const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
+  return {
+    savedFilters: list
+      .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
+      .filter((filter): filter is EvtxSavedFilter => filter !== null),
+  };
+}
+
 
 function newId(): string {
   // crypto.randomUUID is unavailable in some webviews, so fall back rather than throwing.
@@ -88,17 +102,11 @@ export const useSavedFilterStore = create<SavedFilterState>()(
     {
       name: "cmtraceopen-evtx-saved-filters",
       version: 2,
-      // Persisted data from schema 1 used flat criteria and must not be repaired into layered
-      // criteria, because that would silently broaden a filter.
-      migrate: () => ({ savedFilters: [] }),
-      merge: (persisted, current) => {
-        const raw = persisted as { savedFilters?: unknown } | undefined;
-        const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
-        const savedFilters = list
-          .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
-          .filter((filter): filter is EvtxSavedFilter => filter !== null);
-        return { ...current, savedFilters };
-      },
+      migrate: (persisted) => migratePersistedSavedFilters(persisted, 2),
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePersistedSavedFilters(persisted, 2),
+      }),
     }
   )
 );

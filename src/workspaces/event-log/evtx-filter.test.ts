@@ -176,6 +176,21 @@ describe("event id range bounds", () => {
     const ids = parseEventIdFilter("4624-4626");
     expect([...ids!].sort((a, b) => a - b)).toEqual([4624, 4625, 4626]);
   });
+
+  it("handles a large Event ID range across many records in one visible pass", () => {
+    const records = Array.from({ length: 5000 }, (_, index) =>
+      record({ eventId: index % 65536 })
+    );
+    expect(
+      selectVisibleRecords({
+        records,
+        selectedChannels: new Set(["Application"]),
+        filterLevels: new Set(["Information"]),
+        filterEventIds: "1-65535",
+        filterSearch: "",
+      })
+    ).toHaveLength(4999);
+  });
 });
 describe("time-window boundaries", () => {
   it("includes the exact lower boundary and excludes older records", () => {
