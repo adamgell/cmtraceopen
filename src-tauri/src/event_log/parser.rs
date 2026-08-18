@@ -13,7 +13,8 @@ use super::event_node::{extract_event_data, EventFields};
 use super::provider_db::ProviderStore;
 
 use super::models::{
-    ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxParseResult, EvtxRecord,
+    ChannelSourceType, EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxField, EvtxLevel,
+    EvtxParseResult, EvtxRecord,
 };
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
@@ -893,6 +894,72 @@ fn coverage_path(coverage: &SourceCoverage) -> &str {
         | SourceCoverage::LimitReached { path, .. } => path,
     }
 }
+fn coverage_gap_from_source_coverage(coverage: &SourceCoverage) -> EvtxCoverageGap {
+    let (path, kind, reason) = match coverage {
+        SourceCoverage::Unsupported { path, reason } => {
+            (path, EvtxCoverageGapKind::Unsupported, reason)
+        }
+        SourceCoverage::AccessDenied { path, reason } => {
+            (path, EvtxCoverageGapKind::AccessDenied, reason)
+        }
+        SourceCoverage::Missing { path, reason } => (path, EvtxCoverageGapKind::Missing, reason),
+        SourceCoverage::InvalidPattern { path, reason } => {
+            (path, EvtxCoverageGapKind::InvalidPattern, reason)
+        }
+        SourceCoverage::LimitReached { path, reason } => {
+            (path, EvtxCoverageGapKind::LimitReached, reason)
+        }
+    };
+    EvtxCoverageGap::new(path.clone(), kind, reason.clone())
+}
+
+fn coverage_gap_from_evtx_error(source: &str, error: &evtx::err::EvtxError) -> EvtxCoverageGap {
+    match error {
+        evtx::err::EvtxError::FailedToParseChunk { chunk_id, .. } => {
+            let mut gap = EvtxCoverageGap::new(source, EvtxCoverageGapKind::Chunk, error.to_string());
+            gap.chunk_id = Some(*chunk_id);
+            gap
+        }
+        evtx::err::EvtxError::FailedToParseRecord { record_id, .. } => {
+            let mut gap = EvtxCoverageGap::new(source, EvtxCoverageGapKind::Record, error.to_string());
+            gap.event_record_id = Some(*record_id);
+            gap
+        }
+        _ => EvtxCoverageGap::new(source, EvtxCoverageGapKind::File, error.to_string()),
+    }
+}
+
+fn coverage_gap_for_record_xml(
+    source: &str,
+    event_record_id: u64,
+    reason: &str,
+) -> EvtxCoverageGap {
+    let mut gap = EvtxCoverageGap::new(
+        source,
+        EvtxCoverageGapKind::Xml,
+        format!("event XML could not be parsed: {reason}"),
+    );
+    gap.event_record_id = Some(event_record_id);
+    gap
+}
+
+fn empty_coverage_gap(source: &str) -> EvtxCoverageGap {
+    EvtxCoverageGap::new(
+        source,
+        EvtxCoverageGapKind::Empty,
+        "source produced no readable records",
+    )
+}
+
+fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
+    let location = match (gap.chunk_id, gap.event_record_id) {
+        (Some(chunk_id), _) => format!(" chunk {chunk_id}"),
+        (_, Some(record_id)) => format!(" record {record_id}"),
+        _ => String::new(),
+    };
+    format!("{}{}: {}", gap.source, location, gap.reason)
+}
+
 
 /// Parse source selections after bounded expansion into a deterministic manifest.
 pub fn parse_evtx_files(
@@ -913,17 +980,12 @@ pub fn parse_evtx_manifest(
     let mut all_records = Vec::new();
     let mut channels = Vec::new();
     let mut parse_errors = manifest.coverage.len() as u32;
-    let mut error_messages: Vec<String> = manifest
+    let mut coverage_gaps: Vec<EvtxCoverageGap> = manifest
         .coverage
         .iter()
-        .map(|coverage| match coverage {
-            SourceCoverage::Unsupported { path, reason }
-            | SourceCoverage::AccessDenied { path, reason }
-            | SourceCoverage::Missing { path, reason }
-            | SourceCoverage::InvalidPattern { path, reason }
-            | SourceCoverage::LimitReached { path, reason } => format!("{path}: {reason}"),
-        })
+        .map(coverage_gap_from_source_coverage)
         .collect();
+    let mut error_messages: Vec<String> = coverage_gaps.iter().map(format_coverage_gap).collect();
 
     for source in &manifest.entries {
         let path = Path::new(&source.path);
@@ -937,10 +999,22 @@ pub fn parse_evtx_manifest(
                     record.source_label = source.path.clone();
                 }
                 parse_errors += file.parse_errors;
+                coverage_gaps.extend(file.coverage_gaps.iter().cloned().map(|mut gap| {
+                    gap.source = source.path.clone();
+                    gap
+                }));
                 error_messages.extend(
                     file.messages
                         .into_iter()
                         .map(|message| format!("{}: {message}", source.path)),
+                );
+                error_messages.extend(
+                    coverage_gaps
+                        .iter()
+                        .rev()
+                        .take(file.coverage_gaps.len())
+                        .rev()
+                        .map(format_coverage_gap),
                 );
                 let source_label = source.path.clone();
 
@@ -971,14 +1045,15 @@ pub fn parse_evtx_manifest(
                 }
                 all_records.extend(records);
             }
-            Err(error) => {
+            Err(gap) => {
                 log::warn!(
                     "event=evtx_parse_error file=\"{}\" error=\"{}\"",
                     source.path,
-                    error
+                    gap.reason
                 );
                 parse_errors += 1;
-                error_messages.push(format!("{}: {error}", source.path));
+                error_messages.push(format_coverage_gap(&gap));
+                coverage_gaps.push(gap);
             }
         }
     }
@@ -994,6 +1069,7 @@ pub fn parse_evtx_manifest(
         channels,
         parse_errors,
         error_messages,
+        coverage_gaps,
     })
 }
 
@@ -1005,7 +1081,9 @@ struct ParsedFile {
     parse_errors: u32,
     /// Operator-facing explanations, already summarised.
     messages: Vec<String>,
+    coverage_gaps: Vec<EvtxCoverageGap>,
 }
+
 
 /// Parse a single .evtx file.
 ///
@@ -1017,31 +1095,45 @@ fn parse_single_file(
     path: &Path,
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
-) -> Result<ParsedFile, String> {
-    let mut parser = EvtxParser::from_path(path)
-        .map_err(|e| format!("Failed to open EVTX file {}: {}", path.display(), e))?;
-
+) -> Result<ParsedFile, EvtxCoverageGap> {
+    let source_path = path.to_string_lossy().into_owned();
+    let mut parser = EvtxParser::from_path(path).map_err(|error| {
+        EvtxCoverageGap::new(
+            source_path.clone(),
+            EvtxCoverageGapKind::File,
+            format!("failed to open EVTX file: {error}"),
+        )
+    })?;
     let source_label = path
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_default();
 
+
     let mut records = Vec::new();
     let mut parse_errors = 0u32;
     let mut messages = Vec::new();
+    let mut coverage_gaps = Vec::new();
     let mut truncated = false;
 
     // Locked once for the whole file rather than per record. A hundred thousand lock round trips
     // would cost more than the parsing does.
-    let maps = maps
-        .read()
-        .map_err(|_| "map registry lock was poisoned".to_string())?;
+    let maps = maps.read().map_err(|_| {
+        EvtxCoverageGap::new(
+            source_path.clone(),
+            EvtxCoverageGapKind::File,
+            "map registry lock was poisoned",
+        )
+    })?;
     // A read guard: looking a provider up caches internally, so it needs no exclusive access.
     // Taking the write lock here blocked every other reader for the length of the file.
-    let providers = providers
-        .read()
-        .map_err(|_| "provider store lock was poisoned".to_string())?;
-
+    let providers = providers.read().map_err(|_| {
+        EvtxCoverageGap::new(
+            source_path.clone(),
+            EvtxCoverageGapKind::File,
+            "provider store lock was poisoned",
+        )
+    })?;
     // XML rather than JSON. The JSON projection cannot be re-parsed into an event tree, which is
     // what the map engine, the System block, and the XML export all consume; reading XML here is
     // what makes those work on an opened file at all.
@@ -1058,13 +1150,17 @@ fn parse_single_file(
 
         let record = match record_result {
             Ok(r) => r,
-            Err(e) => {
+            Err(error) => {
                 log::warn!(
                     "event=evtx_record_skip file=\"{}\" error=\"{}\"",
                     path.display(),
-                    e
+                    error
                 );
                 parse_errors += 1;
+                coverage_gaps.push(coverage_gap_from_evtx_error(&source_path, &error));
+                // `evtx` 0.12.2 yields a failed chunk/record as one iterator item and then keeps
+                // walking. Do not turn this `Err` into an early return: later readable records are
+                // part of the recoverable evidence.
                 continue;
             }
         };
@@ -1072,10 +1168,6 @@ fn parse_single_file(
         let raw_xml = record.data;
         let event_record_id = record.event_record_id;
 
-        // Parsed once and used for identity, the System block, the decoded payload, and any
-        // registered map, so none of them costs an extra parse. A record whose XML will not parse
-        // is counted as an error rather than pushed with every field defaulted, which would show a
-        // row claiming provider "Unknown" at the epoch.
         let parsed = match super::event_node::parse_event_xml(&raw_xml) {
             Ok(root) => root,
             Err(error) => {
@@ -1085,6 +1177,11 @@ fn parse_single_file(
                     error
                 );
                 parse_errors += 1;
+                coverage_gaps.push(coverage_gap_for_record_xml(
+                    &source_path,
+                    event_record_id,
+                    &error.to_string(),
+                ));
                 continue;
             }
         };
@@ -1150,6 +1247,15 @@ fn parse_single_file(
     if truncated {
         // Previously only logged. An operator saw exactly the cap as the event count with nothing
         // saying the file held more, which reads as a complete picture of a file that was cut off.
+        let mut gap = EvtxCoverageGap::new(
+            source_path.clone(),
+            EvtxCoverageGapKind::Limit,
+            format!(
+                "reader stopped at {MAX_ENTRIES_PER_FILE} events; the source may contain more"
+            ),
+        );
+        gap.event_record_id = records.last().map(|record| record.event_record_id);
+        coverage_gaps.push(gap);
         messages.push(format!(
             "{}: stopped at {} events, the most this reader loads from one file. The file holds more.",
             source_label, MAX_ENTRIES_PER_FILE
@@ -1160,12 +1266,15 @@ fn parse_single_file(
             "{source_label}: {parse_errors} of {} records could not be read and are missing from the view.",
             parse_errors as usize + records.len()
         ));
+    } else if records.is_empty() {
+        coverage_gaps.push(empty_coverage_gap(&source_path));
     }
 
     Ok(ParsedFile {
         records,
         parse_errors,
         messages,
+        coverage_gaps,
     })
 }
 
@@ -1249,6 +1358,96 @@ mod tests {
             result.error_messages
         );
         assert!(result.records.is_empty());
+    }
+    #[test]
+    fn invalid_and_truncated_bytes_produce_a_structured_file_gap() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-recovery-invalid-{}.evtx",
+            std::process::id()
+        ));
+        std::fs::write(&root, b"ElfFile\0").expect("write truncated EVTX bytes");
+        let (maps, providers) = empty_state();
+
+        let result = parse_evtx_files(&[root.to_string_lossy().into_owned()], &maps, &providers)
+            .expect("invalid EVTX input is a parse result, not a command failure");
+
+        assert_eq!(result.total_records, 0);
+        assert_eq!(result.parse_errors, 1);
+        assert!(result.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::File
+                && gap.source == root.to_string_lossy()
+                && !gap.reason.is_empty()
+        }));
+        std::fs::remove_file(root).expect("remove invalid EVTX bytes");
+    }
+
+    #[test]
+    fn unsupported_source_is_a_structured_gap() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-recovery-unsupported-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&root, b"not an event log").expect("write unsupported source");
+        let (maps, providers) = empty_state();
+        let result = parse_evtx_files(&[root.to_string_lossy().into_owned()], &maps, &providers)
+            .expect("unsupported source is a parse result");
+
+        assert_eq!(result.total_records, 0);
+        assert_eq!(result.parse_errors, 1);
+        assert!(result.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Unsupported
+                && gap.source == root.to_string_lossy()
+        }));
+        std::fs::remove_file(root).expect("remove unsupported source");
+    }
+
+    #[test]
+    fn evtx_chunk_and_record_errors_keep_their_recovery_location() {
+        let chunk = evtx::err::EvtxError::FailedToParseChunk {
+            chunk_id: 9,
+            source: Box::new(evtx::err::ChunkError::IncompleteChunk),
+        };
+        let record = evtx::err::EvtxError::FailedToParseRecord {
+            record_id: 42,
+            source: Box::new(evtx::err::EvtxError::DeserializationError(
+                evtx::err::DeserializationError::Truncated {
+                    what: "record",
+                    offset: 7,
+                    need: 4,
+                    have: 2,
+                },
+            )),
+        };
+
+        let chunk_gap = coverage_gap_from_evtx_error("dirty.evtx", &chunk);
+        assert_eq!(chunk_gap.kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(chunk_gap.chunk_id, Some(9));
+        assert_eq!(chunk_gap.event_record_id, None);
+
+        let record_gap = coverage_gap_from_evtx_error("dirty.evtx", &record);
+        assert_eq!(record_gap.kind, EvtxCoverageGapKind::Record);
+        assert_eq!(record_gap.chunk_id, None);
+        assert_eq!(record_gap.event_record_id, Some(42));
+    }
+
+    #[test]
+    fn malformed_xml_is_a_record_gap_with_record_provenance() {
+        let error = super::super::event_node::parse_event_xml("<Event><System></Event>")
+            .expect_err("malformed XML must be rejected");
+        let gap = coverage_gap_for_record_xml("dirty.evtx", 17, &error.to_string());
+
+        assert_eq!(gap.kind, EvtxCoverageGapKind::Xml);
+        assert_eq!(gap.source, "dirty.evtx");
+        assert_eq!(gap.event_record_id, Some(17));
+        assert!(gap.reason.contains("XML"));
+    }
+
+    #[test]
+    fn an_empty_read_is_explicitly_distinct_from_a_failed_read() {
+        let gap = empty_coverage_gap("empty.evtx");
+        assert_eq!(gap.kind, EvtxCoverageGapKind::Empty);
+        assert_eq!(gap.source, "empty.evtx");
+        assert!(gap.reason.contains("no readable"));
     }
 
     #[test]

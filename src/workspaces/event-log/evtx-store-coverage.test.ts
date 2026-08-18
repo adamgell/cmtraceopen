@@ -83,6 +83,32 @@ describe("coverage gaps through the store", () => {
     ]);
   });
 
+  it("retains structured parser locations alongside the banner text", async () => {
+    invoke.mockResolvedValueOnce({
+      ...result("Application", ["Application: malformed XML"]),
+      coverageGaps: [
+        {
+          source: "Application.evtx",
+          kind: "xml",
+          reason: "event XML could not be parsed",
+          eventRecordId: 42,
+        },
+      ],
+    });
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(useEvtxStore.getState().coverageDetails).toEqual([
+      {
+        source: "Application.evtx",
+        kind: "xml",
+        reason: "event XML could not be parsed",
+        eventRecordId: 42,
+      },
+    ]);
+    expect(useEvtxStore.getState().coverageGaps).toContain("Application: malformed XML");
+  });
+
   it("accumulates gaps as channels load one at a time", async () => {
     invoke
       .mockResolvedValueOnce(result("Application", ["Application: 3 records unreadable"]))

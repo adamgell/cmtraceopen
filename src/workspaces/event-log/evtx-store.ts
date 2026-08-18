@@ -1,11 +1,16 @@
 import { create } from "zustand";
-import { assertParseResultShape, mergeCoverageGaps } from "./evtx-coverage";
+import {
+  assertParseResultShape,
+  mergeCoverageGaps,
+  mergeStructuredCoverageGaps,
+} from "./evtx-coverage";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   EvtxRecord,
   EvtxChannelInfo,
+  EvtxCoverageGap,
   EvtxLevel,
   EvtxParseResult,
   EvtxTimeWindow,
@@ -65,6 +70,11 @@ interface EvtxState {
   sourceManifest: EventLogSourceManifest | null;
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
+  /**
+   * Structured parser locations behind `coverageGaps`. The legacy strings remain for live
+   * streaming diagnostics, while file recovery gaps retain chunk/record identity here.
+   */
+  coverageDetails: EvtxCoverageGap[];
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
   filterSearch: string;
@@ -121,6 +131,7 @@ function applyParseResult(
     isLoading: false,
     loadError: null,
     coverageGaps: result.errorMessages,
+    coverageDetails: result.coverageGaps ?? [],
     selectedChannels: channelNames,
     selectedRecordId: null,
   };
@@ -137,6 +148,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   loadStartTime: null,
   loadElapsedMs: null,
   coverageGaps: [],
+  coverageDetails: [],
   sourceManifest: null,
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
@@ -157,7 +169,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       const checked = assertParseResultShape(result);
-      set(applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"));
+      set(
+        applyParseResult(
+          { ...result, errorMessages: checked.errorMessages, coverageGaps: checked.coverageGaps },
+          "files"
+        )
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
@@ -170,7 +187,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const result = await invoke<EvtxParseResult>("evtx_parse_manifest", { manifest });
       const checked = assertParseResultShape(result);
       set({
-        ...applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"),
+        ...applyParseResult(
+          { ...result, errorMessages: checked.errorMessages, coverageGaps: checked.coverageGaps },
+          "files"
+        ),
         sourceManifest: manifest,
       });
     } catch (error) {
@@ -204,6 +224,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadError: null,
         coverageGaps: [],
         loadStartTime: startTime,
+        coverageDetails: [],
         loadElapsedMs: null,
         selectedChannels: selectedNames,
         loadedChannels: new Set<string>(),
@@ -213,7 +234,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
       // Live query records arrive through the batch event. This path invokes the backend directly
       // rather than through queryChannels, so it must drain the same stream before merging.
-      const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
+      const mergeResult = (
+        ch: string,
+        result: EvtxParseResult,
+        gaps: string[],
+        structuredGaps: readonly EvtxCoverageGap[]
+      ) => {
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -236,6 +262,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // rather than replace. Deduplicated because re-querying a channel would otherwise
           // repeat the same line.
           coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
+          coverageDetails: mergeStructuredCoverageGaps(state.coverageDetails, structuredGaps),
         });
       };
 
@@ -264,7 +291,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           mergeResult(
             ch,
             { ...result, records: arrived },
-            [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
+            [...checked.errorMessages, ...streamedGaps, ...shortfallGaps],
+            checked.coverageGaps
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -388,6 +416,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             ...checked.errorMessages,
             ...gapsFound,
           ]),
+          coverageDetails: mergeStructuredCoverageGaps(
+            state.coverageDetails,
+            checked.coverageGaps
+          ),
         });
       } catch (processingError) {
         // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
@@ -430,8 +462,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       // Cleared with the records they describe. Keeping them would report gaps from a set that is
       // no longer on screen, while the new results' own gaps went unreported.
       coverageGaps: [],
+      coverageDetails: [],
     });
-
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
@@ -484,6 +516,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             ...streamedGaps,
             ...shortfallGaps,
           ]),
+          coverageDetails: mergeStructuredCoverageGaps(s.coverageDetails, checked.coverageGaps),
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -585,6 +618,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       // would report a hole in a set no longer on screen, and a zone left over from a previous
       // session would silently reinterpret the next one's timestamps.
       coverageGaps: [],
+      coverageDetails: [],
       sourceManifest: null,
       columnConfig: defaultColumnConfig(),
       groupBy: [],

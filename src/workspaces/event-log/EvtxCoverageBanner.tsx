@@ -3,8 +3,7 @@ import { Button, tokens } from "@fluentui/react-components";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
-import { summarizeCoverageGaps } from "./evtx-coverage";
-
+import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
 /**
  * Shows what is missing from the loaded events.
  *
@@ -17,10 +16,14 @@ import { summarizeCoverageGaps } from "./evtx-coverage";
  * on screen, and letting it be dismissed would make the view claim completeness it does not have.
  */
 export function EvtxCoverageBanner() {
-  const gaps = useEvtxStore((s) => s.coverageGaps);
+  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
+  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
+  const gaps = [
+    ...new Set([...legacyGaps, ...structuredGaps.map(formatCoverageGap)]),
+  ];
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary = summarizeCoverageGaps(gaps);
 

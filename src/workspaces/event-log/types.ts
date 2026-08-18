@@ -48,12 +48,34 @@ export interface EvtxChannelInfo {
   sourceType: "live" | { file: { path: string } };
 }
 
+export type EvtxCoverageGapKind =
+  | "unsupported"
+  | "accessDenied"
+  | "missing"
+  | "invalidPattern"
+  | "limitReached"
+  | "empty"
+  | "file"
+  | "chunk"
+  | "record"
+  | "xml"
+  | "limit";
+
+export interface EvtxCoverageGap {
+  source: string;
+  kind: EvtxCoverageGapKind;
+  reason: string;
+  chunkId?: number;
+  eventRecordId?: number;
+}
+
 export interface EvtxParseResult {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
   totalRecords: number;
   parseErrors: number;
   errorMessages: string[];
+  coverageGaps?: EvtxCoverageGap[];
 }
 
 export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";

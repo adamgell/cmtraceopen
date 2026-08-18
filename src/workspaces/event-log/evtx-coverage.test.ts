@@ -97,3 +97,56 @@ describe("assertParseResultShape", () => {
     expect(shape.errorMessages).toEqual(["real"]);
   });
 });
+
+describe("structured recovery gaps", () => {
+  it("keeps chunk and record provenance in the boundary shape", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        {
+          source: "dirty.evtx",
+          kind: "chunk",
+          reason: "incomplete chunk",
+          chunkId: 9,
+        },
+        {
+          source: "dirty.evtx",
+          kind: "xml",
+          reason: "malformed XML",
+          eventRecordId: 42,
+        },
+      ],
+    });
+
+    expect(shape.coverageGaps).toEqual([
+      {
+        source: "dirty.evtx",
+        kind: "chunk",
+        reason: "incomplete chunk",
+        chunkId: 9,
+      },
+      {
+        source: "dirty.evtx",
+        kind: "xml",
+        reason: "malformed XML",
+        eventRecordId: 42,
+      },
+    ]);
+  });
+
+  it("drops malformed structured gap entries rather than rendering them", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        { source: "real.evtx", kind: "file", reason: "unreadable" },
+        { source: "missing-kind", reason: "not a gap" },
+        "legacy text",
+      ],
+    });
+    expect(shape.coverageGaps).toEqual([
+      { source: "real.evtx", kind: "file", reason: "unreadable" },
+    ]);
+  });
+});
