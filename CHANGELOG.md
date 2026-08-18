@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Canonical user-story tracker**: Inventory every chrome and workspace feature in `docs/qa/user-stories.csv` with expected behavior derived from the current code, plus fixture/RTL coverage for those surfaces.
+
 - **Administrator restart with source restoration (#384)**: Application-wide restart as administrator on supported Windows builds, restoring open sources after elevation.
 - **Company Portal macOS unified-log evidence (#390)**: Normalize Apple unified-log evidence for Company Portal on macOS so enrollment and portal diagnostics correlate without inventing outcomes.
 - **Intune Device Inventory Agent log family (#397 / #354)**: Discover and parse the full Microsoft Device Inventory Agent log set under Program Files (harvester, Inventory Adaptor, and rotation-failure dialects) with known-sources entry, folder aggregation for `.log` / rotations / `.log_`, and logical-record-aware real-time tailing.
@@ -28,6 +30,8 @@ All notable changes to this project will be documented in this file.
 - **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions.
 
 ### Fixed
+
+- **Dialog landmarks**: Filter, Collect Diagnostics, Collection Complete, Update, and first-run file-association overlays expose `role="dialog"` / `aria-modal` so they are reachable as dialog landmarks.
 
 - **Unicode decimal digit panics (#413 / #502)**: Reject non-ASCII Unicode decimal fields in CCM and related time grammars so multi-byte digits cannot panic the parser mid-slice.
 - **Signless CCM timestamp display (#410 / #504)**: Treat signless fractional tails as milliseconds (not fabricated timezone offsets); short fractions pad correctly for public `LogEntry` projection.

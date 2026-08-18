@@ -1434,4 +1434,12 @@ describe("GraphApiTab delegated capabilities", () => {
       screen.queryByText("Connected with partial permissions"),
     ).not.toBeInTheDocument();
   });
+
+  it("shows an unavailable note off Windows", () => {
+    useUiStore.setState({ currentPlatform: "macos" });
+    render(<GraphApiTab />);
+    expect(
+      screen.getByText(/Graph API integration is only available on Windows/),
+    ).toBeInTheDocument();
+  });
 });

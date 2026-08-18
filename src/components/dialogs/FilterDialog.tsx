@@ -168,6 +168,9 @@ export function FilterDialog({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Filter"
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

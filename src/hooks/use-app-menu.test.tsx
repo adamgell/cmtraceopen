@@ -430,6 +430,27 @@ describe("useAppMenu", () => {
 
     expect(recentMocks.clearRecentEntries).toHaveBeenCalled();
   });
+
+  it("toggles Always on Top and invokes the native pin", async () => {
+    useUiStore.setState({ alwaysOnTop: false });
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    await emitMenuAction({ action: "toggle_always_on_top" });
+
+    expect(useUiStore.getState().alwaysOnTop).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
+  });
+
+  it("opens the Collect Diagnostics dialog from the native menu", async () => {
+    useUiStore.setState({ showCollectDiagnosticsDialog: false });
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    await emitMenuAction({ action: "collect_diagnostics" });
+
+    expect(useUiStore.getState().showCollectDiagnosticsDialog).toBe(true);
+  });
 });
 
 describe("useKeyboard native menu parity", () => {

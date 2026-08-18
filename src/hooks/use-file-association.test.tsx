@@ -44,7 +44,7 @@ vi.mock("../workspaces/registry", async (importOriginal) => {
     ...actual,
     getWorkspace: (id: WorkspaceId) => {
       const workspace = actual.getWorkspace(id);
-      return id === "intune" || id === "esp-diagnostics"
+      return id === "intune" || id === "esp-diagnostics" || id === "event-log"
         ? { ...workspace, onOpenSource: workspaceOpenSourceMock }
         : workspace;
     },
@@ -277,8 +277,7 @@ describe("useFileAssociation startup routing", () => {
     }
   });
 
-  it("does not load hidden generic log state for a workspace without a source handler", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("restores an Event Log source through the workspace handler", async () => {
     useUiStore.setState({ currentPlatform: "windows" });
     getInitialElevationRestoreMock.mockResolvedValue(
       ticket({
@@ -289,21 +288,17 @@ describe("useFileAssociation startup routing", () => {
 
     renderHook(() => useFileAssociation());
 
-    try {
-      await waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(
-          "[elevation] requested workspace cannot restore sources; source restore skipped",
-          { workspace: "event-log" },
-        ),
-      );
-      expect(useUiStore.getState().activeView).toBe("event-log");
-      expect(workspaceOpenSourceMock).not.toHaveBeenCalled();
-      expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
-      expect(loadLogSourceMock).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+    await waitFor(() =>
+      expect(workspaceOpenSourceMock).toHaveBeenCalledWith(
+        { kind: "file", path: "C:\\Windows\\protected.evtx" },
+        "startup.elevation-restore",
+      ),
+    );
+    expect(useUiStore.getState().activeView).toBe("event-log");
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
+    expect(loadLogSourceMock).not.toHaveBeenCalled();
   });
+
 
   it("reopens the exact typed folder a ticket names", async () => {
     getInitialElevationRestoreMock.mockResolvedValue(

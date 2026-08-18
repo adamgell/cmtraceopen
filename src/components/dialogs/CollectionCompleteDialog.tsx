@@ -53,6 +53,9 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={isError ? "Collection Failed" : "Collection Complete"}
         style={{
           width: "420px",
           backgroundColor: tokens.colorNeutralBackground1,

@@ -95,6 +95,9 @@ export function FileAssociationPromptDialog({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Associate log files with CMTrace Open?"
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

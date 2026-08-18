@@ -78,6 +78,9 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="About CMTrace Open"
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

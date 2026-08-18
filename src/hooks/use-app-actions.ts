@@ -405,25 +405,27 @@ export function useAppActions(): AppActionHandlers {
 
   const openPathForActiveWorkspace = useCallback(
     async (path: string) => {
+      const workspaceDefinition = getWorkspace(activeWorkspace);
+      if (workspaceDefinition.onOpenPath) {
+        await workspaceDefinition.onOpenPath(path);
+        return;
+      }
+      if (workspaceDefinition.onOpenSource) {
+        const pathKind = await inferPathKind(path);
+        const source: LogSource =
+          pathKind === "folder"
+            ? { kind: "folder", path }
+            : { kind: "file", path };
+        await workspaceDefinition.onOpenSource(source, "drag-drop.path-open");
+        return;
+      }
+
       if (activeWorkspace === "dsregcmd") {
         useUiStore
           .getState()
           .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
         await analyzeDsregcmdPath(path, { fallbackToFolder: true });
         void recordRecentPath(path, "dsregcmd");
-        return;
-      }
-
-      if (isIntuneWorkspace(activeWorkspace)) {
-        const pathKind = await inferPathKind(path);
-        const source: LogSource =
-          pathKind === "folder"
-            ? { kind: "folder", path }
-            : { kind: "file", path };
-        await getWorkspace(activeWorkspace).onOpenSource!(
-          source,
-          "drag-drop.path-open",
-        );
         return;
       }
 

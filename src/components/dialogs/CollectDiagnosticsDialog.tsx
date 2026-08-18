@@ -200,6 +200,9 @@ export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnostics
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Collect Diagnostics"
         style={{
           width: "520px",
           maxHeight: "80vh",

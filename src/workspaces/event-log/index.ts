@@ -1,5 +1,6 @@
 // src/workspaces/event-log/index.ts
 import { lazy } from "react";
+import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceDefinition } from "../types";
 
 export const eventLogWorkspace: WorkspaceDefinition = {
@@ -22,5 +23,11 @@ export const eventLogWorkspace: WorkspaceDefinition = {
     file: "Open EVTX file...",
     folder: "Open EVTX folder...",
     placeholder: "Open event log source...",
+  },
+  onOpenSource: async (source, trigger) => {
+    useUiStore.getState().ensureWorkspaceVisible("event-log", trigger);
+    // Lazy: evtx-store registers Tauri event listeners at module load.
+    const { openEventLogSource } = await import("./open-event-log-source");
+    await openEventLogSource(source);
   },
 };

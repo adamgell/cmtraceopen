@@ -1,5 +1,6 @@
 // src/workspaces/timeline/index.ts
 import { lazy } from "react";
+import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceDefinition } from "../types";
 
 export const timelineWorkspace: WorkspaceDefinition = {
@@ -21,6 +22,13 @@ export const timelineWorkspace: WorkspaceDefinition = {
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {
+    file: "Open timeline file...",
+    folder: "Open timeline folder...",
     placeholder: "Open timeline source...",
+  },
+  onOpenSource: async (source, trigger) => {
+    useUiStore.getState().ensureWorkspaceVisible("timeline", trigger);
+    const { openTimelineSource } = await import("./open-timeline-source");
+    await openTimelineSource(source);
   },
 };

@@ -241,7 +241,12 @@ export function UpdateDialog({
         if (e.target === e.currentTarget && !isDownloading) onClose();
       }}
     >
-      <div style={dialogStyle}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Check for Updates"
+        style={dialogStyle}
+      >
         {renderContent()}
       </div>
     </div>
