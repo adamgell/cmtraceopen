@@ -183,7 +183,7 @@ impl ProviderDb {
             .prepare_cached(
                 "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
-                 ORDER BY SourceOsBuild DESC LIMIT 1",
+                 ORDER BY SourceOsBuild DESC, VersionKey ASC LIMIT 1",
             )
             .map_err(|error| format!("cannot prepare provider query: {error}"))?;
 
@@ -559,7 +559,7 @@ mod tests {
             )
             .expect("schema");
 
-        for (name, build, events_json) in providers {
+        for (index, (name, build, events_json)) in providers.iter().enumerate() {
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
@@ -568,7 +568,7 @@ mod tests {
                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
                     rusqlite::params![
                         name,
-                        format!("vk1:{build}"),
+                        format!("vk1:{build}:{index}"),
                         gzip(events_json),
                         gzip(r#"{"1":"Error"}"#),
                         gzip(r#"{"2":"Information"}"#),
@@ -666,6 +666,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn same_build_versions_use_a_deterministic_version_key_tie_break() {
+        let dir = temp_dir("same-build-versions");
+        let path = dir.join("base.db");
+        build_db(
+            &path,
+            &[
+                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"first"}]"#),
+                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"second"}]"#),
+            ],
+        );
+        let metadata = ProviderDb::open(&path)
+            .expect("opens")
+            .provider("Dup")
+            .expect("query")
+            .expect("present");
+        assert_eq!(metadata.events[0].description.as_deref(), Some("first"));
+    }
     #[test]
     fn a_merged_database_reports_no_single_source_build() {
         let dir = temp_dir("merged");
