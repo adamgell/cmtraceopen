@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterTimelineToRecords,
   isEventOrigin,
   originContext,
   originDetail,
@@ -9,6 +10,7 @@ import {
   type TimelineOrigin,
   type UnifiedTimeline,
 } from "./unified-timeline";
+import type { EvtxRecord } from "./types";
 
 const logOrigin: TimelineOrigin = {
   kind: "log",
@@ -23,7 +25,7 @@ const logOrigin: TimelineOrigin = {
 };
 
 const eventOrigin: TimelineOrigin = {
-  stableId: "Live/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234",
+  stableId: "source4:Live|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
   kind: "event",
   source: "Live",
   machine: "HOST-A",
@@ -89,7 +91,7 @@ describe("originDetail", () => {
     expect(detail).toContain("process 4321");
     expect(detail).toContain("activity {activity}");
     expect(detail).toContain(
-      "stable Live/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234"
+      "stable source4:Live|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234"
     );
   });
 });
@@ -151,5 +153,34 @@ describe("timelineCounts", () => {
 
   it("counts an empty timeline as zero everywhere", () => {
     expect(timelineCounts(timeline())).toEqual({ logs: 0, events: 0, unplaced: 0 });
+  });
+});
+
+describe("filterTimelineToRecords", () => {
+  it("keeps only visible event items and their unplaced coverage", () => {
+    const visibleRecord = {
+      sourceLabel: eventOrigin.source,
+      channel: eventOrigin.channel,
+      eventRecordId: eventOrigin.recordId,
+      eventId: eventOrigin.eventId,
+      provider: eventOrigin.provider,
+    } as EvtxRecord;
+    const hiddenOrigin = {
+      ...eventOrigin,
+      source: "Other",
+      stableId: "source5:Other|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
+    };
+    const filtered = filterTimelineToRecords(
+      timeline({
+        items: [
+          { timestampMs: 1, severity: "info", message: "visible", origin: eventOrigin },
+          { timestampMs: 2, severity: "info", message: "hidden", origin: hiddenOrigin },
+        ],
+        unplaced: [{ origin: eventOrigin, reason: "missingTimestamp" }],
+      }),
+      [visibleRecord]
+    );
+    expect(filtered.items.map((item) => item.message)).toEqual(["visible"]);
+    expect(filtered.unplaced).toHaveLength(1);
   });
 });

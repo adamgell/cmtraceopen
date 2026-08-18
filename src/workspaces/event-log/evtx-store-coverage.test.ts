@@ -493,6 +493,21 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.coverageGaps).toEqual([]);
   });
 
+  it("restores sequence order for equal-time batches delivered out of order", async () => {
+    invoke.mockImplementationOnce(async () => {
+      const first = record("System", 1);
+      const second = record("System", 2);
+      first.timestampEpoch = second.timestampEpoch = 5_000;
+      emitBatch("System", 1, [second]);
+      emitBatch("System", 0, [first]);
+      return streamedReply("System", 2);
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1, 2]);
+  });
+
   it("reports a batch that never arrived instead of showing a short list as complete", async () => {
     // Sequence 1 is skipped. Its events are simply absent, and an absent event is indistinguishable
     // from an event that never happened unless the gap is stated.

@@ -607,7 +607,10 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
  * channel as complete. A batch that never arrived would otherwise be indistinguishable from events
  * that do not exist, which is the failure this workspace exists to avoid.
  */
-const pendingBatches = new Map<string, { records: EvtxRecord[]; sequences: Set<number> }>();
+const pendingBatches = new Map<
+  string,
+  { batches: Map<number, EvtxRecord[]>; sequences: Set<number> }
+>();
 
 listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
   "evtx-record-batch",
@@ -615,14 +618,14 @@ listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
     const { channel, sequence, records } = event.payload;
     let pending = pendingBatches.get(channel);
     if (!pending) {
-      pending = { records: [], sequences: new Set<number>() };
+      pending = { batches: new Map<number, EvtxRecord[]>(), sequences: new Set<number>() };
       pendingBatches.set(channel, pending);
     }
     // A repeated sequence is counted once. Appending it twice would inflate the tally and hide a
     // batch that really is missing.
     if (pending.sequences.has(sequence)) return;
     pending.sequences.add(sequence);
-    pending.records.push(...records);
+    pending.batches.set(sequence, records);
   }
 );
 
@@ -647,7 +650,11 @@ export function drainStreamedRecords(channel: string): {
   for (let i = 0; i < highest; i++) {
     if (!pending.sequences.has(i)) missingSequences.push(i);
   }
-  return { records: pending.records, missingSequences };
+  const records: EvtxRecord[] = [];
+  for (const [, batch] of [...pending.batches.entries()].sort(([a], [b]) => a - b)) {
+    records.push(...batch);
+  }
+  return { records, missingSequences };
 }
 
 /** Discards anything buffered for channels a query is about to start, so a retry cannot double up. */

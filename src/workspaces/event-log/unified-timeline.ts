@@ -6,6 +6,8 @@
  * placed.
  */
 
+import type { EvtxRecord } from "./types";
+
 export type TimelineSeverity =
   | "verbose"
   | "info"
@@ -55,6 +57,36 @@ export interface UnplacedItem {
 export interface UnifiedTimeline {
   items: TimelineItem[];
   unplaced: UnplacedItem[];
+}
+
+const utf8Encoder = new TextEncoder();
+
+function stableRecordIdentity(record: EvtxRecord): string {
+  const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
+  const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
+  if (record.eventRecordId !== 0) {
+    return `${source}|${channel}|record${record.eventRecordId}`;
+  }
+  return `${source}|${channel}|missing|timestamp${record.timestampEpoch}|event${record.eventId}|provider${utf8Encoder.encode(record.provider).length}:${record.provider}|message${utf8Encoder.encode(record.message).length}:${record.message}|xml${utf8Encoder.encode(record.rawXml).length}:${record.rawXml}`;
+}
+
+/**
+ * Filters a cached backend timeline to the records currently visible in the event list.
+ *
+ * Provenance/activity is parsed once when the raw record set changes; channel, level, Event ID,
+ * and search transitions only select from that cached result and never resend raw XML to Tauri.
+ */
+export function filterTimelineToRecords(
+  timeline: UnifiedTimeline,
+  records: EvtxRecord[]
+): UnifiedTimeline {
+  const visibleKeys = new Set(records.map(stableRecordIdentity));
+  const keep = (origin: TimelineOrigin) =>
+    origin.kind === "log" || visibleKeys.has(origin.stableId);
+  return {
+    items: timeline.items.filter((item) => keep(item.origin)),
+    unplaced: timeline.unplaced.filter((item) => keep(item.origin)),
+  };
 }
 
 export const TIMELINE_SEVERITY_RANK: Record<TimelineSeverity, number> = {

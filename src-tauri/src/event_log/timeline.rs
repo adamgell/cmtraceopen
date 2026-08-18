@@ -30,9 +30,22 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
     }
 }
 fn stable_event_id(record: &EvtxRecord) -> String {
+    let source = format!("source{}:{}", record.source_label.len(), record.source_label);
+    let channel = format!("channel{}:{}", record.channel.len(), record.channel);
+    if record.event_record_id != 0 {
+        return format!("{source}|{channel}|record{}", record.event_record_id);
+    }
+
     format!(
-        "{}/{}#{}",
-        record.source_label, record.channel, record.event_record_id
+        "{source}|{channel}|missing|timestamp{}|event{}|provider{}:{}|message{}:{}|xml{}:{}",
+        record.timestamp_epoch,
+        record.event_id,
+        record.provider.len(),
+        record.provider,
+        record.message.len(),
+        record.message,
+        record.raw_xml.len(),
+        record.raw_xml
     )
 }
 
@@ -92,6 +105,7 @@ pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
     if record.timestamp_epoch == 0 {
         return Err(UnplacedItem {
             origin: origin_of(record),
+
             reason: UnplacedReason::MissingTimestamp,
         });
     }
@@ -102,6 +116,16 @@ pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
         message: record.message.clone(),
         origin: origin_of(record),
     })
+}
+
+fn ordered_records(records: &[EvtxRecord]) -> Vec<&EvtxRecord> {
+    let mut ordered: Vec<_> = records.iter().collect();
+    ordered.sort_by(|left, right| {
+        left.timestamp_epoch
+            .cmp(&right.timestamp_epoch)
+            .then_with(|| stable_event_id(left).cmp(&stable_event_id(right)))
+    });
+    ordered
 }
 
 /// Builds one timeline from parsed log entries and events.
@@ -115,7 +139,7 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
             Err(reason) => unplaced.push(reason),
         }
     }
-    for record in records {
+    for record in ordered_records(records) {
         match from_event(record) {
             Ok(item) => placed.push(item),
             Err(reason) => unplaced.push(reason),
@@ -135,7 +159,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
             Err(item) => unplaced.push(item),
         }
     }
-    for record in records {
+    for record in ordered_records(records) {
         match from_event(record) {
             Ok(item) => placed.push(item),
             Err(item) => unplaced.push(item),
@@ -313,7 +337,11 @@ mod tests {
         let mut source = record(1, "remote event", EvtxLevel::Information);
         source.source_label = "Remote: HOST-B".to_string();
         source.computer = "HOST-B".to_string();
-        let expected_stable = format!("Remote: HOST-B/{}#1234", source.channel);
+        let expected_stable = format!(
+            "source14:Remote: HOST-B|channel{}:{}|record1234",
+            source.channel.len(),
+            source.channel
+        );
         match &from_event(&source).expect("placed").origin {
             TimelineOrigin::Event {
                 source,
@@ -322,11 +350,37 @@ mod tests {
                 ..
             } => {
                 assert_eq!(source, "Remote: HOST-B");
-                assert_eq!(machine.as_deref(), Some("HOST-B"));
                 assert_eq!(stable_id, &expected_stable);
             }
             other => panic!("expected event origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_record_ids_and_delimiter_like_sources_keep_distinct_stable_keys() {
+        let mut first = record(1, "first", EvtxLevel::Information);
+        first.event_record_id = 0;
+        first.source_label = "a/b#c".to_string();
+        first.channel = "d/e#f".to_string();
+        first.raw_xml = "<Event><System><EventRecordID>0</EventRecordID></System></Event>".to_string();
+
+        let mut second = first.clone();
+        second.message = "second".to_string();
+        second.raw_xml = "<Event><System><EventRecordID>0</EventRecordID><Level>2</Level></System></Event>".to_string();
+
+        let timeline = build(&[], &[first, second]);
+        let ids: Vec<_> = timeline
+            .items
+            .iter()
+            .map(|item| match &item.origin {
+                TimelineOrigin::Event { stable_id, .. } => stable_id.clone(),
+                other => panic!("expected event origin, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(ids[0].starts_with("source5:a/b#c|channel5:d/e#f|missing|"));
     }
 
     #[test]
@@ -361,19 +415,34 @@ mod tests {
             origins,
             vec![
                 (
-                    r"C:\evidence\folder-a\capture.evtx/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234".to_string(),
+                    r"source33:C:\evidence\folder-a\capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
                     r"C:\evidence\folder-a\capture.evtx".to_string(),
                     Some("HOST-A".to_string()),
                     1234,
                 ),
                 (
-                    r"D:\evidence\folder-b\capture.evtx/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234".to_string(),
+                    r"source33:D:\evidence\folder-b\capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
                     r"D:\evidence\folder-b\capture.evtx".to_string(),
                     Some("HOST-B".to_string()),
                     1234,
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn equal_timestamp_events_have_deterministic_order_across_input_permutations() {
+        let mut first = record(1_000, "first", EvtxLevel::Information);
+        first.event_record_id = 20;
+        let mut second = record(1_000, "second", EvtxLevel::Information);
+        second.event_record_id = 10;
+
+        let one = build(&[], &[first.clone(), second.clone()]);
+        let two = build(&[], &[second, first]);
+        let messages_one: Vec<_> = one.items.iter().map(|item| item.message.as_str()).collect();
+        let messages_two: Vec<_> = two.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages_one, vec!["second", "first"]);
+        assert_eq!(messages_one, messages_two);
     }
 
     #[test]
@@ -403,8 +472,8 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "Live/Security#5678".to_string(),
-                "Live/Security#1234".to_string(),
+                "source4:Live|channel8:Security|record5678".to_string(),
+                "source4:Live|channel8:Security|record1234".to_string(),
             ]
         );
     }

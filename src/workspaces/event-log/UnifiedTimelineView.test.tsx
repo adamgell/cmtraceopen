@@ -31,7 +31,7 @@ const timeline: UnifiedTimeline = {
       message: "Enrollment failed",
       origin: {
         kind: "event",
-        stableId: "capture.evtx/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234",
+        stableId: "source12:capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
         source: "capture.evtx",
         machine: "HOST-A",
         bundle: "bundle-1",
@@ -48,7 +48,7 @@ const timeline: UnifiedTimeline = {
     {
       origin: {
         kind: "event",
-        stableId: "capture.evtx/Security#1234",
+        stableId: "source12:capture.evtx|channel8:Security|record1234",
         source: "capture.evtx",
         machine: null,
         bundle: null,
@@ -68,7 +68,7 @@ describe("UnifiedTimelineView", () => {
   it("renders source and machine provenance while exposing unplaced coverage", () => {
     render(<UnifiedTimelineView timeline={timeline} />);
     expect(screen.getByText(/HOST-A · capture\.evtx/)).toBeInTheDocument();
-    expect(screen.getAllByTitle(/stable capture\.evtx/)).toHaveLength(2);
+    expect(screen.getAllByTitle(/stable source12:capture\.evtx/)).toHaveLength(2);
     expect(screen.getByText("1 event could not be placed: no timestamp")).toBeInTheDocument();
     expect(screen.getByText("Enrollment failed")).toBeInTheDocument();
   });

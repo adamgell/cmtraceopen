@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 import { buildUnifiedTimeline } from "./evtx-store";
 import { selectVisibleRecords } from "./evtx-filter";
+import { filterTimelineToRecords } from "./unified-timeline";
 import type { EvtxRecord } from "./types";
 
 const record: EvtxRecord = {
@@ -72,5 +73,20 @@ describe("buildUnifiedTimeline", () => {
       entries: [],
       records: [record, otherSource],
     });
+  });
+  it("filters a large cached record set without rebuilding the backend payload", async () => {
+    const timeline = { items: [], unplaced: [] };
+    vi.mocked(invoke).mockResolvedValue(timeline);
+    const records = Array.from({ length: 512 }, (_, index) => ({
+      ...record,
+      id: index,
+      eventRecordId: index + 1,
+    }));
+
+    const cached = await buildUnifiedTimeline(records);
+    filterTimelineToRecords(cached, records.slice(0, 1));
+    filterTimelineToRecords(cached, records.slice(256, 257));
+
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

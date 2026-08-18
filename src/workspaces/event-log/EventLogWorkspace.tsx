@@ -9,7 +9,10 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { selectVisibleRecords } from "./evtx-filter";
-import type { UnifiedTimeline } from "./unified-timeline";
+import {
+  filterTimelineToRecords,
+  type UnifiedTimeline,
+} from "./unified-timeline";
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
 const MAX_DETAIL_RATIO = 0.7;
@@ -38,6 +41,10 @@ export function EventLogWorkspace() {
 
   const [timeline, setTimeline] = useState<UnifiedTimeline>({ items: [], unplaced: [] });
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  const visibleTimeline = useMemo(
+    () => filterTimelineToRecords(timeline, visibleRecords),
+    [timeline, visibleRecords]
+  );
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
@@ -74,7 +81,7 @@ export function EventLogWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    if (visibleRecords.length === 0) {
+    if (records.length === 0) {
       setTimeline({ items: [], unplaced: [] });
       setTimelineError(null);
       return () => {
@@ -82,7 +89,7 @@ export function EventLogWorkspace() {
       };
     }
 
-    void buildUnifiedTimeline(visibleRecords)
+    void buildUnifiedTimeline(records)
       .then((nextTimeline) => {
         if (cancelled) return;
         setTimeline(nextTimeline);
@@ -98,7 +105,7 @@ export function EventLogWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [visibleRecords]);
+  }, [records]);
 
   const hasData = sourceMode !== null && (records.length > 0 || channels.length > 0);
 
@@ -160,7 +167,7 @@ export function EventLogWorkspace() {
           }}
         >
           <div style={{ height: "240px", flexShrink: 0, overflow: "hidden" }}>
-            <UnifiedTimelineView timeline={timeline} />
+            <UnifiedTimelineView timeline={visibleTimeline} />
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <EvtxTimeline />
