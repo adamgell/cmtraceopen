@@ -1018,7 +1018,7 @@ loadGeneration: generation,
           return await invoke<EvtxTailStatus>("evtx_start_tail", {
             channel,
             requestId,
-            filter: buildServerFilter(get().timeWindow),
+            filter: buildServerFilter(get().timeWindow, get().filterEventIds, get().filterLevels),
             remoteMachine,
           });
         } catch (error) {
