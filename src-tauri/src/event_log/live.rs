@@ -7,7 +7,7 @@ use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 use cmtraceopen_parser::eventmap::MapRegistry;
 
 #[cfg(target_os = "windows")]
-use windows::core::{Error, HSTRING, PCWSTR, PWSTR};
+use windows::core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
@@ -717,7 +717,9 @@ fn format_event_message(
     let metadata = match cache.get(provider_name) {
         Some(PublisherMetadata::Open(metadata)) => metadata,
         Some(PublisherMetadata::Missing) => return Ok(None),
-        Some(PublisherMetadata::Failed(code)) => return Err(Error::from_win32(*code)),
+        Some(PublisherMetadata::Failed(code)) => {
+            return Err(Error::from_hresult(HRESULT::from_win32(*code)))
+        }
         None => unreachable!("publisher metadata cache insertion failed"),
     };
     let mut buffer_used = 0u32;
@@ -877,9 +879,20 @@ mod tests {
         assert!(format_remote_code("EvtRender", 5).contains("access denied"));
         assert!(format_remote_code("EvtOpenPublisherMetadata", 53)
             .contains("remote source unavailable"));
-        assert!(!is_publisher_metadata_not_found(&Error::from_win32(5)));
-        assert!(!is_publisher_metadata_not_found(&Error::from_win32(15007)));
-        assert!(is_publisher_metadata_not_found(&Error::from_win32(15002)));
+        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(5))));
+        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(15007))));
+        assert!(is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(15002))));
+    }
+    #[test]
+    fn cached_publisher_metadata_failure_is_reused_without_rpc() {
+        let mut cache = HashMap::from([(
+            "provider".to_string(),
+            PublisherMetadata::Failed(5),
+        )]);
+        let error = format_event_message(EVT_HANDLE(0), "provider", None, &mut cache)
+            .expect_err("cached metadata failure must remain an error");
+        assert_eq!(win32_code(&error), 5);
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
