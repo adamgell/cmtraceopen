@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { Button, Spinner, tokens } from "@fluentui/react-components";
+import { useEffect, useRef, useState } from "react";
+import { Button, Input, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openEventLogSource, openEventLogSources } from "./open-event-log-source";
 import { useEvtxStore } from "./evtx-store";
@@ -11,10 +11,15 @@ const EVTX_FILE_DIALOG_FILTERS = [
 ];
 
 export function SourcePicker() {
-  const enumerateChannels = useEvtxStore((s) => s.enumerateChannels);
+  const enumerateLocalChannels = useEvtxStore((s) => s.enumerateLocalChannels);
+  const enumerateRemoteChannels = useEvtxStore((s) => s.enumerateRemoteChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
+  const coverageGaps = useEvtxStore((s) => s.coverageGaps);
+  const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
+  const [remoteTarget, setRemoteTarget] = useState(remoteMachine ?? "");
+  const [remoteTargetDirty, setRemoteTargetDirty] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const openingRef = useRef(false);
@@ -31,6 +36,11 @@ export function SourcePicker() {
     setIsOpening(false);
   };
 
+  useEffect(() => {
+    if (!remoteTargetDirty && remoteMachine && remoteMachine !== remoteTarget) {
+      setRemoteTarget(remoteMachine);
+    }
+  }, [remoteMachine, remoteTarget, remoteTargetDirty]);
   const isWindows = currentPlatform === "windows";
 
   const handleOpenFiles = async () => {
@@ -66,12 +76,21 @@ export function SourcePicker() {
       finishOpening();
     }
   };
-
   const handleEnumerate = async () => {
     if (!beginOpening()) return;
     setLocalError(null);
     try {
-      await enumerateChannels();
+      await enumerateLocalChannels();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalError(message);
+    }
+  };
+
+  const handleRemoteEnumerate = async () => {
+    setLocalError(null);
+    try {
+      await enumerateRemoteChannels(remoteTarget);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
@@ -81,6 +100,7 @@ export function SourcePicker() {
 
   };
   const displayError = loadError ?? localError;
+  const displayCoverage = coverageGaps.join(" • ");
 
   return (
     <div
@@ -133,6 +153,46 @@ export function SourcePicker() {
         </div>
       )}
 
+      {isWindows && !isLoading && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "8px",
+            width: "min(420px, 100%)",
+          }}
+        >
+          <div style={{ display: "flex", gap: "8px", width: "100%" }}>
+            <Input
+              value={remoteTarget}
+              onChange={(_, data) => {
+                setRemoteTargetDirty(true);
+                setRemoteTarget(data.value);
+              }}
+              aria-label="Remote computer name"
+              style={{ flex: 1 }}
+            />
+            <Button
+              appearance="secondary"
+              disabled={!remoteTarget.trim()}
+              onClick={() => void handleRemoteEnumerate()}
+            >
+              Remote computer
+            </Button>
+          </div>
+          <div
+            style={{
+              fontSize: "11px",
+              color: tokens.colorNeutralForeground3,
+              textAlign: "center",
+            }}
+          >
+            Uses your current Windows sign-in. Usernames, passwords, and tokens are not stored.
+          </div>
+        </div>
+      )}
+
       {displayError && (
         <div
           style={{
@@ -144,6 +204,20 @@ export function SourcePicker() {
           }}
         >
           {displayError}
+        </div>
+      )}
+
+      {displayCoverage && (
+        <div
+          style={{
+            fontSize: "12px",
+            color: tokens.colorPaletteYellowForeground1,
+            maxWidth: "500px",
+            textAlign: "center",
+            wordBreak: "break-word",
+          }}
+        >
+          {displayCoverage}
         </div>
       )}
     </div>

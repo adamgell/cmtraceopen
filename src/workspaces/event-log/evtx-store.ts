@@ -46,6 +46,39 @@ function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
   return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
 }
 
+
+let requestGeneration = 0;
+let activeRequestId = "initial";
+
+function beginRequest(): string {
+  activeRequestId = `event-log-${++requestGeneration}`;
+  pendingBatches.clear();
+  return activeRequestId;
+}
+
+function isCurrentRequest(requestId: string): boolean {
+  return requestId === activeRequestId;
+}
+
+function invokeEventQuery<T>(
+  requestId: string,
+  remoteMachine: string | null,
+  channels: string[],
+  maxEvents: number | null,
+  filter: EventQueryFilterSubset
+): Promise<T> {
+  if (remoteMachine) {
+    return invoke<T>("evtx_query_remote_channels", {
+      machine: remoteMachine,
+      channels,
+      maxEvents,
+      filter,
+      requestId,
+    });
+  }
+  return invoke<T>("evtx_query_channels", { channels, maxEvents, filter, requestId });
+
+}
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -58,6 +91,8 @@ interface EvtxState {
   sourceMode: EvtxSourceMode;
   /** Paths currently represented by `records`; used to protect export destinations. */
   sourcePaths: string[];
+  /** Remote target used for live queries; credentials stay in the Windows session only. */
+  remoteMachine: string | null;
   isLoading: boolean;
   loadingChannel: string | null;
   loadingProgress: number | null;
@@ -100,6 +135,8 @@ interface EvtxState {
   parseFiles: (paths: string[]) => Promise<void>;
   parseManifest: (manifest: EventLogSourceManifest) => Promise<void>;
   enumerateChannels: () => Promise<void>;
+  enumerateLocalChannels: () => Promise<void>;
+  enumerateRemoteChannels: (machine: string) => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
@@ -155,6 +192,7 @@ function applyParseResult(
 
 export const useEvtxStore = create<EvtxState>()((set, get) => ({
   records: [],
+  remoteMachine: null,
   channels: [],
   sourceMode: null,
   sourcePaths: [],
@@ -180,11 +218,23 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   sortField: "time",
   sortDirection: "asc",
   selectedRecordId: null,
-
   parseFiles: async (paths) => {
-    set({ isLoading: true, loadError: null });
+    const requestId = beginRequest();
+    set({
+      records: [],
+      channels: [],
+      sourceMode: null,
+      remoteMachine: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: true,
+      loadError: null,
+    });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
+      if (!isCurrentRequest(requestId)) return;
       const checked = assertParseResultShape(result);
       set({
         ...applyParseResult(
@@ -199,6 +249,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         sourcePaths: [...paths],
       });
     } catch (error) {
+      if (!isCurrentRequest(requestId)) return;
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
@@ -230,19 +281,28 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   enumerateChannels: async () => {
+    const requestId = beginRequest();
     set({ isLoading: true, loadError: null });
     try {
-      // Step 1: Enumerate all channels
-      const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+      const remoteMachine = get().remoteMachine;
+      const channels = remoteMachine
+        ? await invoke<EvtxChannelInfo[]>("evtx_enumerate_remote_channels", {
+            machine: remoteMachine,
+          })
+        : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+      if (!isCurrentRequest(requestId)) return;
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
       const availableCore = coreChannels.filter((c) =>
         channels.some((ch) => ch.name === c)
       );
-
       let updatedChannels = channels;
       let loadError: string | null = null;
+      const emptyRemoteGaps =
+        remoteMachine && channels.length === 0
+          ? [`${remoteMachine}: remote source is empty (no channels available)`]
+          : [];
 
       // Show channels immediately, then load events in parallel
       const selectedNames = new Set(availableCore);
@@ -253,7 +313,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         sourcePaths: [],
         isLoading: true,
         loadError: null,
-        coverageGaps: [],
+        coverageGaps: emptyRemoteGaps,
         loadStartTime: startTime,
         coverageDetails: [],
         loadElapsedMs: null,
@@ -271,6 +331,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         gaps: string[],
         structuredGaps: readonly EvtxCoverageGap[]
       ) => {
+        if (!isCurrentRequest(requestId)) return;
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -282,7 +343,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
         const newLoaded = new Set(state.loadedChannels);
-        newLoaded.add(ch);
+        const hasHardFailure = result.parseErrors > 0 && result.records.length === 0;
+        const channelHasUsableData =
+          !hasHardFailure &&
+          (gaps.length === 0 ||
+            result.records.length > 0 ||
+            (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0);
+        if (channelHasUsableData) newLoaded.add(ch);
 
         set({
           records: merged,
@@ -298,25 +365,29 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       };
 
       const promises = availableCore.map(async (ch) => {
+        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
         try {
           resetStreamedRecords([ch]);
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: null,
-            filter: buildServerFilter(get().timeWindow),
-          });
+          const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
+            remoteMachine,
+            [ch],
+            null,
+            buildServerFilter(get().timeWindow)
+          );
+          if (!isCurrentRequest(requestId)) return;
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
           const arrived = [...streamed.records, ...result.records];
           const streamedGaps =
             streamed.missingSequences.length > 0
-              ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+              ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
               : [];
           const shortfallGaps =
             typeof checked.totalRecords === "number" &&
             arrived.length < checked.totalRecords
               ? [
-                  `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                  `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
                 ]
               : [];
           mergeResult(
@@ -326,30 +397,111 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             checked.coverageGaps
           );
         } catch (e) {
+          if (!isCurrentRequest(requestId)) return;
           const msg = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
-          if (!loadError) loadError = `${ch}: ${msg}`;
+          const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+          console.warn(`[evtx] Failed to query ${context}: ${msg}`);
+          if (!loadError) loadError = `${context}: ${msg}`;
+          set((s) => ({
+            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+              `${context}: not read (${msg})`,
+            ]),
+          }));
         }
       });
-
       await Promise.all(promises);
-
+      if (!isCurrentRequest(requestId)) return;
+      const finalState = get();
+      const remoteQueryFailed =
+        remoteMachine !== null &&
+        (availableCore.length === 0
+          ? channels.length === 0
+          : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
       set({
+        sourceMode: remoteQueryFailed ? null : "live",
         isLoading: false,
         loadingChannel: null,
         loadingProgress: null,
         loadElapsedMs: performance.now() - startTime,
         loadError,
       });
+
     } catch (error) {
+      if (!isCurrentRequest(requestId)) return;
       const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message });
+      const remoteMachine = get().remoteMachine;
+      const remoteGap = remoteMachine
+        ? message.startsWith(`${remoteMachine}:`)
+          ? message
+          : message.includes("access denied") || message.includes("credentials rejected")
+            ? `${remoteMachine}: remote source access denied (${message})`
+            : message.includes("unavailable")
+              ? `${remoteMachine}: remote source unavailable (${message})`
+              : `${remoteMachine}: remote source query failed (${message})`
+        : null;
+      set((state) => ({
+        isLoading: false,
+        loadError: message,
+        coverageGaps: remoteGap
+          ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
+          : state.coverageGaps,
+      }));
     }
   },
 
-  queryChannels: async (channels, maxEvents) => {
-    set({ isLoading: true, loadError: null, selectedRecordId: null });
+  enumerateLocalChannels: async () => {
+    set({
+      remoteMachine: null,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+    });
+    await get().enumerateChannels();
+  },
+  enumerateRemoteChannels: async (machine) => {
+    beginRequest();
+    set({
+      remoteMachine: null,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: false,
+      loadError: null,
+    });
+    const normalized = machine.trim().replace(/^[/\\]+/, "");
+    if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) {
+      set({
+        isLoading: false,
+        loadError: "Enter a valid remote computer name.",
+      });
+      return;
+    }
+    set({
+      remoteMachine: normalized,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      loadError: null,
+    });
+    await get().enumerateChannels();
+  },
 
+  queryChannels: async (channels, maxEvents) => {
+    const requestId = beginRequest();
+    set({ isLoading: true, loadError: null, selectedRecordId: null });
+    const remoteMachine = get().remoteMachine;
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
     // at once held every event of every channel in memory twice, once per channel and once in the
@@ -366,22 +518,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const results = await Promise.all(
       channels.map(async (ch) => {
         try {
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: maxEvents ?? null,
-            filter: buildServerFilter(get().timeWindow),
-          });
+          const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
+            remoteMachine,
+            [ch],
+            maxEvents ?? null,
+            buildServerFilter(get().timeWindow)
+          );
           return { channel: ch, result, error: null as string | null };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${message}`);
-          if (!loadError) loadError = `${ch}: ${message}`;
+          const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+          console.warn(`[evtx] Failed to query ${context}: ${message}`);
+          if (!loadError) loadError = `${context}: ${message}`;
           return { channel: ch, result: null, error: message };
         }
       })
     );
-
+    if (!isCurrentRequest(requestId)) return;
     for (const { channel, result, error } of results) {
+      const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
         if (!result) {
           // A channel that could not be read is recorded as a gap, not merely as an error banner
@@ -389,7 +545,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // from the view for as long as the view is on screen.
           set((s) => ({
             coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-              `${channel}: not read (${error ?? "unknown error"})`,
+              `${context}: not read (${error ?? "unknown error"})`,
             ]),
           }));
           continue;
@@ -408,13 +564,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         const gapsFound: string[] = [];
         if (streamed.missingSequences.length > 0) {
           gapsFound.push(
-            `${channel}: ${streamed.missingSequences.length} batches of events were not received`
+            `${context}: ${streamed.missingSequences.length} batches of events were not received`
           );
         }
         const expected = checked.totalRecords;
         if (typeof expected === "number" && arrived.length < expected) {
           gapsFound.push(
-            `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
+            `${context}: ${expected - arrived.length} of ${expected} events did not reach the view`
           );
         }
 
@@ -434,19 +590,23 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
 
+        const reportedGaps = [...checked.errorMessages, ...gapsFound];
         const newLoaded = new Set(state.loadedChannels);
-        newLoaded.add(channel);
+        const channelHasUsableData =
+          reportedGaps.length === 0 ||
+          arrived.length > 0 ||
+          (result.channels.find((c) => c.name === channel)?.eventCount ?? 0) > 0;
+        if (channelHasUsableData) newLoaded.add(channel);
 
+        const channelGaps = `${context}:`;
+        const priorGaps = state.coverageGaps.filter((gap) => !gap.startsWith(channelGaps));
         set({
           records: merged,
           channels: updatedChannels,
           loadedChannels: newLoaded,
-          // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
-          // backend reported here would show a complete view of a partly unreadable set.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
-            ...checked.errorMessages,
-            ...gapsFound,
-          ]),
+          // Replace this channel's prior coverage with the current attempt while retaining gaps for
+          // unrelated channels.
+          coverageGaps: mergeCoverageGaps(priorGaps, reportedGaps),
           coverageDetails: mergeStructuredCoverageGaps(
             state.coverageDetails,
             checked.coverageGaps
@@ -457,10 +617,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         // reply is not a reason to leave the workspace stuck on a spinner with no message.
         const message =
           processingError instanceof Error ? processingError.message : String(processingError);
-        console.warn(`[evtx] Failed to process ${channel}: ${message}`);
-        if (!loadError) loadError = `${channel}: ${message}`;
+        console.warn(`[evtx] Failed to process ${context}: ${message}`);
+        if (!loadError) loadError = `${context}: ${message}`;
         set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${channel}: not read (${message})`]),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${context}: not read (${message})`]),
         }));
       }
     }
@@ -481,6 +641,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const state = get();
     const loaded = [...state.loadedChannels];
     if (loaded.length === 0) return;
+    const requestId = beginRequest();
+    const remoteMachine = state.remoteMachine;
     const startTime = performance.now();
     set({
       records: [],
@@ -498,29 +660,29 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
+      const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
       try {
         resetStreamedRecords([ch]);
-        const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-          channels: [ch],
-          maxEvents: null,
-          // The window is a server-side predicate and a refetch is the only thing that applies it.
-          // Omitting it here made the time-window control a no-op: selecting 1h triggered this
-          // refresh, which then fetched the channel unbounded and replaced the view with events
-          // outside the window the toolbar was still showing as selected.
-          filter: buildServerFilter(get().timeWindow),
-        });
+        const result = await invokeEventQuery<EvtxParseResult>(
+          requestId,
+          remoteMachine,
+          [ch],
+          null,
+          buildServerFilter(get().timeWindow)
+        );
+        if (!isCurrentRequest(requestId)) return;
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
         const arrived = [...streamed.records, ...result.records];
         const streamedGaps =
           streamed.missingSequences.length > 0
-            ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+            ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
             : [];
         const shortfallGaps =
           typeof checked.totalRecords === "number" &&
           arrived.length < checked.totalRecords
             ? [
-                `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
               ]
             : [];
 
@@ -534,35 +696,46 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           ...c,
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
+        const reportedGaps = [...checked.errorMessages, ...streamedGaps, ...shortfallGaps];
         const newLoaded = new Set(s.loadedChannels);
-        newLoaded.add(ch);
+        const channelHasUsableData =
+          reportedGaps.length === 0 ||
+          arrived.length > 0 ||
+          (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
+        if (channelHasUsableData) newLoaded.add(ch);
 
         set({
           records: merged,
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-            ...checked.errorMessages,
-            ...streamedGaps,
-            ...shortfallGaps,
-          ]),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, reportedGaps),
           coverageDetails: mergeStructuredCoverageGaps(s.coverageDetails, checked.coverageGaps),
         });
       } catch (e) {
+        if (!isCurrentRequest(requestId)) return;
         const message = e instanceof Error ? e.message : String(e);
-        console.warn(`[evtx] Refresh failed for ${ch}: ${message}`);
+        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+        console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
         // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
         // here presents a view that is missing a whole channel as complete.
         set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${message})`]),
-          loadError: s.loadError ?? `${ch}: ${message}`,
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+            `${context}: not read (${message})`,
+          ]),
+          loadError: s.loadError ?? `${context}: ${message}`,
         }));
       }
     });
-
     await Promise.all(promises);
+    if (!isCurrentRequest(requestId)) return;
+    const finalState = get();
+    const remoteRefreshFailed =
+      remoteMachine !== null &&
+      finalState.loadedChannels.size === 0 &&
+      finalState.coverageGaps.length > 0;
     set({
+      sourceMode: remoteRefreshFailed ? null : finalState.sourceMode,
       isLoading: false,
       loadingChannel: null,
       loadingProgress: null,
@@ -628,12 +801,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSelectedRecordId: (id) => set({ selectedRecordId: id }),
 
-  reset: () =>
+  reset: () => {
+    beginRequest();
     set({
       records: [],
       channels: [],
       sourceMode: null,
       sourcePaths: [],
+      remoteMachine: null,
       isLoading: false,
       loadError: null,
       selectedChannels: new Set<string>(),
@@ -658,16 +833,21 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,
-    }),
+    });
+  },
 }));
 
 // Listen for progress events from the Rust backend
-listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
-  useEvtxStore.setState({
-    loadingChannel: event.payload.channel,
-    loadingProgress: event.payload.fetched,
-  });
-});
+listen<{ requestId: string; channel: string; fetched: number }>(
+  "evtx-query-progress",
+  (event) => {
+    if (!isCurrentRequest(event.payload.requestId)) return;
+    useEvtxStore.setState({
+      loadingChannel: event.payload.channel,
+      loadingProgress: event.payload.fetched,
+    });
+  }
+);
 
 /**
  * Records arriving in batches while a query is still running.
@@ -683,9 +863,10 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
  */
 const pendingBatches = new Map<string, { records: EvtxRecord[]; sequences: Set<number> }>();
 
-listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
+listen<{ requestId: string; channel: string; sequence: number; records: EvtxRecord[] }>(
   "evtx-record-batch",
   (event) => {
+    if (!isCurrentRequest(event.payload.requestId)) return;
     const { channel, sequence, records } = event.payload;
     let pending = pendingBatches.get(channel);
     if (!pending) {

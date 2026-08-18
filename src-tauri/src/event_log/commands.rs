@@ -11,6 +11,7 @@ use tauri::Emitter;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvtxQueryProgress {
+    request_id: String,
     channel: String,
     fetched: usize,
 }
@@ -23,11 +24,13 @@ struct EvtxQueryProgress {
 ///
 /// `sequence` numbers the batches for one channel from zero. The receiver uses it to notice a batch
 /// it never got: an event channel offers no delivery guarantee, and events that quietly failed to
-/// arrive would look exactly like events that do not exist.
+/// arrive would look exactly like events that do not exist. `request_id` prevents a late batch from
+/// a superseded local/remote source query being merged into the current view.
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvtxRecordBatch {
+    request_id: String,
     channel: String,
     sequence: usize,
     records: Vec<super::models::EvtxRecord>,
@@ -84,17 +87,63 @@ pub async fn evtx_enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 }
 
 #[tauri::command]
-pub async fn evtx_query_channels(
+pub async fn evtx_enumerate_remote_channels(
+    machine: String,
+) -> Result<Vec<EvtxChannelInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tokio::task::spawn_blocking(move || super::live::enumerate_remote_channels(&machine))
+            .await
+            .map_err(|e| format!("Task join error: {e}"))?
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = machine;
+        Err("Remote event log queries are only available on Windows.".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn query_source_channel(
+    remote_machine: Option<&str>,
+    channel: &str,
+    filter: &cmtraceopen_parser::event_query::EventQueryFilter,
+    maps: &cmtraceopen_parser::eventmap::MapRegistry,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+    on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>),
+) -> Result<super::live::ChannelScan, String> {
+    match remote_machine {
+        Some(machine) => super::live::query_remote_channel_streamed(
+            machine,
+            channel,
+            filter,
+            maps,
+            max_events,
+            on_progress,
+            on_batch,
+        ),
+        None => super::live::query_channel_streamed(
+            channel,
+            filter,
+            maps,
+            max_events,
+            on_progress,
+            on_batch,
+        ),
+    }
+}
+async fn query_channels_impl(
     channels: Vec<String>,
     max_events: Option<u64>,
     filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
+    remote_machine: Option<String>,
+    request_id: String,
 ) -> Result<EvtxParseResult, String> {
     #[cfg(target_os = "windows")]
     {
-        // Cloned before the blocking work, so a long channel scan never runs with a state lock
-        // held. Channels are then read under one shared guard rather than locking per record.
         let registry = state.event_maps.clone();
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
@@ -102,23 +151,24 @@ pub async fn evtx_query_channels(
             let maps = registry
                 .read()
                 .map_err(|_| "map registry lock was poisoned".to_string())?;
-
-            // Absent means unfiltered, which keeps the query as "*" and preserves prior behaviour
-            // for callers that have not adopted server-side filtering yet.
             let query_filter = filter.unwrap_or_default();
+            let source_type = remote_machine
+                .as_ref()
+                .map(|machine| super::models::ChannelSourceType::Remote {
+                    machine: machine.clone(),
+                })
+                .unwrap_or(super::models::ChannelSourceType::Live);
 
-            // Channels are queried concurrently. Each one is an independent conversation with the
-            // Event Log service that spends nearly all its time waiting on RPC, so serializing
-            // them leaves the machine idle. Results are collected per channel and ordered
-            // afterwards, so concurrency cannot affect the output.
             let per_channel: Vec<(String, Result<super::live::ChannelScan, String>)> = channels
                 .par_iter()
                 .map(|channel| {
                     let app_ref = &app;
+                    let batch_request_id = request_id.clone();
                     let ch_name = channel.clone();
                     let batch_channel = channel.clone();
                     let mut sequence = 0usize;
-                    let outcome = super::live::query_channel_streamed(
+                    let outcome = query_source_channel(
+                        remote_machine.as_deref(),
                         channel,
                         &query_filter,
                         &maps,
@@ -127,6 +177,7 @@ pub async fn evtx_query_channels(
                             let _ = app_ref.emit(
                                 "evtx-query-progress",
                                 EvtxQueryProgress {
+                                    request_id: batch_request_id.clone(),
                                     channel: ch_name.clone(),
                                     fetched,
                                 },
@@ -136,27 +187,22 @@ pub async fn evtx_query_channels(
                             if batch.is_empty() {
                                 return;
                             }
-                            // Taken from the batch rather than copied out of it. Leaving the records
-                            // behind would send them and also accumulate them, which is the memory
-                            // this exists to avoid.
                             let records = std::mem::take(batch);
-                            let emitted = app_ref.emit(
+                            if let Err(error) = app_ref.emit(
                                 "evtx-record-batch",
                                 EvtxRecordBatch {
+                                    request_id: batch_request_id.clone(),
                                     channel: batch_channel.clone(),
                                     sequence,
                                     records,
                                 },
-                            );
-                            sequence += 1;
-                            if let Err(error) = emitted {
-                                // The records are gone: they were moved into the payload. Say so
-                                // rather than letting the count quietly disagree with the view.
+                            ) {
                                 log::warn!(
                                     "event=evtx_batch_emit_failed channel=\"{batch_channel}\" \
                                      sequence={sequence} error=\"{error}\""
                                 );
                             }
+                            sequence += 1;
                         },
                     );
                     (channel.clone(), outcome)
@@ -167,57 +213,42 @@ pub async fn evtx_query_channels(
             let mut channel_infos = Vec::new();
             let mut parse_errors = 0u32;
             let mut error_messages = Vec::new();
-            // Emitted in batches rather than carried in this reply. Reported so the receiver can
-            // check what it actually assembled against what was sent, instead of assuming an
-            // event channel delivered everything.
             let mut streamed = 0usize;
 
             for (channel, outcome) in per_channel {
                 match outcome {
                     Ok(scan) => {
-                        // `delivered`, not `records.len()`: the records were emitted in batches and
-                        // taken out of the vector on the way. Counting what is left would report a
-                        // fully read channel as empty.
                         channel_infos.push(EvtxChannelInfo {
                             name: channel.clone(),
                             event_count: scan.delivered as u64,
-                            source_type: super::models::ChannelSourceType::Live,
+                            source_type: source_type.clone(),
                         });
                         streamed += scan.delivered;
-                        // A channel can be read partly. Those gaps travel with the records so a
-                        // truncated channel is not presented as a complete one, which is what
-                        // happened while the query returned records alone.
                         if !scan.gaps.is_empty() {
                             parse_errors += scan.gaps.len() as u32;
                             error_messages.extend(scan.gaps);
                         }
                         all_records.extend(scan.records);
                     }
-                    Err(e) => {
+                    Err(error) => {
                         log::warn!(
                             "event=evtx_channel_query_error channel=\"{}\" error=\"{}\"",
                             channel,
-                            e
+                            error
                         );
-                        error_messages.push(format!("{}: {}", channel, e));
-                        // A failed channel is still reported with 0 events so the gap stays visible
-                        // rather than looking like a channel that simply had nothing in it.
+                        error_messages.push(format!("{channel}: {error}"));
                         channel_infos.push(EvtxChannelInfo {
-                            name: channel.clone(),
+                            name: channel,
                             event_count: 0,
-                            source_type: super::models::ChannelSourceType::Live,
+                            source_type: source_type.clone(),
                         });
                         parse_errors += 1;
                     }
                 }
             }
 
-            // `all_records` holds only what the batch hook left behind, which is nothing while the
-            // records are being streamed. `total_records` counts what was sent, so the receiver has
-            // something to check its own tally against.
-            all_records.sort_by_key(|r| r.timestamp_epoch);
+            all_records.sort_by_key(|record| record.timestamp_epoch);
             let total_records = (streamed + all_records.len()) as u64;
-
             Ok(EvtxParseResult {
                 records: all_records,
                 channels: channel_infos,
@@ -229,13 +260,58 @@ pub async fn evtx_query_channels(
             })
         })
         .await
-        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|error| format!("Task join error: {error}"))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events, filter, app, state);
+        let _ = (
+            channels,
+            max_events,
+            filter,
+            app,
+            state,
+            remote_machine,
+            request_id,
+        );
         Err("Live event log queries are only available on Windows.".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn evtx_query_channels(
+    channels: Vec<String>,
+    max_events: Option<u64>,
+    filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    request_id: String,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxParseResult, String> {
+    query_channels_impl(channels, max_events, filter, app, state, None, request_id).await
+}
+
+
+#[tauri::command]
+pub async fn evtx_query_remote_channels(
+    machine: String,
+    channels: Vec<String>,
+    max_events: Option<u64>,
+    filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    request_id: String,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxParseResult, String> {
+    #[cfg(target_os = "windows")]
+    let machine = super::live::normalize_remote_machine_name(&machine)?;
+    query_channels_impl(
+        channels,
+        max_events,
+        filter,
+        app,
+        state,
+        Some(machine),
+        request_id,
+    )
+    .await
 }
 
 /// Writes `records` to `destination` in `format`.
@@ -462,5 +538,17 @@ mod tests {
                 "event-log command surface contains placeholder success: {pattern}"
             );
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn remote_enumeration_is_explicitly_unsupported_outside_windows() {
+        let result = tauri::async_runtime::block_on(super::evtx_enumerate_remote_channels(
+            "lab-host".to_string(),
+        ));
+        assert_eq!(
+            result.expect_err("remote enumeration must be unsupported"),
+            "Remote event log queries are only available on Windows."
+        );
     }
 }

@@ -358,7 +358,11 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_enumerate_channels,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_enumerate_remote_channels,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_query_remote_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_export_records,
             #[cfg(feature = "event-log")]

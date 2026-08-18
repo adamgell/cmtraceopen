@@ -130,10 +130,11 @@ pub struct EvtxChannelInfo {
     pub source_type: ChannelSourceType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChannelSourceType {
     Live,
+    Remote { machine: String },
     File { path: String },
 }
 
