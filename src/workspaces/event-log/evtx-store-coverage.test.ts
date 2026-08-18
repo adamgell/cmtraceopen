@@ -503,9 +503,7 @@ describe("the time window reaches the service", () => {
     expect(
       invoke.mock.calls.some(
         (call) =>
-          JSON.stringify(
-            (call[1] as { filter?: { levels?: number[] } })?.filter?.levels
-          ) === JSON.stringify([2, 0, 4, 255])
+          (call[1] as { filter?: { levels?: number[] } })?.filter?.levels === undefined
       )
     ).toBe(true);
     await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));

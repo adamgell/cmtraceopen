@@ -462,6 +462,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     }
 
     set({ isLoading: false, loadError });
+    if (refreshRequested) refreshBeforeLoad();
   },
   loadSelectedChannels: async () => {
     const state = get();
