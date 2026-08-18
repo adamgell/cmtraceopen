@@ -116,8 +116,9 @@ pub enum TimelineOrigin {
         activity_id: Option<String>,
         /// Event ID, which identifies the event only in combination with the provider.
         event_id: u32,
-        /// Record identifier within its channel.
         record_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        record_id_text: Option<String>,
     },
 }
 
@@ -319,6 +320,7 @@ mod tests {
                 activity_id: None,
                 event_id: 76,
                 record_id: 1,
+                record_id_text: Some("1".to_string()),
             },
         }
     }
@@ -488,6 +490,7 @@ mod tests {
             activity_id: Some("{activity}".into()),
             event_id: 326,
             record_id: 42,
+            record_id_text: Some("42".into()),
         };
         let json = serde_json::to_value(&origin).expect("serializes");
 

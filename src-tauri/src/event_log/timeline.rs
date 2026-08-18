@@ -99,6 +99,7 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         activity_id: extract_activity_id(&record.raw_xml),
         event_id: record.event_id,
         record_id: record.event_record_id,
+        record_id_text: record_id(record).map(|value| value.to_string()),
     }
 }
 

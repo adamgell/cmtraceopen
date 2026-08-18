@@ -62,10 +62,12 @@ export type TimelineOrigin =
       processId: number | null;
       activityId: string | null;
       eventId: number;
+      /** Lossless decimal EventRecordID, when supplied by the backend. */
+      recordIdText?: string | null;
       /** EventRecordID, scoped to the event channel. */
       recordId: number;
-    };
 
+    };
 export interface TimelineItem {
   timestampMs: number;
   severity: TimelineSeverity;
@@ -244,12 +246,13 @@ export function originDetail(origin: TimelineOrigin): string {
     .filter((part): part is string => part !== null)
     .join(" / ");
   const record =
-    origin.recordId === 0
-      ? "record missing"
+    origin.recordIdText ??
+    (origin.recordId === 0
+      ? "missing"
       : Number.isSafeInteger(origin.recordId)
-        ? `record ${origin.recordId}`
-        : "record unavailable (see stable identity)";
-  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / ${record} / ${provenance}`;
+        ? String(origin.recordId)
+        : "unavailable (see stable identity)");
+  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${record} / ${provenance}`;
 }
 
 /** True when the item came from a Windows event rather than a text log. */
