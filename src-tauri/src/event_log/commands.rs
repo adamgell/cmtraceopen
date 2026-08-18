@@ -1,10 +1,3 @@
-use super::models::{EvtxChannelInfo, EvtxParseResult};
-use super::parser::{self, EventLogSourceManifest};
-use crate::state::app_state::AppState;
-#[cfg(target_os = "windows")]
-use serde::Serialize;
-#[cfg(target_os = "windows")]
-use tauri::Emitter;
 use super::models::{
     EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxParseResult,
     EvtxTailStatus,
