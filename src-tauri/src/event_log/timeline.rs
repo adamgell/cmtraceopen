@@ -29,9 +29,16 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
         EvtxLevel::Information => TimelineSeverity::Info,
     }
 }
+fn stable_event_id(record: &EvtxRecord) -> String {
+    format!(
+        "{}/{}#{}",
+        record.source_label, record.channel, record.event_record_id
+    )
+}
+
 fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
     TimelineOrigin::Event {
-        stable_id: record.id,
+        stable_id: stable_event_id(record),
         source: record.source_label.clone(),
         machine: machine_of(&record.computer),
         bundle: bundle_from_source(&record.source_label),
@@ -64,6 +71,9 @@ fn bundle_from_source(source: &str) -> Option<String> {
 /// substring would accept unrelated provider data (or `RelatedActivityID`) as a causal identity.
 fn extract_activity_id(xml: &str) -> Option<String> {
     let root = parse_event_xml(xml).ok()?;
+    if root.name != "Event" {
+        return None;
+    }
     let system = root.children.iter().find(|child| child.name == "System")?;
     let correlation = system
         .children
@@ -321,7 +331,7 @@ mod tests {
                     machine,
                     record_id,
                     ..
-                } => (*stable_id, source.clone(), machine.clone(), *record_id),
+                } => (stable_id.to_string(), source.clone(), machine.clone(), *record_id),
                 other => panic!("expected event origin, got {other:?}"),
             })
             .collect();
@@ -330,17 +340,50 @@ mod tests {
             origins,
             vec![
                 (
-                    101,
-                    "C:\\evidence\\folder-a\\capture.evtx".to_string(),
+                    r"C:\evidence\folder-a\capture.evtx/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234".to_string(),
+                    r"C:\evidence\folder-a\capture.evtx".to_string(),
                     Some("HOST-A".to_string()),
                     1234,
                 ),
                 (
-                    202,
-                    "D:\\evidence\\folder-b\\capture.evtx".to_string(),
+                    r"D:\evidence\folder-b\capture.evtx/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234".to_string(),
+                    r"D:\evidence\folder-b\capture.evtx".to_string(),
                     Some("HOST-B".to_string()),
                     1234,
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn appending_an_earlier_event_keeps_existing_source_record_identity() {
+        let mut existing = record(2_000, "existing", EvtxLevel::Information);
+        existing.id = 0;
+        existing.source_label = "Live".to_string();
+        existing.channel = "Security".to_string();
+
+        let mut earlier = record(1_000, "earlier", EvtxLevel::Information);
+        earlier.id = 99;
+        earlier.event_record_id = 5678;
+        earlier.source_label = "Live".to_string();
+        earlier.channel = "Security".to_string();
+
+        let mut timeline = build(&[], &[existing]);
+        append(&mut timeline, &[], &[earlier]);
+        let ids: Vec<_> = timeline
+            .items
+            .iter()
+            .map(|item| match &item.origin {
+                TimelineOrigin::Event { stable_id, .. } => stable_id.clone(),
+                other => panic!("expected event origin, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec![
+                "Live/Security#5678".to_string(),
+                "Live/Security#1234".to_string(),
             ]
         );
     }
@@ -362,6 +405,19 @@ mod tests {
     fn activity_id_requires_the_system_correlation_element() {
         let mut source = record(1, "x", EvtxLevel::Information);
         source.raw_xml = r#"<Event><System><Provider ActivityID="{wrong}"/></System><Correlation ActivityID="{outside}"/></Event>"#.to_string();
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn activity_id_ignores_correlation_under_non_event_root() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.raw_xml =
+            r#"<Envelope><System><Correlation ActivityID="{wrong-root}"/></System></Envelope>"#
+                .to_string();
         let item = from_event(&source).expect("placed");
         match item.origin {
             TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),

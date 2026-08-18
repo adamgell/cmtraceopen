@@ -23,7 +23,7 @@ const logOrigin: TimelineOrigin = {
 };
 
 const eventOrigin: TimelineOrigin = {
-  stableId: 7,
+  stableId: "Live/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234",
   kind: "event",
   source: "Live",
   machine: "HOST-A",
@@ -88,7 +88,9 @@ describe("originDetail", () => {
     expect(detail).toContain("machine HOST-A");
     expect(detail).toContain("process 4321");
     expect(detail).toContain("activity {activity}");
-    expect(detail).toContain("stable 7");
+    expect(detail).toContain(
+      "stable Live/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1234"
+    );
   });
 });
 

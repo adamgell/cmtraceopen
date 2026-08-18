@@ -96,12 +96,11 @@ pub enum TimelineOrigin {
     },
     /// A Windows event.
     Event {
-        /// Stable identity assigned by the source collection for this record.
+        /// Stable identity composed from source identity, channel, and EventRecordID.
         ///
-        /// Unlike `record_id`, which is scoped to an event channel, this identity remains distinct
-        /// when two sources reuse an EventRecordID (including same-basename files).
-        stable_id: u64,
-        /// Stable source label, usually a file path or live channel source.
+        /// `EvtxRecord.id` is a mutable UI index and must not be used here: live appends can
+        /// reorder records and renumber it.
+        stable_id: String,
         source: String,
         /// Machine that emitted the event, when the source records one.
         machine: Option<String>,
@@ -287,7 +286,8 @@ mod tests {
             severity,
             message: message.to_string(),
             origin: TimelineOrigin::Event {
-                stable_id: 1,
+                stable_id: "Live/Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin#1"
+                    .to_string(),
                 source: "Live".to_string(),
                 machine: Some("TESTHOST".to_string()),
                 bundle: None,
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn an_event_origin_preserves_all_cross_source_provenance() {
         let origin = TimelineOrigin::Event {
-            stable_id: 314,
+            stable_id: "capture.evtx/Application#42".into(),
             source: "capture.evtx".into(),
             machine: Some("HOST-A".into()),
             bundle: Some("bundle-123".into()),
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(json["processId"], 4321);
         assert_eq!(json["activityId"], "{activity}");
         assert_eq!(json["eventId"], 326);
-        assert_eq!(json["stableId"], 314);
+        assert_eq!(json["stableId"], "capture.evtx/Application#42");
         assert_eq!(json["recordId"], 42);
     }
 

@@ -18,6 +18,14 @@ use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
 
+/// Keeps the normalized manifest member path as the record's source identity.
+///
+/// A basename is only a display label: two folder members commonly share one and would otherwise
+/// collide in a merged timeline.
+fn source_label_for_path(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 /// Parse one or more .evtx files and return a unified result.
 ///
 /// The map registry and provider store are passed in rather than reached for. They belong to the
@@ -40,10 +48,7 @@ pub fn parse_evtx_files(
                 let records = file.records;
                 parse_errors += file.parse_errors;
                 error_messages.extend(file.messages);
-                let source_label = path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path_str.clone());
+                let source_label = source_label_for_path(path);
 
                 // Build one EvtxChannelInfo per distinct channel string found in the records,
                 // so that ChannelPicker can match against r.channel values.
@@ -54,8 +59,8 @@ pub fn parse_evtx_files(
                 }
 
                 if channel_counts.is_empty() {
-                    // No records — still emit an entry keyed by the file basename so the
-                    // file appears in the picker.
+                    // No records — still emit an entry keyed by the full source path so the file
+                    // appears in the picker without colliding with a same-named member.
                     channels.push(EvtxChannelInfo {
                         name: source_label.clone(),
                         event_count: 0,
@@ -132,10 +137,7 @@ fn parse_single_file(
     let mut parser = EvtxParser::from_path(path)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path.display(), e))?;
 
-    let source_label = path
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let source_label = source_label_for_path(path);
 
     let mut records = Vec::new();
     let mut parse_errors = 0u32;
@@ -345,6 +347,14 @@ mod tests {
         extract_event_data(&parse(xml)).insertions
     }
 
+    #[test]
+    fn source_label_keeps_full_manifest_member_path_for_timeline_identity() {
+        let path = Path::new("bundle\\server-a\\capture.evtx");
+        assert_eq!(
+            source_label_for_path(path),
+            "bundle\\server-a\\capture.evtx"
+        );
+    }
     #[test]
     fn a_file_that_cannot_be_opened_is_named_in_the_result() {
         // A count with no file name and no reason leaves an operator with a number and no next

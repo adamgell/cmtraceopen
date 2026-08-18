@@ -26,8 +26,8 @@ export type TimelineOrigin =
     }
   | {
       kind: "event";
-      /** Stable source-collection identity; distinct even for reused channel record IDs. */
-      stableId: number;
+      /** Stable source/channel identity plus EventRecordID; unaffected by live UI reindexing. */
+      stableId: string;
       source: string;
       machine: string | null;
       bundle: string | null;

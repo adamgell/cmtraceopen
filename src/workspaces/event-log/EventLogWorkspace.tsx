@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
 import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
 import { SourcePicker } from "./SourcePicker";
@@ -8,6 +8,7 @@ import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
+import { selectVisibleRecords } from "./evtx-filter";
 import type { UnifiedTimeline } from "./unified-timeline";
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
@@ -17,6 +18,21 @@ export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const records = useEvtxStore((s) => s.records);
+  const selectedChannels = useEvtxStore((s) => s.selectedChannels);
+  const filterLevels = useEvtxStore((s) => s.filterLevels);
+  const filterEventIds = useEvtxStore((s) => s.filterEventIds);
+  const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const visibleRecords = useMemo(
+    () =>
+      selectVisibleRecords({
+        records,
+        selectedChannels,
+        filterLevels,
+        filterEventIds,
+        filterSearch,
+      }),
+    [records, selectedChannels, filterLevels, filterEventIds, filterSearch]
+  );
   const channels = useEvtxStore((s) => s.channels);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
 
@@ -58,7 +74,7 @@ export function EventLogWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    if (records.length === 0) {
+    if (visibleRecords.length === 0) {
       setTimeline({ items: [], unplaced: [] });
       setTimelineError(null);
       return () => {
@@ -66,7 +82,7 @@ export function EventLogWorkspace() {
       };
     }
 
-    void buildUnifiedTimeline(records)
+    void buildUnifiedTimeline(visibleRecords)
       .then((nextTimeline) => {
         if (cancelled) return;
         setTimeline(nextTimeline);
@@ -82,7 +98,7 @@ export function EventLogWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [records]);
+  }, [visibleRecords]);
 
   const hasData = sourceMode !== null && (records.length > 0 || channels.length > 0);
 
