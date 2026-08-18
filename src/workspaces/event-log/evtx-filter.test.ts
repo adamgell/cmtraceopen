@@ -142,8 +142,11 @@ describe("quick filter semantics", () => {
     expect(visible(quick({ query: "Other", action: "hide" }))).toHaveLength(1);
   });
 
-  it("does not broaden an invalid Event ID quick filter", () => {
+  it("does not broaden invalid Event ID quick filters under show or hide", () => {
     expect(visible(quick({ mode: "eventIds", query: "not-an-id" }))).toHaveLength(0);
+    expect(
+      visible(quick({ mode: "eventIds", query: "99999999999", action: "hide" }))
+    ).toHaveLength(0);
   });
 
   it("does not constrain an empty quick filter", () => {

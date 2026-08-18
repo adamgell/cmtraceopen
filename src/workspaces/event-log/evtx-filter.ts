@@ -331,9 +331,17 @@ export function recordMatchesVisibleFilter(
   ) {
     return false;
   }
-
   const quickFilter = input.quickFilter;
   if (!quickFilter || !quickFilter.query.trim()) return true;
+
+  if (
+    quickFilter.mode === "eventIds" &&
+    (!input.quickEventIdSelectors ||
+      input.quickEventIdSelectors.invalid ||
+      input.quickEventIdSelectors.selectors.length === 0)
+  ) {
+    return false;
+  }
   const matched = matchesQuickFilter(
     record,
     quickFilter,
