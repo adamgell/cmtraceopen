@@ -14,13 +14,13 @@
 //!   "Opcodes" BLOB, "Parameters" BLOB, "Tasks" BLOB,
 //!   PRIMARY KEY ("ProviderName","VersionKey"))
 //!
-//! Captured level maps are stored separately in the keyed `ProviderLevels` table;
-//! canonical EventLogExpert databases may omit that table.
+//! Captured level maps are carried in the canonical `Maps` JSON BLOB under a `levels` member;
+//! databases produced by EventLogExpert without that member read as having no named levels.
 //!
 //! Every BLOB is gzip-compressed JSON. A real database holds about 1,180 providers in 16 MB, so
 //! rows are read on demand and cached rather than loaded eagerly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -181,7 +181,7 @@ impl ProviderDb {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, SourceOsBuild \
+                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, Maps, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
                  ORDER BY SourceOsBuild DESC, VersionKey ASC LIMIT 1",
             )
@@ -195,40 +195,17 @@ impl ProviderDb {
                 row.get::<_, Vec<u8>>(3)?,
                 row.get::<_, Vec<u8>>(4)?,
                 row.get::<_, Vec<u8>>(5)?,
-                row.get::<_, Option<u32>>(6)?,
+                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, Option<u32>>(7)?,
             ))
         });
 
-        let (version_key, events, messages, tasks, keywords, opcodes, build) = match row {
+        let (version_key, events, messages, tasks, keywords, opcodes, maps, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
         };
-        let levels_table_exists: bool = self
-            .connection
-            .query_row(
-                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ProviderLevels')",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("cannot inspect provider levels schema: {error}"))?;
-        let levels = if !levels_table_exists {
-            Default::default()
-        } else {
-            let blob = self
-                .connection
-                .query_row(
-                    "SELECT Levels FROM ProviderLevels WHERE ProviderName = ?1 AND VersionKey = ?2",
-                    rusqlite::params![name, &version_key],
-                    |row| row.get::<_, Vec<u8>>(0),
-                )
-                .or_else(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(Vec::new()),
-                    error => Err(error),
-                })
-                .map_err(|error| format!("cannot read provider levels {name}: {error}"))?;
-            inflate_json(&blob)?
-        };
+        let levels = levels_from_maps(&maps)?;
 
         Ok(Some(ProviderMetadata {
             provider_name: name.to_string(),
@@ -250,15 +227,10 @@ const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDet
     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
     "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
     "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
-    "ResolvedFromOwningPublisher" INTEGER,
+    "ResolvedFromOwningPublisher" TEXT,
     "SourceOsRevision" INTEGER, "SourceOsEdition" TEXT,
     "SourceOsDisplayVersion" TEXT, "MessageFileVersion" TEXT,
-    PRIMARY KEY ("ProviderName","VersionKey"));
-CREATE TABLE IF NOT EXISTS "ProviderLevels" (
-    "ProviderName" TEXT COLLATE NOCASE NOT NULL,
-    "VersionKey" TEXT NOT NULL,
-    "Levels" BLOB NOT NULL,
-    PRIMARY KEY ("ProviderName","VersionKey")); "#;
+    PRIMARY KEY ("ProviderName","VersionKey"));"#;
 
 /// Serializes `value` to JSON and gzip-compresses it, the way EventLogExpert stores each section.
 fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
@@ -271,6 +243,15 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     encoder
         .finish()
         .map_err(|error| format!("cannot finish compressing provider metadata: {error}"))
+}
+fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    let maps: serde_json::Value = inflate_json(blob)?;
+    maps.get("levels")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| format!("provider levels are not a map: {error}"))?
+        .map_or_else(|| Ok(BTreeMap::new()), Ok)
 }
 
 
@@ -287,8 +268,9 @@ pub struct CapturedProviderMetadata {
 ///
 /// This is the write side of the capture pipeline (issue #539): the Windows capture walk builds
 /// [`CapturedProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the
-/// result back. The round-trip through those two is how a curated database ships. `Maps` and
-/// `Parameters` are written empty because neither the reader nor the capture model consumes them.
+/// result back. The round-trip through those two is how a curated database ships. `Parameters`
+/// remains empty because neither the reader nor the capture model consumes it; named levels are
+/// carried in the canonical `Maps` JSON object.
 pub fn write_provider_database(
     path: &Path,
     providers: &[CapturedProviderMetadata],
@@ -321,18 +303,13 @@ pub fn write_provider_database(
     transaction
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
-    transaction
-        .execute("DELETE FROM ProviderLevels", [])
-        .map_err(|error| format!("cannot clear provider levels: {error}"))?;
 
-    let empty_object = serde_json::json!({});
     let empty_array = serde_json::json!([]);
     for captured in providers {
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
-        let levels = gzip_json(&metadata.levels)?;
-        let maps = gzip_json(&empty_object)?;
+        let maps = gzip_json(&serde_json::json!({ "levels": metadata.levels }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let parameters = gzip_json(&empty_array)?;
@@ -362,17 +339,6 @@ pub fn write_provider_database(
                     "cannot insert provider {} version {}: {error}",
                     metadata.provider_name,
                     captured.version_key
-                )
-            })?;
-        transaction
-            .execute(
-                "INSERT INTO ProviderLevels (ProviderName, VersionKey, Levels) VALUES (?1, ?2, ?3)",
-                rusqlite::params![metadata.provider_name, &captured.version_key, levels],
-            )
-            .map_err(|error| {
-                format!(
-                    "cannot insert provider levels {} version {}: {error}",
-                    metadata.provider_name, captured.version_key
                 )
             })?;
     }

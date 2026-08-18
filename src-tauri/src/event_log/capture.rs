@@ -5,6 +5,11 @@
 //! portable.
 
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
+
+// The provider destination is replaced as one logical snapshot. Serializing captures prevents
+// concurrent command invocations from interleaving DELETE/INSERT transactions into one file.
+static CAPTURE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 use super::models::ProviderCaptureFailure;
 
@@ -72,6 +77,33 @@ pub fn capture_providers_to_db(_db_path: &Path) -> Result<(), CaptureError> {
     Err(CaptureError::unsupported())
 }
 
+fn expand_windows_environment(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut remainder = value;
+    while let Some(start) = remainder.find('%') {
+        output.push_str(&remainder[..start]);
+        let after_start = &remainder[start + 1..];
+        let Some(end) = after_start.find('%') else {
+            output.push_str(remainder);
+            return output;
+        };
+        let name = &after_start[..end];
+        output.push_str(&std::env::var(name).unwrap_or_else(|_| format!("%{name}%")));
+        remainder = &after_start[end + 1..];
+    }
+    output.push_str(remainder);
+    output
+}
+
+fn provider_file_paths(value: &str) -> Vec<String> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(expand_windows_environment)
+        .collect()
+}
+
 #[cfg(target_os = "windows")]
 mod windows_capture {
     use super::*;
@@ -85,6 +117,7 @@ mod windows_capture {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     const MAX_PUBLISHERS: usize = 100_000;
     const MAX_EVENTS_PER_PROVIDER: usize = 100_000;
+    const MAX_IDENTITY_FILE_BYTES: u64 = 64 * 1024 * 1024;
     const MAX_BUFFER_BYTES: usize = 16 * 1024 * 1024;
     const MAX_OBJECT_ARRAY_ITEMS: usize = 100_000;
     const BUFFER_RETRY: usize = 256;
@@ -129,6 +162,9 @@ mod windows_capture {
             _ => Err("metadata value has an invalid type".to_string()),
         }
     }
+    fn optional_nonzero_number(value: OwnedVariant) -> Result<Option<u64>, String> {
+        Ok(optional_number(value)?.filter(|value| *value != 0))
+    }
     fn optional_message_id(value: OwnedVariant) -> Result<Option<u32>, String> {
         Ok(optional_number(value)?.and_then(|value| {
             let value = value as u32;
@@ -145,10 +181,23 @@ mod windows_capture {
             _ => Err("metadata string has an invalid type".to_string()),
         }
     }
+    fn optional_template(value: OwnedVariant) -> Result<Option<String>, String> {
+        Ok(optional_string(value)?.filter(|value| !value.is_empty()))
+    }
     fn decode_event_opcode(raw_value: u64) -> (u32, Option<u32>) {
         let opcode = ((raw_value >> 16) & 0xFFFF) as u32;
         let task = (raw_value & 0xFFFF) as u32;
         (opcode, (task != 0).then_some(task))
+    }
+    fn keyword_bits(mask: u64) -> Vec<u64> {
+        let mut bits = Vec::new();
+        let mut remaining = mask;
+        while remaining != 0 {
+            let bit = remaining & remaining.wrapping_neg();
+            bits.push(bit);
+            remaining &= !bit;
+        }
+        bits
     }
     fn base32(bytes: &[u8]) -> String {
         const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
@@ -187,6 +236,13 @@ mod windows_capture {
     }
     fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
         channels.get(&(channel_id as u32)).cloned()
+    }
+    fn canonical_version_key_owned(identity: &[(String, String, Vec<u8>)]) -> String {
+        let parts: Vec<(&str, &str, &[u8])> = identity
+            .iter()
+            .map(|(label, path, content)| (label.as_str(), path.as_str(), content.as_slice()))
+            .collect();
+        canonical_version_key(&parts)
     }
     fn insert_named_metadata(map: &mut BTreeMap<String, String>, key: u64, value: String) {
         map.entry(key.to_string()).or_insert(value);
@@ -530,23 +586,23 @@ mod windows_capture {
                 .ok_or_else(|| "event metadata is missing EventID".to_string())? as u32;
             let version = optional_number(get_event_variant(event_handle.0, EventMetadataEventVersion)?)?
                 .unwrap_or(0) as u32;
-            let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
+            let channel_index = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
                 .unwrap_or(0);
             let log_name = channels.get(&(channel_index as u32)).cloned();
-            let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
+            let level = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
                 .map(|value| value as u32);
-            let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
+            let task_metadata = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
-            let opcode_raw = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
+            let opcode_raw = optional_nonzero_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
             let (opcode, opcode_task) = opcode_raw
                 .map(decode_event_opcode)
                 .map(|(opcode, task)| (Some(opcode), task))
                 .unwrap_or((None, None));
             let task = opcode_task.or(task_metadata);
             let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
-                .into_iter()
-                .collect();
-            let template = optional_string(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
+                .map(keyword_bits)
+                .unwrap_or_default();
+            let template = optional_template(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
             let description = if let Some(message_id) =
                 optional_message_id(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
             {
@@ -594,23 +650,35 @@ mod windows_capture {
         if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
             return Err("publisher metadata has no identity fields for VersionKey".to_string());
         }
-        let read_content = |label: &str, path: &str| -> Result<Vec<u8>, String> {
-            if path.is_empty() {
-                Ok(Vec::new())
-            } else {
-                std::fs::read(path)
-                    .map_err(|error| format!("cannot read {label} identity file {path}: {error}"))
+        let mut identity = vec![("guid".to_string(), guid.clone(), guid.into_bytes())];
+        for (label, raw_paths) in [
+            ("resource", resource.as_str()),
+            ("parameter", parameter.as_str()),
+            ("message", message.as_str()),
+        ] {
+            for path in provider_file_paths(raw_paths) {
+                let canonical = std::fs::canonicalize(&path)
+                    .map_err(|error| format!("cannot canonicalize {label} identity file {path}: {error}"))?;
+                let canonical_path = canonical.to_string_lossy().into_owned();
+                let size = std::fs::metadata(&canonical)
+                    .map_err(|error| format!("cannot inspect {label} identity file {canonical_path}: {error}"))?
+                    .len();
+                if size > MAX_IDENTITY_FILE_BYTES {
+                    return Err(format!(
+                        "{label} identity file {canonical_path} exceeds {MAX_IDENTITY_FILE_BYTES} bytes"
+                    ));
+                }
+                let content = std::fs::read(&canonical)
+                    .map_err(|error| format!("cannot read {label} identity file {canonical_path}: {error}"))?;
+                if content.len() as u64 > MAX_IDENTITY_FILE_BYTES {
+                    return Err(format!(
+                        "{label} identity file {canonical_path} grew beyond {MAX_IDENTITY_FILE_BYTES} bytes"
+                    ));
+                }
+                identity.push((label.to_string(), canonical_path, content));
             }
-        };
-        let resource_content = read_content("resource", &resource)?;
-        let parameter_content = read_content("parameter", &parameter)?;
-        let message_content = read_content("message", &message)?;
-        Ok(canonical_version_key(&[
-            ("guid", &guid, guid.as_bytes()),
-            ("resource", &resource, resource_content.as_slice()),
-            ("parameter", &parameter, parameter_content.as_slice()),
-            ("message", &message, message_content.as_slice()),
-        ]))
+        }
+        Ok(canonical_version_key_owned(&identity))
     }
 
     fn current_os_build() -> Option<u32> {
@@ -624,6 +692,9 @@ mod windows_capture {
     }
 
     pub fn capture_providers_to_db(db_path: &Path) -> Result<(), CaptureError> {
+        let _capture_guard = CAPTURE_WRITE_LOCK
+            .lock()
+            .map_err(|_| CaptureError::traversal("provider capture lock is poisoned"))?;
         let publisher_enum = unsafe { EvtOpenPublisherEnum(None, 0) }
             .map_err(|error| CaptureError::traversal(format!("cannot open publisher enumeration: {error}")))?;
         let publisher_enum = EvtHandle(publisher_enum);
@@ -710,6 +781,13 @@ mod windows_tests {
         assert_eq!(optional_number(OwnedVariant::Null).expect("null is valid"), None);
         assert_eq!(optional_string(OwnedVariant::Null).expect("null is valid"), None);
     }
+    #[test]
+    fn zero_optional_event_metadata_is_absent() {
+        assert_eq!(optional_nonzero_number(OwnedVariant::Number(0)).expect("zero is valid"), None);
+        assert_eq!(optional_nonzero_number(OwnedVariant::Number(7)).expect("number is valid"), Some(7));
+        assert_eq!(optional_template(OwnedVariant::String(String::new())).expect("empty is valid"), None);
+        assert_eq!(optional_template(OwnedVariant::String("xml".to_string())).expect("text is valid"), Some("xml".to_string()));
+    }
 
     #[test]
     fn version_keys_are_canonical_base32_and_include_file_content() {
@@ -746,6 +824,11 @@ mod windows_tests {
         assert_eq!(decode_event_opcode(0x000B_0002), (11, Some(2)));
         assert_eq!(decode_event_opcode(0x000B_0000), (11, None));
     }
+    #[test]
+    fn event_keyword_masks_expand_to_individual_bits() {
+        assert_eq!(keyword_bits(0x8000_0000_0000_0005), vec![1, 4, 0x8000_0000_0000_0000]);
+        assert!(keyword_bits(0).is_empty());
+    }
 
     #[test]
     fn opcode_metadata_uses_high_word_while_task_keeps_low_word() {
@@ -777,6 +860,22 @@ pub use windows_capture::capture_providers_to_db;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_file_paths_split_and_trim_semicolon_lists() {
+        assert_eq!(
+            provider_file_paths(" first.dll ; ;second.dll "),
+            vec!["first.dll".to_string(), "second.dll".to_string()]
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn provider_file_paths_preserve_unresolved_windows_variables() {
+        assert_eq!(provider_file_paths("%CMTRACEOPEN_MISSING_ENV%/messages.dll"), vec![
+            "%CMTRACEOPEN_MISSING_ENV%/messages.dll".to_string()
+        ]);
+    }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
