@@ -5,10 +5,12 @@
 //! portable.
 
 use std::path::Path;
+#[cfg(target_os = "windows")]
 use std::sync::{LazyLock, Mutex};
 
 // The provider destination is replaced as one logical snapshot. Serializing captures prevents
 // concurrent command invocations from interleaving DELETE/INSERT transactions into one file.
+#[cfg(target_os = "windows")]
 static CAPTURE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 use super::models::ProviderCaptureFailure;
@@ -38,6 +40,7 @@ impl CaptureError {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn traversal(message: impl Into<String>) -> Self {
         Self {
             kind: CaptureErrorKind::Traversal,
@@ -46,19 +49,11 @@ impl CaptureError {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn provider_failures(failures: Vec<ProviderCaptureFailure>) -> Self {
-        let message = format!(
-            "{} provider(s) could not be captured: {}",
-            failures.len(),
-            failures
-                .iter()
-                .map(|failure| format!("{} ({})", failure.provider_name, failure.error))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
         Self {
             kind: CaptureErrorKind::ProviderFailures,
-            message,
+            message: "one or more providers could not be captured".to_string(),
             failures,
         }
     }
@@ -77,6 +72,7 @@ pub fn capture_providers_to_db(_db_path: &Path) -> Result<(), CaptureError> {
     Err(CaptureError::unsupported())
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn expand_windows_environment(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut remainder = value;
@@ -95,6 +91,7 @@ fn expand_windows_environment(value: &str) -> String {
     output
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn provider_file_paths(value: &str) -> Vec<String> {
     value
         .split(';')
@@ -103,12 +100,23 @@ fn provider_file_paths(value: &str) -> Vec<String> {
         .map(expand_windows_environment)
         .collect()
 }
+#[cfg(any(target_os = "windows", test))]
 fn category_message_text(
     message_id: Option<u32>,
     formatted: Option<String>,
     inline_name: String,
 ) -> Option<String> {
     message_id.map(|_| formatted).unwrap_or(Some(inline_name))
+}
+#[cfg(any(target_os = "windows", test))]
+fn event_message_text(message_id: Option<u32>, formatted: Option<String>) -> Option<String> {
+    message_id.and(formatted)
+}
+#[cfg(any(target_os = "windows", test))]
+fn trim_provider_text(value: String) -> String {
+    value
+        .trim_end_matches(|character| matches!(character, '\0' | '\r' | '\n' | '\t' | ' '))
+        .to_string()
 }
 
 
@@ -261,13 +269,6 @@ mod windows_capture {
                 (mask & bit != 0).then_some(bit)
             })
             .collect()
-    }
-    fn category_message_text(
-        message_id: Option<u32>,
-        formatted: Option<String>,
-        inline_name: String,
-    ) -> Option<String> {
-        message_id.map(|_| formatted).unwrap_or(Some(inline_name))
     }
     unsafe fn decode_variant(variant: &EVT_VARIANT) -> Option<OwnedVariant> {
         let kind = variant.Type & EVT_VARIANT_TYPE_MASK;
@@ -482,7 +483,7 @@ mod windows_capture {
             .min(buffer.len());
         Ok(Some(
             String::from_utf16_lossy(&buffer[..length])
-                .trim_end_matches(|character| matches!(character, '\0' | '\r' | '\n' | '\t' | ' '))
+                .trim_end_matches('\0')
                 .to_string(),
         ))
     }
@@ -629,9 +630,9 @@ mod windows_capture {
                         log_link: None,
                         text: text.clone(),
                     });
-                    category_message_text(Some(message_id), text, name)
+                    category_message_text(Some(message_id), text.map(trim_provider_text), trim_provider_text(name))
                 } else {
-                    category_message_text(None, None, name)
+                    category_message_text(None, None, trim_provider_text(name))
                 };
                 let Some(message_text) = message_text else {
                     continue;
@@ -667,15 +668,16 @@ mod windows_capture {
                 .unwrap_or(0);
             let log_name = channels.get(&(channel_index as u32)).cloned();
             let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
-                .map(|value| value as u32);
+                .map(|value| value as u32)
+                .unwrap_or(0);
             let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
             let opcode_raw = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
             let (opcode, opcode_task) = opcode_raw
                 .map(decode_event_opcode)
-                .map(|(opcode, task)| (Some(opcode), task))
-                .unwrap_or((None, None));
-            let task = opcode_task.or(task_metadata);
+                .map(|(opcode, task)| (opcode, task))
+                .unwrap_or((0, None));
+            let task = opcode_task.or(task_metadata).unwrap_or(0);
             let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
                 .map(keyword_bits)
                 .unwrap_or_default();
@@ -693,18 +695,18 @@ mod windows_capture {
                     log_link: None,
                     text: text.clone(),
                 });
-                text
+                event_message_text(Some(message_id), text.map(trim_provider_text))
             } else {
-                None
+                event_message_text(None, None)
             };
             metadata.events.push(ProviderEvent {
                 description,
                 id,
                 version,
                 log_name,
-                level,
-                task,
-                opcode,
+                level: Some(level),
+                task: Some(task),
+                opcode: Some(opcode),
                 keywords,
                 template,
             });
@@ -859,15 +861,18 @@ mod windows_capture {
             }
             return Err(CaptureError::provider_failures(failures));
         }
-        crate::event_log::provider_db::write_provider_database(db_path, &captured)
-            .map_err(CaptureError::traversal)?;
         if hit_safety_bound {
             failures.push(ProviderCaptureFailure {
                 provider_name: "<publisher enumeration>".to_string(),
                 error: "publisher enumeration exceeded bound".to_string(),
             });
         }
-        if failures.is_empty() { Ok(()) } else { Err(CaptureError::provider_failures(failures)) }
+        if !failures.is_empty() {
+            return Err(CaptureError::provider_failures(failures));
+        }
+        crate::event_log::provider_db::write_provider_database(db_path, &captured)
+            .map_err(CaptureError::traversal)?;
+        Ok(())
     }
 #[cfg(test)]
 mod windows_tests {
@@ -986,6 +991,11 @@ mod tests {
             "prefix/%MISSING%/suffix/%UNMATCHED"
         );
     }
+    #[test]
+    fn absent_event_message_id_stays_absent_even_for_empty_text() {
+        assert_eq!(event_message_text(None, Some(String::new())), None);
+        assert_eq!(event_message_text(Some(7), Some(String::new())), Some(String::new()));
+    }
 
     #[test]
     fn unresolved_category_message_does_not_fallback_to_inline_name() {
@@ -996,6 +1006,13 @@ mod tests {
         assert_eq!(
             category_message_text(None, None, "InlineName".to_string()),
             Some("InlineName".to_string())
+        );
+    }
+    #[test]
+    fn inline_category_names_trim_provider_controls() {
+        assert_eq!(
+            trim_provider_text("InlineName\r\n\t \0".to_string()),
+            "InlineName"
         );
     }
 

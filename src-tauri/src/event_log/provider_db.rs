@@ -29,7 +29,7 @@ use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// What a database contributed, so an operator can see coverage rather than guess at it.
@@ -201,13 +201,17 @@ impl ProviderDb {
             ))
         });
 
-        let (version_key, events, messages, tasks, keywords, opcodes, maps, parameters, build) = match row {
+        let (version_key, events, messages, tasks, keywords, opcodes, maps, _parameters, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
         };
         let levels = levels_from_maps(&maps)?;
-        let unavailable_categories = unavailable_categories_from_parameters(&parameters)?;
+        let mut unavailable_categories =
+            unavailable_categories_from_state(&self.connection, name, &version_key)?;
+        if unavailable_categories.is_empty() {
+            unavailable_categories = unavailable_categories_from_parameters(&_parameters)?;
+        }
 
         Ok(Some(ProviderMetadata {
             provider_name: name.to_string(),
@@ -233,7 +237,12 @@ const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDet
     "ResolvedFromOwningPublisher" TEXT,
     "SourceOsRevision" INTEGER, "SourceOsEdition" TEXT,
     "SourceOsDisplayVersion" TEXT, "MessageFileVersion" TEXT,
-    PRIMARY KEY ("ProviderName","VersionKey"));"#;
+    PRIMARY KEY ("ProviderName","VersionKey"));
+CREATE TABLE IF NOT EXISTS "ProviderCaptureState" (
+    "ProviderName" TEXT COLLATE NOCASE NOT NULL,
+    "VersionKey" TEXT NOT NULL,
+    "UnavailableCategories" BLOB NOT NULL,
+    PRIMARY KEY ("ProviderName","VersionKey")); "#;
 
 /// Serializes `value` to JSON and gzip-compresses it, the way EventLogExpert stores each section.
 fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
@@ -250,17 +259,27 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
 fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
     let maps: serde_json::Value = inflate_json(blob)?;
     if let Some(levels) = maps.get("levels") {
+        if let Some(values) = levels.get("Entries").or_else(|| levels.get("Values")) {
+            return serde_json::from_value(values.clone())
+                .map_err(|error| format!("provider level values are not a map: {error}"));
+        }
         return serde_json::from_value(levels.clone())
             .map_err(|error| format!("provider levels are not a map: {error}"));
     }
-    let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_array) else {
-        return Ok(BTreeMap::new());
-    };
-    for definition in definitions {
-        if definition.get("Name").and_then(serde_json::Value::as_str) == Some("levels") {
-            if let Some(values) = definition.get("Values") {
-                return serde_json::from_value(values.clone())
-                    .map_err(|error| format!("provider ValueMapDefinition levels are not a map: {error}"));
+    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_object) {
+        if let Some(levels) = definitions.get("levels") {
+            let values = levels.get("Values").unwrap_or(levels);
+            return serde_json::from_value(values.clone())
+                .map_err(|error| format!("provider level values are not a map: {error}"));
+        }
+    }
+    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_array) {
+        for definition in definitions {
+            if definition.get("Name").and_then(serde_json::Value::as_str) == Some("levels") {
+                if let Some(values) = definition.get("Values") {
+                    return serde_json::from_value(values.clone())
+                        .map_err(|error| format!("provider level values are not a map: {error}"));
+                }
             }
         }
     }
@@ -275,6 +294,38 @@ fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String
         .transpose()
         .map_err(|error| format!("provider unavailable categories are not a set: {error}"))?
         .map_or_else(|| Ok(BTreeSet::new()), Ok)
+}
+
+fn unavailable_categories_from_state(
+    connection: &Connection,
+    provider_name: &str,
+    version_key: &str,
+) -> Result<BTreeSet<String>, String> {
+    let has_table = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ProviderCaptureState'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|error| format!("cannot inspect provider capture state: {error}"))?
+        .is_some();
+    if !has_table {
+        return Ok(BTreeSet::new());
+    }
+    let Some(blob) = connection
+        .query_row(
+            "SELECT UnavailableCategories FROM ProviderCaptureState \
+             WHERE ProviderName = ?1 AND VersionKey = ?2",
+            rusqlite::params![provider_name, version_key],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("cannot read provider capture state: {error}"))?
+    else {
+        return Ok(BTreeSet::new());
+    };
+    inflate_json(&blob)
 }
 
 
@@ -324,26 +375,23 @@ pub fn write_provider_database(
     transaction
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
-
+    transaction
+        .execute("DELETE FROM ProviderCaptureState", [])
+        .map_err(|error| format!("cannot clear provider capture state: {error}"))?;
     for captured in providers {
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
         let maps = gzip_json(&serde_json::json!({
-            "ValueMapDefinition": [{
-                "Name": "levels",
-                "Values": metadata.levels.clone()
-            }]
+            "levels": {
+                "Entries": metadata.levels.clone(),
+                "IsBitMap": false
+            }
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
-        let parameters = gzip_json(&serde_json::json!({
-            "unavailableCategories": metadata.unavailable_categories.clone(),
-            "providerName": metadata.provider_name.clone(),
-            "versionKey": captured.version_key.clone(),
-            "sourceOsBuild": metadata.source_os_build
-        }))?;
+        let parameters = gzip_json(&metadata.messages)?;
         transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
@@ -368,6 +416,23 @@ pub fn write_provider_database(
                     "cannot insert provider {} version {}: {error}",
                     metadata.provider_name,
                     captured.version_key
+                )
+            })?;
+        let unavailable_categories = gzip_json(&metadata.unavailable_categories)?;
+        transaction
+            .execute(
+                "INSERT INTO ProviderCaptureState \
+                 (ProviderName, VersionKey, UnavailableCategories) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    &metadata.provider_name,
+                    &captured.version_key,
+                    unavailable_categories
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "cannot insert provider capture state {} version {}: {error}",
+                    metadata.provider_name, captured.version_key
                 )
             })?;
     }
@@ -806,15 +871,16 @@ mod tests {
         let written =
             write_provider_database(&path, &[captured.clone(), older]).expect("write");
         assert_eq!(written, 2);
-
         let database = ProviderDb::open(&path).expect("opens");
         let read = database
             .provider("Round-Trip-Provider")
             .expect("query")
             .expect("present");
         assert_eq!(read, metadata);
-        assert_eq!(read.levels.get("2").map(String::as_str), Some("Information"));
-        assert!(read.unavailable_categories.contains("keywords"));
+        assert_eq!(
+            read.unavailable_categories,
+            ["keywords".to_string()].into_iter().collect()
+        );
         let version_key: String = database
             .connection
             .query_row(
@@ -834,8 +900,11 @@ mod tests {
             )
             .expect("maps blob");
         let maps: serde_json::Value = inflate_json(&maps_blob).expect("maps JSON");
-        assert!(maps.get("ValueMapDefinition").is_some());
-        assert!(maps.get("levels").is_none());
+        assert_eq!(
+            maps["levels"]["IsBitMap"],
+            serde_json::Value::Bool(false)
+        );
+        assert!(maps["levels"]["Entries"].get("2").is_some());
         for column in [
             "ResolvedFromOwningPublisher",
             "SourceOsRevision",
