@@ -64,12 +64,15 @@ function buildServerFilter(
     filter.eventIdMode = "include";
   }
 
-  if (filterLevels.size > 0 && filterLevels.size < ALL_LEVELS.length) {
-    filter.levels = [...filterLevels].flatMap((level) =>
-      level === "Information"
-        ? [0, 4, ...Array.from({ length: 250 }, (_, index) => index + 6)]
-        : [ALL_LEVELS.indexOf(level) + 1]
-    );
+  // Information includes an unbounded provider-specific raw-level domain (6..254). The parser
+  // intentionally caps XPath OR expressions, so leave level selection local whenever Information
+  // is selected rather than issuing an over-budget or incomplete server predicate.
+  if (
+    filterLevels.size > 0 &&
+    filterLevels.size < ALL_LEVELS.length &&
+    !filterLevels.has("Information")
+  ) {
+    filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
   }
   return filter;
 }
@@ -249,6 +252,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       // Live query records arrive through the batch event. This path invokes the backend directly
       // rather than through queryChannels, so it must drain the same stream before merging.
       const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
+        if (get().loadGeneration !== generation) return;
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -314,6 +318,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       });
 
       await Promise.all(promises);
+      if (get().loadGeneration !== generation) return;
 
       set({
         isLoading: false,

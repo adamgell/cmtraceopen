@@ -166,6 +166,18 @@ describe("ordinary Event ID invalid input", () => {
     ).toHaveLength(0);
   });
 });
+it("excludes records outside the selected level set", () => {
+  expect(
+    selectVisibleRecords({
+      records: [record({ level: "Error" })],
+      selectedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Information"]),
+      filterEventIds: "",
+      filterSearch: "",
+    })
+  ).toHaveLength(0);
+});
+
 
 
 describe("event id range bounds", () => {

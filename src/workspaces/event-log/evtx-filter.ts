@@ -306,6 +306,7 @@ export function recordMatchesVisibleFilter(
   ) {
     return false;
   }
+  if (!input.filterLevels.has(record.level)) return false;
   if (input.eventIdSelectors) {
     if (!eventIdMatchesSelectors(record.eventId, input.eventIdSelectors)) return false;
   } else if (input.eventIdSet && !input.eventIdSet.has(record.eventId)) {
