@@ -8,7 +8,11 @@ import type {
   ParseResult,
   WorkspaceId,
 } from "../types/log";
-import type { EventLogSourceManifest, EvtxParseResult } from "../workspaces/event-log/types";
+import type {
+  EventLogSourceManifest,
+  EventLogSourceSelection,
+  EvtxParseResult,
+} from "../workspaces/event-log/types";
 import type {
   EvidenceArtifactPreview,
   EvidenceBundleDetails,
@@ -306,9 +310,9 @@ export async function listLogFolder(
 }
 
 export async function expandEventLogSources(
-  paths: string[],
+  sources: EventLogSourceSelection[],
 ): Promise<EventLogSourceManifest> {
-  return invokeCommand<EventLogSourceManifest>("evtx_expand_sources", { paths });
+  return invokeCommand<EventLogSourceManifest>("evtx_expand_sources", { sources });
 }
 
 export async function parseEventLogManifest(

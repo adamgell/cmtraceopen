@@ -726,9 +726,10 @@ describe("event-log manifest commands", () => {
     };
     invokeMock.mockResolvedValueOnce(manifest).mockResolvedValueOnce(result);
 
-    await expect(expandEventLogSources(["/logs"])).resolves.toEqual(manifest);
+    const sources = [{ path: "/logs", kind: "file" as const }];
+    await expect(expandEventLogSources(sources)).resolves.toEqual(manifest);
     await expect(parseEventLogManifest(manifest)).resolves.toEqual(result);
-    expect(invokeMock).toHaveBeenNthCalledWith(1, "evtx_expand_sources", { paths: ["/logs"] });
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "evtx_expand_sources", { sources });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "evtx_parse_manifest", { manifest });
   });
 });

@@ -36,6 +36,12 @@ pub enum EventLogSourceKind {
     Archive,
     Vss,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLogSourceSelection {
+    pub path: String,
+    pub kind: EventLogSourceKind,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,12 +83,25 @@ fn is_wildcard_source(source: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
-pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifest, String> {
+pub fn build_source_manifest(paths: &[String]) -> Result<EventLogSourceManifest, String> {
+    let selections = paths
+        .iter()
+        .map(|path| EventLogSourceSelection {
+            path: path.clone(),
+            kind: EventLogSourceKind::File,
+        })
+        .collect::<Vec<_>>();
+    build_source_manifest_for_selections(&selections)
+}
+
+pub fn build_source_manifest_for_selections(
+    sources: &[EventLogSourceSelection],
+) -> Result<EventLogSourceManifest, String> {
     let mut manifest = EventLogSourceManifest {
         entries: Vec::new(),
         coverage: Vec::new(),
     };
-    for (index, source) in sources.iter().enumerate() {
+    for (index, selection) in sources.iter().enumerate() {
         if index >= MAX_SOURCE_INPUTS {
             manifest.coverage.push(SourceCoverage::LimitReached {
                 path: "<source inputs>".to_string(),
@@ -90,6 +109,8 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
             });
             break;
         }
+        let source = &selection.path;
+        let requested_kind = selection.kind;
         let is_wildcard = is_wildcard_source(source)
             && !fs::symlink_metadata(source)
                 .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir());
@@ -121,7 +142,7 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
                 if is_wildcard {
                     EventLogSourceKind::Wildcard
                 } else {
-                    EventLogSourceKind::File
+                    requested_kind
                 },
                 0,
                 &mut manifest,

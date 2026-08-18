@@ -58,6 +58,10 @@ export interface EvtxParseResult {
 
 export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";
 
+export interface EventLogSourceSelection {
+  path: string;
+  kind: EventLogSourceKind;
+}
 export interface EventLogSourceManifestEntry {
   sourceId: string;
   path: string;

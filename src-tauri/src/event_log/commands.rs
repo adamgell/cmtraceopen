@@ -36,8 +36,10 @@ struct EvtxRecordBatch {
 
 /// Expands folder, wildcard, archive, and VSS selections before parsing.
 #[tauri::command]
-pub fn evtx_expand_sources(paths: Vec<String>) -> Result<EventLogSourceManifest, String> {
-    parser::build_source_manifest(&paths)
+pub fn evtx_expand_sources(
+    sources: Vec<parser::EventLogSourceSelection>,
+) -> Result<EventLogSourceManifest, String> {
+    parser::build_source_manifest_for_selections(&sources)
 }
 
 #[tauri::command]

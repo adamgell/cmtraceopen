@@ -10,16 +10,7 @@ export type EventLogOpenSource =
 
 /** Expand selected sources once and hand the complete manifest to the store. */
 export async function openEventLogSources(sources: EventLogOpenSource[]): Promise<void> {
-  const manifest = await expandEventLogSources(sources.map((source) => source.path));
-  const explicitKinds = new Map(
-    sources
-      .filter((source) => source.kind === "archive" || source.kind === "vss")
-      .map((source) => [source.path.replaceAll("/", "\\").toLowerCase(), source.kind] as const)
-  );
-  manifest.entries = manifest.entries.map((entry) => ({
-    ...entry,
-    kind: explicitKinds.get(entry.path.replaceAll("/", "\\").toLowerCase()) ?? entry.kind,
-  }));
+  const manifest = await expandEventLogSources(sources);
 
   await useEvtxStore.getState().parseManifest(manifest);
 }
