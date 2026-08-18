@@ -187,6 +187,19 @@ impl ProviderMetadata {
         }
         candidates.max_by_key(|event| event.version)
     }
+    /// Renders the selected event definition without consulting a Windows registry.
+    ///
+    /// Captured provider metadata is portable; callers can use this on macOS, Linux, and wasm
+    /// builds exactly as on Windows.
+    pub fn render_event_description(
+        &self,
+        event_id: u32,
+        version: Option<u32>,
+        insertions: &[String],
+    ) -> Option<RenderedDescription> {
+        let template = self.event(event_id, version)?.description.as_deref()?;
+        Some(render_description(template, insertions))
+    }
 
     /// Resolves a task value to its name.
     pub fn task_name(&self, task: u32) -> Option<&str> {
@@ -395,6 +408,14 @@ mod tests {
             ]),
             ..Default::default()
         }
+    }
+    #[test]
+    fn captured_metadata_renders_the_requested_event_version_without_registry() {
+        let rendered = metadata()
+            .render_event_description(100, Some(0), &insertions(&["portable".into()]))
+            .expect("event description");
+        assert_eq!(rendered.text, "v0 portable");
+        assert!(rendered.is_complete());
     }
 
     #[test]

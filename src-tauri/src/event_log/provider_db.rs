@@ -72,6 +72,7 @@ pub struct ProviderDbLoadOutcome {
 /// The biggest real provider in a 15.8 MB capture inflates to well under a megabyte, so 64 MB
 /// refuses only what could not be a genuine payload.
 const MAX_PROVIDER_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PROVIDER_ROWS: u64 = 100_000;
 
 fn inflate_json<T: serde::de::DeserializeOwned + Default>(blob: &[u8]) -> Result<T, String> {
     if blob.is_empty() {
@@ -120,6 +121,14 @@ impl ProviderDb {
     /// Read-only matters: these databases are evidence supplied by someone else, and opening them
     /// writable would let SQLite journal into the directory they arrived in.
     pub fn open(path: &Path) -> Result<Self, String> {
+        let database_size = std::fs::metadata(path)
+            .map_err(|error| format!("cannot stat provider database {}: {error}", path.display()))?
+            .len();
+        if database_size > MAX_PROVIDER_DATABASE_BYTES {
+            return Err(format!(
+                "provider database exceeds the {MAX_PROVIDER_DATABASE_BYTES}-byte import/export limit"
+            ));
+        }
         let connection = Connection::open_with_flags(
             path,
             // Read-only, and deliberately without SQLITE_OPEN_URI. With that flag any path
@@ -140,6 +149,12 @@ impl ProviderDb {
                     path.display()
                 )
             })?;
+        if provider_count < 0 || provider_count as u64 > MAX_PROVIDER_ROWS {
+            return Err(format!(
+                "{} contains too many provider rows (maximum is {MAX_PROVIDER_ROWS})",
+                path.display()
+            ));
+        }
 
         // Only meaningful when the whole database came from one capture, which is the normal case;
         // a merged database reports nothing rather than an arbitrary one of several builds. One
@@ -159,7 +174,7 @@ impl ProviderDb {
         Ok(Self {
             info: ProviderDbInfo {
                 path: path.display().to_string(),
-                provider_count: provider_count.max(0) as u64,
+                provider_count: provider_count as u64,
                 source_os_build,
             },
             connection,
@@ -171,59 +186,108 @@ impl ProviderDb {
         &self.info
     }
 
-    /// Loads one provider's metadata.
+    /// Reads every `ProviderDetails` row in deterministic order.
     ///
-    /// Provider names are compared case-insensitively, matching the column's `COLLATE NOCASE` and
-    /// how the event log itself treats them. When several rows exist for one provider, because a
-    /// database merged captures from different builds, the highest `SourceOsBuild` wins as the
-    /// closest match to a modern machine.
-    pub fn provider(&self, name: &str) -> Result<Option<ProviderMetadata>, String> {
+    /// This is intentionally separate from [`Self::provider`], whose historical API chooses one
+    /// row for rendering. Distribution and export callers must not silently collapse distinct
+    /// `VersionKey` values.
+    pub fn rows(&self) -> Result<Vec<CapturedProviderMetadata>, String> {
+        self.rows_for(None)
+    }
+
+    /// Reads every captured version for one provider name.
+    pub fn provider_versions(
+        &self,
+        provider_name: &str,
+    ) -> Result<Vec<CapturedProviderMetadata>, String> {
+        self.rows_for(Some(provider_name))
+    }
+
+    fn rows_for(&self, provider_name: Option<&str>) -> Result<Vec<CapturedProviderMetadata>, String> {
         let mut statement = self
             .connection
-            .prepare_cached(
-                "SELECT VersionKey, Events, Messages, Tasks, Keywords, Opcodes, Maps, Parameters, SourceOsBuild \
-                 FROM ProviderDetails WHERE ProviderName = ?1 \
-                 ORDER BY SourceOsBuild DESC, VersionKey ASC LIMIT 1",
+            .prepare(
+                "SELECT ProviderName, VersionKey, Events, Messages, Tasks, Keywords, Opcodes,
+                        Maps, Parameters, SourceOsBuild
+                 FROM ProviderDetails
+                 WHERE (?1 IS NULL OR ProviderName = ?1)
+                 ORDER BY ProviderName COLLATE NOCASE ASC, SourceOsBuild DESC, VersionKey ASC",
             )
             .map_err(|error| format!("cannot prepare provider query: {error}"))?;
 
-        let row = statement.query_row([name], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
-                row.get::<_, Vec<u8>>(4)?,
-                row.get::<_, Vec<u8>>(5)?,
-                row.get::<_, Vec<u8>>(6)?,
-                row.get::<_, Vec<u8>>(7)?,
-                row.get::<_, Option<u32>>(8)?,
-            ))
-        });
+        let rows = statement
+            .query_map([provider_name], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(6)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(7)?.unwrap_or_default(),
+                    row.get::<_, Option<Vec<u8>>>(8)?.unwrap_or_default(),
+                    row.get::<_, Option<u32>>(9)?,
+                ))
+            })
+            .map_err(|error| format!("cannot read provider rows: {error}"))?;
+        let raw_rows = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("cannot read provider row: {error}"))?;
+        drop(statement);
 
-        let (version_key, events, messages, tasks, keywords, opcodes, maps, _parameters, build) = match row {
-            Ok(values) => values,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(error) => return Err(format!("cannot read provider {name}: {error}")),
-        };
-        let levels = levels_from_maps(&maps)?;
-        let mut unavailable_categories =
-            unavailable_categories_from_state(&self.connection, name, &version_key)?;
-        if unavailable_categories.is_empty() {
-            unavailable_categories = unavailable_categories_from_parameters(&_parameters)?;
-        }
-
-        Ok(Some(ProviderMetadata {
-            provider_name: name.to_string(),
-            events: inflate_json(&events)?,
-            messages: inflate_json(&messages)?,
-            levels,
-            tasks: inflate_json(&tasks)?,
-            keywords: inflate_json(&keywords)?,
-            opcodes: inflate_json(&opcodes)?,
-            unavailable_categories,
-            source_os_build: build,
-        }))
+        raw_rows
+            .into_iter()
+            .map(
+                |(
+                    provider_name,
+                    version_key,
+                    events,
+                    messages,
+                    tasks,
+                    keywords,
+                    opcodes,
+                    maps,
+                    parameters,
+                    source_os_build,
+                )| {
+                    let levels = levels_from_maps(&maps)?;
+                    let mut unavailable_categories = unavailable_categories_from_state(
+                        &self.connection,
+                        &provider_name,
+                        &version_key,
+                    )?;
+                    if unavailable_categories.is_empty() {
+                        unavailable_categories = unavailable_categories_from_parameters(&parameters)?;
+                    }
+                    Ok(CapturedProviderMetadata {
+                        version_key,
+                        metadata: ProviderMetadata {
+                            provider_name,
+                            events: inflate_json(&events)?,
+                            messages: inflate_json(&messages)?,
+                            levels,
+                            tasks: inflate_json(&tasks)?,
+                            keywords: inflate_json(&keywords)?,
+                            opcodes: inflate_json(&opcodes)?,
+                            unavailable_categories,
+                            source_os_build,
+                        },
+                    })
+                },
+            )
+            .collect()
+    }
+    /// Loads the best matching metadata row for rendering.
+    ///
+    /// Rows remain available through [`Self::rows`] and [`Self::provider_versions`]; this
+    /// convenience method retains the original highest-build selection used by event rendering.
+    pub fn provider(&self, name: &str) -> Result<Option<ProviderMetadata>, String> {
+        Ok(self
+            .provider_versions(name)?
+            .into_iter()
+            .next()
+            .map(|captured| captured.metadata))
     }
 }
 /// The `ProviderDetails` schema the reader and writer share, observed on a Windows 11 capture and
@@ -248,6 +312,11 @@ CREATE TABLE IF NOT EXISTS "ProviderCaptureState" (
 fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     let json = serde_json::to_vec(value)
         .map_err(|error| format!("cannot serialize provider metadata: {error}"))?;
+    if json.len() as u64 > MAX_PROVIDER_PAYLOAD_BYTES {
+        return Err(format!(
+            "provider metadata section exceeds the {MAX_PROVIDER_PAYLOAD_BYTES}-byte limit"
+        ));
+    }
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     encoder
         .write_all(&json)
@@ -340,18 +409,35 @@ pub struct CapturedProviderMetadata {
 }
 /// Writes captured provider metadata to a new database in EventLogExpert's schema.
 ///
-/// This is the write side of the capture pipeline (issue #539): the Windows capture walk builds
-/// [`CapturedProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the
-/// result back. The round-trip through those two is how a curated database ships. `Parameters`
-/// remains empty because neither the reader nor the capture model consumes it; named levels are
-/// carried in the canonical `Maps` JSON object.
+/// The destination is built beside the requested path and renamed only after the SQLite
+/// transaction commits. A failed capture therefore cannot leave a half-written database in place.
 pub fn write_provider_database(
     path: &Path,
     providers: &[CapturedProviderMetadata],
 ) -> Result<usize, String> {
+    validate_captured_providers(providers)?;
+    let temporary = temporary_path(path, "write")?;
+    let result = (|| {
+        write_provider_database_inner(&temporary, providers)?;
+        replace_file(&temporary, path)?;
+        Ok(providers.len())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn validate_captured_providers(providers: &[CapturedProviderMetadata]) -> Result<(), String> {
     if providers.is_empty() {
         return Err("cannot write provider database without captured providers".to_string());
     }
+    if providers.len() as u64 > MAX_PROVIDER_ROWS {
+        return Err(format!(
+            "cannot write more than {MAX_PROVIDER_ROWS} provider rows"
+        ));
+    }
+    let mut identities = BTreeSet::new();
     for captured in providers {
         if captured.version_key.is_empty() {
             return Err(format!(
@@ -359,7 +445,27 @@ pub fn write_provider_database(
                 captured.metadata.provider_name
             ));
         }
+        if captured.metadata.provider_name.is_empty() {
+            return Err("cannot write a provider row without a provider name".to_string());
+        }
+        let identity = (
+            captured.metadata.provider_name.to_ascii_lowercase(),
+            captured.version_key.clone(),
+        );
+        if !identities.insert(identity) {
+            return Err(format!(
+                "duplicate provider row {} version {}",
+                captured.metadata.provider_name, captured.version_key
+            ));
+        }
     }
+    Ok(())
+}
+
+fn write_provider_database_inner(
+    path: &Path,
+    providers: &[CapturedProviderMetadata],
+) -> Result<(), String> {
     let mut connection = Connection::open(path).map_err(|error| {
         format!(
             "cannot create provider database {}: {error}",
@@ -383,10 +489,13 @@ pub fn write_provider_database(
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
         let maps = gzip_json(&serde_json::json!({
-            "levels": {
-                "Entries": metadata.levels.clone(),
-                "IsBitMap": false
-            }
+            "ValueMapDefinition": [{
+                "Name": "levels",
+                "Values": metadata.levels.clone()
+            }],
+            // Keep the historical key for older EventLogExpert readers while carrying the
+            // canonical ValueMapDefinition shape used by current databases.
+            "levels": metadata.levels
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
@@ -414,8 +523,7 @@ pub fn write_provider_database(
             .map_err(|error| {
                 format!(
                     "cannot insert provider {} version {}: {error}",
-                    metadata.provider_name,
-                    captured.version_key
+                    metadata.provider_name, captured.version_key
                 )
             })?;
         let unavailable_categories = gzip_json(&metadata.unavailable_categories)?;
@@ -438,8 +546,137 @@ pub fn write_provider_database(
     }
     transaction
         .commit()
-        .map_err(|error| format!("cannot commit provider database transaction: {error}"))?;
-    Ok(providers.len())
+        .map_err(|error| format!("cannot commit provider database transaction: {error}"))
+}
+
+/// Copies a validated EventLogExpert provider database to `destination`.
+///
+/// Copying the SQLite file rather than reconstructing rows preserves every canonical and nullable
+/// column, including fields not needed by the renderer. The copy is bounded and published by a
+/// same-directory rename, so import/export never exposes a partial file.
+pub fn export_provider_database(
+    source: &Path,
+    destination: &Path,
+) -> Result<ProviderDbInfo, String> {
+    let source_db = ProviderDb::open(source)?;
+    if same_file(source, destination) {
+        return Ok(source_db.info().clone());
+    }
+    let temporary = temporary_path(destination, "export")?;
+    let result = (|| {
+        let source_file = std::fs::File::open(source)
+            .map_err(|error| format!("cannot read provider database {}: {error}", source.display()))?;
+        let size = source_file
+            .metadata()
+            .map_err(|error| format!("cannot stat provider database {}: {error}", source.display()))?
+            .len();
+        if size > MAX_PROVIDER_DATABASE_BYTES {
+            return Err(format!(
+                "provider database exceeds the {MAX_PROVIDER_DATABASE_BYTES}-byte import/export limit"
+            ));
+        }
+        let mut input = source_file.take(MAX_PROVIDER_DATABASE_BYTES + 1);
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("cannot create provider export {}: {error}", temporary.display()))?;
+        let copied = std::io::copy(&mut input, &mut output)
+            .map_err(|error| format!("cannot copy provider database: {error}"))?;
+        if copied > MAX_PROVIDER_DATABASE_BYTES {
+            return Err(format!(
+                "provider database exceeds the {MAX_PROVIDER_DATABASE_BYTES}-byte import/export limit"
+            ));
+        }
+        output
+            .sync_all()
+            .map_err(|error| format!("cannot flush provider export: {error}"))?;
+        drop(output);
+        replace_file(&temporary, destination)?;
+        let exported = ProviderDb::open(destination)?;
+        if exported.info().provider_count != source_db.info().provider_count {
+            return Err("provider export row count changed during copy".to_string());
+        }
+        Ok(exported.info().clone())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+const MAX_PROVIDER_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
+
+fn temporary_path(path: &Path, operation: &str) -> Result<PathBuf, String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create provider database directory {}: {error}", parent.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("provider database path has no valid file name: {}", path.display()))?;
+    static NEXT_TEMPORARY: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let nonce = NEXT_TEMPORARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(parent.join(format!(
+        ".{file_name}.cmtraceopen-{operation}-{}-{nonce}.tmp",
+        std::process::id()
+    )))
+}
+
+fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::rename(source, destination).map_err(|error| {
+        format!(
+            "cannot publish provider database {} as {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })
+}
+
+fn same_file(source: &Path, destination: &Path) -> bool {
+    if source == destination {
+        return true;
+    }
+    match (std::fs::canonicalize(source), std::fs::canonicalize(destination)) {
+        (Ok(source), Ok(destination)) => source == destination,
+        _ => false,
+    }
+}
+
+/// Relative location used by packaged builds for a curated provider database.
+pub const PACKAGED_PROVIDER_DATABASE_DIRECTORY: &str = "provider-db";
+
+/// Finds the packaged provider directory without inventing coverage when no real capture was
+/// checked in.
+pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, String> {
+    let directory = resource_dir.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+    if !directory.is_dir() {
+        return Err(format!(
+            "no curated provider database is packaged at {}; a real Windows-captured \
+             EventLogExpert ProviderDetails database is required before packaging provider coverage",
+            directory.display()
+        ));
+    }
+    let has_database = std::fs::read_dir(&directory)
+        .map_err(|error| format!("cannot inspect packaged provider directory {}: {error}", directory.display()))?
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+        });
+    if !has_database {
+        return Err(format!(
+            "packaged provider directory {} contains no database; a real Windows-captured \
+             EventLogExpert ProviderDetails database is required before packaging provider coverage",
+            directory.display()
+        ));
+    }
+    Ok(directory)
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -589,6 +826,39 @@ impl ProviderStore {
     pub fn registered(&self) -> Vec<ProviderDbInfo> {
         self.info.clone()
     }
+    /// Registers one imported provider database, replacing the current set.
+    pub fn load_database(&mut self, path: &Path) -> Result<ProviderDbLoadOutcome, String> {
+        let database = ProviderDb::open(path)?;
+        let info = database.info().clone();
+        let mut open = self
+            .open_databases
+            .lock()
+            .map_err(|_| "provider store lock was poisoned".to_string())?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| "provider cache lock was poisoned".to_string())?;
+        *open = vec![database];
+        cache.clear();
+        self.info = vec![info.clone()];
+        Ok(ProviderDbLoadOutcome {
+            loaded: vec![info],
+            failures: Vec::new(),
+        })
+    }
+
+    /// Returns every provider/version row from all registered databases.
+    pub fn rows(&self) -> Result<Vec<CapturedProviderMetadata>, String> {
+        let open = self
+            .open_databases
+            .lock()
+            .map_err(|_| "provider store lock was poisoned".to_string())?;
+        let mut rows = Vec::new();
+        for database in open.iter() {
+            rows.extend(database.rows()?);
+        }
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +890,7 @@ mod tests {
             .expect("schema");
 
         for (index, (name, build, events_json)) in providers.iter().enumerate() {
+
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
@@ -772,6 +1043,27 @@ mod tests {
             "{error}"
         );
     }
+    #[test]
+    fn reads_eventlogexpert_value_map_definition_levels() {
+        let blob = gzip_json(&serde_json::json!({
+            "ValueMapDefinition": [{
+                "Name": "levels",
+                "Values": {
+                    "2": "Information",
+                    "4": "Warning"
+                }
+            }]
+        }))
+        .expect("compress map");
+
+        assert_eq!(
+            levels_from_maps(&blob).expect("read map"),
+            BTreeMap::from([
+                ("2".to_string(), "Information".to_string()),
+                ("4".to_string(), "Warning".to_string())
+            ])
+        );
+    }
 
     #[test]
     fn an_empty_payload_is_an_empty_section_not_a_fault() {
@@ -881,6 +1173,25 @@ mod tests {
             read.unavailable_categories,
             ["keywords".to_string()].into_iter().collect()
         );
+        assert_eq!(read.levels.get("2").map(String::as_str), Some("Information"));
+        assert!(read.unavailable_categories.contains("keywords"));
+        let rows = database.rows().expect("all captured rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.version_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["publisher-version-key", "publisher-version-key-old"]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.metadata.source_os_build)
+                .collect::<Vec<_>>(),
+            vec![Some(26200), Some(26100)]
+        );
+        assert!(rows
+            .iter()
+            .all(|row| row.metadata.unavailable_categories.contains("keywords")));
         let version_key: String = database
             .connection
             .query_row(
@@ -942,6 +1253,94 @@ mod tests {
             .provider("Atomic")
             .expect("provider query")
             .is_some());
+    }
+    #[test]
+    fn reading_rows_preserves_every_provider_version_and_description() {
+        let dir = temp_dir("all-rows");
+        let path = dir.join("capture.db");
+        build_db(
+            &path,
+            &[
+                (
+                    "Multi-Version",
+                    26100,
+                    r#"[{"Id":7,"Version":0,"Description":"old %1"}]"#,
+                ),
+                (
+                    "Multi-Version",
+                    26200,
+                    r#"[{"Id":7,"Version":1,"Description":"new %1"}]"#,
+                ),
+            ],
+        );
+        let database = ProviderDb::open(&path).expect("opens");
+
+        let rows = database.rows().expect("reads all rows");
+        assert_eq!(rows[0].version_key, "vk1:26200:1");
+        assert_eq!(rows[1].version_key, "vk1:26100:0");
+        assert_eq!(
+            rows[0].metadata.events[0].description.as_deref(),
+            Some("new %1")
+        );
+        assert_eq!(
+            rows[1].metadata.events[0].description.as_deref(),
+            Some("old %1")
+        );
+    }
+
+    #[test]
+    fn exporting_a_database_preserves_the_canonical_rows() {
+        let dir = temp_dir("export");
+        let source = dir.join("source.db");
+        let destination = dir.join("destination.db");
+        build_db(
+            &source,
+            &[
+                ("A", 26100, r#"[{"Id":1,"Version":0,"Description":"a"}]"#),
+                ("A", 26200, r#"[{"Id":1,"Version":1,"Description":"b"}]"#),
+            ],
+        );
+        let source_connection = Connection::open(&source).expect("open source");
+        source_connection
+            .execute_batch(
+                r#"ALTER TABLE ProviderDetails ADD COLUMN MessageFileVersion TEXT;
+                   UPDATE ProviderDetails SET MessageFileVersion = '10.0.26200.1';"#,
+            )
+            .expect("canonical nullable column");
+        drop(source_connection);
+
+        let info = export_provider_database(&source, &destination).expect("exports");
+        assert_eq!(info.provider_count, 2);
+        let exported = ProviderDb::open(&destination).expect("opens export");
+        let rows = exported.rows().expect("reads export rows");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.version_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["vk1:26200:1", "vk1:26100:0"]
+        );
+        let message_file_version: String = exported
+            .connection
+            .query_row(
+                "SELECT MessageFileVersion FROM ProviderDetails WHERE ProviderName = 'A' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("canonical nullable value");
+        assert_eq!(message_file_version, "10.0.26200.1");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.metadata.events[0].description.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("b"), Some("a")]
+        );
+    }
+    #[test]
+    fn packaged_discovery_reports_the_real_artifact_prerequisite() {
+        let dir = temp_dir("packaged-missing");
+        let error = packaged_provider_directory(&dir).expect_err("no packaged artifact");
+        assert!(error.contains("real Windows-captured"));
+        assert!(error.contains("ProviderDetails"));
     }
 }
 
