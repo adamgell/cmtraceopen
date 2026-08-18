@@ -101,3 +101,13 @@ pub struct EvtxParseResult {
     pub parse_errors: u32,
     pub error_messages: Vec<String>,
 }
+/// A provider that could not be captured while scanning the Windows publisher registry.
+///
+/// Capture continues to the next publisher, but the aggregate operation remains unsuccessful so
+/// callers cannot mistake a partial database for complete coverage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCaptureFailure {
+    pub provider_name: String,
+    pub error: String,
+}

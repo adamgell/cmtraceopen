@@ -326,9 +326,9 @@ pub async fn evtx_provider_databases(
 pub async fn evtx_capture_provider_databases(
     db_path: String,
     _state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<(), super::capture::CaptureError> {
     let path = std::path::PathBuf::from(db_path);
-    super::capture::capture_providers_to_db(&path).map_err(|error| error.to_string())
+    super::capture::capture_providers_to_db(&path)
 }
 
 /// Merges already-loaded log entries and event records into one chronological timeline.
