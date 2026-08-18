@@ -300,12 +300,26 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
 }
 fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
     let maps: serde_json::Value = inflate_json(blob)?;
-    maps.get("levels")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| format!("provider levels are not a map: {error}"))?
-        .map_or_else(|| Ok(BTreeMap::new()), Ok)
+    if let Some(levels) = maps.get("levels") {
+        return serde_json::from_value(levels.clone())
+            .map_err(|error| format!("provider levels are not a map: {error}"));
+    }
+    let Some(definitions) = maps
+        .get("ValueMapDefinition")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    for definition in definitions {
+        if definition.get("Name").and_then(serde_json::Value::as_str) == Some("levels") {
+            if let Some(values) = definition.get("Values") {
+                return serde_json::from_value(values.clone()).map_err(|error| {
+                    format!("provider ValueMapDefinition levels are not a map: {error}")
+                });
+            }
+        }
+    }
+    Ok(BTreeMap::new())
 }
 fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String>, String> {
     let parameters: serde_json::Value = inflate_json(blob)?;
@@ -407,7 +421,15 @@ fn write_provider_database_inner(
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
-        let maps = gzip_json(&serde_json::json!({ "levels": metadata.levels }))?;
+        let maps = gzip_json(&serde_json::json!({
+            "ValueMapDefinition": [{
+                "Name": "levels",
+                "Values": metadata.levels.clone()
+            }],
+            // Keep the historical key for older EventLogExpert readers while carrying the
+            // canonical ValueMapDefinition shape used by current databases.
+            "levels": metadata.levels
+        }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
@@ -937,6 +959,27 @@ mod tests {
         assert!(
             error.contains("does not look like a provider database"),
             "{error}"
+        );
+    }
+    #[test]
+    fn reads_eventlogexpert_value_map_definition_levels() {
+        let blob = gzip_json(&serde_json::json!({
+            "ValueMapDefinition": [{
+                "Name": "levels",
+                "Values": {
+                    "2": "Information",
+                    "4": "Warning"
+                }
+            }]
+        }))
+        .expect("compress map");
+
+        assert_eq!(
+            levels_from_maps(&blob).expect("read map"),
+            BTreeMap::from([
+                ("2".to_string(), "Information".to_string()),
+                ("4".to_string(), "Warning".to_string())
+            ])
         );
     }
 
