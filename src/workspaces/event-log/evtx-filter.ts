@@ -34,7 +34,7 @@ export function parseEventIdFilter(raw: string): Set<number> | null {
     const single = Number(token);
     if (Number.isInteger(single)) ids.add(single);
   }
-  return ids.size > 0 ? ids : null;
+  return ids;
 }
 
 /**

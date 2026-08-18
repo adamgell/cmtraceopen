@@ -33,8 +33,8 @@ describe("parseEventIdFilter", () => {
     expect(parseEventIdFilter("4624, abc")).toEqual(new Set([4624]));
   });
 
-  it("returns null when nothing in the box parsed", () => {
-    expect(parseEventIdFilter("abc, def")).toBeNull();
+  it("returns an empty set when a nonempty selector has no valid IDs", () => {
+    expect(parseEventIdFilter("abc, def")).toEqual(new Set());
   });
 });
 
@@ -65,8 +65,8 @@ describe("event id range bounds", () => {
     expect(parseEventIdFilter("1-65535,0")?.size).toBe(65536);
   });
 
-  it("yields nothing for a range entirely above the id space", () => {
-    expect(parseEventIdFilter("100000-200000")).toBeNull();
+  it("yields an empty set for a range entirely above the id space", () => {
+    expect(parseEventIdFilter("100000-200000")).toEqual(new Set());
   });
 
   it("still expands an ordinary range", () => {

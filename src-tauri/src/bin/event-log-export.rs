@@ -219,8 +219,11 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
                 }
             }
         } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES {
-            if let Ok(value) = part.parse::<u32>() {
-                event_ids.insert(value);
+            let Ok(value) = part.parse::<f64>() else {
+                continue;
+            };
+            if value.is_finite() && value.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&value) {
+                event_ids.insert(value as u32);
             }
         }
     }
@@ -228,6 +231,7 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
 }
 
 fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
+    let event_id_filter_active = !filter.event_ids.trim().is_empty();
     let event_ids = parse_event_ids(&filter.event_ids)?;
     let search = filter
         .search
@@ -244,7 +248,7 @@ fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<Evt
                 .levels
                 .as_ref()
                 .is_none_or(|levels| levels.contains(&record.level))
-                && (event_ids.is_empty() || event_ids.contains(&record.event_id))
+                && (!event_id_filter_active || event_ids.contains(&record.event_id))
                 && search.as_deref().is_none_or(|search| {
                     record.message.to_lowercase().contains(search)
                         || record.provider.to_lowercase().contains(search)
@@ -564,8 +568,21 @@ mod tests {
             65_535
         );
         assert_eq!(parse_event_ids("326,abc").expect("mixed tokens"), vec![326]);
-        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![326]);
+        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![1, 326]);
         assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
+    }
+
+    #[test]
+    fn invalid_nonempty_event_id_selector_matches_no_records() {
+        let selected = filtered_records(
+            vec![make_record()],
+            &Filter {
+                event_ids: "not-an-id".into(),
+                ..Filter::default()
+            },
+        )
+        .expect("filter succeeds");
+        assert!(selected.is_empty());
     }
 
     #[test]
