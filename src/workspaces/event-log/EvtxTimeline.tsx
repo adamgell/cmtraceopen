@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import {
@@ -70,6 +70,11 @@ export function EvtxTimeline() {
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const metrics = useMemo(
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
@@ -88,6 +93,7 @@ export function EvtxTimeline() {
         visibleColumns: columnConfig.order,
         timeZoneMode,
         timeWindow,
+        nowEpoch,
       }),
     [
       records,
@@ -99,6 +105,7 @@ export function EvtxTimeline() {
       columnConfig.order,
       timeZoneMode,
       timeWindow,
+      nowEpoch,
     ]
   );
 
