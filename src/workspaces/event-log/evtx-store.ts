@@ -207,6 +207,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
   parseFiles: async (paths) => {
     const generation = get().loadGeneration + 1;
+    resetStreamedRecords([...get().loadedChannels], generation);
     set({ loadGeneration: generation, isLoading: true, loadError: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
@@ -222,6 +223,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
   enumerateChannels: async () => {
     const generation = get().loadGeneration + 1;
+    resetStreamedRecords([...get().loadedChannels], generation);
     set({ loadGeneration: generation, isLoading: true, loadError: null });
     try {
       const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
@@ -717,7 +719,10 @@ listen<{ channel: string; requestId?: number; sequence: number; records: EvtxRec
   (event) => {
     const { channel, requestId, sequence, records } = event.payload;
     const activeRequestId = activeRequestIds.get(channel);
-    if (requestId !== undefined && activeRequestId !== undefined && requestId !== activeRequestId) {
+    if (
+      requestId !== undefined &&
+      (activeRequestId === undefined || requestId !== activeRequestId)
+    ) {
       return;
     }
     let pending = pendingBatches.get(channel);
