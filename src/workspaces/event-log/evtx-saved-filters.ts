@@ -178,10 +178,13 @@ export function parseFilterExport(text: string): {
   // The schema is written on export and must be checked on import. A newer file would otherwise be
   // sanitized into whatever this build understands and imported silently, quietly changing the
   // operator's criteria rather than telling them the file is from a later version.
-  if (isRecord(parsed) && parsed.schema !== undefined && parsed.schema !== SAVED_FILTER_SCHEMA) {
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.schema !== "number" ||
+    parsed.schema !== SAVED_FILTER_SCHEMA
+  ) {
     return { filters: [], skipped: 0, unsupportedSchema: true };
   }
-
   const list = isRecord(parsed) && Array.isArray(parsed.filters) ? parsed.filters : [];
   const filters: EvtxSavedFilter[] = [];
   let skipped = 0;

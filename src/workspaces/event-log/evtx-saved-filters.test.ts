@@ -201,4 +201,15 @@ describe("hostile stored values", () => {
     expect(parsed.filters).toHaveLength(1);
     expect(parsed.unsupportedSchema).toBeUndefined();
   });
+ 
+  it("rejects exports with a missing or non-numeric schema", () => {
+    for (const payload of [
+      { filters: [{ id: "a", name: "A" }] },
+      { schema: "2", filters: [{ id: "a", name: "A" }] },
+    ]) {
+      const parsed = parseFilterExport(JSON.stringify(payload));
+      expect(parsed.filters).toHaveLength(0);
+      expect(parsed.unsupportedSchema).toBe(true);
+    }
+  });
 });
