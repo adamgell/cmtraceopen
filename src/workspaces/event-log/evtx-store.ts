@@ -296,6 +296,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : null,
+            requestId: generation,
             filter: buildServerFilter(
               get().timeWindow,
               get().filterEventIds,
@@ -377,6 +378,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         try {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
+            requestId: generation,
             maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : maxEvents ?? null,
             filter: buildServerFilter(
               get().timeWindow,
@@ -517,7 +519,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         resetStreamedRecords([ch], generation);
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
-          maxEvents: null,
+          maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : null,
           requestId: generation,
           // The window is a server-side predicate and a refetch is the only thing that applies it.
           // Omitting it here made the time-window control a no-op: selecting 1h triggered this
@@ -701,7 +703,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 });
 
 // Listen for progress events from the Rust backend
-listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
+listen<{ channel: string; requestId: number; fetched: number }>("evtx-query-progress", (event) => {
+  const state = useEvtxStore.getState();
+  if (event.payload.requestId !== state.loadGeneration) return;
   useEvtxStore.setState({
     loadingChannel: event.payload.channel,
     loadingProgress: event.payload.fetched,

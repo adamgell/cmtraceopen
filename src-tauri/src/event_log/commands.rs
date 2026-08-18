@@ -13,6 +13,7 @@ use crate::state::app_state::AppState;
 #[serde(rename_all = "camelCase")]
 struct EvtxQueryProgress {
     channel: String,
+    request_id: u64,
     fetched: usize,
 }
 
@@ -110,6 +111,7 @@ pub async fn evtx_query_channels(
                                 "evtx-query-progress",
                                 EvtxQueryProgress {
                                     channel: ch_name.clone(),
+                                    request_id: request_id.unwrap_or_default(),
                                     fetched,
                                 },
                             );
