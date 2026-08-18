@@ -214,7 +214,17 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   parseFiles: async (paths) => {
     const generation = get().loadGeneration + 1;
     invalidateAllStreamedRecords(generation);
-    set({ loadGeneration: generation, isLoading: true, loadError: null });
+    refreshRequested = false;
+    set({
+      loadGeneration: generation,
+      sourceMode: null,
+      records: [],
+      channels: [],
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      isLoading: true,
+      loadError: null,
+    });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       if (get().loadGeneration !== generation) return;
