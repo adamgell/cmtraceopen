@@ -182,22 +182,10 @@ export function EvtxTimeline() {
   );
 
   useEffect(() => {
-    rows.forEach((row, index) => {
-      virtualizer.resizeItem(
-        index,
-        row.kind === "group" ? metrics.rowHeight : rowEstimate
-      );
-    });
     for (const element of rowElementsRef.current.values()) {
       if (element.isConnected) measureConnectedRow(element);
     }
-  }, [
-    metrics.rowHeight,
-    rowEstimate,
-    rows,
-    measureConnectedRow,
-    virtualizer.resizeItem,
-  ]);
+  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow]);
 
   const virtualRows = virtualizer.getVirtualItems();
 

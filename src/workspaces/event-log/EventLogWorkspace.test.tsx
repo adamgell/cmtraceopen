@@ -38,9 +38,14 @@ const virtualizerState = vi.hoisted(() => ({
       virtualizerState.resizeItem(index, observedSize);
       return;
     }
-    if (virtualizerState.measuredSizes.has(index)) return;
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
+    }
+    if (!Object.prototype.hasOwnProperty.call(element, "getBoundingClientRect")) {
+      Object.defineProperty(element, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({ height: virtualizerState.measureElementSize(element) }),
+      });
     }
     virtualizerState.resizeItem(
       index,
@@ -397,7 +402,7 @@ describe("event-viewer shared font metrics", () => {
       largeList.rowHeight + largeList.rowHeight + 6
     );
   });
-  it("updates cached sizes for an offscreen record while remeasuring visible rows", () => {
+  it("updates connected rows while estimating offscreen rows after a font change", () => {
     seedEventLog();
     useEvtxStore.setState({
       records: [
@@ -411,15 +416,14 @@ describe("event-viewer shared font metrics", () => {
 
     const timeline = render(<EvtxTimeline />);
     expect(timeline.getAllByRole("option")).toHaveLength(1);
-    const initialMeasureCalls = virtualizerState.measureCalls;
-
+    const initialResizeItemCalls = virtualizerState.resizeItemCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
 
-    expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
+    expect(virtualizerState.resizeItemCalls).toBeGreaterThan(initialResizeItemCalls);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
     expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
-    expect(virtualizerState.resizedSizes.get(2)).toBe(largeList.rowHeight + 6);
+    expect(virtualizerState.resizedSizes.has(2)).toBe(false);
     expect(virtualizerState.items).toHaveLength(2);
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + (largeList.rowHeight + 6) * 2
