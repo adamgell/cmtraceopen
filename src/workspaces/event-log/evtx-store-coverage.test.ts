@@ -659,6 +659,14 @@ describe("remote event sources", () => {
     ]);
   });
 
+  it("rejects control characters before sending a remote machine name", async () => {
+    await useEvtxStore.getState().enumerateRemoteChannels("lab\0host");
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useEvtxStore.getState().remoteMachine).toBeNull();
+    expect(useEvtxStore.getState().loadError).toBe("Enter a valid remote computer name.");
+  });
+
   it("keeps denied remote sources distinct from an empty source", async () => {
     invoke.mockResolvedValueOnce({
       records: [],

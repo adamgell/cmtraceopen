@@ -309,11 +309,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
   enumerateRemoteChannels: async (machine) => {
     const normalized = machine.trim().replace(/^[/\\]+/, "");
-    set({ remoteMachine: normalized || null, loadError: null });
-    if (!normalized) {
-      set({ isLoading: false, loadError: "Enter a remote computer name." });
+    if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized)) {
+      set({
+        remoteMachine: null,
+        isLoading: false,
+        loadError: "Enter a valid remote computer name.",
+      });
       return;
     }
+    set({ remoteMachine: normalized, loadError: null });
     await get().enumerateChannels();
   },
 

@@ -79,12 +79,17 @@ impl Drop for OwnedEvtHandle {
 #[cfg(target_os = "windows")]
 pub fn normalize_remote_machine_name(machine: &str) -> Result<String, String> {
     let normalized = machine.trim().trim_start_matches('\\').to_string();
-    if normalized.is_empty() || normalized.contains('/') || normalized.contains('\\') {
+    if normalized.is_empty()
+        || normalized.contains('/')
+        || normalized.contains('\\')
+        || normalized.contains('\0')
+        || normalized.chars().any(char::is_control)
+    {
         return Err("remote machine name must be a hostname or UNC computer name".to_string());
     }
     Ok(normalized)
-}
 
+}
 #[cfg(target_os = "windows")]
 fn remote_login(server: &mut [u16]) -> EVT_RPC_LOGIN {
     EVT_RPC_LOGIN {
@@ -818,9 +823,9 @@ fn is_message_not_found(error: &Error) -> bool {
 
 #[cfg(target_os = "windows")]
 fn is_publisher_metadata_not_found(error: &Error) -> bool {
-    // ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND and ERROR_FILE_NOT_FOUND mean that
-    // this provider has no message table; other failures must remain visible.
-    matches!(win32_code(error), 15007 | 2 | 1168)
+    // ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND means this provider has no message table.
+    // ERROR_EVT_CHANNEL_NOT_FOUND (15007) and other failures must remain visible.
+    win32_code(error) == 15002
 }
 
 #[cfg(test)]
@@ -856,11 +861,19 @@ mod tests {
         assert!(format_remote_code("EvtOpenPublisherMetadata", 53)
             .contains("remote source unavailable"));
         assert!(!is_publisher_metadata_not_found(&Error::from_win32(5)));
-        assert!(is_publisher_metadata_not_found(&Error::from_win32(15007)));
+        assert!(!is_publisher_metadata_not_found(&Error::from_win32(15007)));
+        assert!(is_publisher_metadata_not_found(&Error::from_win32(15002)));
+    }
+
+    #[test]
+    fn remote_machine_names_reject_control_characters() {
+        assert!(normalize_remote_machine_name("host\0suffix").is_err());
+        assert!(normalize_remote_machine_name("host\nsuffix").is_err());
+        assert_eq!(normalize_remote_machine_name(r"\\host").unwrap(), "host");
+
     }
 
 }
-
 #[cfg(all(test, target_os = "windows"))]
 mod live_service_tests {
     //! Exercises the live path against the machine's own Event Log service.
