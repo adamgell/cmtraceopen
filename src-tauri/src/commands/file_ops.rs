@@ -14,10 +14,14 @@ use crate::models::log_entry::{
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
 use crate::watcher::tail::InitialLogicalRecord;
-
-use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
+use super::bundle_ops::{
+    collect_files_recursive, detect_evidence_bundle_metadata, unsafe_ancestor_reason,
+    unsafe_entry_reason,
+};
 use super::known_sources::KnownSourcePathKind;
 const MAX_FOLDER_LISTING_ENTRIES: usize = 4_096;
+const MAX_FOLDER_LISTING_WORK: usize = 16_384;
+const MAX_FOLDER_LISTING_ERRORS: usize = 4_096;
 // ── Types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,9 +533,26 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
 
     let requested_path = PathBuf::from(&path);
 
-    // `Path::exists` collapses every failure to false, so a folder the user
-    // cannot read would be reported as missing and never offer elevation. Stat
-    // it directly and keep the OS error kind.
+    match unsafe_ancestor_reason(&requested_path) {
+        Ok(Some(reason)) => {
+            return Err(crate::error::AppError::InvalidInput(format!(
+                "{reason}: {}",
+                requested_path.display()
+            )));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(crate::error::AppError::from_source_io(
+                error,
+                crate::error::SourceOperation::ListFolder,
+                Some(&path),
+            ));
+        }
+    }
+
+    // The no-follow ancestor check above must happen before this metadata call:
+    // `metadata` follows a root symlink and would otherwise move the selection
+    // outside the user's requested tree.
     let metadata = match fs::metadata(&requested_path) {
         Ok(value) => value,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -548,21 +569,6 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             ));
         }
     };
-
-
-    let root_metadata = fs::symlink_metadata(&requested_path).map_err(|error| {
-        crate::error::AppError::from_source_io(
-            error,
-            crate::error::SourceOperation::ListFolder,
-            Some(&path),
-        )
-    })?;
-    if root_metadata.file_type().is_symlink() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "symbolic-link folder roots are not followed: {}",
-            requested_path.display()
-        )));
-    }
     if !metadata.is_dir() {
         return Err(crate::error::AppError::InvalidInput(format!(
             "path is not a folder: {}",
@@ -584,44 +590,68 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     let mut listing_truncated = false;
     for entry_result in read_dir {
         listing_work += 1;
-        if listing_work > MAX_FOLDER_LISTING_ENTRIES {
+        if listing_work > MAX_FOLDER_LISTING_WORK {
             listing_truncated = true;
             break;
         }
         match entry_result {
             Ok(entry) => candidates.push(entry),
-            Err(error) => {
-                let source = normalize_path_string(&requested_path);
-                child_errors.push(format!("{source}: child directory entry could not be read: {error}"));
-                log::warn!(
-                    "event=list_log_folder_skip reason=read_dir_entry_error path=\"{}\" error=\"{}\"",
-                    requested_path.display(),
-                    error
-                );
-            }
-        }
-        if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
-            listing_truncated = true;
-            break;
+            Err(error) => push_folder_error(
+                &mut child_errors,
+                &mut listing_truncated,
+                &requested_path,
+                &format!("child directory entry could not be read: {error}"),
+            ),
         }
     }
-    candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-    for entry in candidates.into_iter().take(MAX_FOLDER_LISTING_ENTRIES) {
+    candidates.sort_by(|left, right| {
+        let left_name = left.file_name().to_string_lossy().to_string();
+        let right_name = right.file_name().to_string_lossy().to_string();
+        left_name
+            .to_ascii_lowercase()
+            .cmp(&right_name.to_ascii_lowercase())
+            .then_with(|| left_name.cmp(&right_name))
+            .then_with(|| left.path().cmp(&right.path()))
+    });
+    if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
+        candidates.truncate(MAX_FOLDER_LISTING_ENTRIES);
+        listing_truncated = true;
+    }
+    for entry in candidates {
         let entry_path = entry.path();
-        let metadata = match entry.metadata() {
+        let unsafe_reason = match unsafe_entry_reason(&entry_path) {
             Ok(value) => value,
             Err(error) => {
-                let source = normalize_path_string(&entry_path);
-                child_errors.push(format!("{source}: child metadata could not be read: {error}"));
-                log::warn!(
-                    "event=list_log_folder_skip reason=metadata_error entry_path=\"{}\" error=\"{}\"",
-                    entry_path.display(),
-                    error
+                push_folder_error(
+                    &mut child_errors,
+                    &mut listing_truncated,
+                    &entry_path,
+                    &error.to_string(),
                 );
                 continue;
             }
         };
-
+        if let Some(reason) = unsafe_reason {
+            push_folder_error(
+                &mut child_errors,
+                &mut listing_truncated,
+                &entry_path,
+                reason,
+            );
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(&entry_path) {
+            Ok(value) => value,
+            Err(error) => {
+                push_folder_error(
+                    &mut child_errors,
+                    &mut listing_truncated,
+                    &entry_path,
+                    &format!("child metadata could not be read: {error}"),
+                );
+                continue;
+            }
+        };
         entries.push(FolderEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: normalize_path_string(&entry_path),
@@ -635,13 +665,15 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         });
     }
     if listing_truncated {
+        if child_errors.len() >= MAX_FOLDER_LISTING_ERRORS {
+            child_errors.truncate(MAX_FOLDER_LISTING_ERRORS - 1);
+        }
         child_errors.push(format!(
-            "{}: folder listing reached the {} entry limit",
+            "{}: folder listing reached the {} entry/work limit",
             requested_path.display(),
             MAX_FOLDER_LISTING_ENTRIES
         ));
     }
-
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
         // For evidence bundles, recursively collect all files from the entire
@@ -649,7 +681,6 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         let collected = collect_files_recursive(&requested_path);
         entries = collected.entries;
         child_errors = collected.child_errors;
-        listing_truncated = false;
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
@@ -685,9 +716,18 @@ pub(crate) fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> 
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
+fn push_folder_error(errors: &mut Vec<String>, truncated: &mut bool, path: &Path, reason: &str) {
+    if errors.len() < MAX_FOLDER_LISTING_ERRORS {
+        errors.push(format!("{}: {reason}", path.display()));
+    } else {
+        *truncated = true;
+    }
+}
+
 fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
     match (left.is_dir, right.is_dir) {
         (true, false) => Ordering::Less,
+
         (false, true) => Ordering::Greater,
         _ => {
             let left_lower = left.name.to_lowercase();

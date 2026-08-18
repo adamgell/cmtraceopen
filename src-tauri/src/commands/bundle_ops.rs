@@ -172,15 +172,14 @@ pub struct EvidenceArtifactPreview {
 const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que"];
 /// Maximum directory entries inspected while recursively collecting a bundle.
 const MAX_BUNDLE_INSPECTED: usize = 8_192;
-
 /// Maximum number of files materialized by recursive bundle collection.
 const MAX_BUNDLE_ENTRIES: usize = 4096;
-
-/// Maximum file size (in bytes) to include in batch aggregate parsing.
-/// Files larger than this are still listed in the sidebar but excluded from
-/// the automatic batch load to avoid long stalls (e.g. 180 MB CBS logs).
-/// Users can still open them individually.
-const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+/// Maximum child diagnostics retained from one recursive bundle collection.
+const MAX_BUNDLE_ERRORS: usize = 4096;
+/// Maximum aggregate file bytes retained in one recursive bundle listing.
+const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum size of an individual file included in batch aggregate parsing.
+const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
@@ -208,33 +207,53 @@ pub(crate) struct RecursiveCollection {
     pub child_errors: Vec<String>,
 }
 
-/// Recursively collects all **text-parseable files** under `root`, returning
-/// them as flat `FolderEntry` items (no directory entries). Used when opening
-/// an evidence bundle so every nested artifact is included in the listing.
-///
-/// Files with known binary extensions and files exceeding
-/// `BUNDLE_BATCH_MAX_FILE_SIZE` are excluded from the listing and logged as
-/// skipped. They remain accessible from the sidebar for individual opening.
 pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     let mut out = Vec::new();
     let mut child_errors = Vec::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
     let mut inspected = 0usize;
+    let mut retained_bytes = 0u64;
     let mut truncated = false;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
     let mut visited = HashSet::new();
 
     'walk: while let Some(dir) = stack.pop() {
+        match unsafe_ancestor_reason(&dir) {
+            Ok(Some(reason)) => {
+                push_collection_error(&mut child_errors, &mut truncated, &dir, reason);
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &dir,
+                    &error.to_string(),
+                );
+                continue;
+            }
+        }
         let identity = match fs::canonicalize(&dir) {
             Ok(path) => path,
             Err(error) => {
-                child_errors.push(format!("{}: {error}", dir.display()));
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &dir,
+                    &error.to_string(),
+                );
                 continue;
             }
         };
         if !visited.insert(identity) {
-            child_errors.push(format!("{}: directory already visited", dir.display()));
+            push_collection_error(
+                &mut child_errors,
+                &mut truncated,
+                &dir,
+                "directory already visited",
+            );
             continue;
         }
         let read_dir = match fs::read_dir(&dir) {
@@ -244,94 +263,119 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                     "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{error}\"",
                     dir.display()
                 );
-                child_errors.push(format!("{}: {error}", dir.display()));
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &dir,
+                    &error.to_string(),
+                );
                 continue;
             }
         };
         let mut candidates = Vec::new();
         for entry_result in read_dir {
-            match entry_result {
-                Ok(entry) => candidates.push(entry),
-                Err(error) => {
-                    child_errors.push(format!("{}: {error}", dir.display()));
-                }
-            }
-            if candidates.len() > MAX_BUNDLE_INSPECTED {
+            if inspected >= MAX_BUNDLE_INSPECTED {
                 truncated = true;
                 break;
             }
+            inspected += 1;
+            match entry_result {
+                Ok(entry) => candidates.push(entry),
+                Err(error) => push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &dir,
+                    &error.to_string(),
+                ),
+            }
         }
-        candidates.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+        candidates.sort_by(|left, right| {
+            let left_name = left.file_name().to_string_lossy().to_string();
+            let right_name = right.file_name().to_string_lossy().to_string();
+            left_name
+                .to_ascii_lowercase()
+                .cmp(&right_name.to_ascii_lowercase())
+                .then_with(|| left_name.cmp(&right_name))
+                .then_with(|| left.path().cmp(&right.path()))
+        });
         for entry in candidates {
-            if inspected >= MAX_BUNDLE_INSPECTED || out.len() >= MAX_BUNDLE_ENTRIES {
+            if out.len() >= MAX_BUNDLE_ENTRIES || inspected > MAX_BUNDLE_INSPECTED {
                 truncated = true;
                 break 'walk;
             }
-            inspected += 1;
             let entry_path = entry.path();
-            match unsafe_entry_reason(&entry_path) {
-                Ok(Some(reason)) => {
-                    child_errors.push(format!("{}: {reason}", entry_path.display()));
-                    continue;
-                }
-                Ok(None) => {}
+            let reason = match unsafe_entry_reason(&entry_path) {
+                Ok(reason) => reason,
                 Err(error) => {
-                    child_errors.push(format!("{}: {error}", entry_path.display()));
-                    continue;
-                }
-            }
-            let metadata = match entry.metadata() {
-                Ok(m) => m,
-                Err(e) => {
-                    log::warn!(
-                        "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
-                        entry_path.display()
+                    push_collection_error(
+                        &mut child_errors,
+                        &mut truncated,
+                        &entry_path,
+                        &error.to_string(),
                     );
-                    child_errors.push(format!("{}: {e}", entry_path.display()));
                     continue;
                 }
             };
-
+            if let Some(reason) = reason {
+                push_collection_error(&mut child_errors, &mut truncated, &entry_path, reason);
+                continue;
+            }
+            let metadata = match fs::symlink_metadata(&entry_path) {
+                Ok(value) => value,
+                Err(error) => {
+                    push_collection_error(
+                        &mut child_errors,
+                        &mut truncated,
+                        &entry_path,
+                        &error.to_string(),
+                    );
+                    continue;
+                }
+            };
             if metadata.is_dir() {
                 stack.push(entry_path);
                 continue;
             }
-
-            // Skip known binary extensions
-            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if BINARY_EXTENSIONS
-                    .iter()
-                    .any(|b| b.eq_ignore_ascii_case(ext))
-                {
-                    skipped_binary += 1;
-                    child_errors.push(format!(
-                        "{}: binary bundle member is unsupported for event-log parsing",
-                        entry_path.display()
-                    ));
-                    log::debug!(
-                        "event=collect_files_recursive_skip reason=binary_extension path=\"{}\"",
-                        entry_path.display()
-                    );
-                    continue;
-                }
-            }
-
-            // Skip files exceeding the size cap
-            let size = metadata.len();
-            if size > BUNDLE_BATCH_MAX_FILE_SIZE {
-                skipped_large += 1;
-                child_errors.push(format!(
-                    "{}: file exceeds the {} byte bundle limit",
-                    entry_path.display(),
-                    BUNDLE_BATCH_MAX_FILE_SIZE
-                ));
-                log::debug!(
-                    "event=collect_files_recursive_skip reason=file_too_large path=\"{}\" size={size}",
-                    entry_path.display()
+            if entry_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| {
+                    BINARY_EXTENSIONS
+                        .iter()
+                        .any(|binary| binary.eq_ignore_ascii_case(extension))
+                })
+            {
+                skipped_binary += 1;
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &entry_path,
+                    "binary bundle member is unsupported for event-log parsing",
                 );
                 continue;
             }
-
+            let size = metadata.len();
+            if size > BUNDLE_BATCH_MAX_FILE_SIZE {
+                skipped_large += 1;
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &entry_path,
+                    &format!("file exceeds the {BUNDLE_BATCH_MAX_FILE_SIZE} byte bundle limit"),
+                );
+                continue;
+            }
+            if retained_bytes.saturating_add(size) > MAX_BUNDLE_BYTES {
+                push_collection_error(
+                    &mut child_errors,
+                    &mut truncated,
+                    &entry_path,
+                    &format!("recursive bundle byte limit of {MAX_BUNDLE_BYTES} reached"),
+                );
+                truncated = true;
+                break 'walk;
+            }
+            retained_bytes = retained_bytes.saturating_add(size);
             out.push(FolderEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
                 path: normalize_path_string(&entry_path),
@@ -343,35 +387,91 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     }
 
     if truncated {
+        if child_errors.len() >= MAX_BUNDLE_ERRORS {
+            child_errors.truncate(MAX_BUNDLE_ERRORS - 1);
+        }
         child_errors.push(format!(
             "{}: recursive listing truncated after inspecting {} entries",
             root.display(),
             inspected
         ));
     }
+    out.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.path.cmp(&right.path))
+    });
     log::info!(
         "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
         root.display(),
         out.len()
     );
-
     RecursiveCollection {
         entries: out,
         child_errors,
     }
 }
 
-fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
-    let metadata = fs::symlink_metadata(path)?;
+fn push_collection_error(
+    errors: &mut Vec<String>,
+    truncated: &mut bool,
+    path: &Path,
+    reason: &str,
+) {
+    if errors.len() < MAX_BUNDLE_ERRORS {
+        errors.push(format!("{}: {reason}", path.display()));
+    } else {
+        *truncated = true;
+    }
+}
+
+pub(crate) fn unsafe_ancestor_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata)
+                if unsafe_entry_metadata(&metadata) && !is_platform_temp_alias(ancestor) =>
+            {
+                return Ok(Some("symbolic link or reparse point is not followed"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+fn is_platform_temp_alias(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        path == Path::new("/tmp") || path == Path::new("/var")
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn unsafe_entry_metadata(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
     if metadata.file_type().is_symlink() {
-        return Ok(Some("symbolic link or reparse point is not followed"));
+        return true;
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
-            return Ok(Some("symbolic link or reparse point is not followed"));
-        }
+        return metadata.file_attributes() & 0x400 != 0;
+    }
+    false
+}
+
+pub(crate) fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if unsafe_entry_metadata(&metadata) {
+        return Ok(Some("symbolic link or reparse point is not followed"));
     }
     Ok(None)
 }
@@ -475,6 +575,22 @@ pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBun
 fn inspect_evidence_bundle_details(
     path: &Path,
 ) -> Result<EvidenceBundleDetails, crate::error::AppError> {
+    match unsafe_ancestor_reason(path) {
+        Ok(Some(reason)) => {
+            return Err(crate::error::AppError::InvalidInput(format!(
+                "{reason}: {}",
+                path.display()
+            )));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(crate::error::AppError::from_source_io(
+                error,
+                crate::error::SourceOperation::ListFolder,
+                path.to_str(),
+            ));
+        }
+    }
     if !path.exists() {
         return Err(crate::error::AppError::InvalidInput(format!(
             "bundle path does not exist: {}",
@@ -997,13 +1113,20 @@ fn resolve_bundle_hint_path(bundle_root: &Path, raw_path: Option<&str>) -> Optio
     if raw_path.is_empty() {
         return None;
     }
-
-    let path = PathBuf::from(raw_path);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(bundle_root.join(path))
+    let path = Path::new(raw_path);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return None;
     }
+    resolve_bundle_artifact_path(bundle_root, raw_path)
 }
 
 fn resolve_bundle_artifact_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
