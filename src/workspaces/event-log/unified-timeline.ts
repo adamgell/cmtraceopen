@@ -16,6 +16,7 @@ function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boo
   const normalize = (value: string) =>
     value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
   const normalizedRoot = normalize(root);
+  if (normalizedRoot === "" || normalizedRoot === "/") return true;
   const normalizedEntry = normalize(entry.filePath);
   return normalizedEntry === normalizedRoot || normalizedEntry.startsWith(`${normalizedRoot}/`);
 }

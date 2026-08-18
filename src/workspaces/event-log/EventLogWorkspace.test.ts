@@ -28,4 +28,15 @@ describe("scopeLogEntries", () => {
       scopeLogEntries(entries, { kind: "file", path: "C:\\logs\\first.log" }, "single-file")
     ).toEqual([entries[0]]);
   });
+
+  it("keeps aggregate entries when unrelated Windows volumes yield a root scope", () => {
+    const entries = [
+      entry("C:\\logs\\first.log", "first source"),
+      entry("D:/logs/second.log", "second source"),
+    ];
+
+    expect(scopeLogEntries(entries, { kind: "folder", path: "/" }, "aggregate-folder")).toEqual(
+      entries
+    );
+  });
 });
