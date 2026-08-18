@@ -60,6 +60,11 @@ describe("event id range bounds", () => {
     expect(ids?.has(65536)).toBe(false);
   });
 
+  it("preserves the complete 16-bit event ID space", () => {
+    expect(parseEventIdFilter("0-65535")?.size).toBe(65536);
+    expect(parseEventIdFilter("1-65535,0")?.size).toBe(65536);
+  });
+
   it("yields nothing for a range entirely above the id space", () => {
     expect(parseEventIdFilter("100000-200000")).toBeNull();
   });

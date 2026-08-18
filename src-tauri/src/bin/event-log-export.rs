@@ -191,7 +191,8 @@ where
     Ok(cli)
 }
 
-const MAX_EVENT_ID_FILTER_VALUES: usize = 65_535;
+const MAX_EVENT_ID: u32 = 65_535;
+const MAX_EVENT_ID_FILTER_VALUES: usize = 65_536;
 
 fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
     let mut event_ids = BTreeSet::new();
@@ -204,7 +205,7 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
                 .parse::<u32>()
                 .map_err(|_| format!("invalid event-ID range {part:?}"))?;
             let from = low.min(high);
-            let to = high.max(low).min(MAX_EVENT_ID_FILTER_VALUES as u32);
+            let to = high.max(low).min(MAX_EVENT_ID);
             if from <= to {
                 for value in from..=to {
                     if event_ids.len() >= MAX_EVENT_ID_FILTER_VALUES {
@@ -494,6 +495,13 @@ mod tests {
         assert_eq!(parse_event_ids("1-65535").expect("range").len(), 65_535);
         assert_eq!(parse_event_ids("1-65536").expect("clamped range").len(), 65_535);
         assert_eq!(parse_event_ids("100000-200000").expect("out-of-space range"), Vec::<u32>::new());
+        assert_eq!(parse_event_ids("0-65535").expect("full range").len(), 65_536);
+        assert_eq!(
+            parse_event_ids("1-65535,0")
+                .expect("full range with single")
+                .len(),
+            65_536
+        );
         assert_eq!(
             parse_event_ids("1-40000,40000-65535")
                 .expect("overlapping ranges")

@@ -23,6 +23,11 @@ name = "event-log-export"
 path = "src/bin/event-log-export.rs"
 required-features = ["event-log"]
 
+[[test]]
+name = "event_log_export_cli"
+path = "tests/event_log_export_cli.rs"
+required-features = ["event-log"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

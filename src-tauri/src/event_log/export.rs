@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use cmtraceopen_parser::intune::apps::windows::common::redact_text;
 
+
+const MAX_RAW_XML_BYTES: usize = 256 * 1024;
 use super::models::EvtxRecord;
 
 /// A supported export format.
@@ -220,7 +222,7 @@ fn event_data_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?is)(?P<open><Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<value>[^<]*)(?P<close></Data\s*>)"#,
+            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
         )
         .expect("event data redaction pattern must compile")
     })
@@ -240,7 +242,7 @@ fn labeled_xml_field_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?is)(?P<open><(?P<label>Computer|SubjectUserName|SubjectDomainName)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:Computer|SubjectUserName|SubjectDomainName)\s*>)"#,
+            r#"(?is)(?P<open><(?:[\w.-]+:)?(?P<label>Computer|SubjectUserName|SubjectDomainName|RemoteHost)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?(?:Computer|SubjectUserName|SubjectDomainName|RemoteHost)\s*>)"#,
         )
         .expect("labeled XML field redaction pattern must compile")
     })
@@ -271,6 +273,9 @@ fn redact_xml_tag(tag: &str) -> String {
 }
 
 fn redact_raw_xml(xml: &str) -> String {
+    if xml.len() > MAX_RAW_XML_BYTES {
+        return "[redacted: oversized text omitted]".to_owned();
+    }
     let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
         format!(
             "{}{}{}",
@@ -680,6 +685,14 @@ mod tests {
         assert!(raw.contains("[tenant:") || raw.contains("[sensitive:"));
     }
 
+    #[test]
+    fn oversized_raw_xml_is_replaced_before_tag_processing() {
+        let mut event = record("safe");
+        event.raw_xml = format!("<Event>{}</Event>", "safe ".repeat(60_000));
+        let output = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
+        assert!(output.contains("[redacted: oversized text omitted]"));
+        assert!(!output.contains(&"safe ".repeat(60_000)));
+    }
     #[test]
     fn oversized_normalized_content_is_explicitly_replaced() {
         let event = record(&"secret-user@example.com ".repeat(20_000));
