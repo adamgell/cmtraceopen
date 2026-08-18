@@ -252,20 +252,42 @@ fn collect_wildcard_dir(
         });
         return;
     }
+    *inspected_work = inspected_work.saturating_add(1);
+    if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
+        coverage.push(SourceCoverage::LimitReached {
+            path: directory.to_string_lossy().to_string(),
+            reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
+        });
+        return;
+    }
     let read_dir = match fs::read_dir(directory) {
         Ok(read_dir) => read_dir,
         Err(error) => {
             let path = directory.to_string_lossy().to_string();
             if error.kind() == std::io::ErrorKind::PermissionDenied {
-                coverage.push(SourceCoverage::AccessDenied { path, reason: error.to_string() });
+                coverage.push(SourceCoverage::AccessDenied {
+                    path,
+                    reason: error.to_string(),
+                });
             } else {
-                coverage.push(SourceCoverage::Missing { path, reason: error.to_string() });
+                coverage.push(SourceCoverage::Missing {
+                    path,
+                    reason: error.to_string(),
+                });
             }
             return;
         }
     };
     let mut entries = Vec::new();
     for entry in read_dir {
+        *inspected_work = inspected_work.saturating_add(1);
+        if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
+            coverage.push(SourceCoverage::LimitReached {
+                path: directory.to_string_lossy().to_string(),
+                reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
+            });
+            break;
+        }
         match entry {
             Ok(entry) => entries.push(entry),
             Err(error) => coverage.push(SourceCoverage::Missing {
