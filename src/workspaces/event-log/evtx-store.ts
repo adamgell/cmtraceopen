@@ -475,10 +475,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }
 
         const state = get();
-        const existingChannelNames = new Set(state.records.map((r) => r.channel));
-        // Only add records from channels we don't already have
-        const newRecords = arrived.filter((r) => !existingChannelNames.has(r.channel));
-        const merged = appendUniqueRecords(state.records, newRecords);
+        // Streamed records are already published; the reply carries only its unstreamed tail.
+        // Merge the reply directly so a channel with both sources does not lose that tail.
+        const merged = appendUniqueRecords(state.records, result.records);
         merged.sort(compareStoredRecords);
         // Reassign IDs
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
