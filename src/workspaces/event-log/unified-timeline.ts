@@ -107,10 +107,21 @@ function eventIdentityPrefix(record: EvtxRecord): string {
   return `${source}|${machine}${channel}`;
 }
 
+function exactRecordIdText(record: EvtxRecord): string | null {
+  const text = record.eventRecordIdText?.trim();
+  if (!text || !/^\d+$/.test(text)) return null;
+  try {
+    return BigInt(text) === 0n ? null : text;
+  } catch {
+    return null;
+  }
+}
+
 function stableRecordBase(record: EvtxRecord): string {
   const prefix = eventIdentityPrefix(record);
-  if (record.eventRecordIdText) {
-    return `${prefix}|record${record.eventRecordIdText}`;
+  const exactId = exactRecordIdText(record);
+  if (exactId !== null) {
+    return `${prefix}|record${exactId}`;
   }
   if (record.eventRecordId !== 0) {
     return Number.isSafeInteger(record.eventRecordId)
@@ -118,7 +129,10 @@ function stableRecordBase(record: EvtxRecord): string {
       : `${prefix}|record`;
   }
   return `${prefix}|missing${missingRecordDigest(record)}`;
+}
 
+export function stableRecordIdentity(record: EvtxRecord): string {
+  return stableRecordBase(record);
 }
 function compareRustStrings(left: string, right: string): number {
   const leftBytes = utf8Encoder.encode(left);
@@ -146,8 +160,9 @@ function stableRecordIdentities(records: EvtxRecord[]): {
   );
   for (const record of orderedRecords) {
     const base = stableRecordBase(record);
-    if (record.eventRecordId !== 0) {
-      if (record.eventRecordIdText || Number.isSafeInteger(record.eventRecordId)) {
+    const exactId = exactRecordIdText(record);
+    if (record.eventRecordId !== 0 || exactId !== null) {
+      if (exactId !== null || Number.isSafeInteger(record.eventRecordId)) {
         keys.add(base);
       } else {
         unsafePrefixes.add(base);

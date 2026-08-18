@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   filterTimelineToRecords,
+  stableRecordIdentity,
   isEventOrigin,
   originContext,
   originDetail,
@@ -198,6 +199,37 @@ describe("filterTimelineToRecords", () => {
     );
     expect(filtered.items.map((item) => item.message)).toEqual(["visible"]);
     expect(filtered.unplaced).toHaveLength(1);
+  });
+
+  it("treats lossless text zero as a missing EventRecordID", () => {
+    const missingRecord = {
+      sourceLabel: "Live",
+      computer: "HOST",
+      channel: "Security",
+      eventRecordId: 0,
+      eventRecordIdText: "0",
+      eventId: 1,
+      provider: "Provider",
+      message: "missing",
+      rawXml: "",
+    } as EvtxRecord;
+    const origin: TimelineOrigin = {
+      ...eventOrigin,
+      stableId: `${stableRecordIdentity(missingRecord)}-0`,
+      source: "Live",
+      machine: "HOST",
+      channel: "Security",
+      eventId: 1,
+      provider: "Provider",
+      recordId: 0,
+      recordIdText: "0",
+    };
+
+    const filtered = filterTimelineToRecords(
+      timeline({ items: [{ timestampMs: 1, severity: "info", message: "missing", origin }] }),
+      [missingRecord]
+    );
+    expect(filtered.items.map((item) => item.message)).toEqual(["missing"]);
   });
 
   it("keeps an unsafe numeric EventRecordID by its backend stable identity", () => {
