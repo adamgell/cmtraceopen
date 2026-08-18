@@ -597,10 +597,10 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
 fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
     if is_vss_path(path) {
         EventLogSourceKind::Vss
-    } else if Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_lowercase().starts_with("archive-"))
-        .unwrap_or(false)
+    } else if path
+        .rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|name| name.to_ascii_lowercase().starts_with("archive-"))
     {
         EventLogSourceKind::Archive
     } else {
@@ -1328,6 +1328,13 @@ mod tests {
         assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
         assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
         assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
+        assert_eq!(
+            classify_source_kind(
+                r"C:\Windows\System32\winevt\Logs\Archive-Application.evtx",
+                EventLogSourceKind::File
+            ),
+            EventLogSourceKind::Archive
+        );
     }
     #[cfg(not(target_os = "windows"))]
     #[test]
