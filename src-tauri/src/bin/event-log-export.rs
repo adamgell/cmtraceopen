@@ -295,22 +295,12 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
 }
 
 fn reject_source_destination(sources: &[String], output: Option<&str>) -> Result<(), String> {
-    let Some(output) = output.filter(|path| *path != "-") else {
-        return Ok(());
-    };
-    let normalize = |path: &str| {
-        fs::canonicalize(path).unwrap_or_else(|_| {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(path)
-        })
-    };
-    let destination = normalize(output);
-    if sources.iter().any(|source| normalize(source) == destination) {
-        return Err("output path cannot overwrite a source path".to_owned());
-    }
-    Ok(())
+    app_lib::event_log::writer::reject_source_destination(
+        sources,
+        output.map(Path::new),
+    )
 }
+
 fn coverage_report(coverage: &Coverage, exported_records: &str) -> String {
     let mut report = format!(
         "coverage: sourceRecords={} exportedRecords={} parseErrors={} gaps={}",

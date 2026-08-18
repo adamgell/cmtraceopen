@@ -178,6 +178,7 @@ export function EvtxFilterBar() {
         records: payload,
         format: format.value,
         destination,
+        sourcePaths: state.sourcePaths,
       });
       // The IPC boundary is typed by assertion, not by the compiler. A malformed reply would
       // otherwise render as "Exported ... (NaN KB)", which still reads as success, and an operator

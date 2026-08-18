@@ -226,12 +226,14 @@ pub async fn evtx_export_records(
     records: Vec<super::models::EvtxRecord>,
     format: super::export::ExportFormat,
     destination: String,
+    source_paths: Vec<String>,
 ) -> Result<u64, String> {
     let record_count = records.len();
+    let destination_path = std::path::PathBuf::from(&destination);
+    super::writer::reject_source_destination(&source_paths, Some(&destination_path))?;
     let destination_for_log = destination.clone();
     let rendered = tokio::task::spawn_blocking(move || {
-        let path = std::path::PathBuf::from(&destination);
-        super::writer::write_records_to_destination(&records, format, Some(&path))
+        super::writer::write_records_to_destination(&records, format, Some(&destination_path))
             .map(|stats| stats.bytes)
     })
     .await

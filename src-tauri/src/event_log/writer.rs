@@ -109,6 +109,12 @@ fn has_illegal_xml_control(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| matches!(*byte, 0x00..=0x08 | 0x0B..=0x0C | 0x0E..=0x1F))
 }
 
+fn valid_xml_code_point(value: u32) -> bool {
+    value <= 0x10_FFFF
+        && !(0xD800..=0xDFFF).contains(&value)
+        && !matches!(value, 0x00..=0x08 | 0x0B..=0x0C | 0x0E..=0x1F)
+}
+
 fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
     let raw_xml = record.raw_xml.trim();
     if raw_xml.is_empty() {
@@ -194,6 +200,12 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 }
             }
             quick_xml::events::Event::CData(data) => {
+                if depth == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "raw XML has top-level CDATA",
+                    ));
+                }
                 let bytes = data.into_inner();
                 if has_illegal_xml_control(&bytes) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
@@ -209,10 +221,9 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                         name.strip_prefix(b"#")
                             .and_then(|value| std::str::from_utf8(value).ok()?.parse::<u32>().ok())
                     })
-                    .map(|value| value <= 0x10FFFF && !(0xD800..=0xDFFF).contains(&value))
-                    .unwrap_or(false);
+                    .is_some_and(valid_xml_code_point);
                 if !valid_named && !valid_numeric {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML contains an unknown entity reference"));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML contains an unknown or invalid entity reference"));
                 }
             }
             quick_xml::events::Event::DocType(_) => {
@@ -362,7 +373,42 @@ pub(crate) fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> 
     }
     Ok(())
 }
+/// Rejects a destination that resolves to one of the opened inputs.
+///
+/// A missing destination is normalized against the current directory so a relative
+/// save path is compared with the same identity as an existing source. `-` remains
+/// the stdout sentinel used by the CLI and is intentionally never treated as a file.
+pub fn reject_source_destination(
+    sources: &[String],
+    destination: Option<&Path>,
+) -> Result<(), String> {
+    let Some(destination) = destination.filter(|path| *path != Path::new("-")) else {
+        return Ok(());
+    };
+    let normalize = |path: &Path| {
+        fs::canonicalize(path).unwrap_or_else(|_| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(path)
+            }
+        })
+    };
+    let destination = normalize(destination);
+    if sources
+        .iter()
+        .map(Path::new)
+        .map(normalize)
+        .any(|source| source == destination)
+    {
+        return Err("output path cannot overwrite an opened source or manifest".to_owned());
+    }
+    Ok(())
+}
 
+/// Writes records to an already-open sink.
 pub fn write_records<W: Write + ?Sized>(
     writer: &mut W,
     format: ExportFormat,
@@ -572,6 +618,8 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
         r#"<Event><!-- invalid--comment --></Event>"#,
         r#"<Event><!DOCTYPE Event [ <!ENTITY x "y"> ] /></Event>"#,
         r#"<Event attr="&#x1;"/>"#,
+        r#"<Event attr="&#xB;"/>"#,
+        r#"<![CDATA[top-level]]><Event/>"#,
         r#"<Event /><?xml version="1.0"?>"#,
         r#"<?provider?><?xml version="1.0"?><Event/>"#,
         "<Event>bad\u{0001}</Event>",

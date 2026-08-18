@@ -118,6 +118,37 @@ fn sensitive_field_re() -> &'static Regex {
         .expect("sensitive field redaction pattern must compile")
     })
 }
+/// JSON properties written with HTML entity delimiters.
+///
+/// Exported event messages sometimes pass through an HTML/XML layer before
+/// reaching JSON. Restricting this rule to an explicit property name and a
+/// quoted value catches those encoded records without treating `&quot;` in
+/// ordinary prose as a credential boundary.
+fn entity_encoded_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)&quot;(?P<field>RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName|ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost|Password|Pwd|Passphrase|LicenseKey|License_Key|ProductKey|Product_Key|SerialKey|Serial|ApiKey|Api_Key|ApiSecret|Api_Secret|AccessToken|Access_Token|Token|Secret|ClientSecret|Client_Secret|Credential|Credentials|Authorization)&quot;\s*:\s*&quot;(?P<value>.*?)&quot;"#,
+        )
+        .expect("entity-encoded field redaction pattern must compile")
+    })
+}
+
+fn redact_entity_encoded_fields(value: &str) -> String {
+    entity_encoded_field_re()
+        .replace_all(value, |caps: &regex::Captures<'_>| {
+            let prefix = format!("{}: ", &caps["field"]);
+            let redacted = redact_text(&format!("{prefix}{}", &caps["value"]));
+            let redacted = redacted
+                .strip_prefix(&prefix)
+                .unwrap_or(&caps["value"]);
+            format!(
+                "&quot;{}&quot;:&quot;{}&quot;",
+                &caps["field"], redacted
+            )
+        })
+        .into_owned()
+}
 
 fn is_redaction_token(value: &str) -> bool {
     let value = value.trim_matches(|character| character == '"' || character == '\'');
@@ -415,7 +446,7 @@ pub fn redact_text(value: &str) -> String {
         format!("{}{}", &caps["flag"], stable_token("command", value))
     });
 
-    sid_re()
+    let masked = sid_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
             // Hashed from the uppercase form. A SID is case-insensitive, so the
             // two spellings name one identity and must reach one token; hashing
@@ -423,9 +454,9 @@ pub fn redact_text(value: &str) -> String {
             // account and break the correlation these tokens exist to provide.
             stable_token("sid", &caps[0].to_ascii_uppercase())
         })
-        .into_owned()
+        .into_owned();
+    redact_entity_encoded_fields(&masked)
 }
-
 #[cfg(test)]
 mod tests {
     use super::{redact_text, sid_occurrences};
@@ -443,6 +474,22 @@ mod tests {
     fn a_json_escaped_path_mask_is_idempotent() {
         let once = redact_text(r#"{"Path":"C:\\Users\\John Doe\\AppData"}"#);
         assert_eq!(once, redact_text(&once));
+    }
+    #[test]
+    fn encoded_json_identity_and_credential_fields_are_masked_without_masking_prose() {
+        let entity = redact_text(
+            r#"&quot;Password&quot;:&quot;hunter2&quot; &quot;UserName&quot;:&quot;CONTOSO\John Doe&quot; &quot;Message&quot;:&quot;Password is required&quot;"#,
+        );
+        assert!(!entity.contains("hunter2"), "got {entity:?}");
+        assert!(!entity.contains("John Doe"), "got {entity:?}");
+        assert!(entity.contains("Password is required"), "got {entity:?}");
+
+        let escaped =
+            redact_text(r#"{\"Password\":\"hunter2\",\"UserName\":\"CONTOSO\\John Doe\",\"ComputerName\":\"DESKTOP-JOHN\"}"#);
+        assert!(!escaped.contains("hunter2"), "got {escaped:?}");
+        assert!(!escaped.contains("John Doe"), "got {escaped:?}");
+        assert!(!escaped.contains("DESKTOP-JOHN"), "got {escaped:?}");
+        assert_eq!(escaped, redact_text(&escaped));
     }
 
     #[test]
