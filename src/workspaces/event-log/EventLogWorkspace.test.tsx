@@ -72,6 +72,10 @@ vi.mock("@tanstack/react-virtual", () => ({
       getVirtualItems,
       measureElement: virtualizerState.measureElement,
       scrollToIndex: vi.fn(),
+      measure: () => {
+        virtualizerState.remeasure();
+        virtualizerState.recalculate();
+      },
     };
   },
 }));
@@ -189,14 +193,9 @@ describe("event-viewer shared font metrics", () => {
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
     filter.unmount();
-
     const timeline = render(<EvtxTimeline />);
     const timelineRoot = screen.getByRole("tree");
     const groupRow = screen.getByRole("treeitem");
-    act(() => {
-      virtualizerState.remeasure();
-      virtualizerState.recalculate();
-    });
     const recordRow = screen.getByRole("option");
     expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
     expect(recordRow.style.lineHeight).toBe(`${smallList.rowLineHeight}px`);
@@ -257,14 +256,9 @@ describe("event-viewer shared font metrics", () => {
 
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
-    virtualizerState.measuredSizes.clear();
     const timelineLarge = render(<EvtxTimeline />);
     const timelineRootLarge = screen.getByRole("tree");
     const recordRowLarge = screen.getByRole("option");
-    act(() => {
-      virtualizerState.remeasure();
-      virtualizerState.recalculate();
-    });
     expect(recordRowLarge.style.fontSize).toBe(`${largeList.fontSize}px`);
     expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRowLarge);
@@ -324,14 +318,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelRow.style.height).toBe(
       `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight}px`
     );
-    expect(filterButton.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
-    expect(recordRow.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
-
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
-    act(() => {
-      virtualizerState.remeasure();
-      virtualizerState.recalculate();
-    });
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
 
     expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);

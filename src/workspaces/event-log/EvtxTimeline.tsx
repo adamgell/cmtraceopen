@@ -150,6 +150,11 @@ export function EvtxTimeline() {
     },
     overscan: 10,
   });
+  // Persisted font-size changes alter rendered row heights. Re-measure after the new styles commit so
+  // TanStack Virtual's cumulative offsets and total size stay aligned with the visible rows.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [virtualizer, metrics.rowHeight]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
