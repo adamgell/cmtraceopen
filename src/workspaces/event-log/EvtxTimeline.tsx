@@ -140,6 +140,7 @@ export function EvtxTimeline() {
     );
     if (!stillVisible) setSelectedRecordId(null);
   }, [rows, selectedRecordId, setSelectedRecordId]);
+  const recordRowExtra = columns.some((column) => column.id === "level") ? 6 : 2;
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -172,13 +173,13 @@ export function EvtxTimeline() {
     rows.forEach((row, index) => {
       virtualizer.resizeItem(
         index,
-        row.kind === "group" ? metrics.rowHeight : metrics.rowHeight + 6
+        row.kind === "group" ? metrics.rowHeight : metrics.rowHeight + recordRowExtra
       );
     });
     for (const element of rowElementsRef.current.values()) {
       if (element.isConnected) virtualizer.measureElement(element);
     }
-  }, [metrics.rowHeight, rows, virtualizer.measureElement, virtualizer.resizeItem]);
+  }, [metrics.rowHeight, recordRowExtra, rows, virtualizer.measureElement, virtualizer.resizeItem]);
 
   const virtualRows = virtualizer.getVirtualItems();
 

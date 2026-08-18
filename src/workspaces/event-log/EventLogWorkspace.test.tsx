@@ -13,10 +13,13 @@ const virtualizerState = vi.hoisted(() => ({
     virtualizerState.measureCalls += 1;
     if (!element) return;
     const index = Number(element.dataset.index);
+    const hasLevelBadge = Array.from(element.children).some(
+      (child) => (child as HTMLElement).style.padding === "2px 6px"
+    );
     const measured =
       element.getAttribute("role") === "treeitem"
         ? Number.parseFloat(element.style.height)
-        : Number.parseFloat(element.style.lineHeight) + 9;
+        : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
     }
@@ -373,6 +376,29 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.items).toHaveLength(2);
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + (largeList.rowHeight + 6) * 2
+    );
+  });
+  it("uses the smaller record cache when the level column is hidden", () => {
+    seedEventLog();
+    useEvtxStore.setState((state) => ({
+      columnConfig: {
+        ...state.columnConfig,
+        order: state.columnConfig.order.filter((id) => id !== "level"),
+      },
+      groupBy: ["level"],
+    }));
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    expect(timeline.getByRole("option")).toBeTruthy();
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 2);
+    expect(virtualizerState.totalSize).toBe(
+      largeList.rowHeight + largeList.rowHeight + 2
     );
   });
 });
