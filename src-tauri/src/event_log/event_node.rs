@@ -141,6 +141,7 @@ fn local_name(raw: &[u8]) -> String {
 pub struct SystemFields {
     pub provider: Option<String>,
     pub event_id: Option<u32>,
+    pub version: Option<u32>,
     pub level: Option<u8>,
     pub channel: Option<String>,
     pub computer: Option<String>,
@@ -195,6 +196,7 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
         // Classic providers write `<EventID Qualifiers="49152">1000</EventID>`. The id is the
         // element text in both shapes; the qualifier is separate and not part of the id.
         event_id: text_of("EventID").and_then(|value| value.parse().ok()),
+        version: text_of("Version").and_then(|value| value.parse().ok()),
         level: text_of("Level").and_then(|value| value.parse().ok()),
         channel: text_of("Channel").map(str::to_string),
         computer: text_of("Computer").map(str::to_string),
@@ -312,6 +314,13 @@ mod tests {
     <Data Name="Empty"></Data>
   </EventData>
 </Event>"#;
+
+    #[test]
+    fn system_version_is_extracted_for_provider_lookup() {
+        let root = parse_event_xml("<Event><System><Version>7</Version></System></Event>")
+            .expect("parses");
+        assert_eq!(extract_system_fields(&root).version, Some(7));
+    }
 
     fn resolve(xml: &str, path: &str) -> Option<String> {
         let root = parse_event_xml(xml).expect("parses");

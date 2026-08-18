@@ -630,13 +630,11 @@ fn expand_path(
 
     let path_string = path.to_string_lossy().to_string();
     let kind = classify_source_kind(&path_string, requested_kind);
-    // VSS paths are a privileged source type even when the requested path does not exist locally.
-    // Report the platform/elevation boundary instead of masking it as a generic missing path.
-    if matches!(kind, EventLogSourceKind::Vss) {
-        if let Some(gap) = gated_source(&path_string, kind) {
-            manifest.coverage.push(gap);
-            return Ok(());
-        }
+    // Archived and VSS paths are privileged source types even when wildcard expansion found the
+    // concrete path only after the initial selection-kind check.
+    if let Some(gap) = gated_source(&path_string, kind) {
+        manifest.coverage.push(gap);
+        return Ok(());
     }
 
     match first_reparse_component(path) {
@@ -900,7 +898,7 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
 fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
     if is_vss_path(path) {
         EventLogSourceKind::Vss
-    } else if matches!(requested_kind, EventLogSourceKind::File)
+    } else if !matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
         && !fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
         && path
             .rsplit(['\\', '/'])
@@ -1566,7 +1564,7 @@ fn parse_single_file(
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = describe_event(&providers, &provider, event_id, &insertions)
+        let message = describe_event(&providers, &provider, event_id, system.version, &insertions)
             .or(payload)
             .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields));
 
@@ -1643,10 +1641,11 @@ fn describe_event(
     store: &ProviderStore,
     provider: &str,
     event_id: u32,
+    version: Option<u32>,
     insertions: &[String],
 ) -> Option<String> {
     let metadata = store.provider(provider)?;
-    let event = metadata.event(event_id, None)?;
+    let event = metadata.event(event_id, version)?;
     let template = event.description.as_deref()?;
 
     let rendered = cmtraceopen_parser::provider::render_description(template, insertions);
@@ -2411,7 +2410,7 @@ mod description_tests {
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        assert!(describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, &data).is_none());
+        assert!(describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, None, &data).is_none());
     }
 
     #[test]
@@ -2427,6 +2426,7 @@ mod description_tests {
                 &store,
                 "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
                 999_999,
+                None,
                 &data
             )
             .is_none(),
@@ -2445,6 +2445,7 @@ mod description_tests {
             &store,
             "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
             2,
+            None,
             &data,
         )
         .expect("the MDM provider defines event 2");
@@ -2468,6 +2469,7 @@ mod description_tests {
             &store,
             "Definitely-Not-A-Real-Provider",
             1,
+            None,
             &insertions(&[("a", "b")])
         )
         .is_none());

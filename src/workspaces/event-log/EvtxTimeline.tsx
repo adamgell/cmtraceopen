@@ -79,7 +79,8 @@ export function EvtxTimeline() {
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-  const rowEstimate = metrics.rowHeight + 2;
+  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
+  const rowEstimate = metrics.rowHeight + recordRowExtra;
 
   const filteredRecords = useMemo(
     () =>
@@ -116,6 +117,7 @@ export function EvtxTimeline() {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const rowElementsRef = useRef(new Set<HTMLElement>());
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
@@ -151,17 +153,52 @@ export function EvtxTimeline() {
     );
     if (!stillVisible) setSelectedRecordId(null);
   }, [rows, selectedRecordId, setSelectedRecordId]);
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowEstimate,
+    estimateSize: (index) =>
+      rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
     getItemKey: (index) => {
       const row = rows[index];
       return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
     },
     overscan: 10,
   });
+  const measureRow = useCallback(
+    (node: HTMLElement | null) => {
+      if (node) {
+        rowElementsRef.current.add(node);
+      } else {
+        for (const element of rowElementsRef.current) {
+          if (!element.isConnected) rowElementsRef.current.delete(element);
+        }
+      }
+      virtualizer.measureElement(node);
+    },
+    [virtualizer.measureElement]
+  );
+
+  // Persisted font-size and row-shape changes alter rendered row heights. Estimates remain correct
+  // for offscreen rows, while connected rows must use their actual border-box height because
+  // TanStack's no-entry measurement path may return the existing cache.
+  const measureConnectedRow = useCallback(
+    (element: HTMLElement) => {
+      const height = element.getBoundingClientRect().height;
+      if (height > 0) {
+        virtualizer.resizeItem(Number(element.dataset.index), height);
+      } else {
+        virtualizer.measureElement(element);
+      }
+    },
+    [virtualizer.measureElement, virtualizer.resizeItem]
+  );
+
+  useEffect(() => {
+    virtualizer.measure();
+    for (const element of rowElementsRef.current) {
+      if (element.isConnected) measureConnectedRow(element);
+    }
+  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
@@ -284,7 +321,7 @@ export function EvtxTimeline() {
               return (
                 <div
                   key={virtualRow.key}
-                  ref={virtualizer.measureElement}
+                  ref={measureRow}
                   data-index={virtualRow.index}
                   role="treeitem"
                   aria-level={row.depth + 1}
@@ -310,6 +347,7 @@ export function EvtxTimeline() {
                     gap: "6px",
                     paddingLeft: `${8 + row.depth * 16}px`,
                     height: `${metrics.rowHeight}px`,
+                    boxSizing: "border-box",
                     fontSize: `${smallFontSize}px`,
                     fontWeight: 600,
                     cursor: "pointer",
@@ -330,7 +368,7 @@ export function EvtxTimeline() {
             return (
               <EvtxTimelineRow
                 key={virtualRow.key}
-                ref={virtualizer.measureElement}
+                ref={measureRow}
                 record={record}
                 dataIndex={virtualRow.index}
                 isSelected={selectedRecordId === record.id}

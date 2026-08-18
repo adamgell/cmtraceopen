@@ -197,6 +197,9 @@ mod windows_capture {
             (value != u32::MAX).then_some(value)
         }))
     }
+    fn short_message_id(raw_id: u32) -> u32 {
+        u32::from((raw_id & 0xFFFF) as u16)
+    }
     fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
         if target == 1 { (raw_value >> 16) & 0xFFFF } else { raw_value }
     }
@@ -209,11 +212,6 @@ mod windows_capture {
     }
     fn optional_template(value: OwnedVariant) -> Result<Option<String>, String> {
         Ok(optional_string(value)?.filter(|value| !value.is_empty()))
-    }
-    fn decode_event_opcode(raw_value: u64) -> (u32, Option<u32>) {
-        let opcode = ((raw_value >> 16) & 0xFFFF) as u32;
-        let task = (raw_value & 0xFFFF) as u32;
-        (opcode, (task != 0).then_some(task))
     }
     fn base32(bytes: &[u8]) -> String {
         const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
@@ -494,7 +492,7 @@ mod windows_capture {
     ) -> Result<(), String> {
         let mut add = |value: OwnedVariant| -> Result<(), String> {
             if let Some(raw_id) = optional_message_id(value)? {
-                let short_id = raw_id as u32;
+                let short_id = short_message_id(raw_id);
                 let text = format_message(metadata, raw_id)?;
                 ids.entry(raw_id as u64).or_insert_with(|| ProviderMessage {
                     raw_id: raw_id as u64,
@@ -623,7 +621,7 @@ mod windows_capture {
                     let text = format_message(metadata_handle, message_id)?;
                     messages.entry(message_id as u64).or_insert(ProviderMessage {
                         raw_id: message_id as u64,
-                        short_id: message_id as u32,
+                        short_id: short_message_id(message_id),
                         provider_name: Some(publisher_name.to_string()),
                         template: None,
                         tag: None,
@@ -672,12 +670,10 @@ mod windows_capture {
                 .unwrap_or(0);
             let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
-            let opcode_raw = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
-            let (opcode, opcode_task) = opcode_raw
-                .map(decode_event_opcode)
-                .map(|(opcode, task)| (opcode, task))
-                .unwrap_or((0, None));
-            let task = opcode_task.or(task_metadata).unwrap_or(0);
+            let opcode_raw =
+                optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
+            let opcode = opcode_raw.map(|value| value as u32).unwrap_or(0);
+            let task = task_metadata.unwrap_or(0);
             let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
                 .map(keyword_bits)
                 .unwrap_or_default();
@@ -688,7 +684,7 @@ mod windows_capture {
                 let text = format_message(metadata_handle, message_id)?;
                 messages.entry(message_id as u64).or_insert(ProviderMessage {
                     raw_id: message_id as u64,
-                    short_id: message_id as u32,
+                    short_id: short_message_id(message_id),
                     provider_name: Some(publisher_name.to_string()),
                     template: template.clone(),
                     tag: None,
@@ -923,12 +919,7 @@ mod windows_tests {
             optional_message_id(OwnedVariant::Number(0x1_0001)).expect("message id is valid"),
             Some(0x1_0001)
         );
-    }
-
-    #[test]
-    fn event_opcode_decodes_composite_opcode_and_task() {
-        assert_eq!(decode_event_opcode(0x000B_0002), (11, Some(2)));
-        assert_eq!(decode_event_opcode(0x000B_0000), (11, None));
+        assert_eq!(short_message_id(0x1_0001), 1);
     }
     #[test]
     fn event_keyword_masks_expand_to_individual_bits() {

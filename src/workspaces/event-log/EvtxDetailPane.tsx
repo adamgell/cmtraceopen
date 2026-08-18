@@ -3,7 +3,8 @@ import { Button, tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
-  getLogListMetrics,
+  clampLogDetailsFontSize,
+  getLogDetailsLineHeight,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
@@ -13,11 +14,11 @@ export function EvtxDetailPane() {
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const [showRawXml, setShowRawXml] = useState(false);
 
-  const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const metrics = useMemo(
-    () => getLogListMetrics(logListFontSize),
-    [logListFontSize]
-  );
+  const logDetailsFontSize = useUiStore((s) => s.logDetailsFontSize);
+  const fontSize = clampLogDetailsFontSize(logDetailsFontSize);
+  const detailLineHeight = getLogDetailsLineHeight(logDetailsFontSize);
+  const monoFontSize = Math.max(10, fontSize - 1);
+  const labelFontSize = Math.max(10, fontSize - 2);
 
   const record = useMemo(() => {
     if (selectedRecordId == null) return null;
@@ -30,7 +31,7 @@ export function EvtxDetailPane() {
         style={{
           padding: "16px",
           color: tokens.colorNeutralForeground4,
-          fontSize: `${metrics.fontSize}px`,
+          fontSize: `${fontSize}px`,
           fontFamily: LOG_UI_FONT_FAMILY,
           textAlign: "center",
         }}
@@ -40,8 +41,6 @@ export function EvtxDetailPane() {
     );
   }
 
-  const fontSize = metrics.fontSize;
-  const monoFontSize = Math.max(10, fontSize - 1);
 
   return (
     <div
@@ -53,6 +52,7 @@ export function EvtxDetailPane() {
         padding: "12px",
         fontFamily: LOG_UI_FONT_FAMILY,
         fontSize: `${fontSize}px`,
+        lineHeight: `${detailLineHeight}px`,
         gap: "12px",
       }}
     >
@@ -120,7 +120,7 @@ export function EvtxDetailPane() {
         <div>
           <div
             style={{
-              fontSize: "11px",
+              fontSize: `${labelFontSize}px`,
               fontWeight: 600,
               color: tokens.colorNeutralForeground3,
               textTransform: "uppercase",
@@ -289,6 +289,7 @@ export function EvtxDetailPane() {
           size="small"
           appearance="subtle"
           onClick={() => setShowRawXml(!showRawXml)}
+          style={{ fontSize: `${fontSize}px` }}
         >
           {showRawXml ? "Hide Raw XML" : "Show Raw XML"}
         </Button>

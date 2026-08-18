@@ -733,7 +733,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const merged = mergeRecordsPreservingSelection(
           state.records,
           state.selectedRecordId,
-          result.records
+          arrived
         );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const updatedChannels = state.channels.map((c) => ({
@@ -866,7 +866,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const merged = mergeRecordsPreservingSelection(
           s.records,
           s.selectedRecordId,
-          result.records
+          arrived
         );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const newChannels = s.channels.map((c) => ({
