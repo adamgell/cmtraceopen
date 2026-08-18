@@ -28,12 +28,12 @@ interface SavedFilterState {
 }
 export function migratePersistedSavedFilters(
   persisted: unknown,
-  version: number
+  version: number | undefined
 ): { savedFilters: EvtxSavedFilter[] } {
+  if (version == null || version < 2) return { savedFilters: [] };
   if (version > 2) {
     throw new Error(`Unsupported saved-filter schema version ${version}`);
   }
-  if (version < 2) return { savedFilters: [] };
   const raw = persisted as { savedFilters?: unknown } | undefined;
   if (!raw || !Array.isArray(raw.savedFilters)) {
     throw new Error("Malformed saved-filter storage envelope");

@@ -43,6 +43,7 @@ describe("useSavedFilterStore", () => {
     };
     expect(migratePersistedSavedFilters(layered, 1).savedFilters).toEqual([]);
     expect(migratePersistedSavedFilters(layered, 0).savedFilters).toEqual([]);
+    expect(migratePersistedSavedFilters(layered, undefined).savedFilters).toEqual([]);
     expect(() => migratePersistedSavedFilters(layered, 99)).toThrow(/Unsupported/);
     expect(migratePersistedSavedFilters(layered, 2).savedFilters).toHaveLength(1);
   });
