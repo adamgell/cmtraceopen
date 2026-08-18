@@ -222,6 +222,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       channels: [],
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
+      timeWindow: get().timeWindow === "24h" ? "all" : get().timeWindow,
       isLoading: true,
       loadError: null,
     });
