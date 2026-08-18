@@ -189,8 +189,10 @@ impl UnifiedTimeline {
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
-    let first = source.trim_start_matches(['/', '\\']).split(['/', '\\']).next()?;
-    first.eq_ignore_ascii_case("bundle").then(|| first.to_string())
+    source
+        .split(['/', '\\'])
+        .find(|part| part.eq_ignore_ascii_case("bundle"))
+        .map(str::to_string)
 }
 
 /// Converts a parsed log entry, or reports why it cannot be placed.

@@ -99,10 +99,12 @@ fn machine_of(value: &str) -> Option<String> {
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
-    let first = source.split(['/', '\\']).next()?;
-    first.eq_ignore_ascii_case("bundle").then(|| first.to_string())
-}
+    source
+        .split(['/', '\\'])
+        .find(|part| part.eq_ignore_ascii_case("bundle"))
+        .map(str::to_string)
 
+}
 fn timestamp_is_present(record: &EvtxRecord) -> bool {
     if record.timestamp_epoch != 0 {
         return true;
