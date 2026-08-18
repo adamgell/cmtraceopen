@@ -678,6 +678,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
   reset: () => {
     const loadGeneration = get().loadGeneration + 1;
+    invalidateAllStreamedRecords(loadGeneration);
     set({
       records: [],
       channels: [],
