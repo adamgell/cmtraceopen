@@ -227,11 +227,9 @@ mod windows_capture {
     }
     fn canonical_version_key(identity: &[(&str, &str, &[u8])]) -> String {
         let mut digest = Sha256::new();
-        for (label, path, content) in identity {
+        for (label, _path, content) in identity {
             digest.update(label.as_bytes());
             digest.update((label.len() as u64).to_le_bytes());
-            digest.update(path.as_bytes());
-            digest.update((path.len() as u64).to_le_bytes());
             digest.update(content);
             digest.update((content.len() as u64).to_le_bytes());
         }
@@ -250,14 +248,15 @@ mod windows_capture {
     fn insert_named_metadata(map: &mut BTreeMap<String, String>, key: u64, value: String) {
         map.entry(key.to_string()).or_insert(value);
     }
-
-    fn string(value: OwnedVariant) -> Option<String> {
-        match value {
-            OwnedVariant::String(value) => Some(value),
-            _ => None,
-        }
+    fn keyword_bits(mask: u64) -> Vec<u64> {
+        (0..u64::BITS)
+            .rev()
+            .filter_map(|shift| {
+                let bit = 1u64 << shift;
+                (mask & bit != 0).then_some(bit)
+            })
+            .collect()
     }
-
     unsafe fn decode_variant(variant: &EVT_VARIANT) -> Option<OwnedVariant> {
         let kind = variant.Type & EVT_VARIANT_TYPE_MASK;
         let number = match kind {
@@ -471,7 +470,7 @@ mod windows_capture {
             .min(buffer.len());
         Ok(Some(
             String::from_utf16_lossy(&buffer[..length])
-                .trim_end_matches('\0')
+                .trim_end_matches(|character| matches!(character, '\0' | '\r' | '\n' | '\t' | ' '))
                 .to_string(),
         ))
     }
@@ -681,7 +680,8 @@ mod windows_capture {
 
     unsafe fn provider_version_key(metadata: EVT_HANDLE) -> Result<String, String> {
         let read = |property: EVT_PUBLISHER_METADATA_PROPERTY_ID| -> Result<String, String> {
-            Ok(get_publisher_variant(metadata, property)?
+            Ok(optional_publisher_variant(metadata, property)?
+                .0
                 .and_then(string)
                 .unwrap_or_default())
         };
@@ -845,7 +845,11 @@ mod windows_tests {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || b"234567".contains(&byte)));
         assert_eq!(base32(&[0]), "aa");
-        assert_ne!(first, second, "same path with changed content needs a new version");
+        assert_ne!(first, second, "same payload content change needs a new version");
+        assert_eq!(
+            first,
+            canonical_version_key(&[("resource", "different-machine-path.dll", b"one")])
+        );
         let high_bytes = base32(&[0xff; 32]);
         assert_eq!(high_bytes.len(), 52);
     }
@@ -873,7 +877,7 @@ mod windows_tests {
     }
     #[test]
     fn event_keyword_masks_expand_to_individual_bits() {
-        assert_eq!(keyword_bits(0x8000_0000_0000_0005), vec![1, 4, 0x8000_0000_0000_0000]);
+        assert_eq!(keyword_bits(0x8000_0000_0000_0005), vec![0x8000_0000_0000_0000, 4, 1]);
         assert!(keyword_bits(0).is_empty());
     }
 
