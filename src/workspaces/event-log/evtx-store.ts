@@ -521,13 +521,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           (result.channels.find((c) => c.name === channel)?.eventCount ?? 0) > 0;
         if (channelHasUsableData) newLoaded.add(channel);
 
+        const channelGaps = `${context}:`;
+        const priorGaps = state.coverageGaps.filter((gap) => !gap.startsWith(channelGaps));
         set({
           records: merged,
           channels: updatedChannels,
           loadedChannels: newLoaded,
-          // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
-          // backend reported here would show a complete view of a partly unreadable set.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, reportedGaps),
+          // Replace this channel's prior coverage with the current attempt while retaining gaps for
+          // unrelated channels.
+          coverageGaps: mergeCoverageGaps(priorGaps, reportedGaps),
         });
       } catch (processingError) {
         // assertParseResultShape throws by design on a reply this build cannot read, and a malformed

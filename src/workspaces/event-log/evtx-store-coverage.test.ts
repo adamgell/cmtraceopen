@@ -117,6 +117,19 @@ describe("coverage gaps through the store", () => {
     expect(useEvtxStore.getState().coverageGaps).toEqual([]);
   });
 
+  it("clears a failed channel gap after a clean retry", async () => {
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Application: not read (access denied)"
+    );
+
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
   it("a refresh drops gaps from the records it replaced", async () => {
     // The refresh clears the records, so gaps describing them must go too, or the banner reports a
     // gap in a set that is no longer on screen.
