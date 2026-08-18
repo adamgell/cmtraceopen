@@ -110,6 +110,7 @@ mod windows_capture {
     }
 
     enum OwnedVariant {
+        Null,
         String(String),
         Number(u64),
         Handle(EVT_HANDLE),
@@ -118,6 +119,23 @@ mod windows_capture {
         match value {
             OwnedVariant::Number(value) => Some(value),
             _ => None,
+        }
+    }
+    fn optional_number(value: OwnedVariant) -> Result<Option<u64>, String> {
+        match value {
+            OwnedVariant::Null => Ok(None),
+            OwnedVariant::Number(value) => Ok(Some(value)),
+            _ => Err("metadata value has an invalid type".to_string()),
+        }
+    }
+    fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
+        if target == 1 { raw_value & 0xFFFF } else { raw_value }
+    }
+    fn optional_string(value: OwnedVariant) -> Result<Option<String>, String> {
+        match value {
+            OwnedVariant::Null => Ok(None),
+            OwnedVariant::String(value) => Ok(Some(value)),
+            _ => Err("metadata string has an invalid type".to_string()),
         }
     }
 
@@ -141,6 +159,9 @@ mod windows_capture {
         };
         if let Some(number) = number {
             return Some(OwnedVariant::Number(number));
+        }
+        if kind == EvtVarTypeNull.0 as u32 {
+            return Some(OwnedVariant::Null);
         }
         if kind == EvtVarTypeGuid.0 as u32 {
             let pointer = variant.Anonymous.GuidVal;
@@ -335,6 +356,40 @@ mod windows_capture {
         }
     }
 
+    unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<BTreeMap<u32, String>, String> {
+        let Some(OwnedVariant::Handle(array_handle)) =
+            get_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?
+        else {
+            return Ok(BTreeMap::new());
+        };
+        let array_handle = EvtHandle(array_handle);
+        let mut count = 0u32;
+        EvtGetObjectArraySize(array_handle.0.0, &mut count)
+            .map_err(|error| format!("channel reference array size failed: {error}"))?;
+        let count = usize::try_from(count).map_err(|_| "channel reference size overflow".to_string())?;
+        if count > MAX_OBJECT_ARRAY_ITEMS {
+            return Err("channel reference array exceeds bound".to_string());
+        }
+        let mut names = BTreeMap::new();
+        for index in 0..count {
+            let index = u32::try_from(index).map_err(|_| "channel reference index overflow".to_string())?;
+            let channel_index = number(object_property(
+                array_handle.0.0,
+                index,
+                EvtPublisherMetadataChannelReferenceIndex.0 as u32,
+            )?)
+            .ok_or_else(|| "channel reference index has an invalid type".to_string())?;
+            let path = string(object_property(
+                array_handle.0.0,
+                index,
+                EvtPublisherMetadataChannelReferencePath.0 as u32,
+            )?)
+            .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
+            names.insert(channel_index as u32, path);
+        }
+        Ok(names)
+    }
+
     unsafe fn capture_provider(
         publisher_name: &str,
         metadata_handle: EVT_HANDLE,
@@ -345,6 +400,7 @@ mod windows_capture {
             source_os_build,
             ..ProviderMetadata::default()
         };
+        let channels = channel_names(metadata_handle)?;
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages);
 
@@ -360,26 +416,27 @@ mod windows_capture {
             EvtGetObjectArraySize(array_handle.0.0, &mut count)
                 .map_err(|error| format!("metadata array {} size failed: {error}", array_property.0))?;
             let count = usize::try_from(count).map_err(|_| "metadata array size overflow".to_string())?;
-            if count > MAX_OBJECT_ARRAY_ITEMS { return Err("metadata object array exceeds bound".to_string()); }
+            if count > MAX_OBJECT_ARRAY_ITEMS {
+                return Err(format!("metadata array {} exceeds bound", array_property.0));
+            }
             for index in 0..count {
                 let index = u32::try_from(index).map_err(|_| "metadata array index overflow".to_string())?;
-                let name = object_property(array_handle.0.0, index, name_property.0 as u32)
-                    .ok()
-                    .and_then(string);
-                let value = object_property(array_handle.0.0, index, value_property.0 as u32)
-                    .ok()
-                    .and_then(number);
-                let message_id = object_property(array_handle.0.0, index, message_property.0 as u32)
-                    .ok()
-                    .and_then(number);
-                if let (Some(name), Some(value)) = (name, value) {
-                    let target_map = match target {
-                        0 => &mut metadata.tasks,
-                        1 => &mut metadata.opcodes,
-                        _ => &mut metadata.keywords,
-                    };
-                    target_map.insert(value.to_string(), name);
-                }
+                let name = string(object_property(array_handle.0.0, index, name_property.0 as u32)?)
+                    .ok_or_else(|| format!("metadata array {} name has an invalid type", array_property.0))?;
+                let raw_value = number(object_property(array_handle.0.0, index, value_property.0 as u32)?)
+                    .ok_or_else(|| format!("metadata array {} value has an invalid type", array_property.0))?;
+                let value = metadata_key_value(target, raw_value);
+                let message_id = optional_number(object_property(
+                    array_handle.0.0,
+                    index,
+                    message_property.0 as u32,
+                )?)?;
+                let target_map = match target {
+                    0 => &mut metadata.tasks,
+                    1 => &mut metadata.opcodes,
+                    _ => &mut metadata.keywords,
+                };
+                target_map.insert(value.to_string(), name);
                 if let Some(message_id) = message_id {
                     messages.entry(message_id).or_insert_with(|| ProviderMessage {
                         raw_id: message_id,
@@ -393,40 +450,34 @@ mod windows_capture {
         let event_enum = EvtOpenEventMetadataEnum(metadata_handle, 0)
             .map_err(|error| format!("event metadata enumeration failed: {error}"))?;
         let event_enum = EvtHandle(event_enum);
+        let mut exhausted = false;
         for _ in 0..MAX_EVENTS_PER_PROVIDER {
             let event_handle = match EvtNextEventMetadata(event_enum.0, 0) {
                 Ok(handle) => EvtHandle(handle),
-                Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => break,
+                Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => {
+                    exhausted = true;
+                    break;
+                }
                 Err(error) => return Err(format!("event metadata enumeration failed: {error}")),
             };
-            let id = number(get_event_variant(event_handle.0, EventMetadataEventID)?).unwrap_or(0) as u32;
-            let version = number(get_event_variant(event_handle.0, EventMetadataEventVersion)?).unwrap_or(0) as u32;
-            let log_name = get_event_variant(event_handle.0, EventMetadataEventChannel)
-                .ok()
-                .and_then(string);
-            let level = get_event_variant(event_handle.0, EventMetadataEventLevel)
-                .ok()
-                .and_then(number)
+            let id = optional_number(get_event_variant(event_handle.0, EventMetadataEventID)?)?
+                .ok_or_else(|| "event metadata is missing EventID".to_string())? as u32;
+            let version = optional_number(get_event_variant(event_handle.0, EventMetadataEventVersion)?)?
+                .unwrap_or(0) as u32;
+            let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
+                .ok_or_else(|| "event metadata is missing channel index".to_string())?;
+            let log_name = channels.get(&(channel_index as u32)).cloned();
+            let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
                 .map(|value| value as u32);
-            let task = get_event_variant(event_handle.0, EventMetadataEventTask)
-                .ok()
-                .and_then(number)
+            let task = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
                 .map(|value| value as u32);
-            let opcode = get_event_variant(event_handle.0, EventMetadataEventOpcode)
-                .ok()
-                .and_then(number)
+            let opcode = optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?
                 .map(|value| value as u32);
-            let keywords = get_event_variant(event_handle.0, EventMetadataEventKeyword)
-                .ok()
-                .and_then(number)
+            let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
                 .into_iter()
                 .collect();
-            let template = get_event_variant(event_handle.0, EventMetadataEventTemplate)
-                .ok()
-                .and_then(string);
-            let description = get_event_variant(event_handle.0, EventMetadataEventMessageID)
-                .ok()
-                .and_then(number)
+            let template = optional_string(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
+            let description = optional_number(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
                 .and_then(|message_id| {
                     messages.entry(message_id).or_insert_with(|| ProviderMessage {
                         raw_id: message_id,
@@ -446,6 +497,9 @@ mod windows_capture {
                 keywords,
                 template,
             });
+        }
+        if !exhausted {
+            return Err("event metadata enumeration exceeded bound".to_string());
         }
         metadata.messages = messages.into_values().collect();
         Ok(metadata)
@@ -485,6 +539,7 @@ mod windows_capture {
         let publisher_enum = EvtHandle(publisher_enum);
         let mut captured = Vec::new();
         let mut failures = Vec::new();
+        let mut exhausted = false;
         let source_os_build = current_os_build();
 
         for _ in 0..MAX_PUBLISHERS {
@@ -497,6 +552,7 @@ mod windows_capture {
                         break String::from_utf16_lossy(&publisher_buffer[..length]).trim_end_matches('\0').to_string();
                     }
                     Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => {
+                        exhausted = true;
                         if captured.is_empty() && failures.is_empty() {
                             return Err(CaptureError::traversal("publisher enumeration returned no providers"));
                         }
@@ -544,8 +600,31 @@ mod windows_capture {
         }
         crate::event_log::provider_db::write_provider_database(db_path, &captured)
             .map_err(CaptureError::traversal)?;
+        if !exhausted {
+            failures.push(ProviderCaptureFailure {
+                provider_name: "<publisher enumeration>".to_string(),
+                error: "publisher enumeration exceeded bound".to_string(),
+            });
+        }
         if failures.is_empty() { Ok(()) } else { Err(CaptureError::provider_failures(failures)) }
     }
+#[cfg(test)]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn null_optional_metadata_is_not_a_capture_error() {
+        assert_eq!(optional_number(OwnedVariant::Null).expect("null is valid"), None);
+        assert_eq!(optional_string(OwnedVariant::Null).expect("null is valid"), None);
+    }
+
+    #[test]
+    fn opcode_metadata_uses_low_word_for_lookup() {
+        assert_eq!(metadata_key_value(1, 0x0002_000B), 11);
+        assert_eq!(metadata_key_value(2, 0x8000_0000_0000_0001), 0x8000_0000_0000_0001);
+    }
+}
+
 }
 
 #[cfg(target_os = "windows")]
@@ -570,6 +649,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    #[ignore = "requires an authorized Windows guest"]
     fn windows_provider_walk_writes_named_rows_with_composite_keys() {
         let path = std::env::temp_dir().join(format!(
             "cmtraceopen-provider-capture-{}.db",
