@@ -427,6 +427,17 @@ describe("a multi-channel query is delivered one channel at a time", () => {
     expect(useEvtxStore.getState().loadError).toContain("Security");
     expect(useEvtxStore.getState().isLoading).toBe(false);
   });
+
+  it("qualifies manual remote query failures with the host", async () => {
+    useEvtxStore.setState({ remoteMachine: "lab-host" });
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+
+    await useEvtxStore.getState().queryChannels(["Security"]);
+
+    const state = useEvtxStore.getState();
+    expect(state.loadError).toBe("lab-host/Security: access denied");
+    expect(state.coverageGaps).toContain("lab-host/Security: not read (access denied)");
+  });
 });
 
 describe("the time window reaches the service", () => {

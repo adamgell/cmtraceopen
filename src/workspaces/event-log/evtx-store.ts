@@ -276,6 +276,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       };
 
       const promises = availableCore.map(async (ch) => {
+        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
         try {
           resetStreamedRecords([ch]);
           const result = await invokeEventQuery<EvtxParseResult>(
@@ -291,13 +292,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           const arrived = [...streamed.records, ...result.records];
           const streamedGaps =
             streamed.missingSequences.length > 0
-              ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+              ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
               : [];
           const shortfallGaps =
             typeof checked.totalRecords === "number" &&
             arrived.length < checked.totalRecords
               ? [
-                  `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                  `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
                 ]
               : [];
           mergeResult(
@@ -427,15 +428,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           return { channel: ch, result, error: null as string | null };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${message}`);
-          if (!loadError) loadError = `${ch}: ${message}`;
+          const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+          console.warn(`[evtx] Failed to query ${context}: ${message}`);
+          if (!loadError) loadError = `${context}: ${message}`;
           return { channel: ch, result: null, error: message };
         }
       })
     );
     if (!isCurrentRequest(requestId)) return;
-
     for (const { channel, result, error } of results) {
+      const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
         if (!result) {
           // A channel that could not be read is recorded as a gap, not merely as an error banner
@@ -443,7 +445,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // from the view for as long as the view is on screen.
           set((s) => ({
             coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-              `${channel}: not read (${error ?? "unknown error"})`,
+              `${context}: not read (${error ?? "unknown error"})`,
             ]),
           }));
           continue;
@@ -462,13 +464,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         const gapsFound: string[] = [];
         if (streamed.missingSequences.length > 0) {
           gapsFound.push(
-            `${channel}: ${streamed.missingSequences.length} batches of events were not received`
+            `${context}: ${streamed.missingSequences.length} batches of events were not received`
           );
         }
         const expected = checked.totalRecords;
         if (typeof expected === "number" && arrived.length < expected) {
           gapsFound.push(
-            `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
+            `${context}: ${expected - arrived.length} of ${expected} events did not reach the view`
           );
         }
 
@@ -509,10 +511,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         // reply is not a reason to leave the workspace stuck on a spinner with no message.
         const message =
           processingError instanceof Error ? processingError.message : String(processingError);
-        console.warn(`[evtx] Failed to process ${channel}: ${message}`);
-        if (!loadError) loadError = `${channel}: ${message}`;
+        console.warn(`[evtx] Failed to process ${context}: ${message}`);
+        if (!loadError) loadError = `${context}: ${message}`;
         set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${channel}: not read (${message})`]),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${context}: not read (${message})`]),
         }));
       }
     }
@@ -552,6 +554,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
+      const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
       try {
         resetStreamedRecords([ch]);
         const result = await invokeEventQuery<EvtxParseResult>(
@@ -567,13 +570,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         const arrived = [...streamed.records, ...result.records];
         const streamedGaps =
           streamed.missingSequences.length > 0
-            ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+            ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
             : [];
         const shortfallGaps =
           typeof checked.totalRecords === "number" &&
           arrived.length < checked.totalRecords
             ? [
-                `${ch}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
+                `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
               ]
             : [];
 
