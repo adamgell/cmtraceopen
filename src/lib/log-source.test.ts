@@ -7,6 +7,7 @@ import type {
   ParseResult,
 } from "../types/log";
 import { useLogStore, setCachedTabSnapshot, clearAllTabSnapshots } from "../stores/log-store";
+import type { TabEntrySnapshot } from "./tab-snapshot-cache";
 import { useUiStore } from "../stores/ui-store";
 import { loadLogSource, switchToTab } from "./log-source";
 
@@ -139,23 +140,23 @@ function makeEntry(id: number, filePath: string, message: string): LogEntry {
   };
 }
 
-function snapshotFor(filePath: string, message: string) {
+function snapshotFor(filePath: string, message: string): TabEntrySnapshot {
   return {
     entries: [makeEntry(1, filePath, message)],
-    formatDetected: "Ccm" as const,
+    formatDetected: "Ccm",
     parserSelection: {
-      parser: "ccm" as const,
-      implementation: "ccm" as const,
-      provenance: "dedicated" as const,
-      parseQuality: "structured" as const,
-      recordFraming: "physicalLine" as const,
+      parser: "ccm",
+      implementation: "ccm",
+      provenance: "dedicated",
+      parseQuality: "structured",
+      recordFraming: "physicalLine",
       dateOrder: null,
     },
     totalLines: 1,
     byteOffset: 0,
     selectedSourceFilePath: filePath,
-    sourceOpenMode: "single-file" as const,
-    activeColumns: ["severity", "dateTime", "message"] as const,
+    sourceOpenMode: "single-file",
+    activeColumns: ["severity", "dateTime", "message"],
   };
 }
 
@@ -187,13 +188,21 @@ describe("switchToTab", () => {
       activeSource: { kind: "file", path: fileA },
     });
 
-    const listing = Promise.withResolvers<{
+    let resolveListing!: (value: {
       sourceKind: "folder";
       source: LogSource;
       entries: FolderEntry[];
       bundleMetadata: null;
-    }>();
-    commands.listLogSourceFolder.mockReturnValue(listing.promise);
+    }) => void;
+    const listingPromise = new Promise<{
+      sourceKind: "folder";
+      source: LogSource;
+      entries: FolderEntry[];
+      bundleMetadata: null;
+    }>((resolve) => {
+      resolveListing = resolve;
+    });
+    commands.listLogSourceFolder.mockReturnValue(listingPromise);
 
     const pending = switchToTab(fileB, {
       sourceKind: "folder",
@@ -203,12 +212,13 @@ describe("switchToTab", () => {
 
     await vi.waitFor(() => {
       expect(useLogStore.getState().openFilePath).toBe(fileB);
+      expect(useLogStore.getState().selectedSourceFilePath).toBe(fileB);
       expect(useLogStore.getState().entries.map((entry) => entry.message)).toEqual([
         "CIAgent line",
       ]);
     });
 
-    listing.resolve({
+    resolveListing({
       sourceKind: "folder",
       source: folderSource,
       entries: [],
@@ -241,4 +251,80 @@ describe("switchToTab", () => {
     expect(useLogStore.getState().openFilePath).toBe(fileA);
     expect(useLogStore.getState().entries[0]?.message).toBe("AppEnforce line");
   });
+
+  it("does not apply a stale folder listing after a later tab switch", async () => {
+    const otherFolder: LogSource = { kind: "folder", path: "C:/Windows/CCM/Logs/Other" };
+    const fileC = "C:/Windows/CCM/Logs/Start.log";
+    setCachedTabSnapshot(fileA, snapshotFor(fileA, "AppEnforce line"));
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    setCachedTabSnapshot(fileC, snapshotFor(fileC, "Start line"));
+    useLogStore.setState({
+      openFilePath: fileC,
+      selectedSourceFilePath: fileC,
+      entries: snapshotFor(fileC, "Start line").entries,
+      activeSource: { kind: "folder", path: "C:/Windows/CCM/Logs/Start" },
+    });
+    let resolveFirst!: (value: {
+      sourceKind: "folder";
+      source: LogSource;
+      entries: FolderEntry[];
+      bundleMetadata: null;
+    }) => void;
+    const firstListing = new Promise<{
+      sourceKind: "folder";
+      source: LogSource;
+      entries: FolderEntry[];
+      bundleMetadata: null;
+    }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    commands.listLogSourceFolder.mockReturnValueOnce(firstListing);
+    commands.listLogSourceFolder.mockResolvedValueOnce({
+      sourceKind: "folder",
+      source: otherFolder,
+      entries: [
+        {
+          name: "CIAgent.log",
+          path: fileB,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+      ],
+      bundleMetadata: null,
+    });
+
+    const first = switchToTab(fileA, {
+      sourceKind: "folder",
+      sourcePath: folderSource.path,
+      source: folderSource,
+    });
+    const second = switchToTab(fileB, {
+      sourceKind: "folder",
+      sourcePath: otherFolder.path,
+      source: otherFolder,
+    });
+
+    await second;
+    expect(useLogStore.getState().activeSource).toEqual(otherFolder);
+
+    resolveFirst({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: [
+        {
+          name: "AppEnforce.log",
+          path: fileA,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+      ],
+      bundleMetadata: null,
+    });
+    await first;
+    expect(useLogStore.getState().activeSource).toEqual(otherFolder);
+    expect(useLogStore.getState().sourceEntries.map((entry) => entry.path)).toEqual([fileB]);
+  });
+
 });

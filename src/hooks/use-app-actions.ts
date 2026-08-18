@@ -421,11 +421,31 @@ export function useAppActions(): AppActionHandlers {
       }
       if (workspaceDefinition.onOpenSource) {
         const pathKind = await inferPathKind(path);
-        const source: LogSource =
-          pathKind === "folder"
-            ? { kind: "folder", path }
-            : { kind: "file", path };
-        await workspaceDefinition.onOpenSource(source, "drag-drop.path-open");
+        if (pathKind === "folder") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            "drag-drop.path-open",
+          );
+          return;
+        }
+        if (pathKind === "file") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            "drag-drop.path-open",
+          );
+          return;
+        }
+        try {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            "drag-drop.path-open",
+          );
+        } catch {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            "drag-drop.path-open",
+          );
+        }
         return;
       }
 

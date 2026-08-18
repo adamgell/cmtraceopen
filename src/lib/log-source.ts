@@ -711,8 +711,8 @@ export async function switchToTab(
     }
 
     logState.setEntries(cached.entries);
+    logState.setSelectedSourceFilePath(cached.selectedSourceFilePath);
     logState.setOpenFilePath(filePath);
-    logState.setSourceOpenMode(cached.sourceOpenMode);
     logState.setFormatDetected(cached.formatDetected);
     logState.setParserSelection(cached.parserSelection);
     logState.setTotalLines(cached.totalLines);
@@ -761,6 +761,8 @@ export async function switchToTab(
   await loadSelectedLogFile(filePath, source);
 }
 
+let folderRestoreGeneration = 0;
+
 /** Restore the sidebar folder listing if the active source changed. */
 async function restoreFolderContext(
   logState: ReturnType<typeof useLogStore.getState>,
@@ -773,17 +775,23 @@ async function restoreFolderContext(
     currentSource.kind !== source.kind ||
     getLogSourcePath(currentSource) !== getLogSourcePath(source);
 
-  if (sourceChanged) {
-    console.info("[log-source] restoring folder context", {
-      sourceKind: source.kind,
-      sourcePath: getLogSourcePath(source),
-    });
-
-    const listing = await listLogSourceFolder(source);
-    logState.setActiveSource(source);
-    logState.setSourceEntries(listing.entries);
-    logState.setBundleMetadata(listing.bundleMetadata ?? null);
+  if (!sourceChanged) {
+    return;
   }
+
+  const generation = ++folderRestoreGeneration;
+  console.info("[log-source] restoring folder context", {
+    sourceKind: source.kind,
+    sourcePath: getLogSourcePath(source),
+  });
+
+  const listing = await listLogSourceFolder(source);
+  if (generation !== folderRestoreGeneration) {
+    return;
+  }
+  logState.setActiveSource(source);
+  logState.setSourceEntries(listing.entries);
+  logState.setBundleMetadata(listing.bundleMetadata ?? null);
 }
 
 /**

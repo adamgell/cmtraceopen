@@ -54,9 +54,17 @@ beforeEach(() => {
 });
 
 describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
+  function createOnOpen(workspaceId: Parameters<typeof createIntuneOnOpenSource>[0]) {
+    const onOpen = createIntuneOnOpenSource(workspaceId);
+    if (!onOpen) {
+      throw new Error("createIntuneOnOpenSource must return a handler");
+    }
+    return onOpen;
+  }
+
   it("forwards graphApiEnabled and does not include live event logs for a file source", async () => {
     useUiStore.setState({ graphApiEnabled: true });
-    const onOpen = createIntuneOnOpenSource("intune");
+    const onOpen = createOnOpen("intune");
 
     await onOpen({ kind: "file", path: "C:/Logs/IME/AppWorkload.log" }, "test.open-file");
 
@@ -69,7 +77,7 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
 
   it("includes live event logs only for the known windows-intune-ime-logs source", async () => {
     useUiStore.setState({ graphApiEnabled: false });
-    const onOpen = createIntuneOnOpenSource("new-intune");
+    const onOpen = createOnOpen("new-intune");
 
     await onOpen(
       {

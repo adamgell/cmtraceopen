@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MergeLegendBar } from "./MergeLegendBar";
+import { buildMergeCacheKey } from "../../lib/merge-entries";
 import { useLogStore } from "../../stores/log-store";
 import type { LogEntry } from "../../types/log";
 
@@ -36,6 +37,7 @@ describe("MergeLegendBar", () => {
         colorAssignments: { [app]: "#ef4444", [ci]: "#3b82f6" },
         fileVisibility: { [app]: true, [ci]: true },
         mergedEntries: [entry(1, app), entry(2, ci), entry(3, app)],
+        cacheKey: buildMergeCacheKey([app, ci], { [app]: 2, [ci]: 1 }),
       },
     });
   });
