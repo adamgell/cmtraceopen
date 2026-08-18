@@ -553,6 +553,7 @@ fn query_channel_inner(
         records.append(&mut batch_records);
     }
 
+    if unparsable > 0 {
         // Counted and reported rather than passed over. Events that never arrived look exactly like
         // evidence that the thing being investigated did not happen.
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
