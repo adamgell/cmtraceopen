@@ -417,7 +417,12 @@ fn streaming_writer_handles_each_record_without_collecting_the_iterator() {
 
 #[test]
 fn writer_supports_html_and_raw_xml_without_reusing_xml_container() {
-    let event = record("<danger>&");
+    let mut event = record("<danger>&");
+    event.raw_xml = "<?xml version=\"1.0\"?><Event><Data>message</Data><Message>PASSWORD=raw-secret</Message></Event>".into();
+    event.event_data = vec![super::models::EvtxField {
+        name: "Password".into(),
+        value: "event-secret".into(),
+    }];
     let mut html = Cursor::new(Vec::new());
     super::writer::write_record_stream(&mut html, ExportFormat::Html, [&event], &[])
         .expect("HTML succeeds");
@@ -425,12 +430,14 @@ fn writer_supports_html_and_raw_xml_without_reusing_xml_container() {
     assert!(html.contains("<table"));
     assert!(html.contains("&lt;danger&gt;&amp;"));
 
+    assert!(!html.contains("raw-secret"));
+    assert!(!html.contains("event-secret"));
     let mut raw = Cursor::new(Vec::new());
     super::writer::write_record_stream(&mut raw, ExportFormat::RawXml, [&event], &[])
         .expect("raw XML succeeds");
     let raw = String::from_utf8(raw.into_inner()).expect("UTF-8");
     assert!(raw.starts_with("<?xml version=\"1.0\"?>"));
-    assert!(raw.contains("<Event><Data>message</Data></Event>"));
+    assert!(raw.contains("<Event><Data>message</Data>"));
     assert!(!raw.contains("<Events>"));
 }
 
