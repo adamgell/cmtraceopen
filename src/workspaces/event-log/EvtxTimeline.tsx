@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import {
@@ -8,7 +8,7 @@ import {
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
-  parseEventIdFilter,
+  selectVisibleRecords,
   buildGroupedRows,
   type EvtxRow,
 } from "./evtx-filter";
@@ -57,45 +57,57 @@ export function EvtxTimeline() {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const groupBy = useEvtxStore((s) => s.groupBy);
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
 
   const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const metrics = useMemo(
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
-
   const rowEstimate = metrics.rowHeight + 2;
 
-  const eventIdSet = useMemo(
-    () => parseEventIdFilter(filterEventIds),
-    [filterEventIds]
+  const filteredRecords = useMemo(
+    () =>
+      selectVisibleRecords({
+        records,
+        selectedChannels,
+        filterLevels,
+        filterEventIds,
+        filterSearch,
+        quickFilter,
+        visibleColumns: columnConfig.order,
+        timeZoneMode,
+        timeWindow,
+        nowEpoch,
+      }),
+    [
+      records,
+      selectedChannels,
+      filterLevels,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      columnConfig.order,
+      timeZoneMode,
+      timeWindow,
+      nowEpoch,
+    ]
   );
-
-  const searchLower = useMemo(
-    () => filterSearch.trim().toLowerCase(),
-    [filterSearch]
-  );
-
-  const filteredRecords = useMemo(() => {
-    return records.filter((r) => {
-      if (!selectedChannels.has(r.channel)) return false;
-      if (!filterLevels.has(r.level)) return false;
-      if (eventIdSet && !eventIdSet.has(r.eventId)) return false;
-      if (searchLower && !r.message.toLowerCase().includes(searchLower) && !r.provider.toLowerCase().includes(searchLower)) {
-        return false;
-      }
-      return true;
-    });
-  }, [records, selectedChannels, filterLevels, eventIdSet, searchLower]);
 
   const sortedRecords = useMemo(() => {
     return [...filteredRecords].sort((a, b) =>

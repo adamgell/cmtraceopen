@@ -1,11 +1,11 @@
-#[cfg(target_os = "windows")]
-use serde::Serialize;
 use super::models::{EvtxChannelInfo, EvtxParseResult};
 use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
-use tauri::{AppHandle, Manager};
+#[cfg(target_os = "windows")]
+use serde::Serialize;
 #[cfg(target_os = "windows")]
 use tauri::Emitter;
+use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
@@ -34,6 +34,15 @@ struct EvtxRecordBatch {
     channel: String,
     sequence: usize,
     records: Vec<super::models::EvtxRecord>,
+}
+#[cfg(target_os = "windows")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvtxRecordStreamComplete {
+    channel: String,
+    request_id: String,
+    sequence_count: usize,
+    total_records: usize,
 }
 
 /// Expands folder, wildcard, archive, and VSS selections before parsing.
@@ -205,6 +214,22 @@ async fn query_channels_impl(
                             sequence += 1;
                         },
                     );
+                    let sequence_count = sequence;
+                    let total_records = outcome.as_ref().map(|scan| scan.delivered).unwrap_or(0);
+                    if let Err(error) = app_ref.emit(
+                        "evtx-record-stream-complete",
+                        EvtxRecordStreamComplete {
+                            channel: batch_channel.clone(),
+                            request_id: batch_request_id.clone(),
+                            sequence_count,
+                            total_records,
+                        },
+                    ) {
+                        log::warn!(
+                            "event=evtx_stream_complete_emit_failed channel=\"{batch_channel}\" \
+                             error=\"{error}\""
+                        );
+                    }
                     (channel.clone(), outcome)
                 })
                 .collect();
@@ -288,7 +313,6 @@ pub async fn evtx_query_channels(
 ) -> Result<EvtxParseResult, String> {
     query_channels_impl(channels, max_events, filter, app, state, None, request_id).await
 }
-
 
 #[tauri::command]
 pub async fn evtx_query_remote_channels(
@@ -495,7 +519,6 @@ pub async fn evtx_capture_provider_databases(
             message: format!("provider capture task failed: {error}"),
             failures: Vec::new(),
         })?
-
 }
 /// Merges already-loaded log entries and event records into one chronological timeline.
 ///

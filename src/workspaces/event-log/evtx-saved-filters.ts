@@ -6,16 +6,18 @@
  * serialization rules are testable without a Zustand or Tauri runtime.
  */
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
-import type { EvtxGroupField } from "./evtx-filter";
+import {
+  DEFAULT_QUICK_FILTER,
+  type EvtxFilterModel,
+  type EvtxGroupField,
+  type EvtxQuickFilter,
+  type EvtxQuickFilterAction,
+  type EvtxQuickFilterMode,
+  type EvtxQuickFilterScope,
+} from "./evtx-filter";
 
-/** Everything a saved filter restores. */
-export interface EvtxFilterCriteria {
-  levels: EvtxLevel[];
-  eventIds: string;
-  search: string;
-  timeWindow: EvtxTimeWindow;
-  groupBy: EvtxGroupField[];
-}
+/** Everything a saved filter restores, using the same layered model as runtime evaluation. */
+export interface EvtxFilterCriteria extends EvtxFilterModel {}
 
 export interface EvtxSavedFilter {
   id: string;
@@ -36,6 +38,35 @@ export const ALL_LEVELS: EvtxLevel[] = [
   "Verbose",
 ];
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
+const QUICK_FILTER_MODES: EvtxQuickFilterMode[] = [
+  "oneString",
+  "multipleWords",
+  "multipleStrings",
+  "allWords",
+  "allStrings",
+  "eventIds",
+];
+const QUICK_FILTER_SCOPES: EvtxQuickFilterScope[] = ["allColumns", "visibleColumns"];
+const QUICK_FILTER_ACTIONS: EvtxQuickFilterAction[] = ["show", "hide"];
+
+/** Revalidates the interactive grammar when a filter is loaded from disk. */
+export function sanitizeQuickFilter(input: unknown): EvtxQuickFilter {
+  const raw = isRecord(input) ? input : {};
+  return {
+    mode: QUICK_FILTER_MODES.includes(raw.mode as EvtxQuickFilterMode)
+      ? (raw.mode as EvtxQuickFilterMode)
+      : DEFAULT_QUICK_FILTER.mode,
+    query: typeof raw.query === "string" ? raw.query : "",
+    scope: QUICK_FILTER_SCOPES.includes(raw.scope as EvtxQuickFilterScope)
+      ? (raw.scope as EvtxQuickFilterScope)
+      : DEFAULT_QUICK_FILTER.scope,
+    action: QUICK_FILTER_ACTIONS.includes(raw.action as EvtxQuickFilterAction)
+      ? (raw.action as EvtxQuickFilterAction)
+      : DEFAULT_QUICK_FILTER.action,
+    caseSensitive: raw.caseSensitive === true,
+    highlight: raw.highlight !== false,
+  };
+}
 const GROUP_FIELDS: EvtxGroupField[] = [
   "level",
   "provider",
@@ -45,7 +76,7 @@ const GROUP_FIELDS: EvtxGroupField[] = [
 ];
 
 /** The current schema version, so an older export can be recognised rather than misread. */
-export const SAVED_FILTER_SCHEMA = 1;
+export const SAVED_FILTER_SCHEMA = 2;
 
 export interface EvtxFilterExport {
   schema: number;
@@ -65,29 +96,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
   const raw = isRecord(input) ? input : {};
+  const before = isRecord(raw.beforeLoad) ? raw.beforeLoad : {};
+  const onLoad = isRecord(raw.onLoad) ? raw.onLoad : {};
+  const after = isRecord(raw.afterLoad) ? raw.afterLoad : {};
 
-  const levels = Array.isArray(raw.levels)
-    ? (raw.levels.filter((level): level is EvtxLevel =>
+  const levels = Array.isArray(before.levels)
+    ? (before.levels.filter((level): level is EvtxLevel =>
         ALL_LEVELS.includes(level as EvtxLevel)
       ) as EvtxLevel[])
     : [];
-
-  const groupBy = Array.isArray(raw.groupBy)
-    ? (raw.groupBy.filter((field): field is EvtxGroupField =>
+  const groupBy = Array.isArray(after.groupBy)
+    ? (after.groupBy.filter((field): field is EvtxGroupField =>
         GROUP_FIELDS.includes(field as EvtxGroupField)
       ) as EvtxGroupField[])
     : [];
 
+  const selectedChannels = Array.isArray(before.selectedChannels)
+    ? before.selectedChannels.filter((channel): channel is string => typeof channel === "string")
+    : undefined;
   return {
-    // An empty level list would match nothing, which no operator means to save, so it falls back
-    // to every level rather than producing a filter that silently hides everything.
-    levels: levels.length > 0 ? levels : [...ALL_LEVELS],
-    eventIds: typeof raw.eventIds === "string" ? raw.eventIds : "",
-    search: typeof raw.search === "string" ? raw.search : "",
-    timeWindow: TIME_WINDOWS.includes(raw.timeWindow as EvtxTimeWindow)
-      ? (raw.timeWindow as EvtxTimeWindow)
-      : "24h",
-    groupBy,
+    beforeLoad: {
+      levels: levels.length > 0 ? levels : [...ALL_LEVELS],
+      eventIds: typeof before.eventIds === "string" ? before.eventIds : "",
+      timeWindow: TIME_WINDOWS.includes(before.timeWindow as EvtxTimeWindow)
+        ? (before.timeWindow as EvtxTimeWindow)
+        : "24h",
+      selectedChannels,
+    },
+    onLoad: {
+      search: typeof onLoad.search === "string" ? onLoad.search : "",
+      quickFilter: sanitizeQuickFilter(onLoad.quickFilter),
+    },
+    afterLoad: { groupBy },
   };
 }
 
@@ -142,10 +182,13 @@ export function parseFilterExport(text: string): {
   // The schema is written on export and must be checked on import. A newer file would otherwise be
   // sanitized into whatever this build understands and imported silently, quietly changing the
   // operator's criteria rather than telling them the file is from a later version.
-  if (isRecord(parsed) && parsed.schema !== undefined && parsed.schema !== SAVED_FILTER_SCHEMA) {
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.schema !== "number" ||
+    parsed.schema !== SAVED_FILTER_SCHEMA
+  ) {
     return { filters: [], skipped: 0, unsupportedSchema: true };
   }
-
   const list = isRecord(parsed) && Array.isArray(parsed.filters) ? parsed.filters : [];
   const filters: EvtxSavedFilter[] = [];
   let skipped = 0;
