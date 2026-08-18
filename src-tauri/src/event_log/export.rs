@@ -346,7 +346,7 @@ fn redact_xml_text(text: &str) -> String {
 
 fn redact_raw_xml(xml: &str) -> String {
     if xml.len() > MAX_RAW_XML_BYTES {
-        return "[redacted: oversized text omitted]".to_owned();
+        return "<Event><Redaction>[redacted: oversized text omitted]</Redaction></Event>".to_owned();
     }
     let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
         let label = if captures["label"].eq_ignore_ascii_case("Computer") {
@@ -834,8 +834,9 @@ mod tests {
         let mut event = record("safe");
         event.raw_xml = format!("<Event>{}</Event>", "safe ".repeat(60_000));
         let output = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
-        assert!(output.contains("[redacted: oversized text omitted]"));
-        assert!(!output.contains(&"safe ".repeat(60_000)));
+        assert_eq!(output, "<Event><Redaction>[redacted: oversized text omitted]</Redaction></Event>\n");
+        let mut reader = quick_xml::Reader::from_str(output.trim());
+        while !matches!(reader.read_event().expect("valid marker"), quick_xml::events::Event::Eof) {}
     }
     #[test]
     fn oversized_normalized_content_is_explicitly_replaced() {

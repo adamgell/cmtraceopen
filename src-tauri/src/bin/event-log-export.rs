@@ -330,8 +330,14 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let cli = load_cli(parse_args(args)?)?;
-    reject_source_destination(&cli.sources, cli.output.as_deref())?;
+    let parsed = parse_args(args)?;
+    let manifest_path = parsed.manifest.clone();
+    let cli = load_cli(parsed)?;
+    let mut protected_sources = cli.sources.clone();
+    if let Some(manifest_path) = manifest_path {
+        protected_sources.push(manifest_path);
+    }
+    reject_source_destination(&protected_sources, cli.output.as_deref())?;
     let records = filtered_records(cli.records, &cli.filter)?;
     let stats = match cli
         .output
@@ -618,6 +624,28 @@ mod tests {
         .expect_err("source overwrite rejected");
         assert!(error.contains("overwrite"));
         assert_eq!(std::fs::read_to_string(source).expect("source"), "evidence");
+    }
+
+    #[test]
+    fn manifest_path_is_protected_from_output_overwrite() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        std::fs::write(&manifest_path, r#"{"records":[]}"#).expect("manifest");
+        let mut stdout = Vec::new();
+        let error = run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "json",
+                "--output",
+                manifest_path.to_str().expect("manifest path"),
+            ],
+            &mut stdout,
+        )
+        .expect_err("manifest overwrite rejected");
+        assert!(error.contains("overwrite") || error.contains("collision"));
     }
     #[test]
     fn run_writes_direct_file_and_returns_coverage_report() {
