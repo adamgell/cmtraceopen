@@ -153,7 +153,7 @@ pub fn build_source_manifest_for_selections(
                 } else {
                     requested_kind
                 },
-                path.components().count().min(MAX_SOURCE_MANIFEST_DEPTH),
+                0,
                 &mut inspected_work,
                 &mut manifest,
             )?;
@@ -224,15 +224,16 @@ fn expand_wildcard(
         match result {
             Ok(path) => paths.push(path),
             Err(error) => {
+                let error_path = error.path().to_string_lossy().to_string();
                 let io_error = error.into_error();
                 if io_error.kind() == std::io::ErrorKind::PermissionDenied {
                     coverage.push(SourceCoverage::AccessDenied {
-                        path: pattern.to_string(),
+                        path: error_path,
                         reason: format!("wildcard entry access was denied: {io_error}"),
                     });
                 } else {
                     coverage.push(SourceCoverage::Missing {
-                        path: pattern.to_string(),
+                        path: error_path,
                         reason: format!("wildcard entry could not be read: {io_error}"),
                     });
                 }
