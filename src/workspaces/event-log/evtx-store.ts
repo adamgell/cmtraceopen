@@ -44,6 +44,9 @@ export function buildUnifiedTimeline(
   records: EvtxRecord[],
   entries: LogEntry[] = []
 ): Promise<UnifiedTimeline> {
+  if (records.some((record) => record.eventRecordId !== 0 && !Number.isSafeInteger(record.eventRecordId))) {
+    return Promise.reject(new Error("EventRecordID exceeds JavaScript safe integer precision"));
+  }
   return invoke<UnifiedTimeline>("evtx_build_unified_timeline", { entries, records });
 }
 

@@ -189,7 +189,7 @@ impl UnifiedTimeline {
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
-    let first = source.split(['/', '\\']).next()?;
+    let first = source.trim_start_matches(['/', '\\']).split(['/', '\\']).next()?;
     first.eq_ignore_ascii_case("bundle").then(|| first.to_string())
 }
 
@@ -197,11 +197,12 @@ fn bundle_from_source(source: &str) -> Option<String> {
 pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
     let file = entry.file_path.clone();
     let source = entry.source_file.clone().unwrap_or_else(|| file.clone());
+    let bundle = bundle_from_source(&source).or_else(|| bundle_from_source(&file));
     let origin = TimelineOrigin::Log {
         file,
         component: entry.component.clone(),
         line: entry.line_number,
-        bundle: bundle_from_source(&source),
+        bundle,
         // LogEntry::host_name is DHCP client payload, not the machine that emitted the log.
         machine: None,
         record_id: entry.id,
@@ -579,13 +580,14 @@ mod tests {
     fn log_origin_keeps_physical_file_separate_from_parser_source_token() {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.source_file = Some("store.cs:1".into());
-        entry.file_path = "/logs/ccm.log".into();
+        entry.file_path = "/bundle/evidence/ccm.log".into();
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
-            TimelineOrigin::Log { file, source, .. } => {
-                assert_eq!(file, "/logs/ccm.log");
+            TimelineOrigin::Log { file, source, bundle, .. } => {
+                assert_eq!(file, "/bundle/evidence/ccm.log");
                 assert_eq!(source, "store.cs:1");
+                assert_eq!(bundle.as_deref(), Some("bundle"));
             }
             other => panic!("expected a log origin, got {other:?}"),
         }

@@ -89,4 +89,10 @@ describe("buildUnifiedTimeline", () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+
+  it("fails closed instead of forwarding unsafe EventRecordIDs through JSON", async () => {
+    const unsafe = { ...record, eventRecordId: Number.MAX_SAFE_INTEGER + 2 };
+    await expect(buildUnifiedTimeline([unsafe])).rejects.toThrow("safe integer");
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });

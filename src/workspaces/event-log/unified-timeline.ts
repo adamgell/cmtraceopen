@@ -93,6 +93,16 @@ function stableRecordBase(record: EvtxRecord): string {
   return `${prefix}|missing${missingRecordDigest(record)}`;
 }
 
+function compareRustStrings(left: string, right: string): number {
+  const leftBytes = utf8Encoder.encode(left);
+  const rightBytes = utf8Encoder.encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = leftBytes[index] - rightBytes[index];
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
 function stableRecordIdentities(records: EvtxRecord[]): {
   keys: Set<string>;
   unsafePrefixes: Set<string>;
@@ -100,7 +110,14 @@ function stableRecordIdentities(records: EvtxRecord[]): {
   const keys = new Set<string>();
   const unsafePrefixes = new Set<string>();
   const occurrences = new Map<string, number>();
-  for (const record of records) {
+  const orderedRecords = [...records].sort((left, right) =>
+    (left.timestampEpoch ?? 0) - (right.timestampEpoch ?? 0) ||
+    compareRustStrings(stableRecordBase(left), stableRecordBase(right)) ||
+    compareRustStrings(left.timestamp ?? "", right.timestamp ?? "") ||
+    compareRustStrings(left.message ?? "", right.message ?? "") ||
+    compareRustStrings(left.rawXml ?? "", right.rawXml ?? "")
+  );
+  for (const record of orderedRecords) {
     const base = stableRecordBase(record);
     if (record.eventRecordId !== 0) {
       if (Number.isSafeInteger(record.eventRecordId)) {
