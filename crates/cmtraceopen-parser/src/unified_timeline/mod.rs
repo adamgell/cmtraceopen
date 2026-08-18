@@ -592,6 +592,23 @@ mod tests {
     }
 
     #[test]
+    fn non_ccm_log_origin_uses_physical_file_when_no_source_token_exists() {
+        let mut entry = log_entry(Some(1_000), "panther line", Severity::Info);
+        entry.source_file = None;
+        entry.file_path = "/logs/setupact.log".into();
+        let timeline = from_log_entries(&[entry]);
+
+        match &timeline.items[0].origin {
+            TimelineOrigin::Log { file, source, bundle, .. } => {
+                assert_eq!(file, "/logs/setupact.log");
+                assert_eq!(source, "/logs/setupact.log");
+                assert_eq!(bundle, &None);
+            }
+            other => panic!("expected a log origin, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_log_origin_keeps_its_wire_keys() {
         let origin = TimelineOrigin::Log {
             file: "cmt.log".into(),
