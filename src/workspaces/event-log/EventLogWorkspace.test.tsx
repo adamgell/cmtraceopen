@@ -7,6 +7,7 @@ const virtualizerState = vi.hoisted(() => ({
   totalSize: 0,
   resizedSizes: new Map<number, number>(),
   measureCalls: 0,
+  visibleCount: null as number | null,
   recalculate: () => undefined,
   measureElement: (element: HTMLElement | null) => {
     virtualizerState.measureCalls += 1;
@@ -48,7 +49,8 @@ vi.mock("@tanstack/react-virtual", () => ({
     };
     const getVirtualItems = () => {
       let start = 0;
-      const items = Array.from({ length: count }, (_, index) => {
+      const visibleCount = virtualizerState.visibleCount ?? count;
+      const items = Array.from({ length: Math.min(count, visibleCount) }, (_, index) => {
         const size = measuredSize(index);
         const item = {
           index,
@@ -147,6 +149,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     virtualizerState.measuredSizes.clear();
+    virtualizerState.visibleCount = null;
     virtualizerState.measureCalls = 0;
     virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
@@ -342,6 +345,34 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + largeList.rowHeight + 6
+    );
+  });
+  it("updates cached sizes for an offscreen record while remeasuring visible rows", () => {
+    seedEventLog();
+    useEvtxStore.setState({
+      records: [
+        RECORD,
+        { ...RECORD, id: 2, eventRecordId: 2, eventId: 43, message: "Second event" },
+      ],
+      groupBy: ["level"],
+    });
+    virtualizerState.visibleCount = 2;
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    expect(timeline.getAllByRole("option")).toHaveLength(1);
+    const initialMeasureCalls = virtualizerState.measureCalls;
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
+    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
+    expect(virtualizerState.resizedSizes.get(2)).toBe(largeList.rowHeight + 6);
+    expect(virtualizerState.items).toHaveLength(2);
+    expect(virtualizerState.totalSize).toBe(
+      largeList.rowHeight + (largeList.rowHeight + 6) * 2
     );
   });
 });
