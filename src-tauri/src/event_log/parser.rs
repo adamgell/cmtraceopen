@@ -320,7 +320,7 @@ fn expand_path(
         };
         for child_error in &listing.child_errors {
             let (coverage_path, coverage_reason) = child_error
-                .split_once(": ")
+                .rsplit_once(": ")
                 .map_or((path_string.as_str(), child_error.as_str()), |(path, reason)| {
                     (path, reason)
                 });
@@ -528,7 +528,9 @@ fn normalize_source_path(path: &Path) -> String {
     let raw = path.to_string_lossy();
     let windows_native = raw.starts_with("\\\\")
         || raw.starts_with("//")
-        || (raw.len() >= 3 && raw.as_bytes()[1] == b':' && raw.as_bytes()[2] == b'\\');
+        || (raw.len() >= 3
+            && raw.as_bytes()[1] == b':'
+            && (raw.as_bytes()[2] == b'\\' || raw.as_bytes()[2] == b'/'));
     if windows_native {
         return normalize_windows_path(&raw);
     }
@@ -1133,6 +1135,10 @@ mod tests {
         assert_eq!(
             normalize_source_path(Path::new(r"\\server\share\logs\..\Application.evtx")),
             r"\\server\share\Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new(r"C:/logs/../Application.evtx")),
+            r"C:\Application.evtx"
         );
         assert_eq!(
             normalize_source_path(Path::new(r"\\?\C:\logs\.\Application.evtx")),
