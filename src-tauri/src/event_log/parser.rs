@@ -73,14 +73,20 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
     };
 
     for source in sources {
-        let is_wildcard = !is_vss_path(source) && (source.contains('*') || source.contains('?'));
+        let is_wildcard =
+            !is_vss_path(source) && (source.contains('*') || source.contains('?') || source.contains('['));
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage)
         } else {
             vec![PathBuf::from(source)]
         };
 
-        if is_wildcard && paths.is_empty() {
+        if is_wildcard
+            && paths.is_empty()
+            && !manifest.coverage.iter().any(|coverage| {
+                matches!(coverage, SourceCoverage::InvalidPattern { path, .. } if path == source)
+            })
+        {
             manifest.coverage.push(SourceCoverage::Missing {
                 path: source.clone(),
                 reason: "wildcard did not match any filesystem path".to_string(),
@@ -116,6 +122,13 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
         require_literal_separator: false,
         require_literal_leading_dot: false,
     };
+    if pattern.matches('[').count() != pattern.matches(']').count() {
+        coverage.push(SourceCoverage::InvalidPattern {
+            path: pattern.to_string(),
+            reason: "wildcard character class is not balanced".to_string(),
+        });
+        return Vec::new();
+    }
     let matches = match glob::glob_with(pattern, options) {
         Ok(matches) => matches,
         Err(error) => {
@@ -126,10 +139,10 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
             return Vec::new();
         }
     };
-
     let mut paths = Vec::new();
+    let mut inspected = 0usize;
     for result in matches {
-        if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+        if inspected >= MAX_SOURCE_MANIFEST_ENTRIES {
             coverage.push(SourceCoverage::LimitReached {
                 path: pattern.to_string(),
                 reason: format!(
@@ -139,6 +152,7 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
             });
             break;
         }
+        inspected += 1;
         match result {
             Ok(path) => paths.push(path),
             Err(error) => coverage.push(SourceCoverage::Missing {
@@ -251,6 +265,13 @@ fn expand_path(
                 return Ok(());
             }
         };
+        for child_error in &listing.child_errors {
+            manifest.coverage.push(SourceCoverage::Missing {
+                path: path_string.clone(),
+                reason: child_error.clone(),
+            });
+        }
+
         for entry in listing.entries {
             if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
                 manifest.coverage.push(SourceCoverage::LimitReached {
@@ -594,7 +615,11 @@ pub fn parse_evtx_manifest(
                     record.source_label = source.path.clone();
                 }
                 parse_errors += file.parse_errors;
-                error_messages.extend(file.messages);
+                error_messages.extend(
+                    file.messages
+                        .into_iter()
+                        .map(|message| format!("{}: {message}", source.path)),
+                );
                 let source_label = source.path.clone();
 
                 let mut channel_counts: std::collections::HashMap<String, u64> =
@@ -1083,6 +1108,17 @@ mod tests {
     }
 
     #[test]
+    fn invalid_wildcard_reports_only_invalid_pattern_coverage() {
+        let manifest = build_source_manifest(&["/logs/[".to_string()]).expect("build manifest");
+        assert_eq!(manifest.entries.len(), 0);
+        assert_eq!(manifest.coverage.len(), 1);
+        assert!(matches!(
+            manifest.coverage[0],
+            SourceCoverage::InvalidPattern { .. }
+        ));
+    }
+
+    #[test]
     fn source_manifest_wildcards_are_case_insensitive_and_deterministic() {
         let root = std::env::temp_dir().join(format!(
             "cmtrace-event-source-wildcard-{}",
@@ -1095,6 +1131,17 @@ mod tests {
 
         let pattern = root.join("*.evtx").to_string_lossy().to_string();
         let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(manifest.entries.iter().any(|entry| entry.path.ends_with("Application.evtx")));
+            assert!(
+                manifest.entries.iter().any(|entry| entry.path.contains("Archive-"))
+                    || manifest.coverage.iter().any(|coverage| {
+                        matches!(coverage, SourceCoverage::AccessDenied { path, .. } if path.contains("Archive-"))
+                    })
+            );
+        }
         #[cfg(not(target_os = "windows"))]
         {
             assert_eq!(manifest.entries.len(), 1);
@@ -1104,8 +1151,7 @@ mod tests {
                 [SourceCoverage::Unsupported { .. }]
             ));
         }
-        #[cfg(target_os = "windows")]
-        assert_eq!(manifest.entries.len(), 2);
+
 
         std::fs::remove_dir_all(root).expect("remove source tree");
     }

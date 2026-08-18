@@ -108,6 +108,7 @@ export interface FolderListingResult {
   sourceKind: LogSourceKind;
   source: LogSource;
   entries: FolderEntry[];
+  childErrors?: string[];
   bundleMetadata?: EvidenceBundleMetadata | null;
 }
 

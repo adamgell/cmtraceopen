@@ -303,6 +303,20 @@ pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBun
 
     let manifest_content = fs::read_to_string(&manifest_path).ok()?;
     let manifest = serde_json::from_str::<Value>(&manifest_content).ok()?;
+    let bundle = manifest.get("bundle")?.as_object()?;
+    if bundle
+        .get("bundleId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+        && bundle
+            .get("bundleLabel")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .is_none()
+    {
+        return None;
+    }
 
     let mut primary_entry_points = resolve_bundle_primary_entry_points(path, &manifest);
     if primary_entry_points.is_empty() {

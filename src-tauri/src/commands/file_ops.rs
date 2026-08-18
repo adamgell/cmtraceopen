@@ -72,6 +72,8 @@ pub struct FolderListingResult {
     pub source: LogSource,
     pub entries: Vec<FolderEntry>,
     #[serde(default)]
+    pub child_errors: Vec<String>,
+    #[serde(default)]
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
 
@@ -563,11 +565,13 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     })?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
-
+    let mut child_errors: Vec<String> = Vec::new();
     for entry_result in read_dir {
         let entry = match entry_result {
             Ok(value) => value,
             Err(error) => {
+                let source = normalize_path_string(&requested_path);
+                child_errors.push(format!("{source}: child directory entry could not be read: {error}"));
                 log::warn!(
                     "event=list_log_folder_skip reason=read_dir_entry_error path=\"{}\" error=\"{}\"",
                     requested_path.display(),
@@ -581,6 +585,8 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         let metadata = match entry.metadata() {
             Ok(value) => value,
             Err(error) => {
+                let source = normalize_path_string(&entry_path);
+                child_errors.push(format!("{source}: child metadata could not be read: {error}"));
                 log::warn!(
                     "event=list_log_folder_skip reason=metadata_error entry_path=\"{}\" error=\"{}\"",
                     entry_path.display(),
@@ -625,6 +631,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         source: LogSource::Folder {
             path: normalize_path_string(&requested_path),
         },
+        child_errors,
         entries,
         bundle_metadata,
     })
@@ -932,6 +939,20 @@ mod tests {
         }
 
         fs::remove_dir_all(&dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn ordinary_manifest_folder_keeps_evtx_children_and_is_not_bundle() {
+        let dir = create_temp_dir("file-ops-ordinary-manifest");
+        fs::write(dir.join("manifest.json"), r#"{"notes":"ordinary folder"}"#)
+            .expect("write ordinary manifest");
+        fs::write(dir.join("Application.evtx"), b"evtx").expect("write evtx");
+
+        let result = list_log_folder(dir.to_string_lossy().to_string()).expect("list folder");
+        assert!(result.bundle_metadata.is_none());
+        assert!(result.entries.iter().any(|entry| entry.name == "Application.evtx"));
+
+        fs::remove_dir_all(&dir).expect("remove ordinary folder");
     }
 
     #[test]
