@@ -46,6 +46,10 @@ describe("useSavedFilterStore", () => {
     expect(() => migratePersistedSavedFilters(layered, 99)).toThrow(/Unsupported/);
     expect(migratePersistedSavedFilters(layered, 2).savedFilters).toHaveLength(1);
   });
+  it("rejects absent and malformed current-schema envelopes", () => {
+    expect(() => migratePersistedSavedFilters(undefined, 2)).toThrow(/Malformed/);
+    expect(() => migratePersistedSavedFilters({ savedFilters: "bad" }, 2)).toThrow(/Malformed/);
+  });
   it("persists every quick-filter mode and grouping criterion", () => {
     const saved = useSavedFilterStore.getState().save(
       "Triage",

@@ -35,12 +35,14 @@ export function migratePersistedSavedFilters(
   }
   if (version < 2) return { savedFilters: [] };
   const raw = persisted as { savedFilters?: unknown } | undefined;
-  const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
-  return {
-    savedFilters: list
-      .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
-      .filter((filter): filter is EvtxSavedFilter => filter !== null),
-  };
+  if (!raw || !Array.isArray(raw.savedFilters)) {
+    throw new Error("Malformed saved-filter storage envelope");
+  }
+  const list = raw.savedFilters;
+  const savedFilters = list
+    .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
+    .filter((filter): filter is EvtxSavedFilter => filter !== null);
+  return { savedFilters };
 }
 
 
