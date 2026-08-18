@@ -169,7 +169,7 @@ fn account_field_re() -> &'static Regex {
         // masked — see `split_leading_token`), while a malformed
         // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
+            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)",
         )
         .expect("account field regex must compile")
     })
@@ -189,7 +189,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
+            r"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22<>]+)",
         )
         .expect("host field regex must compile")
     })

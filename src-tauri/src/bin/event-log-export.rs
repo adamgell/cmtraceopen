@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::sync::RwLock;
@@ -193,35 +194,33 @@ where
 const MAX_EVENT_ID_FILTER_VALUES: usize = 65_535;
 
 fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
-    let mut event_ids = Vec::new();
+    let mut event_ids = BTreeSet::new();
     for part in input.split([',', ' ', '\t']).filter(|part| !part.is_empty()) {
-        let values = if let Some((low, high)) = part.split_once('-') {
+        if let Some((low, high)) = part.split_once('-') {
             let low = low
                 .parse::<u32>()
                 .map_err(|_| format!("invalid event-ID range {part:?}"))?;
             let high = high
                 .parse::<u32>()
                 .map_err(|_| format!("invalid event-ID range {part:?}"))?;
-            let count = u64::from(low.abs_diff(high)) + 1;
-            if count > MAX_EVENT_ID_FILTER_VALUES as u64 {
-                return Err(format!(
-                    "event-ID range {part:?} exceeds the {MAX_EVENT_ID_FILTER_VALUES}-value limit"
-                ));
+            let from = low.min(high);
+            let to = high.max(low).min(MAX_EVENT_ID_FILTER_VALUES as u32);
+            if from <= to {
+                for value in from..=to {
+                    if event_ids.len() >= MAX_EVENT_ID_FILTER_VALUES {
+                        break;
+                    }
+                    event_ids.insert(value);
+                }
             }
-            (low.min(high)..=low.max(high)).collect::<Vec<_>>()
-        } else {
-            vec![part
-                .parse::<u32>()
-                .map_err(|_| format!("invalid event ID {part:?}"))?]
-        };
-        if event_ids.len() + values.len() > MAX_EVENT_ID_FILTER_VALUES {
-            return Err(format!(
-                "event-ID filter exceeds the {MAX_EVENT_ID_FILTER_VALUES}-value limit"
-            ));
+        } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES {
+            event_ids.insert(
+                part.parse::<u32>()
+                    .map_err(|_| format!("invalid event ID {part:?}"))?,
+            );
         }
-        event_ids.extend(values);
     }
-    Ok(event_ids)
+    Ok(event_ids.into_iter().collect())
 }
 
 fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
@@ -491,9 +490,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_event_id_ranges_that_would_allocate_too_many_values() {
-        assert!(parse_event_ids("1-65535").is_ok());
-        assert!(parse_event_ids("1-40000,40000-65535").is_err());
+    fn clamps_event_id_ranges_like_the_frontend_filter() {
+        assert_eq!(parse_event_ids("1-65535").expect("range").len(), 65_535);
+        assert_eq!(parse_event_ids("1-65536").expect("clamped range").len(), 65_535);
+        assert_eq!(parse_event_ids("100000-200000").expect("out-of-space range"), Vec::<u32>::new());
+        assert_eq!(
+            parse_event_ids("1-40000,40000-65535")
+                .expect("overlapping ranges")
+                .len(),
+            65_535
+        );
     }
     #[test]
     fn run_writes_direct_file_and_returns_coverage_report() {

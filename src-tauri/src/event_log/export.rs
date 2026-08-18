@@ -226,6 +226,26 @@ fn event_data_pattern() -> &'static Regex {
     })
 }
 
+fn cdata_event_data_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)<!\[CDATA\[(?P<value>.*?)\]\]>(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
+        )
+        .expect("CDATA event data redaction pattern must compile")
+    })
+}
+
+fn labeled_xml_field_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><(?P<label>Computer|SubjectUserName|SubjectDomainName)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:Computer|SubjectUserName|SubjectDomainName)\s*>)"#,
+        )
+        .expect("labeled XML field redaction pattern must compile")
+    })
+}
+
 fn redact_xml_tag(tag: &str) -> String {
     let mut output = String::with_capacity(tag.len());
     let mut cursor = 0;
@@ -254,6 +274,27 @@ fn redact_raw_xml(xml: &str) -> String {
     let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
         format!(
             "{}{}{}",
+            &captures["open"],
+            redact_labeled_value(&captures["label"], &captures["value"]),
+            &captures["close"],
+        )
+    });
+    let labeled = labeled_xml_field_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
+        let label = if captures["label"].eq_ignore_ascii_case("Computer") {
+            "ComputerName"
+        } else {
+            &captures["label"]
+        };
+        format!(
+            "{}{}{}",
+            &captures["open"],
+            redact_labeled_value(label, &captures["value"]),
+            &captures["close"],
+        )
+    });
+    let labeled = cdata_event_data_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
+        format!(
+            "{}<![CDATA[{}]]>{}",
             &captures["open"],
             redact_labeled_value(&captures["label"], &captures["value"]),
             &captures["close"],
@@ -598,17 +639,41 @@ mod tests {
                 name: "TargetUserName".into(),
                 value: "CONTOSO\\Jane Doe".into(),
             },
+            crate::event_log::models::EvtxField {
+                name: "SubjectUserName".into(),
+                value: "CONTOSO\\Alice Doe".into(),
+            },
+            crate::event_log::models::EvtxField {
+                name: "SubjectDomainName".into(),
+                value: "CONTOSO".into(),
+            },
         ];
         event.raw_xml =
             "<Event><Data>TenantId=99999999-8888-4777-8666-555555555555</Data></Event>".into();
+        event.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "RemoteHost".into(),
+            text: "REMOTE-HOST".into(),
+            complete: true,
+        }];
 
         let json = export_records(&[event.clone()], ExportFormat::Json).expect("JSON export");
         assert!(!json.contains("John Doe"));
         assert!(!json.contains("DESKTOP-JOHN"));
         assert!(!json.contains("Jane Doe"));
+        assert!(!json.contains("Alice Doe"));
+        assert!(!json.contains("\"value\":\"CONTOSO\""));
         assert!(!json.contains("hunter2"));
         assert!(!json.contains("ABC123456"));
-        assert!(!json.contains("99999999-8888"));
+        assert!(!json.contains("REMOTE-HOST"));
+        let xml = export_records(&[event.clone()], ExportFormat::Xml).expect("XML export");
+        assert!(!xml.contains("John Doe"));
+        assert!(!xml.contains("Jane Doe"));
+        assert!(!xml.contains("Alice Doe"));
+        assert!(!xml.contains("\"value\":\"CONTOSO\""));
+        assert!(!xml.contains("hunter2"));
+        assert!(!xml.contains("REMOTE-HOST"));
+        assert!(!xml.contains("ABC123456"));
+        assert!(!xml.contains("99999999-8888"));
 
         let raw = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
         assert!(!raw.contains("99999999-8888"));

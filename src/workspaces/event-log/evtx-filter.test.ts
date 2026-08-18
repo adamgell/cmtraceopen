@@ -52,6 +52,14 @@ describe("event id range bounds", () => {
     expect(ids!.has(65536)).toBe(false);
   });
 
+  it("clamps the first value beyond the bounded range", () => {
+    const ids = parseEventIdFilter("1-65536");
+    expect(ids?.size).toBe(65535);
+    expect(ids?.has(1)).toBe(true);
+    expect(ids?.has(65535)).toBe(true);
+    expect(ids?.has(65536)).toBe(false);
+  });
+
   it("yields nothing for a range entirely above the id space", () => {
     expect(parseEventIdFilter("100000-200000")).toBeNull();
   });
