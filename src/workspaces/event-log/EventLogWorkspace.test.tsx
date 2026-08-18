@@ -15,7 +15,7 @@ const virtualizerState = vi.hoisted(() => ({
     const measured =
       element.getAttribute("role") === "treeitem"
         ? Number.parseFloat(element.style.height)
-        : Number.parseFloat(element.style.lineHeight) + 5;
+        : Number.parseFloat(element.style.lineHeight) + 9;
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
     }
@@ -204,11 +204,11 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRow);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: smallList.rowHeight + 2,
+      size: smallList.rowHeight + 6,
       start: smallList.rowHeight,
     });
     expect(virtualizerState.totalSize).toBe(
-      smallList.rowHeight + smallList.rowHeight + 2
+      smallList.rowHeight + smallList.rowHeight + 6
     );
     expect(groupRow.style.boxSizing).toBe("border-box");
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
@@ -270,13 +270,13 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: largeList.rowHeight + 2,
+      size: largeList.rowHeight + 6,
       start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getByRole("treeitem");
     expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 2
+      largeList.rowHeight + largeList.rowHeight + 6
     );
     fireEvent.keyDown(timelineRootLarge, { key: "ArrowDown" });
     expect(timelineRootLarge).toHaveFocus();
@@ -338,10 +338,10 @@ describe("event-viewer shared font metrics", () => {
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
-    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 2);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 2
+      largeList.rowHeight + largeList.rowHeight + 6
     );
   });
 });
