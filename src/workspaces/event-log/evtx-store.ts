@@ -36,6 +36,15 @@ type ServerFilter = EventQueryFilterSubset & {
   eventIds?: EvtxEventIdSelector[];
   eventIdMode?: "include";
 };
+function compareStoredRecords(a: EvtxRecord, b: EvtxRecord): number {
+  return (
+    a.timestampEpoch - b.timestampEpoch ||
+    a.sourceLabel.localeCompare(b.sourceLabel) ||
+    a.channel.localeCompare(b.channel) ||
+    a.eventRecordId - b.eventRecordId ||
+    a.eventId - b.eventId
+  );
+}
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -278,7 +287,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         if (get().loadGeneration !== generation) return;
         const state = get();
         const merged = [...state.records, ...result.records];
-        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        merged.sort(compareStoredRecords);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
@@ -452,7 +461,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         // Only add records from channels we don't already have
         const newRecords = arrived.filter((r) => !existingChannelNames.has(r.channel));
         const merged = [...state.records, ...newRecords];
-        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        merged.sort(compareStoredRecords);
         // Reassign IDs
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -498,6 +507,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         records: s.records.filter((record) => !refreshChannels.includes(record.channel)),
         loadedChannels: new Set(
           [...s.loadedChannels].filter((channel) => !refreshChannels.includes(channel))
+        ),
+        coverageGaps: s.coverageGaps.filter(
+          (gap) => !refreshChannels.some((channel) => gap.startsWith(`${channel}:`))
         ),
       }));
       void get().queryChannels(refreshChannels, maxEvents);
@@ -568,7 +580,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
         const s = get();
         const merged = [...s.records, ...arrived];
-        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+        merged.sort(compareStoredRecords);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
