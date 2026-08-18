@@ -100,7 +100,7 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
+            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
         )
         .expect("msi property regex must compile")
     })
@@ -189,7 +189,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22<>]+)"#,
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>]+)"#,
         )
         .expect("host field regex must compile")
     })
@@ -361,13 +361,17 @@ pub fn redact_text(value: &str) -> String {
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         let value = &caps["value"];
-        if already_masked(value) {
+        let quote = value.chars().next().filter(|character| *character == '"' || *character == '\'');
+        let inner = quote
+            .and_then(|quote| value.strip_prefix(quote).and_then(|value| value.strip_suffix(quote)))
+            .unwrap_or(value);
+        if already_masked(inner) {
             return format!("{}{}", &caps["field"], value);
         }
-        if let Some(projected) = preserve_token_mask_tail(value, "host") {
-            return format!("{}{}", &caps["field"], projected);
-        }
-        format!("{}{}", &caps["field"], stable_token("host", value))
+        let projected = preserve_token_mask_tail(inner, "host")
+            .unwrap_or_else(|| stable_token("host", inner));
+        let projected = quote.map_or(projected.clone(), |quote| format!("{quote}{projected}{quote}"));
+        format!("{}{}", &caps["field"], projected)
     });
 
     let masked = unc_host_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
@@ -803,5 +807,16 @@ mod tests {
         assert!(!redacted.contains("99999999-8888"));
         assert!(!redacted.contains("Jane Doe"));
         assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn credential_labels_and_quoted_computer_values_are_redacted() {
+        let redacted = redact_text(
+            r#"ApiSecret=hunter2 AccessToken=abc123 Credential=topsecret {"Computer":"DESKTOP-JOHN"}"#,
+        );
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("abc123"));
+        assert!(!redacted.contains("topsecret"));
+        assert!(!redacted.contains("DESKTOP-JOHN"));
     }
 }

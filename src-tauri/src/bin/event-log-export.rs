@@ -321,6 +321,7 @@ where
     S: Into<String>,
 {
     let cli = load_cli(parse_args(args)?)?;
+    reject_source_destination(&cli.sources, cli.output.as_deref())?;
     let records = filtered_records(cli.records, &cli.filter)?;
     let stats = match cli
         .output

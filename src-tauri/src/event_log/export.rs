@@ -265,9 +265,20 @@ fn labeled_xml_field_pattern() -> &'static Regex {
     })
 }
 
+fn xml_name_attribute(tag: &str) -> Option<String> {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r#"(?i)\bName\s*=\s*["']([^"']+)["']"#)
+            .expect("XML Name attribute pattern must compile")
+    })
+    .captures(tag)
+    .map(|captures| captures[1].to_owned())
+}
+
 fn redact_xml_tag(tag: &str) -> String {
     let mut output = String::with_capacity(tag.len());
     let mut cursor = 0;
+    let context_label = xml_name_attribute(tag);
     let mut pending_label: Option<String> = None;
     while cursor < tag.len() {
         let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
@@ -291,7 +302,10 @@ fn redact_xml_tag(tag: &str) -> String {
             .trim_start_matches(|c: char| c == '<' || c == '/');
         let value = &tag[opening + 1..end];
         let label = if attr_name.eq_ignore_ascii_case("value") {
-            pending_label.as_deref().unwrap_or(attr_name)
+            pending_label
+                .as_deref()
+                .or(context_label.as_deref())
+                .unwrap_or(attr_name)
         } else if attr_name.eq_ignore_ascii_case("computer") {
             "ComputerName"
         } else {
@@ -715,7 +729,7 @@ mod tests {
     #[test]
     fn raw_xml_attributes_and_processing_instructions_are_redacted() {
         let mut event = record("safe");
-        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><Data Name="RemoteHost" Value="REMOTE-HOST" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><Data Value="REMOTE-HOST" Name="RemoteHost" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
         for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
             let output = export_records(&[event.clone()], format).expect("export");
             assert!(!output.contains("DESKTOP-JOHN"));

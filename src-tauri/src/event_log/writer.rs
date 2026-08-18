@@ -94,6 +94,10 @@ fn invalid_comment(comment: quick_xml::events::BytesText<'_>) -> bool {
     bytes.windows(2).any(|pair| pair == b"--") || bytes.last() == Some(&b'-')
 }
 
+fn has_illegal_xml_control(bytes: &[u8]) -> bool {
+    bytes.iter().any(|byte| matches!(*byte, 0x00..=0x08 | 0x0B..=0x0C | 0x0E..=0x1F))
+}
+
 fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
     let raw_xml = record.raw_xml.trim();
     if raw_xml.is_empty() {
@@ -105,6 +109,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
     let mut reader = quick_xml::Reader::from_str(raw_xml);
     let mut depth = 0usize;
     let mut root_seen = false;
+    let mut declaration_seen = false;
     loop {
         let event = reader.read_event().map_err(|error| {
             io::Error::new(
@@ -114,14 +119,23 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
         })?;
         match event {
             quick_xml::events::Event::Eof => break,
+            quick_xml::events::Event::Decl(_) => {
+                if declaration_seen || root_seen {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML declaration is outside the prolog"));
+                }
+                declaration_seen = true;
+            }
             quick_xml::events::Event::Start(element) => {
                 if depth == 0 && root_seen {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has multiple roots"));
                 }
                 for attribute in element.attributes().with_checks(true) {
-                    attribute.map_err(|error| {
+                    let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
+                    if has_illegal_xml_control(&attribute.value) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
+                    }
                 }
                 if depth == 0 {
                     root_seen = true;
@@ -133,9 +147,12 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has multiple roots"));
                 }
                 for attribute in element.attributes().with_checks(true) {
-                    attribute.map_err(|error| {
+                    let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
+                    if has_illegal_xml_control(&attribute.value) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
+                    }
                 }
                 if depth == 0 {
                     root_seen = true;
@@ -148,8 +165,17 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 depth -= 1;
             }
             quick_xml::events::Event::Text(text) => {
-                if depth == 0 && !text.into_inner().iter().all(u8::is_ascii_whitespace) {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has text outside its root"));
+                let bytes = text.into_inner();
+                if has_illegal_xml_control(&bytes)
+                    || (depth == 0 && !bytes.iter().all(u8::is_ascii_whitespace))
+                {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has invalid text"));
+                }
+            }
+            quick_xml::events::Event::CData(data) => {
+                let bytes = data.into_inner();
+                if has_illegal_xml_control(&bytes) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                 }
             }
             quick_xml::events::Event::Comment(comment) => {
@@ -486,12 +512,19 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
     for raw_xml in [
         r#"<Event id="1" id="2"/>"#,
         r#"<Event><!-- invalid--comment --></Event>"#,
+        r#"<Event /><?xml version="1.0"?>"#,
+        "<Event>bad\u{0001}</Event>",
     ] {
         let mut event = record("invalid");
         event.raw_xml = raw_xml.into();
         let error = super::writer::write_records(&mut Cursor::new(Vec::new()), ExportFormat::Json, &[event])
             .expect_err("strict XML must reject malformed content");
-        assert!(error.to_string().contains("malformed") || error.to_string().contains("invalid"));
+        assert!(
+            error.to_string().contains("malformed")
+                || error.to_string().contains("invalid")
+                || error.to_string().contains("prolog")
+                || error.to_string().contains("control")
+        );
     }
 }
 #[test]
