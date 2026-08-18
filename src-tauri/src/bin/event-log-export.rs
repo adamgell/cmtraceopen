@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::Path;
 use std::sync::RwLock;
 
@@ -10,8 +11,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Filter {
-    channels: Vec<String>,
-    levels: Vec<EvtxLevel>,
+    channels: Option<Vec<String>>,
+    levels: Option<Vec<EvtxLevel>>,
     event_ids: String,
     search: Option<String>,
 }
@@ -37,10 +38,8 @@ struct Cli {
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct ManifestFilter {
-    #[serde(default)]
-    selected_channels: Vec<String>,
-    #[serde(default)]
-    filter_levels: Vec<EvtxLevel>,
+    selected_channels: Option<Vec<String>>,
+    filter_levels: Option<Vec<EvtxLevel>>,
     #[serde(default)]
     filter_event_ids: String,
     #[serde(default)]
@@ -121,6 +120,8 @@ where
         filter: Filter::default(),
         coverage: Coverage::default(),
     };
+    let mut manifest_supplied = false;
+    let mut filter_supplied = false;
     while let Some(argument) = args.next() {
         let value = |argument: &str, args: &mut dyn Iterator<Item = String>| {
             args.next()
@@ -128,28 +129,47 @@ where
         };
         match argument.as_str() {
             "--source" => cli.sources.push(value("--source", &mut args)?),
-            "--manifest" => cli.manifest = Some(value("--manifest", &mut args)?),
+            "--manifest" => {
+                manifest_supplied = true;
+                cli.manifest = Some(value("--manifest", &mut args)?);
+            }
             "--format" => cli.format = format_from_arg(&value("--format", &mut args)?)?,
             "--output" => cli.output = Some(value("--output", &mut args)?),
-            "--channel" => cli.filter.channels.push(value("--channel", &mut args)?),
+            "--channel" => {
+                filter_supplied = true;
+                cli.filter
+                    .channels
+                    .get_or_insert_with(Vec::new)
+                    .push(value("--channel", &mut args)?);
+            }
             "--level" => {
+                filter_supplied = true;
                 let level = value("--level", &mut args)?;
-                cli.filter.levels.push(match level.as_str() {
-                    "Critical" => EvtxLevel::Critical,
-                    "Error" => EvtxLevel::Error,
-                    "Warning" => EvtxLevel::Warning,
-                    "Information" => EvtxLevel::Information,
-                    "Verbose" => EvtxLevel::Verbose,
-                    other => return Err(format!("unknown level {other:?}")),
-                });
+                cli.filter
+                    .levels
+                    .get_or_insert_with(Vec::new)
+                    .push(match level.as_str() {
+                        "Critical" => EvtxLevel::Critical,
+                        "Error" => EvtxLevel::Error,
+                        "Warning" => EvtxLevel::Warning,
+                        "Information" => EvtxLevel::Information,
+                        "Verbose" => EvtxLevel::Verbose,
+                        other => return Err(format!("unknown level {other:?}")),
+                    });
             }
             "--event-id" => {
+                filter_supplied = true;
                 if !cli.filter.event_ids.is_empty() {
                     cli.filter.event_ids.push(',');
                 }
-                cli.filter.event_ids.push_str(&value("--event-id", &mut args)?);
+                cli.filter
+                    .event_ids
+                    .push_str(&value("--event-id", &mut args)?);
             }
-            "--search" => cli.filter.search = Some(value("--search", &mut args)?),
+            "--search" => {
+                filter_supplied = true;
+                cli.filter.search = Some(value("--search", &mut args)?);
+            }
             "--help" | "-h" => {
                 return Err(
                     "usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>] \
@@ -164,40 +184,70 @@ where
     if cli.sources.is_empty() && cli.manifest.is_none() {
         return Err("at least one --source or --manifest is required".to_owned());
     }
+    if manifest_supplied && (!cli.sources.is_empty() || filter_supplied) {
+        return Err("--manifest cannot be combined with --source or filter arguments".to_owned());
+    }
     Ok(cli)
 }
 
-fn parse_event_ids(input: &str) -> Vec<u32> {
-    input
-        .split([',', ' ', '\t'])
-        .filter_map(|part| {
-            if let Some((low, high)) = part.split_once('-') {
-                let low = low.parse::<u32>().ok()?;
-                let high = high.parse::<u32>().ok()?;
-                Some((low.min(high)..=low.max(high)).collect::<Vec<_>>())
-            } else {
-                Some(vec![part.parse::<u32>().ok()?])
+const MAX_EVENT_ID_FILTER_VALUES: usize = 65_535;
+
+fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
+    let mut event_ids = Vec::new();
+    for part in input.split([',', ' ', '\t']).filter(|part| !part.is_empty()) {
+        let values = if let Some((low, high)) = part.split_once('-') {
+            let low = low
+                .parse::<u32>()
+                .map_err(|_| format!("invalid event-ID range {part:?}"))?;
+            let high = high
+                .parse::<u32>()
+                .map_err(|_| format!("invalid event-ID range {part:?}"))?;
+            let count = u64::from(low.abs_diff(high)) + 1;
+            if count > MAX_EVENT_ID_FILTER_VALUES as u64 {
+                return Err(format!(
+                    "event-ID range {part:?} exceeds the {MAX_EVENT_ID_FILTER_VALUES}-value limit"
+                ));
             }
-        })
-        .flatten()
-        .collect()
+            (low.min(high)..=low.max(high)).collect::<Vec<_>>()
+        } else {
+            vec![part
+                .parse::<u32>()
+                .map_err(|_| format!("invalid event ID {part:?}"))?]
+        };
+        if event_ids.len() + values.len() > MAX_EVENT_ID_FILTER_VALUES {
+            return Err(format!(
+                "event-ID filter exceeds the {MAX_EVENT_ID_FILTER_VALUES}-value limit"
+            ));
+        }
+        event_ids.extend(values);
+    }
+    Ok(event_ids)
 }
 
-fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Vec<EvtxRecord> {
-    let event_ids = parse_event_ids(&filter.event_ids);
-    records
+fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
+    let event_ids = parse_event_ids(&filter.event_ids)?;
+    let search = filter
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|search| !search.is_empty())
+        .map(str::to_lowercase);
+    Ok(records
         .into_iter()
         .filter(|record| {
-            (filter.channels.is_empty() || filter.channels.iter().any(|channel| channel == &record.channel))
-                && (filter.levels.is_empty() || filter.levels.contains(&record.level))
+            filter.channels.as_ref().is_none_or(|channels| {
+                channels.iter().any(|channel| channel == &record.channel)
+            }) && filter
+                .levels
+                .as_ref()
+                .is_none_or(|levels| levels.contains(&record.level))
                 && (event_ids.is_empty() || event_ids.contains(&record.event_id))
-                && filter.search.as_deref().is_none_or(|search| {
-                    let search = search.to_ascii_lowercase();
-                    record.message.to_ascii_lowercase().contains(&search)
-                        || record.provider.to_ascii_lowercase().contains(&search)
+                && search.as_deref().is_none_or(|search| {
+                    record.message.to_lowercase().contains(search)
+                        || record.provider.to_lowercase().contains(search)
                 })
         })
-        .collect()
+        .collect())
 }
 
 fn load_manifest(path: &str) -> Result<Cli, String> {
@@ -206,8 +256,7 @@ fn load_manifest(path: &str) -> Result<Cli, String> {
     Cli::from_manifest_json(&input)
 }
 
-fn run() -> Result<(), String> {
-    let mut cli = parse_args(std::env::args())?;
+fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     if let Some(path) = cli.manifest.take() {
         let manifest = load_manifest(&path)?;
         cli.sources = manifest.sources;
@@ -229,11 +278,26 @@ fn run() -> Result<(), String> {
     } else if cli.coverage.total_records == 0 {
         cli.coverage.total_records = cli.records.len() as u64;
     }
+    Ok(cli)
+}
 
-    let records = filtered_records(cli.records, &cli.filter);
-    let path = cli.output.as_deref().map(Path::new);
-    let stats = app_lib::event_log::writer::write_records_to_destination(&records, cli.format, path)?;
-    eprintln!(
+fn run_with_args<I, S>(args: I, stdout: &mut dyn Write) -> Result<String, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let cli = load_cli(parse_args(args)?)?;
+    let records = filtered_records(cli.records, &cli.filter)?;
+    let stats = match cli.output.as_deref().map(Path::new) {
+        Some(path) => app_lib::event_log::writer::write_records_to_destination(
+            &records,
+            cli.format,
+            Some(path),
+        )?,
+        None => app_lib::event_log::writer::write_records(stdout, cli.format, &records)
+            .map_err(|error| error.to_string())?,
+    };
+    let mut report = format!(
         "coverage: sourceRecords={} exportedRecords={} parseErrors={} gaps={}",
         cli.coverage.total_records,
         stats.records,
@@ -241,8 +305,15 @@ fn run() -> Result<(), String> {
         cli.coverage.error_messages.len()
     );
     for error in cli.coverage.error_messages {
-        eprintln!("coverage-gap: {error}");
+        report.push_str(&format!("\ncoverage-gap: {error}"));
     }
+    Ok(report)
+}
+
+fn run() -> Result<(), String> {
+    let mut stdout = std::io::stdout().lock();
+    let report = run_with_args(std::env::args(), &mut stdout)?;
+    eprintln!("{report}");
     Ok(())
 }
 
@@ -255,9 +326,33 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{filtered_records, parse_args, Cli, Filter};
-    use app_lib::event_log::models::EvtxLevel;
+    use super::{filtered_records, parse_args, parse_event_ids, run_with_args, Cli, Filter};
+    use app_lib::event_log::models::{EvtxLevel, EvtxRecord};
 
+    fn make_record() -> EvtxRecord {
+        EvtxRecord {
+            id: 1,
+            event_record_id: 1,
+            timestamp: String::new(),
+            timestamp_epoch: 0,
+            provider: "Provider".into(),
+            channel: "Application".into(),
+            event_id: 1,
+            level: EvtxLevel::Error,
+            computer: "HOST".into(),
+            message: "message".into(),
+            event_data: Vec::new(),
+            raw_xml: "<Event />".into(),
+            source_label: "source".into(),
+            task: None,
+            opcode: None,
+            process_id: None,
+            thread_id: None,
+            user_sid: None,
+            keywords: None,
+            mapped: Vec::new(),
+        }
+    }
     #[test]
     fn parses_source_format_output_and_gui_filter_shape() {
         let cli = parse_args([
@@ -277,7 +372,7 @@ mod tests {
         assert_eq!(cli.sources, vec!["Application.evtx"]);
         assert_eq!(cli.format, app_lib::event_log::export::ExportFormat::Csv);
         assert_eq!(cli.output.as_deref(), Some("events.csv"));
-        assert_eq!(cli.filter.channels, vec!["Application"]);
+        assert_eq!(cli.filter.channels, Some(vec!["Application".into()]));
         assert_eq!(cli.filter.search.as_deref(), Some("token"));
     }
 
@@ -312,7 +407,7 @@ mod tests {
         let cli = Cli::from_manifest_json(manifest).expect("manifest parses");
         assert_eq!(cli.coverage.total_records, 4);
         assert_eq!(cli.coverage.parse_errors, 1);
-        assert_eq!(cli.filter.channels, vec!["Application"]);
+        assert_eq!(cli.filter.channels, Some(vec!["Application".into()]));
         assert_eq!(cli.filter.search.as_deref(), Some("boot"));
     }
 
@@ -343,13 +438,145 @@ mod tests {
         let selected = filtered_records(
             vec![make(326, "boot token"), make(4624, "other")],
             &Filter {
-                channels: vec!["Application".into()],
-                levels: vec![EvtxLevel::Error],
+                channels: Some(vec!["Application".into()]),
+                levels: Some(vec![EvtxLevel::Error]),
                 event_ids: "326".into(),
                 search: Some("boot".into()),
             },
-        );
+        )
+        .expect("filter succeeds");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].event_id, 326);
+    }
+
+    #[test]
+    fn rejects_manifest_conflicts_instead_of_overwriting_sources_or_filters() {
+        assert!(parse_args([
+            "event-log-export",
+            "--manifest",
+            "events.json",
+            "--source",
+            "events.evtx",
+        ])
+        .is_err());
+        assert!(parse_args([
+            "event-log-export",
+            "--manifest",
+            "events.json",
+            "--search",
+            "boot",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn preserves_empty_manifest_selections_as_match_none() {
+        let cli = Cli::from_manifest_json(
+            r#"{"records":[],"filter":{"selectedChannels":[],"filterLevels":[]}}"#,
+        )
+        .expect("manifest parses");
+        assert_eq!(
+            filtered_records(
+                vec![app_lib::event_log::models::EvtxRecord {
+                    channel: "Application".into(),
+                    level: EvtxLevel::Error,
+                    ..make_record()
+                }],
+                &cli.filter,
+            )
+            .expect("filter succeeds")
+            .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn rejects_event_id_ranges_that_would_allocate_too_many_values() {
+        assert!(parse_event_ids("1-65535").is_ok());
+        assert!(parse_event_ids("1-40000,40000-65535").is_err());
+    }
+    #[test]
+    fn run_writes_direct_file_and_returns_coverage_report() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        let output_path = directory.path().join("events.json");
+        let mut event = make_record();
+        event.message = "PASSWORD=hunter2".into();
+        let manifest = serde_json::json!({
+            "records": [event],
+            "totalRecords": 1,
+            "parseErrors": 1,
+            "errorMessages": ["damaged.evtx: truncated"]
+        });
+        std::fs::write(&manifest_path, manifest.to_string()).expect("manifest");
+        let mut stdout = Vec::new();
+        let report = run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "json",
+                "--output",
+                output_path.to_str().expect("output path"),
+            ],
+            &mut stdout,
+        )
+        .expect("CLI succeeds");
+        let output = std::fs::read_to_string(output_path).expect("output file");
+        assert!(!output.contains("hunter2"));
+        assert!(report.contains("parseErrors=1"));
+        assert!(report.contains("coverage-gap: damaged.evtx: truncated"));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn run_writes_stdout_through_the_shared_writer() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({"records": [make_record()]}).to_string(),
+        )
+        .expect("manifest");
+        let mut stdout = Vec::new();
+        run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "json",
+            ],
+            &mut stdout,
+        )
+        .expect("CLI succeeds");
+        assert!(String::from_utf8(stdout).expect("JSON").starts_with('['));
+    }
+
+    #[test]
+    fn run_surfaces_writer_errors_for_xml_without_raw_content() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        let mut event = make_record();
+        event.raw_xml.clear();
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({"records": [event]}).to_string(),
+        )
+        .expect("manifest");
+        let mut stdout = Vec::new();
+        let error = run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "xml",
+            ],
+            &mut stdout,
+        )
+        .expect_err("missing raw XML fails");
+        assert!(error.contains("raw XML"));
     }
 }

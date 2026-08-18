@@ -8,7 +8,9 @@
 //! Formatting is deliberately separate from writing files, so the rules below are unit-testable
 //! without touching the filesystem.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use cmtraceopen_parser::intune::apps::windows::common::redact_text;
 
 use super::models::EvtxRecord;
@@ -181,11 +183,9 @@ pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
 pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
     let mut redacted = record.clone();
     redacted.timestamp = redact_text(&record.timestamp);
-    redacted.provider = redact_text(&record.provider);
-    redacted.channel = redact_text(&record.channel);
-    redacted.computer = redact_text(&record.computer);
+    redacted.computer = redact_labeled_value("ComputerName", &record.computer);
     redacted.message = redact_text(&record.message);
-    redacted.raw_xml = redact_text(&record.raw_xml);
+    redacted.raw_xml = redact_raw_xml(&record.raw_xml);
     redacted.source_label = redact_text(&record.source_label);
     redacted.event_data = record
         .event_data
@@ -214,6 +214,80 @@ fn redact_labeled_value(label: &str, value: &str) -> String {
         .strip_prefix(&prefix)
         .unwrap_or(&redacted)
         .to_owned()
+}
+
+fn event_data_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)(?P<open><Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<value>[^<]*)(?P<close></Data\s*>)"#,
+        )
+        .expect("event data redaction pattern must compile")
+    })
+}
+
+fn redact_xml_tag(tag: &str) -> String {
+    let mut output = String::with_capacity(tag.len());
+    let mut cursor = 0;
+    while cursor < tag.len() {
+        let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
+        else {
+            output.push_str(&tag[cursor..]);
+            break;
+        };
+        let opening = cursor + relative;
+        output.push_str(&tag[cursor..=opening]);
+        let quote = tag.as_bytes()[opening];
+        let Some(relative_end) = tag[opening + 1..].find(quote as char) else {
+            output.push_str(&tag[opening + 1..]);
+            break;
+        };
+        let end = opening + 1 + relative_end;
+        output.push_str(&redact_text(&tag[opening + 1..end]));
+        output.push(quote as char);
+        cursor = end + 1;
+    }
+    output
+}
+
+fn redact_raw_xml(xml: &str) -> String {
+    let labeled = event_data_pattern().replace_all(xml, |captures: &regex::Captures<'_>| {
+        format!(
+            "{}{}{}",
+            &captures["open"],
+            redact_labeled_value(&captures["label"], &captures["value"]),
+            &captures["close"],
+        )
+    });
+    let mut output = String::with_capacity(labeled.len());
+    let mut cursor = 0;
+    while cursor < labeled.len() {
+        let Some(relative_open) = labeled[cursor..].find('<') else {
+            output.push_str(&redact_text(&labeled[cursor..]));
+            break;
+        };
+        let opening = cursor + relative_open;
+        output.push_str(&redact_text(&labeled[cursor..opening]));
+        let mut end = opening + 1;
+        let mut quote = None;
+        while end < labeled.len() {
+            let byte = labeled.as_bytes()[end];
+            if let Some(expected) = quote {
+                if byte == expected {
+                    quote = None;
+                }
+            } else if byte == b'"' || byte == b'\'' {
+                quote = Some(byte);
+            } else if byte == b'>' {
+                end += 1;
+                break;
+            }
+            end += 1;
+        }
+        output.push_str(&redact_xml_tag(&labeled[opening..end]));
+        cursor = end;
+    }
+    output
 }
 
 /// Renders records in `format`.
@@ -514,15 +588,24 @@ mod tests {
     #[test]
     fn every_serialized_field_and_raw_xml_uses_the_shared_redaction_projection() {
         let mut event = record(r#"RunAsUser=CONTOSO\John Doe PASSWORD=hunter2"#);
-        event.event_data = vec![crate::event_log::models::EvtxField {
-            name: "SerialNumber".into(),
-            value: "ABC123456".into(),
-        }];
+        event.computer = "DESKTOP-JOHN".into();
+        event.event_data = vec![
+            crate::event_log::models::EvtxField {
+                name: "SerialNumber".into(),
+                value: "ABC123456".into(),
+            },
+            crate::event_log::models::EvtxField {
+                name: "TargetUserName".into(),
+                value: "CONTOSO\\Jane Doe".into(),
+            },
+        ];
         event.raw_xml =
             "<Event><Data>TenantId=99999999-8888-4777-8666-555555555555</Data></Event>".into();
 
         let json = export_records(&[event.clone()], ExportFormat::Json).expect("JSON export");
         assert!(!json.contains("John Doe"));
+        assert!(!json.contains("DESKTOP-JOHN"));
+        assert!(!json.contains("Jane Doe"));
         assert!(!json.contains("hunter2"));
         assert!(!json.contains("ABC123456"));
         assert!(!json.contains("99999999-8888"));

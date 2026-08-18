@@ -89,6 +89,17 @@ fn write_html_row<W: Write>(
     writer.write_all(b"</tr>\n")
 }
 
+fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
+    let raw_xml = record.raw_xml.trim();
+    if raw_xml.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "record is missing raw XML",
+        ));
+    }
+    Ok(raw_xml)
+}
+
 /// Streams records directly to `writer`, applying the export redaction projection
 /// one record at a time.
 ///
@@ -150,6 +161,7 @@ where
         ExportFormat::Xml => {
             writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Events>\n")?;
             for item in records {
+                required_raw_xml(item.borrow())?;
                 let redacted = export::redact_record(item.borrow());
                 writer.write_all(export::strip_xml_declaration(redacted.raw_xml.trim()).as_bytes())?;
                 writer.write_all(b"\n")?;
@@ -159,6 +171,7 @@ where
         }
         ExportFormat::RawXml => {
             for item in records {
+                required_raw_xml(item.borrow())?;
                 let redacted = export::redact_record(item.borrow());
                 writer.write_all(redacted.raw_xml.trim().as_bytes())?;
                 writer.write_all(b"\n")?;
@@ -342,4 +355,42 @@ fn writes_directly_to_a_file_and_reports_bytes() {
     assert_eq!(stats.bytes, bytes.len() as u64);
     assert_eq!(stats.records, 1);
     assert!(String::from_utf8_lossy(&bytes).contains("file output"));
+}
+#[test]
+fn xml_redaction_preserves_markup_and_masks_named_event_data() {
+    let event = record("safe");
+    let event = EvtxRecord {
+        raw_xml: "<Event><EventData><Data Name=\"TargetUserName\">CONTOSO\\John Doe</Data><Data Name=\"DeviceHardwareData\">AA-BB-CC</Data></EventData></Event>".into(),
+        ..event
+    };
+    let mut output = Cursor::new(Vec::new());
+    write_record_stream(&mut output, ExportFormat::RawXml, [&event], &[])
+        .expect("raw XML succeeds");
+    let output = String::from_utf8(output.into_inner()).expect("UTF-8");
+    assert!(!output.contains("John Doe"));
+    assert!(!output.contains("AA-BB-CC"));
+    let mut reader = quick_xml::Reader::from_str(&output);
+    let mut buffer = Vec::new();
+    while reader
+        .read_event_into(&mut buffer)
+        .expect("well-formed XML")
+        .into_owned()
+        != quick_xml::events::Event::Eof
+    {
+        buffer.clear();
+    }
+}
+
+#[test]
+fn xml_formats_reject_records_without_raw_xml() {
+    let event = EvtxRecord {
+        raw_xml: String::new(),
+        ..record("missing")
+    };
+    for format in [ExportFormat::Xml, ExportFormat::RawXml] {
+        let mut output = Cursor::new(Vec::new());
+        let error = write_record_stream(&mut output, format, [&event], &[])
+            .expect_err("missing raw XML must not count as exported");
+        assert!(error.to_string().contains("raw XML"));
+    }
 }
