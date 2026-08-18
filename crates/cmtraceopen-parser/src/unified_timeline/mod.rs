@@ -85,13 +85,31 @@ pub enum TimelineOrigin {
         component: Option<String>,
         /// 1-based line number, so the item can be traced back to the source.
         line: u32,
+        /// Stable source label. This is the source file when one is available.
+        source: String,
+        /// Machine that emitted the line, when the source records one.
+        machine: Option<String>,
+        /// Containing evidence bundle, when the source path identifies one.
+        bundle: Option<String>,
+        /// Stable parser record identity.
+        record_id: u64,
     },
     /// A Windows event.
     Event {
+        /// Stable source label, usually a file path or live channel source.
+        source: String,
+        /// Machine that emitted the event.
+        machine: Option<String>,
+        /// Containing evidence bundle, when known.
+        bundle: Option<String>,
         /// Channel the event was read from, for example `Microsoft-Windows-DNSServer/Audit`.
         channel: String,
         /// Publisher that raised it, as the event's own `System` block names it.
         provider: String,
+        /// Emitting process, when the event declares one.
+        process_id: Option<u32>,
+        /// Correlation ActivityID, when the event declares one.
+        activity_id: Option<String>,
         /// Event ID, which identifies the event only in combination with the provider.
         event_id: u32,
         /// Record identifier within its channel.
@@ -157,11 +175,6 @@ impl UnifiedTimeline {
     }
 
     /// Inclusive time span covered, or `None` when nothing was placed.
-    ///
-    /// The bounds are computed rather than read off the ends. `merge` sorts, so reading the ends
-    /// would be correct on that path, but `items` is a public field and a value built directly can
-    /// hold items in any order. Reporting a span narrower than the data would understate what a
-    /// timeline actually covers.
     pub fn span_ms(&self) -> Option<(i64, i64)> {
         let mut stamps = self.items.iter().map(|item| item.timestamp_ms);
         let first = stamps.next()?;
@@ -171,15 +184,29 @@ impl UnifiedTimeline {
     }
 }
 
+fn bundle_from_source(source: &str) -> Option<String> {
+    let first = source.split(['/', '\\']).next()?;
+    if first.is_empty() || first.ends_with(':') || !source.contains(['/', '\\']) {
+        None
+    } else {
+        Some(first.to_string())
+    }
+}
+
 /// Converts a parsed log entry, or reports why it cannot be placed.
 pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
+    let source = entry
+        .source_file
+        .clone()
+        .unwrap_or_else(|| entry.file_path.clone());
     let origin = TimelineOrigin::Log {
-        file: entry
-            .source_file
-            .clone()
-            .unwrap_or_else(|| entry.file_path.clone()),
+        file: source.clone(),
         component: entry.component.clone(),
         line: entry.line_number,
+        bundle: bundle_from_source(&source),
+        machine: entry.host_name.clone(),
+        record_id: entry.id,
+        source,
     };
 
     match entry.timestamp {
@@ -196,6 +223,18 @@ pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
     }
 }
 
+/// Appends parsed log entries without losing existing placed or unplaced records.
+pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry]) {
+    let mut placed = std::mem::take(&mut timeline.items);
+    let mut unplaced = std::mem::take(&mut timeline.unplaced);
+    for entry in entries {
+        match from_log_entry(entry) {
+            Ok(item) => placed.push(item),
+            Err(item) => unplaced.push(item),
+        }
+    }
+    *timeline = merge(placed, unplaced);
+}
 /// Merges already-converted items into one chronological timeline.
 ///
 /// Ordering is stable: items sharing a timestamp keep the order they were supplied in. That matters
@@ -206,7 +245,6 @@ pub fn merge(
     unplaced: impl IntoIterator<Item = UnplacedItem>,
 ) -> UnifiedTimeline {
     let mut items: Vec<TimelineItem> = placed.into_iter().collect();
-    // sort_by_key is a stable sort, which is what preserves input order within a timestamp.
     items.sort_by_key(|item| item.timestamp_ms);
     UnifiedTimeline {
         items,
@@ -216,15 +254,9 @@ pub fn merge(
 
 /// Converts and merges a slice of log entries, collecting the ones that cannot be placed.
 pub fn from_log_entries(entries: &[LogEntry]) -> UnifiedTimeline {
-    let mut placed = Vec::new();
-    let mut unplaced = Vec::new();
-    for entry in entries {
-        match from_log_entry(entry) {
-            Ok(item) => placed.push(item),
-            Err(reason) => unplaced.push(reason),
-        }
-    }
-    merge(placed, unplaced)
+    let mut timeline = UnifiedTimeline::default();
+    append(&mut timeline, entries);
+    timeline
 }
 
 #[cfg(test)]
@@ -250,10 +282,15 @@ mod tests {
             severity,
             message: message.to_string(),
             origin: TimelineOrigin::Event {
+                source: "Live".to_string(),
+                machine: Some("TESTHOST".to_string()),
+                bundle: None,
                 channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
                     .to_string(),
                 provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider"
                     .to_string(),
+                process_id: None,
+                activity_id: None,
                 event_id: 76,
                 record_id: 1,
             },
@@ -287,7 +324,6 @@ mod tests {
 
     #[test]
     fn an_entry_without_a_timestamp_is_reported_rather_than_placed() {
-        // Placing it at the epoch, or at the previous entry's time, would invent a sequence.
         let entries = [
             log_entry(Some(1_000), "placed", Severity::Info),
             log_entry(None, "continuation line", Severity::Info),
@@ -296,10 +332,7 @@ mod tests {
 
         assert_eq!(timeline.items.len(), 1);
         assert_eq!(timeline.unplaced.len(), 1);
-        assert_eq!(
-            timeline.unplaced[0].reason,
-            UnplacedReason::MissingTimestamp
-        );
+        assert_eq!(timeline.unplaced[0].reason, UnplacedReason::MissingTimestamp);
         assert!(!timeline.is_complete());
     }
 
@@ -307,11 +340,7 @@ mod tests {
     fn an_unplaced_item_still_says_where_it_came_from() {
         let timeline = from_log_entries(&[log_entry(None, "orphan", Severity::Error)]);
         match &timeline.unplaced[0].origin {
-            TimelineOrigin::Log {
-                file,
-                line,
-                component,
-            } => {
+            TimelineOrigin::Log { file, line, component, .. } => {
                 assert!(file.ends_with("IntuneManagementExtension.log"));
                 assert_eq!(*line, 7);
                 assert_eq!(component.as_deref(), Some("IME"));
@@ -421,23 +450,89 @@ mod tests {
     }
 
     #[test]
-    fn an_event_origin_serializes_with_the_keys_the_frontend_reads() {
-        // rename_all on an enum renames the variants, not the fields inside a struct variant, so
-        // this needs rename_all_fields. Without it event_id went over the wire as "event_id" while
-        // the timeline view reads origin.eventId, and every event row showed undefined.
+    fn an_event_origin_preserves_all_cross_source_provenance() {
         let origin = TimelineOrigin::Event {
+            source: "capture.evtx".into(),
+            machine: Some("HOST-A".into()),
+            bundle: Some("bundle-123".into()),
             channel: "Application".into(),
             provider: "ESENT".into(),
+            process_id: Some(4321),
+            activity_id: Some("{activity}".into()),
             event_id: 326,
             record_id: 42,
         };
         let json = serde_json::to_value(&origin).expect("serializes");
 
         assert_eq!(json["kind"], "event");
+        assert_eq!(json["source"], "capture.evtx");
+        assert_eq!(json["machine"], "HOST-A");
+        assert_eq!(json["bundle"], "bundle-123");
+        assert_eq!(json["channel"], "Application");
+        assert_eq!(json["provider"], "ESENT");
+        assert_eq!(json["processId"], 4321);
+        assert_eq!(json["activityId"], "{activity}");
         assert_eq!(json["eventId"], 326);
         assert_eq!(json["recordId"], 42);
-        assert!(json.get("event_id").is_none(), "{json}");
-        assert!(json.get("record_id").is_none(), "{json}");
+    }
+
+    #[test]
+    fn appending_records_reconciles_into_the_same_deterministic_order() {
+        let mut timeline = merge([event(3_000, "last", TimelineSeverity::Info)], []);
+        append(&mut timeline, &[log_entry(Some(1_000), "first", Severity::Info)]);
+
+        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages, vec!["first", "last"]);
+        assert!(timeline.is_complete());
+    }
+
+    #[test]
+    fn append_keeps_missing_timestamps_visible_and_counts_them() {
+        let mut timeline = merge([event(1_000, "placed", TimelineSeverity::Info)], []);
+        append(&mut timeline, &[log_entry(None, "unplaced", Severity::Info)]);
+
+        assert_eq!(timeline.items.len(), 1);
+        assert_eq!(timeline.unplaced.len(), 1);
+        assert_eq!(
+            timeline.unplaced[0].reason,
+            UnplacedReason::MissingTimestamp
+        );
+        assert!(!timeline.is_complete());
+    }
+
+    #[test]
+    fn equal_timestamps_keep_supplied_order_for_live_reconciliation() {
+        let mut timeline = UnifiedTimeline::default();
+        append(&mut timeline, &[log_entry(Some(5_000), "first", Severity::Info)]);
+        append(&mut timeline, &[log_entry(Some(5_000), "second", Severity::Info)]);
+
+        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn log_origin_preserves_source_machine_bundle_and_record_identity() {
+        let mut entry = log_entry(Some(1_000), "line", Severity::Info);
+        entry.id = 99;
+        entry.host_name = Some("HOST-B".into());
+        entry.source_file = Some("bundle/evidence/logs/app.log".into());
+        let timeline = from_log_entries(&[entry]);
+
+        match &timeline.items[0].origin {
+            TimelineOrigin::Log {
+                source,
+                machine,
+                bundle,
+                record_id,
+                ..
+            } => {
+                assert_eq!(source, "bundle/evidence/logs/app.log");
+                assert_eq!(machine.as_deref(), Some("HOST-B"));
+                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(*record_id, 99);
+            }
+            other => panic!("expected a log origin, got {other:?}"),
+        }
     }
 
     #[test]
@@ -446,10 +541,16 @@ mod tests {
             file: "cmt.log".into(),
             component: Some("Agent".into()),
             line: 7,
+            source: "cmt.log".into(),
+            machine: None,
+            bundle: None,
+            record_id: 7,
         };
         let json = serde_json::to_value(&origin).expect("serializes");
         assert_eq!(json["kind"], "log");
         assert_eq!(json["file"], "cmt.log");
         assert_eq!(json["line"], 7);
+        assert_eq!(json["source"], "cmt.log");
+        assert_eq!(json["recordId"], 7);
     }
 }

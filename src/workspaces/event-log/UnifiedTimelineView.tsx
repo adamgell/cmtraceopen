@@ -8,6 +8,7 @@ import { formatEventTime } from "./evtx-time";
 import { useEvtxStore } from "./evtx-store";
 import {
   isEventOrigin,
+  originContext,
   originDetail,
   originLabel,
   timelineCounts,
@@ -171,7 +172,6 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                   >
                     {formatEventTime(item.timestampMs, timeZoneMode)}
                   </span>
-
                   <span
                     style={{
                       width: "220px",
@@ -185,6 +185,21 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                     title={originDetail(item.origin)}
                   >
                     {originLabel(item.origin)}
+                  </span>
+
+                  <span
+                    style={{
+                      width: "180px",
+                      flexShrink: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: `${smallFontSize}px`,
+                      color: tokens.colorNeutralForeground4,
+                    }}
+                    title={originDetail(item.origin)}
+                  >
+                    {originContext(item.origin)}
                   </span>
 
                   <span

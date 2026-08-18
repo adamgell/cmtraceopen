@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isEventOrigin,
+  originContext,
   originDetail,
   originLabel,
   timelineCounts,
@@ -14,12 +15,22 @@ const logOrigin: TimelineOrigin = {
   file: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
   component: "IME",
   line: 42,
+  source:
+    "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+  machine: "HOST-A",
+  bundle: null,
+  recordId: 42,
 };
 
 const eventOrigin: TimelineOrigin = {
   kind: "event",
+  source: "Live",
+  machine: "HOST-A",
+  bundle: null,
   channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
   provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+  processId: 4321,
+  activityId: "{activity}",
   eventId: 76,
   recordId: 1234,
 };
@@ -40,13 +51,19 @@ describe("originLabel", () => {
   });
 
   it("shows the channel leaf and event id, not the Microsoft-Windows prefix", () => {
-    // That prefix is on nearly every channel and distinguishes nothing in a narrow column.
     expect(originLabel(eventOrigin)).toBe("Admin (76)");
   });
 
   it("falls back to the whole value when there is no separator", () => {
     expect(originLabel({ ...eventOrigin, channel: "Security" })).toBe("Security (76)");
     expect(originLabel({ ...logOrigin, file: "app.log", component: null })).toBe("app.log");
+  });
+});
+
+describe("originContext", () => {
+  it("shows machine and source provenance without changing the stable label", () => {
+    expect(originContext(eventOrigin)).toBe("HOST-A · Live");
+    expect(originContext({ ...logOrigin, machine: null })).toContain("machine unknown");
   });
 });
 
@@ -57,13 +74,19 @@ describe("originDetail", () => {
   });
 
   it("gives channel, provider, event and record for an event", () => {
-    // All four, as the name promises. Asserting only two let a change that dropped the channel or
-    // the provider from the detail line pass.
     const detail = originDetail(eventOrigin);
     expect(detail).toContain(eventOrigin.channel);
     expect(detail).toContain(eventOrigin.provider);
     expect(detail).toContain("event 76");
     expect(detail).toContain("record 1234");
+  });
+
+  it("includes source machine process and activity provenance for an event", () => {
+    const detail = originDetail(eventOrigin);
+    expect(detail).toContain("source Live");
+    expect(detail).toContain("machine HOST-A");
+    expect(detail).toContain("process 4321");
+    expect(detail).toContain("activity {activity}");
   });
 });
 

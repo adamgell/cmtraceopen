@@ -14,11 +14,25 @@ export type TimelineSeverity =
   | "critical";
 
 export type TimelineOrigin =
-  | { kind: "log"; file: string; component: string | null; line: number }
+  | {
+      kind: "log";
+      file: string;
+      component: string | null;
+      line: number;
+      source: string;
+      machine: string | null;
+      bundle: string | null;
+      recordId: number;
+    }
   | {
       kind: "event";
+      source: string;
+      machine: string | null;
+      bundle: string | null;
       channel: string;
       provider: string;
+      processId: number | null;
+      activityId: string | null;
       eventId: number;
       recordId: number;
     };
@@ -61,12 +75,35 @@ export function originLabel(origin: TimelineOrigin): string {
   return `${leaf} (${origin.eventId})`;
 }
 
+/** Compact machine/source context shown beside the stable source label. */
+export function originContext(origin: TimelineOrigin): string {
+  const machine = origin.machine ?? "machine unknown";
+  return `${machine} · ${origin.source}`;
+}
+
 /** Full source description, for a tooltip. */
 export function originDetail(origin: TimelineOrigin): string {
   if (origin.kind === "log") {
-    return `${origin.file}:${origin.line}${origin.component ? ` (${origin.component})` : ""}`;
+    const provenance = [
+      `source ${origin.source}`,
+      origin.machine ? `machine ${origin.machine}` : null,
+      origin.bundle ? `bundle ${origin.bundle}` : null,
+      `record ${origin.recordId}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" / ");
+    return `${origin.file}:${origin.line}${origin.component ? ` (${origin.component})` : ""} / ${provenance}`;
   }
-  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${origin.recordId}`;
+  const provenance = [
+    `source ${origin.source}`,
+    origin.machine ? `machine ${origin.machine}` : null,
+    origin.bundle ? `bundle ${origin.bundle}` : null,
+    origin.processId !== null ? `process ${origin.processId}` : null,
+    origin.activityId ? `activity ${origin.activityId}` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" / ");
+  return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${origin.recordId} / ${provenance}`;
 }
 
 /** True when the item came from a Windows event rather than a text log. */

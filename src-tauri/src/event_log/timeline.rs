@@ -31,11 +31,50 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
 
 fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
     TimelineOrigin::Event {
+        source: record.source_label.clone(),
+        machine: (!record.computer.is_empty()).then(|| record.computer.clone()),
+        bundle: bundle_from_source(&record.source_label),
         channel: record.channel.clone(),
         provider: record.provider.clone(),
+        process_id: record.process_id,
+        activity_id: extract_activity_id(&record.raw_xml),
         event_id: record.event_id,
         record_id: record.event_record_id,
     }
+}
+
+fn bundle_from_source(source: &str) -> Option<String> {
+    let first = source.split(['/', '\\']).next()?;
+    if first.is_empty() || first.ends_with(':') || !source.contains(['/', '\\']) {
+        None
+    } else {
+        Some(first.to_string())
+    }
+}
+
+/// Extracts only the provider-declared correlation ActivityID; absence remains explicit.
+fn extract_activity_id(xml: &str) -> Option<String> {
+    let marker = "ActivityID";
+    let mut offset = 0;
+    while let Some(relative) = xml[offset..].find(marker) {
+        let start = offset + relative;
+        let preceding = xml[..start].chars().next_back();
+        if preceding.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_') {
+            offset = start + marker.len();
+            continue;
+        }
+        let rest = xml[start + marker.len()..].trim_start();
+        let rest = rest.strip_prefix('=')?.trim_start();
+        let quote = rest.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let value = &rest[quote.len_utf8()..];
+        let end = value.find(quote)?;
+        let value = &value[..end];
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    None
 }
 
 /// Converts one event, or reports why it has no position.
@@ -80,10 +119,28 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
     merge(placed, unplaced)
 }
 
+/// Appends new log and event records while preserving existing placed and unplaced items.
+pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[EvtxRecord]) {
+    let mut placed = std::mem::take(&mut timeline.items);
+    let mut unplaced = std::mem::take(&mut timeline.unplaced);
+    for entry in entries {
+        match from_log_entry(entry) {
+            Ok(item) => placed.push(item),
+            Err(item) => unplaced.push(item),
+        }
+    }
+    for record in records {
+        match from_event(record) {
+            Ok(item) => placed.push(item),
+            Err(item) => unplaced.push(item),
+        }
+    }
+    *timeline = merge(placed, unplaced);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn record(timestamp_epoch: i64, message: &str, level: EvtxLevel) -> EvtxRecord {
         EvtxRecord {
             id: 0,
@@ -215,5 +272,57 @@ mod tests {
         assert!(timeline.items.is_empty());
         assert!(timeline.is_complete());
         assert_eq!(timeline.span_ms(), None);
+    }
+    #[test]
+    fn event_origin_preserves_source_machine_process_and_activity() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.source_label = "bundle/evidence/events.evtx".to_string();
+        source.computer = "HOST-A".to_string();
+        source.process_id = Some(4321);
+        source.raw_xml =
+            r#"<Correlation ActivityID="{1234}" RelatedActivityID="{5678}"/>"#.to_string();
+
+        match &from_event(&source).expect("placed").origin {
+            TimelineOrigin::Event {
+                source,
+                machine,
+                bundle,
+                process_id,
+                activity_id,
+                ..
+            } => {
+                assert_eq!(source, "bundle/evidence/events.evtx");
+                assert_eq!(machine.as_deref(), Some("HOST-A"));
+                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(*process_id, Some(4321));
+                assert_eq!(activity_id.as_deref(), Some("{1234}"));
+            }
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn related_activity_does_not_masquerade_as_activity() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.raw_xml = r#"<Correlation RelatedActivityID="{5678}"/>"#.to_string();
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+    #[test]
+    fn append_reconciles_new_events_without_dropping_unplaced_records() {
+        let mut timeline = build(&[], &[record(2_000, "second", EvtxLevel::Information)]);
+        append(
+            &mut timeline,
+            &[],
+            &[record(1_000, "first", EvtxLevel::Information), record(0, "undated", EvtxLevel::Warning)],
+        );
+
+        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages, vec!["first", "second"]);
+        assert_eq!(timeline.unplaced.len(), 1);
+        assert!(!timeline.is_complete());
     }
 }
