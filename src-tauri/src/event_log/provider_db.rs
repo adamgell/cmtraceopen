@@ -333,14 +333,16 @@ pub fn write_provider_database(
             "ValueMapDefinition": [{
                 "Name": "levels",
                 "Values": metadata.levels.clone()
-            }],
-            "levels": metadata.levels
+            }]
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
         let parameters = gzip_json(&serde_json::json!({
-            "unavailableCategories": metadata.unavailable_categories
+            "unavailableCategories": metadata.unavailable_categories.clone(),
+            "providerName": metadata.provider_name.clone(),
+            "versionKey": captured.version_key.clone(),
+            "sourceOsBuild": metadata.source_os_build
         }))?;
         transaction
             .execute(
@@ -819,6 +821,17 @@ mod tests {
             )
             .expect("version key");
         assert_eq!(version_key, "publisher-version-key");
+        let maps_blob: Vec<u8> = database
+            .connection
+            .query_row(
+                "SELECT Maps FROM ProviderDetails WHERE ProviderName = ?1 AND VersionKey = ?2",
+                rusqlite::params!["Round-Trip-Provider", "publisher-version-key"],
+                |row| row.get(0),
+            )
+            .expect("maps blob");
+        let maps: serde_json::Value = inflate_json(&maps_blob).expect("maps JSON");
+        assert!(maps.get("ValueMapDefinition").is_some());
+        assert!(maps.get("levels").is_none());
         for column in [
             "ResolvedFromOwningPublisher",
             "SourceOsRevision",

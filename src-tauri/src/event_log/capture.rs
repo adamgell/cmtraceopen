@@ -596,7 +596,10 @@ mod windows_capture {
                     });
                     text
                 } else {
-                    None
+                    Some(name)
+                };
+                let Some(message_text) = message_text else {
+                    continue;
                 };
                 let target_map = match target {
                     0 => &mut metadata.tasks,
@@ -604,7 +607,7 @@ mod windows_capture {
                     2 => &mut metadata.keywords,
                     _ => &mut metadata.levels,
                 };
-                insert_named_metadata(target_map, value, message_text.unwrap_or(name));
+                insert_named_metadata(target_map, value, message_text);
             }
         }
 
@@ -675,16 +678,23 @@ mod windows_capture {
     }
 
     unsafe fn provider_version_key(metadata: EVT_HANDLE) -> Result<String, String> {
-        let read = |property: EVT_PUBLISHER_METADATA_PROPERTY_ID| -> Result<String, String> {
-            Ok(optional_publisher_variant(metadata, property)?
-                .0
-                .and_then(string)
-                .unwrap_or_default())
+        let read = |property: EVT_PUBLISHER_METADATA_PROPERTY_ID| -> Result<Option<String>, String> {
+            match optional_publisher_variant(metadata, property) {
+                Ok((value, _unavailable)) => Ok(value.and_then(string)),
+                Err(error)
+                    if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
+                        || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
+                        || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(error),
+            }
         };
-        let guid = read(EvtPublisherMetadataPublisherGuid)?;
-        let resource = read(EvtPublisherMetadataResourceFilePath)?;
-        let parameter = read(EvtPublisherMetadataParameterFilePath)?;
-        let message = read(EvtPublisherMetadataMessageFilePath)?;
+        let guid = read(EvtPublisherMetadataPublisherGuid)?.unwrap_or_default();
+        let resource = read(EvtPublisherMetadataResourceFilePath)?.unwrap_or_default();
+        let parameter = read(EvtPublisherMetadataParameterFilePath)?.unwrap_or_default();
+        let message = read(EvtPublisherMetadataMessageFilePath)?.unwrap_or_default();
         if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
             return Err("publisher metadata has no identity fields for VersionKey".to_string());
         }
@@ -713,7 +723,7 @@ mod windows_capture {
                         "{label} identity file {canonical_path} grew beyond {MAX_IDENTITY_FILE_BYTES} bytes"
                     ));
                 }
-                identity.push((label.to_string(), canonical_path, content));
+                identity.push((label.to_string(), String::new(), content));
             }
         }
         Ok(canonical_version_key_owned(&identity))
@@ -919,9 +929,18 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn provider_file_paths_preserve_unresolved_windows_variables() {
-        assert_eq!(provider_file_paths("%CMTRACEOPEN_MISSING_ENV%/messages.dll"), vec![
-            "%CMTRACEOPEN_MISSING_ENV%/messages.dll".to_string()
-        ]);
+        assert_eq!(
+            provider_file_paths("%CMTRACEOPEN_MISSING_ENV%/messages.dll"),
+            vec!["%CMTRACEOPEN_MISSING_ENV%/messages.dll".to_string()]
+        );
+    }
+
+    #[test]
+    fn unmatched_environment_variable_preserves_literal_remainder() {
+        assert_eq!(
+            expand_windows_environment("prefix/%MISSING%/suffix/%UNMATCHED"),
+            "prefix/%MISSING%/suffix/%UNMATCHED"
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
