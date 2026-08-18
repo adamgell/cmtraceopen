@@ -362,6 +362,7 @@ export function recordMatchesVisibleFilter(
 export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
   const predicateInput = {
     ...input,
+    nowEpoch: input.nowEpoch ?? Date.now(),
     eventIdSet: undefined,
     eventIdSelectors: input.filterEventIds.trim()
       ? parseEventIdSelectors(input.filterEventIds)
