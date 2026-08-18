@@ -4,6 +4,7 @@ const virtualizerState = vi.hoisted(() => ({
   measured: [] as HTMLElement[],
   measuredSizes: new Map<number, number>(),
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
+  initialItems: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
   totalSize: 0,
   resizedSizes: new Map<number, number>(),
   measureCalls: 0,
@@ -65,6 +66,13 @@ vi.mock("@tanstack/react-virtual", () => ({
         start += size;
         return item;
       });
+      if (
+        virtualizerState.initialItems.length === 0 &&
+        virtualizerState.measuredSizes.size === 0 &&
+        virtualizerState.resizedSizes.size === 0
+      ) {
+        virtualizerState.initialItems = items;
+      }
       virtualizerState.items = items;
       return items;
     };
@@ -151,6 +159,7 @@ describe("event-viewer shared font metrics", () => {
     useEvtxStore.getState().reset();
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
+    virtualizerState.initialItems.length = 0;
     virtualizerState.measuredSizes.clear();
     virtualizerState.visibleCount = null;
     virtualizerState.measureCalls = 0;
@@ -326,6 +335,8 @@ describe("event-viewer shared font metrics", () => {
     const timeline = render(<EvtxTimeline />);
     const recordRow = timeline.getByRole("option");
     const initialMeasureCalls = virtualizerState.measureCalls;
+    const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
+    expect(virtualizerState.initialItems[1].size).toBe(smallList.rowHeight + 6);
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(
@@ -391,6 +402,9 @@ describe("event-viewer shared font metrics", () => {
 
     const timeline = render(<EvtxTimeline />);
     expect(timeline.getByRole("option")).toBeTruthy();
+    expect(virtualizerState.initialItems[1].size).toBe(
+      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight + 2
+    );
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);

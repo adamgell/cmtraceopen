@@ -73,7 +73,8 @@ export function EvtxTimeline() {
     [logListFontSize]
   );
 
-  const rowEstimate = metrics.rowHeight + 2;
+  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
+  const rowEstimate = metrics.rowHeight + recordRowExtra;
 
   const eventIdSet = useMemo(
     () => parseEventIdFilter(filterEventIds),
@@ -140,8 +141,6 @@ export function EvtxTimeline() {
     );
     if (!stillVisible) setSelectedRecordId(null);
   }, [rows, selectedRecordId, setSelectedRecordId]);
-  const recordRowExtra = columns.some((column) => column.id === "level") ? 6 : 2;
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
