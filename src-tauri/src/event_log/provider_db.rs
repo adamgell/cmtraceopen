@@ -43,6 +43,25 @@ pub struct ProviderDbInfo {
     pub source_os_build: Option<u32>,
 }
 
+/// One provider database that could not be opened while scanning a directory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDbLoadFailure {
+    pub path: String,
+    pub reason: String,
+}
+
+/// Coverage returned by a provider-directory load.
+///
+/// Valid databases remain registered even when one or more siblings fail, while the failures stay
+/// attached to the IPC result instead of being reduced to a warning and a misleading clean success.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDbLoadOutcome {
+    pub loaded: Vec<ProviderDbInfo>,
+    pub failures: Vec<ProviderDbLoadFailure>,
+}
+
 /// Decompresses one gzip JSON payload into `T`.
 ///
 /// An empty BLOB is a legitimately empty section rather than a fault, so it deserializes to the
@@ -218,15 +237,25 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("cannot finish compressing provider metadata: {error}"))
 }
 
+
+/// Provider metadata captured for one concrete provider version.
+///
+/// The version key is part of the database's composite identity. It must come from the capture
+/// walk; deriving it from the source OS build would collapse distinct provider definitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedProviderMetadata {
+    pub metadata: ProviderMetadata,
+    pub version_key: String,
+}
 /// Writes captured provider metadata to a new database in EventLogExpert's schema.
 ///
 /// This is the write side of the capture pipeline (issue #539): the Windows capture walk builds
-/// [`ProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the result back.
-/// The round-trip through those two is how a curated database ships. `Maps` and `Parameters` are
-/// written empty because neither the reader nor the capture model consumes them.
+/// [`CapturedProviderMetadata`] values and hands them here, and [`ProviderDb::open`] reads the
+/// result back. The round-trip through those two is how a curated database ships. `Maps` and
+/// `Parameters` are written empty because neither the reader nor the capture model consumes them.
 pub fn write_provider_database(
     path: &Path,
-    providers: &[ProviderMetadata],
+    providers: &[CapturedProviderMetadata],
 ) -> Result<usize, String> {
     let connection = Connection::open(path).map_err(|error| {
         format!(
@@ -245,9 +274,14 @@ pub fn write_provider_database(
 
     let empty_object = serde_json::json!({});
     let empty_array = serde_json::json!([]);
-
-    for metadata in providers {
-        let build = metadata.source_os_build.unwrap_or(0);
+    for captured in providers {
+        if captured.version_key.is_empty() {
+            return Err(format!(
+                "provider {} is missing its captured version key",
+                captured.metadata.provider_name
+            ));
+        }
+        let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
         let maps = gzip_json(&empty_object)?;
@@ -264,7 +298,7 @@ pub fn write_provider_database(
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
                 rusqlite::params![
                     metadata.provider_name,
-                    format!("vk1:{build}"),
+                    &captured.version_key,
                     events,
                     keywords,
                     maps,
@@ -277,8 +311,9 @@ pub fn write_provider_database(
             )
             .map_err(|error| {
                 format!(
-                    "cannot insert provider {}: {error}",
-                    metadata.provider_name
+                    "cannot insert provider {} version {}: {error}",
+                    metadata.provider_name,
+                    captured.version_key
                 )
             })?;
     }
@@ -312,7 +347,7 @@ pub struct ProviderStore {
 
 impl ProviderStore {
     /// Registers every `.db` in `directory`, replacing any previously registered set.
-    pub fn load_directory(&mut self, directory: &Path) -> Result<Vec<ProviderDbInfo>, String> {
+    pub fn load_directory(&mut self, directory: &Path) -> Result<ProviderDbLoadOutcome, String> {
         let entries = std::fs::read_dir(directory).map_err(|error| {
             format!(
                 "cannot read provider database directory {}: {error}",
@@ -322,7 +357,7 @@ impl ProviderStore {
 
         let mut databases: Vec<ProviderDb> = Vec::new();
         let mut info = Vec::new();
-        let mut failures: Vec<String> = Vec::new();
+        let mut failures: Vec<ProviderDbLoadFailure> = Vec::new();
 
         let mut paths: Vec<PathBuf> = Vec::new();
         for entry in entries {
@@ -330,10 +365,10 @@ impl ProviderStore {
             // the map loader. Dropping it lets a partial set look complete.
             match entry {
                 Ok(entry) => paths.push(entry.path()),
-                Err(error) => failures.push(format!(
-                    "cannot read an entry in {}: {error}",
-                    directory.display()
-                )),
+                Err(error) => failures.push(ProviderDbLoadFailure {
+                    path: directory.display().to_string(),
+                    reason: format!("cannot read directory entry: {error}"),
+                }),
             }
         }
         paths.retain(|path| {
@@ -355,7 +390,10 @@ impl ProviderStore {
                 }
                 // A file that is not a provider database is reported, not fatal: the directory is
                 // user-supplied and may hold anything.
-                Err(reason) => failures.push(reason),
+                Err(reason) => failures.push(ProviderDbLoadFailure {
+                    path: path.display().to_string(),
+                    reason,
+                }),
             }
         }
 
@@ -377,18 +415,19 @@ impl ProviderStore {
         drop(cache);
         self.info = info.clone();
 
-        if info.is_empty() && !failures.is_empty() {
-            return Err(failures.join("; "));
-        }
-        // Reported even when something loaded. Returning Ok and dropping four reasons on the floor
-        // leaves an operator looking at partial provider coverage with no explanation for it.
+        // Reported even when something loaded. Returning only valid files would leave an operator
+        // looking at partial provider coverage with no explanation for it.
         for failure in &failures {
             log::warn!(
-                "event=provider_db_skipped directory=\"{}\" reason=\"{failure}\"",
-                directory.display()
+                "event=provider_db_skipped path=\"{}\" reason=\"{}\"",
+                failure.path,
+                failure.reason
             );
         }
-        Ok(info)
+        Ok(ProviderDbLoadOutcome {
+            loaded: info,
+            failures,
+        })
     }
 
     /// Metadata for `provider_name`, consulting registered databases in order and caching it.
@@ -614,12 +653,15 @@ mod tests {
         build_db(&dir.join("a.db"), &[("A", 26200, EVENTS)]);
         build_db(&dir.join("b.db"), &[("B", 26200, EVENTS)]);
         std::fs::write(dir.join("notes.txt"), b"ignore me").expect("write");
+        std::fs::write(dir.join("bad.db"), b"not a provider database").expect("write");
 
         // A store local to this test. The old process global meant a parallel test registering a
         // different directory replaced this one's set mid-run.
         let mut store = ProviderStore::default();
-        let info = store.load_directory(&dir).expect("loads");
-        assert_eq!(info.len(), 2);
+        let outcome = store.load_directory(&dir).expect("loads");
+        assert_eq!(outcome.loaded.len(), 2);
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(outcome.failures[0].path.ends_with("bad.db"));
         assert!(store.provider("A").is_some());
         assert!(store.provider("B").is_some());
         assert!(store.provider("Nobody").is_none());
@@ -665,16 +707,37 @@ mod tests {
             source_os_build: Some(26200),
         };
 
+        let captured = CapturedProviderMetadata {
+            metadata: metadata.clone(),
+            version_key: "publisher-version-key".to_string(),
+        };
+
+        let mut older_metadata = metadata.clone();
+        older_metadata.source_os_build = Some(26100);
+        let older = CapturedProviderMetadata {
+            metadata: older_metadata,
+            version_key: "publisher-version-key-old".to_string(),
+        };
+
         let written =
-            write_provider_database(&path, std::slice::from_ref(&metadata)).expect("write");
-        assert_eq!(written, 1);
+            write_provider_database(&path, &[captured.clone(), older]).expect("write");
+        assert_eq!(written, 2);
 
         let database = ProviderDb::open(&path).expect("opens");
         let read = database
             .provider("Round-Trip-Provider")
             .expect("query")
             .expect("present");
-        assert_eq!(read, metadata);
+        let version_key: String = database
+            .connection
+            .query_row(
+                "SELECT VersionKey FROM ProviderDetails WHERE ProviderName = ?1 \
+                 ORDER BY SourceOsBuild DESC LIMIT 1",
+                ["Round-Trip-Provider"],
+                |row| row.get(0),
+            )
+            .expect("version key");
+        assert_eq!(version_key, "publisher-version-key");
     }
 }
 

@@ -287,11 +287,11 @@ pub async fn evtx_loaded_map_count(state: tauri::State<'_, AppState>) -> Result<
 pub async fn evtx_load_provider_databases(
     directory: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
+) -> Result<super::provider_db::ProviderDbLoadOutcome, String> {
     let path = std::path::PathBuf::from(&directory);
     let providers = state.provider_store.clone();
     tokio::task::spawn_blocking(
-        move || -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
+        move || -> Result<super::provider_db::ProviderDbLoadOutcome, String> {
             // Scanned into a fresh store first, then swapped, so the write lock is held for the
             // assignment rather than for the whole directory walk. Any parse in flight would
             // otherwise block on its read guard for as long as opening every database takes. Same

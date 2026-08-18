@@ -29,6 +29,25 @@ function emitBatch(channel: string, sequence: number, records: unknown[]) {
   listeners.get("evtx-record-batch")?.({ payload: { channel, sequence, records } });
 }
 
+function streamedRecord(channel: string, id = 0) {
+  return {
+    id,
+    eventRecordId: id,
+    timestamp: "2026-08-11T12:00:00.000Z",
+    timestampEpoch: 1_000 + id,
+    provider: "P",
+    channel,
+    eventId: 1,
+    level: "Information",
+    computer: "C",
+    message: "m",
+    eventData: [],
+    rawXml: "<Event/>",
+    sourceLabel: "Live",
+    mapped: [],
+  };
+}
+
 function result(channel: string, gaps: string[]) {
   return {
     records: [],
@@ -106,6 +125,7 @@ describe("coverage gaps through the store", () => {
   });
 
   it("records a channel whose refresh failed instead of showing the cleared view as complete", async () => {
+
     // The refresh clears coverageGaps with the records it replaced. A channel whose refresh then
     // fails contributes zero records to the replaced view, so the failure must be recorded or the
     // view reports full coverage while missing a whole channel.
@@ -122,6 +142,61 @@ describe("coverage gaps through the store", () => {
     expect(state.loadError).toContain("Application");
     expect(state.loadError).toContain("access denied");
     expect(state.isLoading).toBe(false);
+  });
+});
+describe("live batch delivery through initial and refresh loads", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+    });
+  });
+
+  it("assembles streamed batches during initial channel enumeration", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 1, sourceType: "live" }];
+      }
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    expect(useEvtxStore.getState().records).toHaveLength(1);
+    expect(useEvtxStore.getState().records[0].channel).toBe("Application");
+  });
+
+  it("assembles streamed batches during refresh", async () => {
+    useEvtxStore.setState({
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+    });
+    invoke.mockImplementation(async () => {
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    expect(useEvtxStore.getState().records).toHaveLength(1);
+    expect(useEvtxStore.getState().records[0].channel).toBe("Application");
   });
 });
 

@@ -193,7 +193,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         selectedRecordId: null,
       });
 
-      // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
+      // Live query records arrive through the batch event. This path invokes the backend directly
+      // rather than through queryChannels, so it must drain the same stream before merging.
       const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
         const state = get();
         const merged = [...state.records, ...result.records];
@@ -228,7 +229,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             filter: buildServerFilter(get().timeWindow),
           });
           const checked = assertParseResultShape(result);
-          mergeResult(ch, result, checked.errorMessages);
+          const streamed = drainStreamedRecords(ch);
+          const streamedGaps =
+            streamed.missingSequences.length > 0
+              ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+              : [];
+          mergeResult(
+            ch,
+            { ...result, records: [...streamed.records, ...result.records] },
+            [...checked.errorMessages, ...streamedGaps]
+          );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
@@ -386,8 +396,6 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       records: [],
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
-      isLoading: true,
-      loadError: null,
       loadStartTime: startTime,
       loadElapsedMs: null,
       // Cleared with the records they describe. Keeping them would report gaps from a set that is
@@ -395,6 +403,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       coverageGaps: [],
     });
 
+    // Refresh invokes the streaming command directly, so drain its batch before merging the
+    // command reply (which intentionally carries only records not emitted in batches).
     const promises = loaded.map(async (ch) => {
       try {
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
@@ -407,9 +417,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           filter: buildServerFilter(get().timeWindow),
         });
         const checked = assertParseResultShape(result);
+        const streamed = drainStreamedRecords(ch);
+        const streamedGaps =
+          streamed.missingSequences.length > 0
+            ? [`${ch}: ${streamed.missingSequences.length} batches of events were not received`]
+            : [];
 
         const s = get();
-        const merged = [...s.records, ...result.records];
+        const merged = [...s.records, ...streamed.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -426,7 +441,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, checked.errorMessages),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+            ...checked.errorMessages,
+            ...streamedGaps,
+          ]),
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
