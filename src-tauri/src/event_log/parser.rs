@@ -91,14 +91,21 @@ fn is_wildcard_source(source: &str) -> bool {
 }
 
 pub fn build_source_manifest(paths: &[String]) -> Result<EventLogSourceManifest, String> {
-    let selections = paths
-        .iter()
-        .map(|path| EventLogSourceSelection {
+    let mut selections = Vec::with_capacity(paths.len().min(MAX_SOURCE_INPUTS));
+    for path in paths.iter().take(MAX_SOURCE_INPUTS) {
+        selections.push(EventLogSourceSelection {
             path: path.clone(),
             kind: EventLogSourceKind::File,
-        })
-        .collect::<Vec<_>>();
-    build_source_manifest_for_selections(&selections)
+        });
+    }
+    let mut manifest = build_source_manifest_for_selections(&selections)?;
+    if paths.len() > MAX_SOURCE_INPUTS {
+        manifest.coverage.push(SourceCoverage::LimitReached {
+            path: "<source inputs>".to_string(),
+            reason: format!("source input count exceeds {MAX_SOURCE_INPUTS}"),
+        });
+    }
+    Ok(manifest)
 }
 
 pub fn build_source_manifest_for_selections(
@@ -119,7 +126,8 @@ pub fn build_source_manifest_for_selections(
         }
         let source = &selection.path;
         let requested_kind = selection.kind;
-        if let Some(gap) = gated_source(source, requested_kind) {
+        let effective_kind = classify_source_kind(source, requested_kind);
+        if let Some(gap) = gated_source(source, effective_kind) {
             manifest.coverage.push(gap);
             continue;
         }
@@ -151,16 +159,15 @@ pub fn build_source_manifest_for_selections(
                 reason: "wildcard did not match any filesystem path".to_string(),
             });
         }
-
         for path in paths {
             expand_path(
                 &path,
                 if is_wildcard
-                    && !matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
+                    && !matches!(effective_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
                 {
                     EventLogSourceKind::Wildcard
                 } else {
-                    requested_kind
+                    effective_kind
                 },
                 0,
                 &mut inspected_work,
@@ -501,8 +508,13 @@ fn read_wildcard_children(
         }
     };
     let mut entries = Vec::new();
+    let mut entry_limit_reached = false;
     let mut work_exhausted = false;
     for entry in read_dir {
+        if entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+            entry_limit_reached = true;
+            break;
+        }
         *inspected_work = inspected_work.saturating_add(1);
         if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
             work_exhausted = true;
@@ -528,8 +540,7 @@ fn read_wildcard_children(
             .then_with(|| left_name.cmp(&right_name))
             .then_with(|| left.cmp(right))
     });
-    if entries.len() > MAX_SOURCE_MANIFEST_ENTRIES {
-        entries.truncate(MAX_SOURCE_MANIFEST_ENTRIES);
+    if entry_limit_reached {
         coverage.push(SourceCoverage::LimitReached {
             path: directory.to_string_lossy().to_string(),
             reason: format!(
@@ -808,7 +819,14 @@ fn expand_path(
 
     let normalized_path = normalize_source_path(path);
     let source_id = source_identity(&normalized_path);
-    if manifest.entries.iter().any(|entry| entry.source_id == source_id) {
+    if let Some(existing) = manifest
+        .entries
+        .iter_mut()
+        .find(|entry| entry.source_id == source_id)
+    {
+        if source_kind_priority(kind) > source_kind_priority(existing.kind) {
+            existing.kind = kind;
+        }
         return Ok(());
     }
     manifest.entries.push(EventLogSource {
@@ -882,14 +900,26 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
 fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
     if is_vss_path(path) {
         EventLogSourceKind::Vss
-    } else if path
-        .rsplit(['\\', '/'])
-        .next()
-        .is_some_and(|name| name.to_ascii_lowercase().starts_with("archive-"))
+    } else if matches!(requested_kind, EventLogSourceKind::File)
+        && !fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        && path
+            .rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.to_ascii_lowercase().starts_with("archive-"))
     {
         EventLogSourceKind::Archive
     } else {
         requested_kind
+    }
+}
+
+fn source_kind_priority(kind: EventLogSourceKind) -> u8 {
+    match kind {
+        EventLogSourceKind::File => 1,
+        EventLogSourceKind::Folder => 2,
+        EventLogSourceKind::Wildcard => 3,
+        EventLogSourceKind::Archive => 4,
+        EventLogSourceKind::Vss => 5,
     }
 }
 
