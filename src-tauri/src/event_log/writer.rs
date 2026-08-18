@@ -474,6 +474,7 @@ fn record(message: &str) -> EvtxRecord {
     EvtxRecord {
         id: 7,
         event_record_id: 42,
+        event_record_id_text: Some("42".into()),
         timestamp: "2026-08-09T12:00:00Z".into(),
         timestamp_epoch: 0,
         provider: "Provider".into(),
@@ -634,6 +635,7 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
                 || error.to_string().contains("prolog")
                 || error.to_string().contains("control")
                 || error.to_string().contains("doctype")
+                || error.to_string().contains("CDATA")
         );
     }
 }

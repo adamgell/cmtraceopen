@@ -31,6 +31,10 @@ export function EventLogWorkspace() {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
+  const columnOrder = useEvtxStore((s) => s.columnConfig.order);
   const visibleRecords = useMemo(
     () =>
       selectVisibleRecords({
@@ -39,8 +43,22 @@ export function EventLogWorkspace() {
         filterLevels,
         filterEventIds,
         filterSearch,
+        quickFilter,
+        visibleColumns: columnOrder,
+        timeZoneMode,
+        timeWindow,
       }),
-    [records, selectedChannels, filterLevels, filterEventIds, filterSearch]
+    [
+      records,
+      selectedChannels,
+      filterLevels,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      columnOrder,
+      timeZoneMode,
+      timeWindow,
+    ]
   );
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);

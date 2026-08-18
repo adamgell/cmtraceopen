@@ -169,51 +169,6 @@ function compareRustStrings(left: string, right: string): number {
   }
   return leftBytes.length - rightBytes.length;
 }
-function stableRecordIdentityMap(records: EvtxRecord[]): Map<EvtxRecord, string> {
-  const identities = new Map<EvtxRecord, string>();
-  const occurrences = new Map<string, number>();
-  const orderedRecords = [...records].sort((left, right) =>
-    (left.timestampEpoch ?? 0) - (right.timestampEpoch ?? 0) ||
-    compareRustStrings(stableRecordBase(left), stableRecordBase(right)) ||
-    compareRustStrings(left.timestamp ?? "", right.timestamp ?? "") ||
-    compareRustStrings(left.message ?? "", right.message ?? "") ||
-    compareRustStrings(left.rawXml ?? "", right.rawXml ?? "")
-  );
-  for (const record of orderedRecords) {
-    const base = stableRecordBase(record);
-    const exactId = exactRecordIdText(record);
-    if (record.eventRecordId !== 0 || exactId !== null) {
-      identities.set(record, base);
-      continue;
-    }
-    const occurrence = occurrences.get(base) ?? 0;
-    occurrences.set(base, occurrence + 1);
-    identities.set(record, `${base}-${occurrence}`);
-  }
-  return identities;
-}
-
-function stableRecordIdentities(records: EvtxRecord[]): {
-  keys: Set<string>;
-  unsafePrefixes: Set<string>;
-} {
-  const identities = stableRecordIdentityMap(records);
-  const keys = new Set<string>();
-  const unsafePrefixes = new Set<string>();
-  for (const [record, identity] of identities) {
-    const exactId = exactRecordIdText(record);
-    if (record.eventRecordId !== 0 || exactId !== null) {
-      if (exactId !== null || Number.isSafeInteger(record.eventRecordId)) {
-        keys.add(identity);
-      } else {
-        unsafePrefixes.add(identity);
-      }
-      continue;
-    }
-    keys.add(identity);
-  }
-  return { keys, unsafePrefixes };
-}
 
 /**
  * Filters a cached backend timeline to the records currently visible in the event list.
@@ -230,7 +185,16 @@ export function filterTimelineToRecords(
   const keys = new Set(
     records.map((record) => canonicalKeys.get(record) ?? stableRecordBase(record))
   );
-  const { unsafePrefixes } = stableRecordIdentities(records);
+  const unsafePrefixes = new Set(
+    records
+      .filter(
+        (record) =>
+          record.eventRecordId !== 0 &&
+          exactRecordIdText(record) === null &&
+          !Number.isSafeInteger(record.eventRecordId)
+      )
+      .map((record) => canonicalKeys.get(record) ?? stableRecordBase(record))
+  );
   const unsafeOriginCounts = new Map<string, number>();
   for (const item of [...timeline.items, ...timeline.unplaced]) {
     if (item.origin.kind !== "event") continue;

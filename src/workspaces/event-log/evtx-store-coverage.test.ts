@@ -952,6 +952,7 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.records.map((item) => item.eventRecordId)).toEqual([1, 100]);
     expect(state.selectedRecordId).toBe(1);
     expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
+  });
   it("restores sequence order for equal-time batches delivered out of order", async () => {
     invoke.mockImplementationOnce(async () => {
       const first = record("System", 1);
@@ -959,13 +960,13 @@ describe("records that arrive in batches while the query runs", () => {
       first.timestampEpoch = second.timestampEpoch = 5_000;
       emitBatch("System", 1, [second]);
       emitBatch("System", 0, [first]);
+      emitTerminal("System", 2, 2);
       return streamedReply("System", 2);
     });
 
     await useEvtxStore.getState().queryChannels(["System"]);
 
     expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1, 2]);
-  });
   });
 
   it("reports a batch that never arrived instead of showing a short list as complete", async () => {

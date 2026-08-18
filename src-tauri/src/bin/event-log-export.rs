@@ -378,6 +378,7 @@ mod tests {
         EvtxRecord {
             id: 1,
             event_record_id: 1,
+            event_record_id_text: Some("1".into()),
             timestamp: String::new(),
             timestamp_epoch: 0,
             provider: "Provider".into(),
@@ -461,6 +462,7 @@ mod tests {
         let make = |id: u32, message: &str| app_lib::event_log::models::EvtxRecord {
             id: id as u64,
             event_record_id: id as u64,
+            event_record_id_text: Some(id.to_string()),
             timestamp: String::new(),
             timestamp_epoch: id as i64,
             provider: "Provider".into(),

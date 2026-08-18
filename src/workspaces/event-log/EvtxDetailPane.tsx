@@ -193,7 +193,7 @@ export function EvtxDetailPane() {
           <strong>Computer:</strong> {record.computer}
         </span>
         <span>
-          <strong>Record ID:</strong> {record.eventRecordId}
+          <strong>Record ID:</strong> {record.eventRecordIdText ?? record.eventRecordId}
         </span>
         <span>
           <strong>Source:</strong> {record.sourceLabel}

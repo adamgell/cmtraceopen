@@ -42,6 +42,8 @@ impl EvtxCoverageGap {
             chunk_id: None,
             event_record_id: None,
         }
+    }
+}
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum U64Transport {

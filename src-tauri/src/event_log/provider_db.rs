@@ -495,7 +495,10 @@ fn write_provider_database_inner(
             }],
             // Keep the historical key for older EventLogExpert readers while carrying the
             // canonical ValueMapDefinition shape used by current databases.
-            "levels": metadata.levels
+            "levels": {
+                "IsBitMap": false,
+                "Entries": metadata.levels
+            }
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
@@ -1125,7 +1128,7 @@ mod tests {
             }],
             messages: vec![ProviderMessage {
                 raw_id: 0x8000_0002,
-                short_id: 0x8000_0002,
+                short_id: 2,
                 provider_name: Some("Round-Trip-Provider".to_string()),
                 template: Some("<template />".to_string()),
                 tag: Some("Enrollment".to_string()),
