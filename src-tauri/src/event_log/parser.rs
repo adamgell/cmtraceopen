@@ -464,7 +464,16 @@ fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> 
 
 fn is_vss_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\").to_lowercase();
-    normalized.contains("globalroot\\device\\harddiskvolumeshadowcopy")
+    let Some(rest) = normalized
+        .strip_prefix("\\\\?\\globalroot\\device\\harddiskvolumeshadowcopy")
+    else {
+        return false;
+    };
+    let digits = rest
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    digits > 0 && (rest[digits..].is_empty() || rest[digits..].starts_with('\\'))
 }
 fn is_evtx_candidate(path: &Path) -> bool {
     let lower = path
@@ -517,11 +526,25 @@ fn normalize_windows_path(raw: &str) -> String {
     } else {
         (String::new(), raw.as_str())
     };
+    let minimum_components = if prefix == "\\\\" {
+        2
+    } else if prefix == "\\\\?\\"
+        && rest
+            .split('\\')
+            .next()
+            .is_some_and(|component| component.eq_ignore_ascii_case("UNC"))
+    {
+        4
+    } else if prefix.len() == 3 && prefix.as_bytes()[1] == b':' {
+        1
+    } else {
+        0
+    };
     let mut components: Vec<&str> = Vec::new();
     for component in rest.split('\\') {
         match component {
             "" | "." => {}
-            ".." if components.last().is_some_and(|last| *last != "..") => {
+            ".." if components.len() > minimum_components => {
                 components.pop();
             }
             ".." => {}
@@ -1075,6 +1098,12 @@ mod tests {
             )),
             r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Logs\Application.evtx"
         );
+        assert_eq!(
+            normalize_source_path(Path::new(r"\\server\share\..\Application.evtx")),
+            r"\\server\share\Application.evtx"
+        );
+        assert!(!is_vss_path(r"C:\logs\harddiskvolumeshadowcopy1\Application.evtx"));
+        assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
         assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
         assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
     }
