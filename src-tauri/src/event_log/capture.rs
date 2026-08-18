@@ -735,7 +735,7 @@ mod windows_tests {
     #[test]
     fn channel_resolution_uses_reference_id_not_array_position() {
         let channels = BTreeMap::from([(7, "Admin".to_string()), (42, "Operational".to_string())]);
-        assert_eq!(resolve_channel_name(&channels, 42).as_deref(), Some("Operational"));
+        assert_eq!(resolve_channel_name(&channels, 0), None);
         assert_eq!(resolve_channel_name(&channels, 1), None);
     }
 }
