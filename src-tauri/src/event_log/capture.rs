@@ -103,6 +103,14 @@ fn provider_file_paths(value: &str) -> Vec<String> {
         .map(expand_windows_environment)
         .collect()
 }
+fn category_message_text(
+    message_id: Option<u32>,
+    formatted: Option<String>,
+    inline_name: String,
+) -> Option<String> {
+    message_id.map(|_| formatted).unwrap_or(Some(inline_name))
+}
+
 
 #[cfg(target_os = "windows")]
 mod windows_capture {
@@ -253,6 +261,13 @@ mod windows_capture {
                 (mask & bit != 0).then_some(bit)
             })
             .collect()
+    }
+    fn category_message_text(
+        message_id: Option<u32>,
+        formatted: Option<String>,
+        inline_name: String,
+    ) -> Option<String> {
+        message_id.map(|_| formatted).unwrap_or(Some(inline_name))
     }
     unsafe fn decode_variant(variant: &EVT_VARIANT) -> Option<OwnedVariant> {
         let kind = variant.Type & EVT_VARIANT_TYPE_MASK;
@@ -478,11 +493,15 @@ mod windows_capture {
     ) -> Result<(), String> {
         let mut add = |value: OwnedVariant| -> Result<(), String> {
             if let Some(raw_id) = optional_message_id(value)? {
-                let short_id = (raw_id as u16) as u32;
+                let short_id = raw_id as u32;
                 let text = format_message(metadata, raw_id)?;
                 ids.entry(raw_id as u64).or_insert_with(|| ProviderMessage {
                     raw_id: raw_id as u64,
                     short_id,
+                    provider_name: None,
+                    template: None,
+                    tag: None,
+                    log_link: None,
                     text,
                 });
             }
@@ -499,8 +518,11 @@ mod windows_capture {
     unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<(BTreeMap<u32, String>, bool), String> {
         let (channel_value, unavailable) =
             optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?;
-        let Some(OwnedVariant::Handle(array_handle)) = channel_value else {
+        let Some(channel_value) = channel_value else {
             return Ok((BTreeMap::new(), unavailable));
+        };
+        let OwnedVariant::Handle(array_handle) = channel_value else {
+            return Err("channel references metadata has an invalid type".to_string());
         };
         let array_handle = EvtHandle(array_handle);
         let mut count = 0u32;
@@ -547,6 +569,9 @@ mod windows_capture {
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
 
+        for message in messages.values_mut() {
+            message.provider_name = Some(publisher_name.to_string());
+        }
         for (array_property, name_property, value_property, message_property, target) in [
             (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelName, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
             (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskName, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
@@ -564,8 +589,14 @@ mod windows_capture {
                 };
                 metadata.unavailable_categories.insert(category.to_string());
             }
-            let Some(OwnedVariant::Handle(array_handle)) = array_value else {
+            let Some(array_value) = array_value else {
                 continue;
+            };
+            let OwnedVariant::Handle(array_handle) = array_value else {
+                return Err(format!(
+                    "metadata array {} has an invalid type",
+                    array_property.0
+                ));
             };
             let array_handle = EvtHandle(array_handle);
             let mut count = 0u32;
@@ -588,15 +619,19 @@ mod windows_capture {
                     message_property.0 as u32,
                 )?)?;
                 let message_text = if let Some(message_id) = message_id {
-                    let text = format_message(metadata_handle, message_id).unwrap_or(None);
+                    let text = format_message(metadata_handle, message_id)?;
                     messages.entry(message_id as u64).or_insert(ProviderMessage {
                         raw_id: message_id as u64,
-                        short_id: message_id as u16 as u32,
+                        short_id: message_id as u32,
+                        provider_name: Some(publisher_name.to_string()),
+                        template: None,
+                        tag: None,
+                        log_link: None,
                         text: text.clone(),
                     });
-                    text
+                    category_message_text(Some(message_id), text, name)
                 } else {
-                    Some(name)
+                    category_message_text(None, None, name)
                 };
                 let Some(message_text) = message_text else {
                     continue;
@@ -648,10 +683,14 @@ mod windows_capture {
             let description = if let Some(message_id) =
                 optional_message_id(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
             {
-                let text = format_message(metadata_handle, message_id).unwrap_or(None);
+                let text = format_message(metadata_handle, message_id)?;
                 messages.entry(message_id as u64).or_insert(ProviderMessage {
                     raw_id: message_id as u64,
-                    short_id: message_id as u16 as u32,
+                    short_id: message_id as u32,
+                    provider_name: Some(publisher_name.to_string()),
+                    template: template.clone(),
+                    tag: None,
+                    log_link: None,
                     text: text.clone(),
                 });
                 text
@@ -680,7 +719,12 @@ mod windows_capture {
     unsafe fn provider_version_key(metadata: EVT_HANDLE) -> Result<String, String> {
         let read = |property: EVT_PUBLISHER_METADATA_PROPERTY_ID| -> Result<Option<String>, String> {
             match optional_publisher_variant(metadata, property) {
-                Ok((value, _unavailable)) => Ok(value.and_then(string)),
+                Ok((value, _unavailable)) => value
+                    .map(|variant| {
+                        string(variant)
+                            .ok_or_else(|| format!("publisher property {} has an invalid type", property.0))
+                    })
+                    .transpose(),
                 Err(error)
                     if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
                         || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
@@ -940,6 +984,18 @@ mod tests {
         assert_eq!(
             expand_windows_environment("prefix/%MISSING%/suffix/%UNMATCHED"),
             "prefix/%MISSING%/suffix/%UNMATCHED"
+        );
+    }
+
+    #[test]
+    fn unresolved_category_message_does_not_fallback_to_inline_name() {
+        assert_eq!(
+            category_message_text(Some(7), None, "InlineName".to_string()),
+            None
+        );
+        assert_eq!(
+            category_message_text(None, None, "InlineName".to_string()),
+            Some("InlineName".to_string())
         );
     }
 

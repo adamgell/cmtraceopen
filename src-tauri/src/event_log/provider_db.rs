@@ -768,7 +768,11 @@ mod tests {
             }],
             messages: vec![ProviderMessage {
                 raw_id: 0x8000_0002,
-                short_id: 2,
+                short_id: 0x8000_0002,
+                provider_name: Some("Round-Trip-Provider".to_string()),
+                template: Some("<template />".to_string()),
+                tag: Some("Enrollment".to_string()),
+                log_link: Some("https://example.invalid/event/2".to_string()),
                 text: Some("Enroll failed: (%1).".to_string()),
             }],
             levels: [("2".to_string(), "Information".to_string())]

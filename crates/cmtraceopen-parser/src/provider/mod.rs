@@ -119,6 +119,18 @@ pub struct ProviderMessage {
         serialize_with = "u32_as_signed"
     )]
     pub short_id: u32,
+    /// Provider name owning this message row, when persisted by EventLogExpert.
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    /// Manifest template associated with this message, when present.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// EventLogExpert message tag, when present.
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// EventLogExpert log-link metadata, when present.
+    #[serde(default)]
+    pub log_link: Option<String>,
     /// The message text.
     #[serde(default)]
     pub text: Option<String>,
