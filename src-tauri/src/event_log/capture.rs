@@ -151,7 +151,7 @@ mod windows_capture {
         (opcode, (task != 0).then_some(task))
     }
     fn base32(bytes: &[u8]) -> String {
-        const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
         let mut output = String::new();
         let mut buffer = 0u64;
         let mut bits = 0u8;
@@ -685,8 +685,11 @@ mod windows_capture {
                 Err(error) => failures.push(ProviderCaptureFailure { provider_name: publisher_name.clone(), error: format!("cannot open publisher metadata: {error}") }),
             }
         }
-        if captured.is_empty() && failures.is_empty() {
-            return Err(CaptureError::traversal("publisher enumeration exceeded its safety bound"));
+        if captured.is_empty() {
+            if failures.is_empty() {
+                return Err(CaptureError::traversal("publisher enumeration exceeded its safety bound"));
+            }
+            return Err(CaptureError::provider_failures(failures));
         }
         crate::event_log::provider_db::write_provider_database(db_path, &captured)
             .map_err(CaptureError::traversal)?;
@@ -715,7 +718,8 @@ mod windows_tests {
         assert!(first.starts_with("vk1:"));
         assert!(first[4..]
             .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || b"234567".contains(&byte)));
+            .all(|byte| byte.is_ascii_lowercase() || b"234567".contains(&byte)));
+        assert_eq!(base32(&[0]), "aa");
         assert_ne!(first, second, "same path with changed content needs a new version");
         let high_bytes = base32(&[0xff; 32]);
         assert_eq!(high_bytes.len(), 52);

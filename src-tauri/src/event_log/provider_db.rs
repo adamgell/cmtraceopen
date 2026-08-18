@@ -250,6 +250,9 @@ const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDet
     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
     "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
     "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
+    "ResolvedFromOwningPublisher" INTEGER,
+    "SourceOsRevision" INTEGER, "SourceOsEdition" TEXT,
+    "SourceOsDisplayVersion" TEXT, "MessageFileVersion" TEXT,
     PRIMARY KEY ("ProviderName","VersionKey"));
 CREATE TABLE IF NOT EXISTS "ProviderLevels" (
     "ProviderName" TEXT COLLATE NOCASE NOT NULL,
@@ -290,7 +293,18 @@ pub fn write_provider_database(
     path: &Path,
     providers: &[CapturedProviderMetadata],
 ) -> Result<usize, String> {
-    let connection = Connection::open(path).map_err(|error| {
+    if providers.is_empty() {
+        return Err("cannot write provider database without captured providers".to_string());
+    }
+    for captured in providers {
+        if captured.version_key.is_empty() {
+            return Err(format!(
+                "provider {} is missing its captured version key",
+                captured.metadata.provider_name
+            ));
+        }
+    }
+    let mut connection = Connection::open(path).map_err(|error| {
         format!(
             "cannot create provider database {}: {error}",
             path.display()
@@ -299,24 +313,21 @@ pub fn write_provider_database(
     connection
         .execute_batch(PROVIDER_DETAILS_SCHEMA)
         .map_err(|error| format!("cannot create provider database schema: {error}"))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("cannot begin provider database transaction: {error}"))?;
     // Writing a database is a full replacement, not an append: a stale provider row from an earlier
     // capture at the same path must not survive into the new set.
-    connection
+    transaction
         .execute("DELETE FROM ProviderDetails", [])
         .map_err(|error| format!("cannot clear provider database: {error}"))?;
-    connection
+    transaction
         .execute("DELETE FROM ProviderLevels", [])
         .map_err(|error| format!("cannot clear provider levels: {error}"))?;
 
     let empty_object = serde_json::json!({});
     let empty_array = serde_json::json!([]);
     for captured in providers {
-        if captured.version_key.is_empty() {
-            return Err(format!(
-                "provider {} is missing its captured version key",
-                captured.metadata.provider_name
-            ));
-        }
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
@@ -327,7 +338,7 @@ pub fn write_provider_database(
         let parameters = gzip_json(&empty_array)?;
         let tasks = gzip_json(&metadata.tasks)?;
 
-        connection
+        transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
                    (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
@@ -353,7 +364,7 @@ pub fn write_provider_database(
                     captured.version_key
                 )
             })?;
-        connection
+        transaction
             .execute(
                 "INSERT INTO ProviderLevels (ProviderName, VersionKey, Levels) VALUES (?1, ?2, ?3)",
                 rusqlite::params![metadata.provider_name, &captured.version_key, levels],
@@ -365,6 +376,9 @@ pub fn write_provider_database(
                 )
             })?;
     }
+    transaction
+        .commit()
+        .map_err(|error| format!("cannot commit provider database transaction: {error}"))?;
     Ok(providers.len())
 }
 
@@ -792,6 +806,43 @@ mod tests {
             )
             .expect("version key");
         assert_eq!(version_key, "publisher-version-key");
+        for column in [
+            "ResolvedFromOwningPublisher",
+            "SourceOsRevision",
+            "SourceOsEdition",
+            "SourceOsDisplayVersion",
+            "MessageFileVersion",
+        ] {
+            let present: i64 = database
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('ProviderDetails') WHERE name = ?1",
+                    [column],
+                    |row| row.get(0),
+                )
+                .expect("canonical nullable column query");
+            assert_eq!(present, 1, "missing canonical column {column}");
+        }
+    }
+    #[test]
+    fn failed_replacement_does_not_wipe_previous_database() {
+        let dir = temp_dir("atomic");
+        let path = dir.join("base.db");
+        let metadata = ProviderMetadata {
+            provider_name: "Atomic".to_string(),
+            ..ProviderMetadata::default()
+        };
+        let captured = CapturedProviderMetadata {
+            metadata,
+            version_key: "version".to_string(),
+        };
+        write_provider_database(&path, std::slice::from_ref(&captured)).expect("initial write");
+        assert!(write_provider_database(&path, &[captured.clone(), captured]).is_err());
+        assert!(ProviderDb::open(&path)
+            .expect("database remains readable")
+            .provider("Atomic")
+            .expect("provider query")
+            .is_some());
     }
 }
 
