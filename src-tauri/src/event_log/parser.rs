@@ -28,6 +28,8 @@ const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 /// This is deliberately applied before parsing. A folder or wildcard is user input and must not
 /// turn into an unbounded parser workload.
 pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
+/// Bounds the number of per-region diagnostics while preserving the parser error count.
+const MAX_COVERAGE_GAPS_PER_FILE: usize = 4_096;
 const MAX_SOURCE_MANIFEST_WORK: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -959,6 +961,18 @@ fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
     };
     format!("{}{}: {}", gap.source, location, gap.reason)
 }
+fn bound_coverage_gaps(gaps: &mut Vec<EvtxCoverageGap>, source: &str) {
+    if gaps.len() <= MAX_COVERAGE_GAPS_PER_FILE {
+        return;
+    }
+    let omitted = gaps.len() - (MAX_COVERAGE_GAPS_PER_FILE - 1);
+    gaps.truncate(MAX_COVERAGE_GAPS_PER_FILE - 1);
+    gaps.push(EvtxCoverageGap::new(
+        source,
+        EvtxCoverageGapKind::Limit,
+        format!("{omitted} additional recovery gaps were coalesced"),
+    ));
+}
 
 
 /// Parse source selections after bounded expansion into a deterministic manifest.
@@ -1269,6 +1283,7 @@ fn parse_single_file(
     } else if records.is_empty() {
         coverage_gaps.push(empty_coverage_gap(&source_path));
     }
+    bound_coverage_gaps(&mut coverage_gaps, &source_path);
 
     Ok(ParsedFile {
         records,
@@ -1426,8 +1441,29 @@ mod tests {
 
         let record_gap = coverage_gap_from_evtx_error("dirty.evtx", &record);
         assert_eq!(record_gap.kind, EvtxCoverageGapKind::Record);
+
         assert_eq!(record_gap.chunk_id, None);
         assert_eq!(record_gap.event_record_id, Some(42));
+    }
+    #[test]
+    fn damaged_gap_reporting_is_bounded_with_an_explicit_aggregate_gap() {
+        let mut gaps = (0..=MAX_COVERAGE_GAPS_PER_FILE)
+            .map(|record_id| {
+                let mut gap =
+                    EvtxCoverageGap::new("dirty.evtx", EvtxCoverageGapKind::Record, "unreadable");
+                gap.event_record_id = Some(record_id as u64);
+                gap
+            })
+            .collect();
+
+        bound_coverage_gaps(&mut gaps, "dirty.evtx");
+
+        assert_eq!(gaps.len(), MAX_COVERAGE_GAPS_PER_FILE);
+        assert_eq!(
+            gaps.last().map(|gap| gap.kind),
+            Some(EvtxCoverageGapKind::Limit)
+        );
+        assert!(gaps.last().is_some_and(|gap| gap.reason.contains("additional")));
     }
 
     #[test]
