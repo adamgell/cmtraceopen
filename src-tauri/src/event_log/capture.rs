@@ -112,8 +112,9 @@ mod windows_capture {
     use sha2::{Digest, Sha256};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{
-        ERROR_EVT_MESSAGE_ID_NOT_FOUND, ERROR_EVT_MESSAGE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
-        ERROR_NO_MORE_ITEMS,
+        ERROR_EVT_CHANNEL_NOT_FOUND, ERROR_EVT_MESSAGE_ID_NOT_FOUND, ERROR_EVT_MESSAGE_NOT_FOUND,
+        ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS,
+        ERROR_NOT_FOUND,
     };
 
     use winreg::enums::HKEY_LOCAL_MACHINE;
@@ -335,8 +336,9 @@ mod windows_capture {
         let mut used = 0u32;
         let first = EvtGetPublisherMetadataProperty(metadata, property, 0, 0, None, &mut used);
         if let Err(error) = first {
-            if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!("property {} query failed: {}", property.0, error));
+            let code = win32_code(&error);
+            if code != ERROR_INSUFFICIENT_BUFFER.0 {
+                return Err(format!("property {} query failed (code {}): {}", property.0, code, error));
             }
         } else {
             return Ok(None);
@@ -357,10 +359,19 @@ mod windows_capture {
     unsafe fn optional_publisher_variant(
         metadata: EVT_HANDLE,
         property: EVT_PUBLISHER_METADATA_PROPERTY_ID,
-    ) -> Option<OwnedVariant> {
-        get_publisher_variant(metadata, property).ok().flatten()
+    ) -> Result<Option<OwnedVariant>, String> {
+        match get_publisher_variant(metadata, property) {
+            Ok(value) => Ok(value),
+            Err(error)
+                if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
+                    || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
+                    || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
-
     unsafe fn get_event_variant(
         metadata: EVT_HANDLE,
         property: EVT_EVENT_METADATA_PROPERTY_ID,
@@ -482,7 +493,7 @@ mod windows_capture {
             Ok(())
         };
         if let Some(value) =
-            optional_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)
+            optional_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)?
         {
             add(value)?;
         }
@@ -491,7 +502,7 @@ mod windows_capture {
 
     unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<BTreeMap<u32, String>, String> {
         let Some(OwnedVariant::Handle(array_handle)) =
-            optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)
+            optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?
         else {
             return Ok(BTreeMap::new());
         };
@@ -544,7 +555,7 @@ mod windows_capture {
             (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
         ] {
             let Some(OwnedVariant::Handle(array_handle)) =
-                optional_publisher_variant(metadata_handle, array_property)
+                optional_publisher_variant(metadata_handle, array_property)?
             else {
                 continue;
             };
@@ -721,6 +732,7 @@ mod windows_capture {
         let mut captured = Vec::new();
         let mut failures = Vec::new();
         let mut hit_safety_bound = true;
+        let source_os_build = current_os_build();
 
         for _ in 0..MAX_PUBLISHERS {
             let mut publisher_buffer = vec![0u16; BUFFER_RETRY];
