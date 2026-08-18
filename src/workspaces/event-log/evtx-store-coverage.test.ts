@@ -708,6 +708,7 @@ describe("remote event sources", () => {
 
     await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
 
+    expect(useEvtxStore.getState().coverageGaps).toHaveLength(1);
     expect(useEvtxStore.getState().coverageGaps).toContain(
       "Security: not read (access denied)"
     );

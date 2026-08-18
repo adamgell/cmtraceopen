@@ -551,19 +551,15 @@ fn query_channel_inner(
             "{channel}: {unparsable} events could not be read and are missing from this view"
         ));
     }
+    // Render and message failures already append one classified gap per failed event above.
+    // Keep the counters in logs only so one failure cannot appear twice in coverage UI.
     if unrenderable > 0 {
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
-        gaps.push(format!(
-            "{channel}: {unrenderable} events could not be rendered and are missing from this view"
-        ));
     }
     if message_failures > 0 {
         log::warn!(
             "event=evtx_live_query_gap channel=\"{channel}\" message_failures={message_failures}"
         );
-        gaps.push(format!(
-            "{channel}: {message_failures} event messages could not be formatted"
-        ));
     }
     log::info!(
         "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} gaps={}",
