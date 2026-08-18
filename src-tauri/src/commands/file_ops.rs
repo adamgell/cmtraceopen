@@ -1002,6 +1002,7 @@ mod tests {
             list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list folder");
         let bundle_metadata = result.bundle_metadata.expect("bundle metadata");
 
+
         assert_eq!(bundle_metadata.primary_entry_points.len(), 2);
         assert!(bundle_metadata
             .primary_entry_points
@@ -1020,6 +1021,30 @@ mod tests {
             ));
 
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
+    }
+    #[test]
+    fn bundle_listing_includes_nested_evtx_and_bounds_recursive_entries() {
+        let bundle_dir = create_temp_dir("file-ops-bundle-eventlog-cap");
+        let nested = bundle_dir.join("evidence").join("logs").join("nested");
+        fs::create_dir_all(&nested).expect("create nested logs");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        let evtx = nested.join("Application.evtx");
+        fs::write(&evtx, b"evtx").expect("write event log");
+        for index in 0..4100 {
+            fs::write(nested.join(format!("artifact-{index}.log")), b"log")
+                .expect("write artifact");
+        }
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result.entries.len() <= 4096);
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.path == evtx.to_string_lossy()));
+
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle");
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {

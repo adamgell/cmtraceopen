@@ -167,8 +167,11 @@ pub struct EvidenceArtifactPreview {
 // ── Constants ───────────────────────────────────────────────────────────
 
 /// File extensions that are binary / non-parseable as text logs.
-/// These are skipped during recursive bundle collection.
-const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que", "evtx"];
+/// Event-log exports are retained because the event-log source path parses them.
+const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que"];
+
+/// Maximum number of files materialized by recursive bundle collection.
+const MAX_BUNDLE_ENTRIES: usize = 4096;
 
 /// Maximum file size (in bytes) to include in batch aggregate parsing.
 /// Files larger than this are still listed in the sidebar but excluded from
@@ -209,7 +212,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
     let mut skipped_large = 0u32;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
-    while let Some(dir) = stack.pop() {
+    'walk: while let Some(dir) = stack.pop() {
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => {
@@ -222,6 +225,9 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
         };
 
         for entry_result in read_dir {
+            if out.len() >= MAX_BUNDLE_ENTRIES {
+                break 'walk;
+            }
             let entry = match entry_result {
                 Ok(v) => v,
                 Err(e) => {

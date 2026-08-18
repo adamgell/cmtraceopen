@@ -92,8 +92,12 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
 
         if is_wildcard
             && paths.is_empty()
-            && !manifest.coverage.iter().any(|coverage| {
-                matches!(coverage, SourceCoverage::InvalidPattern { path, .. } if path == source)
+            && !manifest.coverage.iter().any(|coverage| match coverage {
+                SourceCoverage::Unsupported { path, .. }
+                | SourceCoverage::AccessDenied { path, .. }
+                | SourceCoverage::Missing { path, .. }
+                | SourceCoverage::InvalidPattern { path, .. }
+                | SourceCoverage::LimitReached { path, .. } => path == source,
             })
         {
             manifest.coverage.push(SourceCoverage::Missing {
