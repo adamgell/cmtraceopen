@@ -50,11 +50,7 @@ fn missing_record_digest(record: &EvtxRecord) -> String {
     format!("{first:08x}{second:08x}")
 }
 
- fn stable_event_id(record: &EvtxRecord) -> String {
-     stable_event_id_with_occurrence(record, 0)
- }
-
-fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> String {
+fn stable_event_id(record: &EvtxRecord) -> String {
     let source = format!("source{}:{}", record.source_label.len(), record.source_label);
     let channel = format!("channel{}:{}", record.channel.len(), record.channel);
     let machine = record.computer.trim();
@@ -63,12 +59,23 @@ fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> St
     if record.event_record_id != 0 {
         return format!("{identity}|record{}", record.event_record_id);
     }
+    format!("{identity}|missing{}", missing_record_digest(record))
+}
 
-    format!(
-        "{identity}|missing{}-{}",
-        missing_record_digest(record),
-        occurrence
-    )
+fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> String {
+    let base = stable_event_id(record);
+    if record.event_record_id != 0 {
+        return base;
+    }
+    format!("{base}-{occurrence}")
+}
+
+fn stable_event_base_from_id(stable_id: &str) -> &str {
+    if stable_id.contains("|missing") {
+        stable_id.rsplit_once('-').map(|(base, _)| base).unwrap_or(stable_id)
+    } else {
+        stable_id
+    }
 }
 
 fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
@@ -215,10 +222,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
         .chain(unplaced.iter().map(|item| &item.origin))
     {
         if let TimelineOrigin::Event { stable_id, .. } = origin {
-            let base = stable_id
-                .rsplit_once('-')
-                .map(|(base, _)| base)
-                .unwrap_or(stable_id.as_str());
+            let base = stable_event_base_from_id(stable_id);
             *existing_occurrences.entry(base.to_string()).or_insert(0usize) += 1;
         }
     }
@@ -481,6 +485,26 @@ mod tests {
         assert_ne!(ids[0], ids[1]);
         assert!(ids[0].ends_with("-0") || ids[0].ends_with("-1"));
         assert!(ids[1].ends_with("-0") || ids[1].ends_with("-1"));
+    }
+
+    #[test]
+    fn appending_identical_missing_id_keeps_occurrence_identity_distinct() {
+        let mut event = record(1_000, "same", EvtxLevel::Information);
+        event.event_record_id = 0;
+        let mut timeline = build(&[], &[event.clone()]);
+        append(&mut timeline, &[], &[event]);
+        let ids: Vec<_> = timeline
+            .items
+            .iter()
+            .map(|item| match &item.origin {
+                TimelineOrigin::Event { stable_id, .. } => stable_id.clone(),
+                other => panic!("expected event origin, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(ids.iter().any(|id| id.ends_with("-0")));
+        assert!(ids.iter().any(|id| id.ends_with("-1")));
     }
 
     #[test]
