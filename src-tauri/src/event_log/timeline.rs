@@ -309,6 +309,27 @@ mod tests {
     }
 
     #[test]
+    fn remote_source_label_and_machine_are_preserved_in_timeline_origin() {
+        let mut source = record(1, "remote event", EvtxLevel::Information);
+        source.source_label = "Remote: HOST-B".to_string();
+        source.computer = "HOST-B".to_string();
+        let expected_stable = format!("Remote: HOST-B/{}#1234", source.channel);
+        match &from_event(&source).expect("placed").origin {
+            TimelineOrigin::Event {
+                source,
+                machine,
+                stable_id,
+                ..
+            } => {
+                assert_eq!(source, "Remote: HOST-B");
+                assert_eq!(machine.as_deref(), Some("HOST-B"));
+                assert_eq!(stable_id, &expected_stable);
+            }
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn same_basename_sources_with_reused_event_record_ids_keep_distinct_keys() {
         let mut first = record(1_000, "first source", EvtxLevel::Information);
         first.id = 101;
