@@ -38,7 +38,21 @@ function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
 }
 
 
+let requestGeneration = 0;
+let activeRequestId = "initial";
+
+function beginRequest(): string {
+  activeRequestId = `event-log-${++requestGeneration}`;
+  pendingBatches.clear();
+  return activeRequestId;
+}
+
+function isCurrentRequest(requestId: string): boolean {
+  return requestId === activeRequestId;
+}
+
 function invokeEventQuery<T>(
+  requestId: string,
   remoteMachine: string | null,
   channels: string[],
   maxEvents: number | null,
@@ -50,11 +64,12 @@ function invokeEventQuery<T>(
       channels,
       maxEvents,
       filter,
+      requestId,
     });
   }
-  return invoke<T>("evtx_query_channels", { channels, maxEvents, filter });
-}
+  return invoke<T>("evtx_query_channels", { channels, maxEvents, filter, requestId });
 
+}
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -170,19 +185,24 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   collapsedGroups: new Set<string>(),
   sortField: "time",
   sortDirection: "asc",
+  selectedRecordId: null,
   parseFiles: async (paths) => {
+    const requestId = beginRequest();
     set({ isLoading: true, loadError: null, remoteMachine: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
+      if (!isCurrentRequest(requestId)) return;
       const checked = assertParseResultShape(result);
       set(applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"));
     } catch (error) {
+      if (!isCurrentRequest(requestId)) return;
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
   },
 
   enumerateChannels: async () => {
+    const requestId = beginRequest();
     set({ isLoading: true, loadError: null });
     try {
       const remoteMachine = get().remoteMachine;
@@ -191,6 +211,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             machine: remoteMachine,
           })
         : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+      if (!isCurrentRequest(requestId)) return;
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
@@ -224,6 +245,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       // Live query records arrive through the batch event. This path invokes the backend directly
       // rather than through queryChannels, so it must drain the same stream before merging.
       const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
+        if (!isCurrentRequest(requestId)) return;
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -253,11 +275,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         try {
           resetStreamedRecords([ch]);
           const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
             remoteMachine,
             [ch],
             null,
             buildServerFilter(get().timeWindow)
           );
+          if (!isCurrentRequest(requestId)) return;
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
           const arrived = [...streamed.records, ...result.records];
@@ -291,6 +315,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       });
 
       await Promise.all(promises);
+      if (!isCurrentRequest(requestId)) return;
 
       const finalState = get();
       const remoteQueryFailed =
@@ -307,6 +332,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         loadError,
       });
     } catch (error) {
+      if (!isCurrentRequest(requestId)) return;
       const message = error instanceof Error ? error.message : String(error);
       const remoteMachine = get().remoteMachine;
       const remoteGap = remoteMachine
@@ -367,9 +393,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   queryChannels: async (channels, maxEvents) => {
+    const requestId = beginRequest();
     set({ isLoading: true, loadError: null, selectedRecordId: null });
     const remoteMachine = get().remoteMachine;
-
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
     // at once held every event of every channel in memory twice, once per channel and once in the
@@ -387,6 +413,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       channels.map(async (ch) => {
         try {
           const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
             remoteMachine,
             [ch],
             maxEvents ?? null,
@@ -401,6 +428,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         }
       })
     );
+    if (!isCurrentRequest(requestId)) return;
 
     for (const { channel, result, error } of results) {
       try {
@@ -498,6 +526,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const state = get();
     const loaded = [...state.loadedChannels];
     if (loaded.length === 0) return;
+    const requestId = beginRequest();
     const remoteMachine = state.remoteMachine;
     const startTime = performance.now();
     set({
@@ -519,11 +548,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       try {
         resetStreamedRecords([ch]);
         const result = await invokeEventQuery<EvtxParseResult>(
+          requestId,
           remoteMachine,
           [ch],
           null,
           buildServerFilter(get().timeWindow)
         );
+        if (!isCurrentRequest(requestId)) return;
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
         const arrived = [...streamed.records, ...result.records];
@@ -564,6 +595,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           ]),
         });
       } catch (e) {
+        if (!isCurrentRequest(requestId)) return;
         const message = e instanceof Error ? e.message : String(e);
         const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
         console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
@@ -578,6 +610,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       }
     });
     await Promise.all(promises);
+    if (!isCurrentRequest(requestId)) return;
     const finalState = get();
     const remoteRefreshFailed =
       remoteMachine !== null &&
@@ -683,12 +716,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 }));
 
 // Listen for progress events from the Rust backend
-listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
-  useEvtxStore.setState({
-    loadingChannel: event.payload.channel,
-    loadingProgress: event.payload.fetched,
-  });
-});
+listen<{ requestId: string; channel: string; fetched: number }>(
+  "evtx-query-progress",
+  (event) => {
+    if (!isCurrentRequest(event.payload.requestId)) return;
+    useEvtxStore.setState({
+      loadingChannel: event.payload.channel,
+      loadingProgress: event.payload.fetched,
+    });
+  }
+);
 
 /**
  * Records arriving in batches while a query is still running.
@@ -704,9 +741,10 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
  */
 const pendingBatches = new Map<string, { records: EvtxRecord[]; sequences: Set<number> }>();
 
-listen<{ channel: string; sequence: number; records: EvtxRecord[] }>(
+listen<{ requestId: string; channel: string; sequence: number; records: EvtxRecord[] }>(
   "evtx-record-batch",
   (event) => {
+    if (!isCurrentRequest(event.payload.requestId)) return;
     const { channel, sequence, records } = event.payload;
     let pending = pendingBatches.get(channel);
     if (!pending) {

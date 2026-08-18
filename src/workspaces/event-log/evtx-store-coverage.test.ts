@@ -8,6 +8,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -25,11 +26,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 const { useEvtxStore } = await import("./evtx-store");
 
 /** Delivers a batch the way the backend emits one. */
-function emitBatch(channel: string, sequence: number, records: unknown[]) {
-  listeners.get("evtx-record-batch")?.({ payload: { channel, sequence, records } });
+function emitBatch(channel: string, sequence: number, records: unknown[], requestId?: string) {
+  const latestCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+  const currentRequestId =
+    requestId ?? (latestCall?.[1] as { requestId?: string } | undefined)?.requestId;
+  listeners.get("evtx-record-batch")?.({
+    payload: { requestId: currentRequestId, channel, sequence, records },
+  });
 }
 
-function streamedRecord(channel: string, id = 0) {
+function streamedRecord(channel: string, id = 0): EvtxRecord {
   return {
     id,
     eventRecordId: id,
@@ -168,6 +174,31 @@ describe("coverage gaps through the store", () => {
       "lab-host/Security: not read (access denied)",
     ]);
     expect(state.loadError).toBe("lab-host/Security: access denied");
+  });
+
+  it("ignores a late batch from a superseded source query", async () => {
+    let oldRequestId: string | undefined;
+    let resolveOld: ((value: unknown) => void) | undefined;
+    invoke.mockImplementationOnce((_name: string, args: { requestId: string }) => {
+      oldRequestId = args.requestId;
+      return new Promise((resolve) => {
+        resolveOld = resolve;
+      });
+    });
+
+    const oldQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    await Promise.resolve();
+
+    invoke.mockResolvedValueOnce([]);
+    const sourceSwitch = useEvtxStore.getState().enumerateRemoteChannels("new-host");
+    await Promise.resolve();
+
+    emitBatch("Application", 0, [streamedRecord("Application")], oldRequestId);
+    resolveOld?.(result("Application", []));
+    await oldQuery;
+    await sourceSwitch;
+
+    expect(useEvtxStore.getState().records).toEqual([]);
   });
 });
 describe("live batch delivery through initial and refresh loads", () => {

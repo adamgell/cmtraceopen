@@ -12,6 +12,7 @@ use crate::state::app_state::AppState;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvtxQueryProgress {
+    request_id: String,
     channel: String,
     fetched: usize,
 }
@@ -24,11 +25,13 @@ struct EvtxQueryProgress {
 ///
 /// `sequence` numbers the batches for one channel from zero. The receiver uses it to notice a batch
 /// it never got: an event channel offers no delivery guarantee, and events that quietly failed to
-/// arrive would look exactly like events that do not exist.
+/// arrive would look exactly like events that do not exist. `request_id` prevents a late batch from
+/// a superseded local/remote source query being merged into the current view.
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvtxRecordBatch {
+    request_id: String,
     channel: String,
     sequence: usize,
     records: Vec<super::models::EvtxRecord>,
@@ -110,7 +113,6 @@ fn query_source_channel(
         ),
     }
 }
-
 async fn query_channels_impl(
     channels: Vec<String>,
     max_events: Option<u64>,
@@ -118,6 +120,7 @@ async fn query_channels_impl(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     remote_machine: Option<String>,
+    request_id: String,
 ) -> Result<EvtxParseResult, String> {
     #[cfg(target_os = "windows")]
     {
@@ -140,6 +143,7 @@ async fn query_channels_impl(
                 .par_iter()
                 .map(|channel| {
                     let app_ref = &app;
+                    let batch_request_id = request_id.clone();
                     let ch_name = channel.clone();
                     let batch_channel = channel.clone();
                     let mut sequence = 0usize;
@@ -153,6 +157,7 @@ async fn query_channels_impl(
                             let _ = app_ref.emit(
                                 "evtx-query-progress",
                                 EvtxQueryProgress {
+                                    request_id: batch_request_id.clone(),
                                     channel: ch_name.clone(),
                                     fetched,
                                 },
@@ -166,6 +171,7 @@ async fn query_channels_impl(
                             if let Err(error) = app_ref.emit(
                                 "evtx-record-batch",
                                 EvtxRecordBatch {
+                                    request_id: batch_request_id.clone(),
                                     channel: batch_channel.clone(),
                                     sequence,
                                     records,
@@ -232,11 +238,19 @@ async fn query_channels_impl(
             })
         })
         .await
-        .map_err(|error| format!("Task join error: {error}"))?
+        .map_err(|error| format!("Task join error: {error}"))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events, filter, app, state, remote_machine);
+        let _ = (
+            channels,
+            max_events,
+            filter,
+            app,
+            state,
+            remote_machine,
+            request_id,
+        );
         Err("Live event log queries are only available on Windows.".to_string())
     }
 }
@@ -246,11 +260,13 @@ pub async fn evtx_query_channels(
     channels: Vec<String>,
     max_events: Option<u64>,
     filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    request_id: String,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
-    query_channels_impl(channels, max_events, filter, app, state, None).await
+    query_channels_impl(channels, max_events, filter, app, state, None, request_id).await
 }
+
 
 #[tauri::command]
 pub async fn evtx_query_remote_channels(
@@ -258,6 +274,7 @@ pub async fn evtx_query_remote_channels(
     channels: Vec<String>,
     max_events: Option<u64>,
     filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
+    request_id: String,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
@@ -270,6 +287,7 @@ pub async fn evtx_query_remote_channels(
         app,
         state,
         Some(machine),
+        request_id,
     )
     .await
 }
