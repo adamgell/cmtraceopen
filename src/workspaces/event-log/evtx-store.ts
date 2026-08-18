@@ -481,6 +481,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     set({ isLoading: false, loadError });
     if (refreshRequested && get().sourceMode === "live") {
       refreshRequested = false;
+      set((s) => ({
+        records: s.records.filter((record) => !channels.includes(record.channel)),
+        loadedChannels: new Set(
+          [...s.loadedChannels].filter((channel) => !channels.includes(channel))
+        ),
+      }));
       void get().queryChannels(channels, maxEvents);
     } else {
       refreshRequested = false;
