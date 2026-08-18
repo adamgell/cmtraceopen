@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SecureBootWorkspace } from "./SecureBootWorkspace";
 import { useSecureBootStore } from "./secureboot-store";
+import { useUiStore } from "../../stores/ui-store";
 import type { SecureBootAnalysisResult, SecureBootScanState } from "./types";
 
 function scanState(): SecureBootScanState {
@@ -75,10 +76,13 @@ function analysis(): SecureBootAnalysisResult {
 afterEach(() => {
   cleanup();
   useSecureBootStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
 });
 
 beforeEach(() => {
   useSecureBootStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
+  useUiStore.setState({ currentPlatform: "windows" });
 });
 
 describe("SecureBootWorkspace fixtures", () => {
