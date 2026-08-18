@@ -289,6 +289,7 @@ export function EvtxDetailPane() {
           size="small"
           appearance="subtle"
           onClick={() => setShowRawXml(!showRawXml)}
+          style={{ fontSize: `${fontSize}px` }}
         >
           {showRawXml ? "Hide Raw XML" : "Show Raw XML"}
         </Button>

@@ -2,7 +2,9 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const virtualizerState = vi.hoisted(() => ({
   measured: [] as HTMLElement[],
+  measuredSizes: new Map<number, number>(),
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
+  totalSize: 0,
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
@@ -16,24 +18,48 @@ vi.mock("@tanstack/react-virtual", () => ({
     count: number;
     estimateSize: () => number;
     getItemKey?: (index: number) => string | number;
-  }) => ({
-    getTotalSize: () => count * estimateSize(),
-    getVirtualItems: () => {
-      const items = Array.from({ length: count }, (_, index) => ({
-        index,
-        size: estimateSize(),
-        start: index * estimateSize(),
-        end: (index + 1) * estimateSize(),
-        key: getItemKey?.(index) ?? index,
-      }));
+  }) => {
+    const measuredSize = (index: number) =>
+      virtualizerState.measuredSizes.get(index) ?? estimateSize();
+    const getTotalSize = () => {
+      virtualizerState.totalSize = Array.from({ length: count }, (_, index) =>
+        measuredSize(index)
+      ).reduce((total, size) => total + size, 0);
+      return virtualizerState.totalSize;
+    };
+    const getVirtualItems = () => {
+      let start = 0;
+      const items = Array.from({ length: count }, (_, index) => {
+        const size = measuredSize(index);
+        const item = {
+          index,
+          size,
+          start,
+          end: start + size,
+          key: getItemKey?.(index) ?? index,
+        };
+        start += size;
+        return item;
+      });
       virtualizerState.items = items;
       return items;
-    },
-    measureElement: (element: HTMLElement | null) => {
-      if (element) virtualizerState.measured.push(element);
-    },
-    scrollToIndex: vi.fn(),
-  }),
+    };
+    return {
+      getTotalSize,
+      getVirtualItems,
+      measureElement: (element: HTMLElement | null) => {
+        if (!element) return;
+        const index = Number(element.dataset.index);
+        const measured =
+          element.getAttribute("role") === "treeitem"
+            ? Number.parseFloat(element.style.height)
+            : Number.parseFloat(element.style.lineHeight) + 5;
+        virtualizerState.measured.push(element);
+        virtualizerState.measuredSizes.set(index, measured);
+      },
+      scrollToIndex: vi.fn(),
+    };
+  },
 }));
 import {
   getLogDetailsLineHeight,
@@ -102,6 +128,8 @@ describe("event-viewer shared font metrics", () => {
     useEvtxStore.getState().reset();
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
+    virtualizerState.measuredSizes.clear();
+    virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
   });
 
@@ -152,6 +180,9 @@ describe("event-viewer shared font metrics", () => {
     const timelineRoot = screen.getByRole("tree");
     const groupRow = screen.getByRole("treeitem");
     const virtualizerContent = timelineRoot.firstElementChild as HTMLElement;
+    act(() => {
+      useEvtxStore.getState().setSortDirection("desc");
+    });
     const recordRow = screen.getByRole("option");
     expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
     expect(recordRow.style.lineHeight).toBe(`${smallList.rowLineHeight}px`);
@@ -159,10 +190,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
       size: smallList.rowHeight + 2,
-      start: smallList.rowHeight + 2,
+      start: smallList.rowHeight,
     });
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
-    expect(virtualizerContent.style.height).toBe(`${(smallList.rowHeight + 2) * 2}px`);
+    expect(virtualizerContent.style.height).toBe(
+      `${smallList.rowHeight + smallList.rowHeight + 2}px`
+    );
     fireEvent.keyDown(timelineRoot, { key: "ArrowDown" });
     expect(timelineRoot).toHaveFocus();
     timeline.unmount();
@@ -172,6 +205,9 @@ describe("event-viewer shared font metrics", () => {
     expect(detailRoot.style.fontSize).toBe(`${MIN_LOG_DETAILS_FONT_SIZE}px`);
     expect(detailRoot.style.overflow).toBe("auto");
     expect(detailRoot.style.lineHeight).toBe(`${smallDetailLineHeight}px`);
+    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
+      `${MIN_LOG_DETAILS_FONT_SIZE}px`
+    );
     detail.unmount();
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
@@ -209,21 +245,27 @@ describe("event-viewer shared font metrics", () => {
 
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
+    virtualizerState.measuredSizes.clear();
     const timelineLarge = render(<EvtxTimeline />);
     const timelineRootLarge = screen.getByRole("tree");
     const recordRowLarge = screen.getByRole("option");
+    act(() => {
+      useEvtxStore.getState().setSortDirection("asc");
+    });
     expect(recordRowLarge.style.fontSize).toBe(`${largeList.fontSize}px`);
     expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
       size: largeList.rowHeight + 2,
-      start: largeList.rowHeight + 2,
+      start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getByRole("treeitem");
     const virtualizerContentLarge = timelineRootLarge.firstElementChild as HTMLElement;
     expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
-    expect(virtualizerContentLarge.style.height).toBe(`${(largeList.rowHeight + 2) * 2}px`);
+    expect(virtualizerContentLarge.style.height).toBe(
+      `${largeList.rowHeight + largeList.rowHeight + 2}px`
+    );
     fireEvent.keyDown(timelineRootLarge, { key: "ArrowDown" });
     expect(timelineRootLarge).toHaveFocus();
     timelineLarge.unmount();
@@ -240,6 +282,9 @@ describe("event-viewer shared font metrics", () => {
       `${getLogDetailsLineHeight(MAX_LOG_DETAILS_FONT_SIZE)}px`
     );
     expect(detailRootLarge.style.overflow).toBe("auto");
+    expect(screen.getByRole("button", { name: "Show Raw XML" }).style.fontSize).toBe(
+      `${MAX_LOG_DETAILS_FONT_SIZE}px`
+    );
     detailLarge.unmount();
 
     expect(useUiStore.getState().logListFontSize).toBe(MAX_LOG_LIST_FONT_SIZE);
@@ -249,5 +294,46 @@ describe("event-viewer shared font metrics", () => {
     };
     expect(persisted.state?.logListFontSize).toBe(MAX_LOG_LIST_FONT_SIZE);
     expect(persisted.state?.logDetailsFontSize).toBe(MAX_LOG_DETAILS_FONT_SIZE);
+  });
+  it("updates mounted list controls, rows, and virtualizer when persisted list size changes", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: ["level"] });
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const channel = render(<ChannelPicker />);
+    const channelInput = channel.getByPlaceholderText("Filter channels...") as HTMLInputElement;
+    const channelRow = channel.getByText("Application").closest("label") as HTMLElement;
+    const filter = render(<EvtxFilterBar />);
+    const filterButton = filter.getByRole("button", { name: "Crit" });
+    const timeline = render(<EvtxTimeline />);
+    const timelineRoot = timeline.getByRole("tree");
+    const recordRow = timeline.getByRole("option");
+    const virtualizerContent = timelineRoot.firstElementChild as HTMLElement;
+
+    expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
+    expect(channelRow.style.height).toBe(
+      `${getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight}px`
+    );
+    expect(filterButton.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
+    expect(recordRow.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    act(() => {
+      useEvtxStore.getState().setSortDirection("desc");
+    });
+    const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);
+    expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
+    expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
+    expect(filter.getByRole("button", { name: "Crit" })).toBe(filterButton);
+    expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
+    expect(timeline.getByRole("option")).toBe(recordRow);
+    expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
+    expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
+    expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
+    expect(virtualizerContent.style.height).toBe(
+      `${largeList.rowHeight + largeList.rowHeight + 2}px`
+    );
   });
 });
