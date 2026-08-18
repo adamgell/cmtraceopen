@@ -774,6 +774,13 @@ fn normalize_windows_path(raw: &str) -> String {
     if prefix == "\\\\?\\"
         && components
             .first()
+            .is_some_and(|component| component.eq_ignore_ascii_case("UNC"))
+    {
+        return format!("\\\\{}", components[1..].join("\\"));
+    }
+    if prefix == "\\\\?\\"
+        && components
+            .first()
             .is_some_and(|component| component.len() == 2 && component.as_bytes()[1] == b':')
     {
         return components.join("\\");
