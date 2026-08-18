@@ -332,6 +332,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         loadElapsedMs: performance.now() - startTime,
         loadError,
       });
+      if (refreshRequested) refreshBeforeLoad();
     } catch (error) {
       if (get().loadGeneration !== generation) return;
       const message = error instanceof Error ? error.message : String(error);
