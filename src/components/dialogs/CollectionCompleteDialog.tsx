@@ -1,9 +1,10 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { CheckmarkRegular, DismissRegular } from "@fluentui/react-icons";
 import type { CollectionResult } from "../../lib/commands";
 import { loadPathAsLogSource } from "../../lib/log-source";
 import { useUiStore } from "../../stores/ui-store";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getThemeById } from "../../lib/themes";
 
 interface CollectionCompleteDialogProps {
@@ -13,6 +14,8 @@ interface CollectionCompleteDialogProps {
 
 export function CollectionCompleteDialog({ result, onClose }: CollectionCompleteDialogProps) {
   const [showGaps, setShowGaps] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(result !== null, dialogRef);
   const themeId = useUiStore((s) => s.themeId);
   const statusPalette = useMemo(
     () => getThemeById(themeId).severityPalette.status,
@@ -53,9 +56,11 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={isError ? "Collection Failed" : "Collection Complete"}
+        tabIndex={-1}
         style={{
           width: "420px",
           backgroundColor: tokens.colorNeutralBackground1,

@@ -125,6 +125,9 @@ export function useKeyboard() {
   const showFileAssociationPromptOpen = useUiStore(
     (state) => state.showFileAssociationPrompt
   );
+  const showUpdateDialogOpen = useUiStore(
+    (state) => state.showUpdateDialog,
+  );
   const {
     commandState,
     openSourceFileDialog,
@@ -159,6 +162,10 @@ export function useKeyboard() {
         // break both.
         return;
       }
+      if (showUpdateDialogOpen) {
+        if (event.ctrlKey || event.metaKey) event.preventDefault();
+        return;
+      }
 
       const ctrl = event.ctrlKey || event.metaKey;
       const isInput = isTypingTarget(event.target);
@@ -169,6 +176,7 @@ export function useKeyboard() {
         showAboutDialogOpen ||
         showSettingsDialogOpen ||
         showEvidenceBundleDialogOpen ||
+        showUpdateDialogOpen ||
         showFileAssociationPromptOpen;
 
       if (ctrl && !isInput && commandState.canAdjustTextSize) {
@@ -355,6 +363,7 @@ export function useKeyboard() {
     showFilterDialog,
     showFilterDialogOpen,
     showFileAssociationPromptOpen,
+    showUpdateDialogOpen,
     showFindBar,
     showFindBarOpen,
     toggleDetailsPane,

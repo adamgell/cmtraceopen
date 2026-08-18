@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import { useFilterStore } from "../../stores/filter-store";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 
 export type FilterOp =
   | "Equals"
@@ -55,9 +56,11 @@ export function FilterDialog({
 }: FilterDialogProps) {
   const [clauses, setClauses] = useState<FilterClause[]>([emptyClause()]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
+  useModalFocus(isOpen, dialogRef, inputRef);
 
   useEffect(() => {
     if (isOpen) {
@@ -66,7 +69,6 @@ export function FilterDialog({
           ? [...currentClauses]
           : [emptyClause()]
       );
-      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen, currentClauses]);
 
@@ -168,8 +170,10 @@ export function FilterDialog({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         aria-label="Filter"
         style={{
           backgroundColor: tokens.colorNeutralBackground1,

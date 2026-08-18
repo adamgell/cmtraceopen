@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { tokens, Button } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import { useLogStore } from "../../stores/log-store";
@@ -16,11 +16,14 @@ const DNS_PARSER_KINDS = new Set<ParserKind>(["dnsDebug", "dnsAudit", "dhcp"]);
 
 export function DnsWorkspaceBanner() {
   const parserSelection = useLogStore((s) => s.parserSelection);
+  const openFilePath = useLogStore((s) => s.openFilePath);
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
-  const [dismissed, setDismissed] = useState(false);
+  const dismissedDnsBannerPath = useUiStore((s) => s.dismissedDnsBannerPath);
+  const setDismissedDnsBannerPath = useUiStore((s) => s.setDismissedDnsBannerPath);
 
   const parser = parserSelection?.parser;
   const label = parser ? PARSER_LABELS[parser] : undefined;
+  const dismissed = openFilePath !== null && dismissedDnsBannerPath === openFilePath;
 
   const handleOpenInWorkspace = useCallback(() => {
     const logState = useLogStore.getState();
@@ -61,7 +64,9 @@ export function DnsWorkspaceBanner() {
         size="small"
         appearance="subtle"
         icon={<DismissRegular />}
-        onClick={() => setDismissed(true)}
+        onClick={() => {
+          if (openFilePath) setDismissedDnsBannerPath(openFilePath);
+        }}
         aria-label="Dismiss"
       />
     </div>

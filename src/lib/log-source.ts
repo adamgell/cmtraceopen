@@ -665,6 +665,7 @@ export async function switchToTab(
 
   // Already showing this file — nothing to do
   if (currentPath === filePath) return;
+  folderRestoreGeneration += 1;
 
   // ── Registry tab: restore from registry cache ──────────────────────
   {
@@ -720,6 +721,7 @@ export async function switchToTab(
     logState.setActiveColumns(cached.activeColumns);
     useUiStore.getState().resetColumnWidths();
     logState.setAggregateFiles([]);
+    logState.setSourceOpenMode(cached.sourceOpenMode);
     logState.selectEntry(null);
     logState.setSourceStatus({
       kind: "loaded",

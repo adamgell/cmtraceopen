@@ -101,6 +101,11 @@ describe("LogListView selection and jump fixtures", () => {
     render(<LogListView />);
     fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
     fireEvent.click(screen.getByText("Policy evaluation 3 completed"), { metaKey: true });
+    fireEvent.click(screen.getByText("Policy evaluation 4 completed"), { ctrlKey: true });
+    expect(screen.getByText("Policy evaluation 4 completed").closest("[role='option']")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
     expect(screen.getByText("Policy evaluation 1 completed").closest("[role='option']")).toHaveStyle({
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
@@ -114,6 +119,7 @@ describe("LogListView selection and jump fixtures", () => {
     render(<LogListView />);
     const list = screen.getByRole("listbox", { name: "Log entries" });
     fireEvent.keyDown(list, { key: "a", metaKey: true });
+    fireEvent.keyDown(list, { key: "a", ctrlKey: true });
     for (const id of [1, 2, 3, 4, 5]) {
       expect(screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']")).toHaveStyle({
         outline: "1px solid rgba(59, 130, 246, 0.5)",

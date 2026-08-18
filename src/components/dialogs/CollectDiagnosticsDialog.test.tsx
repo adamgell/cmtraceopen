@@ -75,6 +75,45 @@ describe("CollectionCompleteDialog", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
   });
 
+  it("traps focus and restores the opener when closed", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const rendered = render(
+      <CollectionCompleteDialog
+        onClose={() => {}}
+        result={{
+          bundlePath: "C:/Users/Public/cmtrace-bundle",
+          bundleId: "bundle-1",
+          artifactCounts: { collected: 1, missing: 0, failed: 0, total: 1 },
+          durationMs: 100,
+          gaps: [],
+        }}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Collection Complete" });
+    const close = screen.getByRole("button", { name: "Close" });
+    const openBundle = screen.getByRole("button", { name: "Open Bundle" });
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(close);
+
+    openBundle.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(openBundle);
+
+    opener.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+
+    rendered.rerender(<CollectionCompleteDialog onClose={() => {}} result={null} />);
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it("shows counts, gaps, Close, and Open Bundle", () => {
     const onClose = vi.fn();
     render(

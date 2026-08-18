@@ -30,8 +30,8 @@ function renderDialog(
     onSkipVersion: vi.fn(),
     ...overrides,
   };
-  render(<UpdateDialog {...props} />);
-  return { props };
+  const rendered = render(<UpdateDialog {...props} />);
+  return { props, ...rendered };
 }
 
 const availableUpdate = (overrides: Partial<UpdateInfo> = {}): UpdateInfo => ({
@@ -49,6 +49,45 @@ describe("UpdateDialog", () => {
     renderDialog({ isChecking: true });
     const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
+  it("traps focus and restores the opener when closed", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const { rerender } = renderDialog({ isChecking: true });
+    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancel);
+
+    opener.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+
+    rerender(
+      <UpdateDialog
+        isOpen={false}
+        onClose={vi.fn()}
+        updateInfo={null}
+        isChecking={false}
+        isDownloading={false}
+        downloadProgress={0}
+        onCheckForUpdates={vi.fn().mockResolvedValue(null)}
+        onDownloadAndInstall={vi.fn()}
+        onOpenReleasePage={vi.fn()}
+        onSkipVersion={vi.fn()}
+      />,
+    );
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("shows Cancel while checking", () => {

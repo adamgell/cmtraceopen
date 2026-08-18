@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SysmonWorkspace } from "./SysmonWorkspace";
 import { useSysmonStore } from "./sysmon-store";
+import { useUiStore } from "../../stores/ui-store";
 import type { SysmonAnalysisResult, SysmonEvent } from "./types";
 
 vi.mock("../../hooks/use-app-actions", () => ({
@@ -92,10 +93,13 @@ function analysis(): SysmonAnalysisResult {
 afterEach(() => {
   cleanup();
   useSysmonStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
 });
 
 beforeEach(() => {
   useSysmonStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
+  useUiStore.setState({ currentPlatform: "windows" });
 });
 
 describe("SysmonWorkspace fixtures", () => {
