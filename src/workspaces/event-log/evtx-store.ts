@@ -417,6 +417,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const results = await Promise.all(
       channels.map(async (ch) => {
         try {
+        resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             requestId: generation,
@@ -860,8 +861,11 @@ listen<{ channel: string; requestId: number; sequenceCount: number; totalRecords
   "evtx-record-stream-complete",
   (event) => {
     const { channel, requestId, sequenceCount, totalRecords } = event.payload;
-    const pending = pendingBatches.get(channel);
-    if (!pending || pending.requestId !== requestId) return;
+    let pending = pendingBatches.get(channel);
+    if (!pending || pending.requestId !== requestId) {
+      pending = { requestId, records: [], sequences: new Set<number>() };
+      pendingBatches.set(channel, pending);
+    }
     pending.terminal = { sequenceCount, totalRecords };
     retireCompletedStream(channel, pending);
   }
