@@ -202,15 +202,30 @@ impl ProviderDb {
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
         };
-        let levels = match self.connection.query_row(
-            "SELECT Levels FROM ProviderLevels WHERE ProviderName = ?1 AND VersionKey = ?2",
-            rusqlite::params![name, &version_key],
-            |row| row.get::<_, Vec<u8>>(0),
-        ) {
-            Ok(blob) => inflate_json(&blob)?,
-            Err(rusqlite::Error::QueryReturnedNoRows) => Default::default(),
-            Err(rusqlite::Error::SqliteFailure(_, _)) => Default::default(),
-            Err(error) => return Err(format!("cannot read provider levels {name}: {error}")),
+        let levels_table_exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ProviderLevels')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("cannot inspect provider levels schema: {error}"))?;
+        let levels = if !levels_table_exists {
+            Default::default()
+        } else {
+            let blob = self
+                .connection
+                .query_row(
+                    "SELECT Levels FROM ProviderLevels WHERE ProviderName = ?1 AND VersionKey = ?2",
+                    rusqlite::params![name, &version_key],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(Vec::new()),
+                    error => Err(error),
+                })
+                .map_err(|error| format!("cannot read provider levels {name}: {error}"))?;
+            inflate_json(&blob)?
         };
 
         Ok(Some(ProviderMetadata {
@@ -541,10 +556,10 @@ mod tests {
                         gzip(events_json),
                         gzip(r#"{"1":"Error"}"#),
                         gzip(r#"{"2":"Information"}"#),
-                        gzip("{}"),
                         gzip("[]"),
                         gzip(r#"{"11":"Start"}"#),
                         gzip("[]"),
+                        gzip(r#"{"1":"Enrollment"}"#),
                         build,
                     ],
                 )
@@ -580,6 +595,7 @@ mod tests {
         assert_eq!(metadata.task_name(1), Some("Enrollment"));
         assert_eq!(metadata.opcode_name(11), Some("Start"));
         assert_eq!(metadata.keyword_names(1), vec!["Error"]);
+        assert!(metadata.levels.is_empty(), "canonical DBs have no fabricated levels");
     }
 
     #[test]
