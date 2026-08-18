@@ -33,6 +33,15 @@ export type EvtxQuickFilterScope = "allColumns" | "visibleColumns";
 
 /** Whether matching records are retained or removed. */
 export type EvtxQuickFilterAction = "show" | "hide";
+/** Interactive filter state shared by local evaluation, persistence, and the UI. */
+export interface EvtxQuickFilter {
+  mode: EvtxQuickFilterMode;
+  query: string;
+  scope: EvtxQuickFilterScope;
+  action: EvtxQuickFilterAction;
+  caseSensitive: boolean;
+  highlight: boolean;
+}
 
 /** Criteria that can be compiled into the backend query before records load. */
 export interface EvtxBeforeLoadCriteria {

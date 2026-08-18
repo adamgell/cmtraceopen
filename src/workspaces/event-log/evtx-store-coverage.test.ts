@@ -523,6 +523,28 @@ describe("the time window reaches the service", () => {
 
 
 
+  it("keeps latest before-load criteria across rapid commits", async () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+    });
+    invoke.mockResolvedValue(result("Application", []));
+
+    useEvtxStore.getState().setFilterLevels(new Set(["Error"]));
+    useEvtxStore.getState().setFilterEventIds("4624-4626");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    await vi.waitFor(() => expect(useEvtxStore.getState().isLoading).toBe(false));
+
+    expect(invoke.mock.calls.length).toBeGreaterThan(0);
+    expect(
+      invoke.mock.calls.some((call) =>
+        JSON.stringify(
+          (call[1] as { filter?: { eventIds?: unknown[] } })?.filter?.eventIds
+        ).includes('"low":4624')
+      )
+    ).toBe(true);
+  });
 describe("records that arrive in batches while the query runs", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -541,6 +563,7 @@ describe("records that arrive in batches while the query runs", () => {
       eventRecordId: epoch,
       timestamp: "2026-08-12T12:00:00.000Z",
       timestampEpoch: epoch,
+
       provider: "P",
       channel,
       eventId: 1,

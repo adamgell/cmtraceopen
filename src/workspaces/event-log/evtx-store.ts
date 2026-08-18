@@ -124,6 +124,8 @@ interface EvtxState {
   setFilterEventIds: (eventIds: string) => void;
   setBeforeLoadCriteria: (criteria: EvtxBeforeLoadCriteria) => void;
   setFilterSearch: (search: string) => void;
+  setQuickFilter: (filter: EvtxQuickFilter) => void;
+  setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
   moveColumnBy: (id: EvtxColumnId, direction: -1 | 1) => void;
@@ -153,11 +155,17 @@ function applyParseResult(
 }
 
 export const useEvtxStore = create<EvtxState>()((set, get) => {
+  let refreshScheduled = false;
   const refreshBeforeLoad = () => {
-    const state = get();
-    if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
-      void state.refreshLoadedChannels();
-    }
+    if (refreshScheduled) return;
+    refreshScheduled = true;
+    queueMicrotask(() => {
+      refreshScheduled = false;
+      const state = get();
+      if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
+        void state.refreshLoadedChannels();
+      }
+    });
   };
 
   return ({

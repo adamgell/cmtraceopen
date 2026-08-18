@@ -135,7 +135,6 @@ export function EvtxFilterBar() {
   const groupBy = useEvtxStore((s) => s.groupBy);
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
 
-  const setFilterLevels = useEvtxStore((s) => s.setFilterLevels);
   const setBeforeLoadCriteria = useEvtxStore((s) => s.setBeforeLoadCriteria);
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
   const saveFilter = useSavedFilterStore((s) => s.save);
@@ -161,6 +160,7 @@ export function EvtxFilterBar() {
   const commitFilterName = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    const state = useEvtxStore.getState();
     const saved = saveFilter(
       trimmed,
       sanitizeCriteria({
