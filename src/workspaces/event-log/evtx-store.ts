@@ -225,6 +225,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     set({ loadGeneration: generation, isLoading: true, loadError: null });
     try {
       const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+      if (get().loadGeneration !== generation) return;
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
@@ -280,8 +281,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
         });
       };
-
       const promises = availableCore.map(async (ch) => {
+        if (get().loadGeneration !== generation) return;
         try {
           resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
@@ -330,8 +331,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         loadElapsedMs: performance.now() - startTime,
         loadError,
       });
-      if (refreshRequested) refreshBeforeLoad();
     } catch (error) {
+      if (get().loadGeneration !== generation) return;
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
     }
