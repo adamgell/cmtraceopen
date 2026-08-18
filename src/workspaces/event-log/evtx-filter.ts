@@ -50,7 +50,7 @@ export interface EvtxBeforeLoadCriteria {
   timeWindow: EvtxTimeWindow;
 }
 
-/** Criteria evaluated against records as they arrive. */
+/** Criteria evaluated synchronously by the shared local visible selector as records arrive/render. */
 export interface EvtxOnLoadCriteria {
   search: string;
   quickFilter: EvtxQuickFilter;
