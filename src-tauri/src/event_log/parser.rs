@@ -66,6 +66,16 @@ pub struct EventLogSourceManifest {
 /// Expansion uses the existing bounded folder-listing command rather than walking arbitrary
 /// directories directly. Source IDs are lexical, separator-normalized, and case-folded so the
 /// same member selected through two paths is represented once.
+fn is_wildcard_source(source: &str) -> bool {
+    if is_vss_path(source) {
+        return false;
+    }
+    let pattern = source
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(source);
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
 pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifest, String> {
     let mut manifest = EventLogSourceManifest {
         entries: Vec::new(),
@@ -73,8 +83,7 @@ pub fn build_source_manifest(sources: &[String]) -> Result<EventLogSourceManifes
     };
 
     for source in sources {
-        let is_wildcard =
-            !is_vss_path(source) && (source.contains('*') || source.contains('?') || source.contains('['));
+        let is_wildcard = is_wildcard_source(source);
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage)
         } else {
@@ -155,10 +164,20 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
         inspected += 1;
         match result {
             Ok(path) => paths.push(path),
-            Err(error) => coverage.push(SourceCoverage::Missing {
-                path: pattern.to_string(),
-                reason: format!("wildcard entry could not be read: {error}"),
-            }),
+            Err(error) => {
+                let io_error = error.into_error();
+                if io_error.kind() == std::io::ErrorKind::PermissionDenied {
+                    coverage.push(SourceCoverage::AccessDenied {
+                        path: pattern.to_string(),
+                        reason: format!("wildcard entry access was denied: {io_error}"),
+                    });
+                } else {
+                    coverage.push(SourceCoverage::Missing {
+                        path: pattern.to_string(),
+                        reason: format!("wildcard entry could not be read: {io_error}"),
+                    });
+                }
+            }
         }
     }
     paths
@@ -498,7 +517,17 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
         entries: Vec::new(),
         coverage,
     };
+    let mut inspected = 0usize;
     for source in &input.entries {
+        if inspected >= MAX_SOURCE_MANIFEST_ENTRIES {
+            record_manifest_limit(
+                &mut validated,
+                Path::new(&source.path),
+                "source manifest entry inspection exceeds the file manifest limit",
+            );
+            break;
+        }
+        inspected += 1;
         let path = Path::new(&source.path);
         if validated.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
             record_manifest_limit(
@@ -556,6 +585,13 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
             source_id,
             path: normalized_path,
             kind,
+        });
+    }
+    if validated.coverage.len() > MAX_SOURCE_MANIFEST_ENTRIES {
+        validated.coverage.truncate(MAX_SOURCE_MANIFEST_ENTRIES - 1);
+        validated.coverage.push(SourceCoverage::LimitReached {
+            path: "<manifest coverage>".to_string(),
+            reason: "source manifest diagnostics exceed the file manifest limit".to_string(),
         });
     }
     validated
@@ -1009,6 +1045,8 @@ mod tests {
             )),
             r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Logs\Application.evtx"
         );
+        assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
+        assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
     }
 
     #[cfg(unix)]
@@ -1065,6 +1103,27 @@ mod tests {
     }
 
     #[test]
+    fn all_invalid_oversized_manifest_stops_inspection_and_bounds_diagnostics() {
+        let entries = (0..=MAX_SOURCE_MANIFEST_ENTRIES * 2)
+            .map(|index| EventLogSource {
+                source_id: format!("/logs/{index}.txt"),
+                path: format!("/logs/{index}.txt"),
+                kind: EventLogSourceKind::File,
+            })
+            .collect();
+        let manifest = validate_source_manifest(&EventLogSourceManifest {
+            entries,
+            coverage: Vec::new(),
+        });
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.len() <= MAX_SOURCE_MANIFEST_ENTRIES);
+        assert!(manifest
+            .coverage
+            .iter()
+            .any(|coverage| matches!(coverage, SourceCoverage::LimitReached { .. })));
+    }
+
+    #[test]
     fn parsing_direct_manifest_is_bounded_and_reports_oversize_coverage() {
         let (maps, providers) = empty_state();
         let entries = (0..=MAX_SOURCE_MANIFEST_ENTRIES)
@@ -1087,7 +1146,7 @@ mod tests {
         assert!(result
             .error_messages
             .iter()
-            .any(|message| message.contains("source manifest exceeds")));
+            .any(|message| message.contains("source manifest") && message.contains("limit")));
     }
 
     #[test]
