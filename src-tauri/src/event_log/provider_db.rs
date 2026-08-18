@@ -728,6 +728,7 @@ mod tests {
             .provider("Round-Trip-Provider")
             .expect("query")
             .expect("present");
+        assert_eq!(read, metadata);
         let version_key: String = database
             .connection
             .query_row(
