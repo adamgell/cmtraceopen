@@ -438,6 +438,25 @@ describe("event-viewer shared font metrics", () => {
       largeList.rowHeight + (largeList.rowHeight + 6) * 2
     );
   });
+  it("remeasures a record after a group header shifts its row index", () => {
+    seedEventLog();
+    setListFontSize(MIN_LOG_LIST_FONT_SIZE);
+
+    const timeline = render(<EvtxTimeline />);
+    const recordRow = timeline.getByRole("option");
+    act(() => {
+      useEvtxStore.setState({ groupBy: ["level"] });
+    });
+    expect(timeline.getByRole("option")).toBe(recordRow);
+    expect(timeline.getByRole("treeitem")).toBeTruthy();
+
+    setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
+
+    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
+    timeline.unmount();
+  });
   it("clears a measured row cache when that row becomes offscreen", () => {
     seedEventLog();
     useEvtxStore.setState({

@@ -105,7 +105,7 @@ export function EvtxTimeline() {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
-  const rowElementsRef = useRef(new Map<number, HTMLElement>());
+  const rowElementsRef = useRef(new Set<HTMLElement>());
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
@@ -155,10 +155,10 @@ export function EvtxTimeline() {
   const measureRow = useCallback(
     (node: HTMLElement | null) => {
       if (node) {
-        rowElementsRef.current.set(Number(node.dataset.index), node);
+        rowElementsRef.current.add(node);
       } else {
-        for (const [index, element] of rowElementsRef.current) {
-          if (!element.isConnected) rowElementsRef.current.delete(index);
+        for (const element of rowElementsRef.current) {
+          if (!element.isConnected) rowElementsRef.current.delete(element);
         }
       }
       virtualizer.measureElement(node);
@@ -183,7 +183,7 @@ export function EvtxTimeline() {
 
   useEffect(() => {
     virtualizer.measure();
-    for (const element of rowElementsRef.current.values()) {
+    for (const element of rowElementsRef.current) {
       if (element.isConnected) measureConnectedRow(element);
     }
   }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
