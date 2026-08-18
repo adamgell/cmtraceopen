@@ -756,6 +756,40 @@ describe("remote event sources", () => {
     expect(state.sourceMode).toBeNull();
     expect(state.records).toEqual([]);
   });
+  it("preserves successful remote channels when another core channel is denied", async () => {
+    invoke.mockImplementation(async (name: string, args?: { channels?: string[] }) => {
+      if (name === "evtx_enumerate_remote_channels") {
+        return [
+          { name: "Application", eventCount: 0, sourceType: { remote: { machine: "lab-host" } } },
+          { name: "Security", eventCount: 0, sourceType: { remote: { machine: "lab-host" } } },
+        ];
+      }
+      if (args?.channels?.[0] === "Application") {
+        return {
+          records: [],
+          channels: [
+            {
+              name: "Application",
+              eventCount: 0,
+              sourceType: { remote: { machine: "lab-host" } },
+            },
+          ],
+          totalRecords: 0,
+          parseErrors: 0,
+          errorMessages: [],
+        };
+      }
+      throw new Error("access denied");
+    });
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    const state = useEvtxStore.getState();
+    expect(state.sourceMode).toBe("live");
+    expect(state.channels.map((channel) => channel.name)).toEqual(["Application", "Security"]);
+    expect(state.coverageGaps).toContain("lab-host/Security: not read (access denied)");
+  });
+
   it("keeps local source selection local after a remote attempt", async () => {
     invoke.mockImplementation(async (name: string) => {
       if (name === "evtx_enumerate_channels") {

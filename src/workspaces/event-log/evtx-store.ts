@@ -295,7 +295,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const finalState = get();
       const remoteQueryFailed =
         remoteMachine !== null &&
-        finalState.records.length === 0 &&
+        availableCore.length > 0 &&
+        finalState.loadedChannels.size === 0 &&
         finalState.coverageGaps.length > 0;
       set({
         sourceMode: remoteQueryFailed ? null : "live",
