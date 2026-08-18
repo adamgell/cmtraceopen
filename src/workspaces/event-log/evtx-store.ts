@@ -54,7 +54,14 @@ export function buildUnifiedTimeline(
   ) {
     return Promise.reject(new Error("EventRecordID exceeds JavaScript safe integer precision"));
   }
-  return invoke<UnifiedTimeline>("evtx_build_unified_timeline", { entries, records });
+  const transportRecords = records.map((record) => ({
+    ...record,
+    eventRecordId: record.eventRecordIdText ?? String(record.eventRecordId),
+  }));
+  return invoke<UnifiedTimeline>("evtx_build_unified_timeline", {
+    entries,
+    records: transportRecords,
+  });
 }
 
 export type EvtxSourceMode = "files" | "live" | null;

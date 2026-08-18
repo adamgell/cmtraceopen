@@ -1,9 +1,27 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum U64Transport {
+    Number(u64),
+    Text(String),
+}
+
+fn deserialize_u64_transport<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match U64Transport::deserialize(deserializer)? {
+        U64Transport::Number(value) => Ok(value),
+        U64Transport::Text(value) => value.parse().map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvtxRecord {
     pub id: u64,
+    #[serde(deserialize_with = "deserialize_u64_transport")]
     pub event_record_id: u64,
     /// Lossless decimal EventRecordID for IPC consumers that cannot represent all u64 values.
     #[serde(default, skip_serializing_if = "Option::is_none")]

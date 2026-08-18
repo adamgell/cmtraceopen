@@ -38,7 +38,7 @@ describe("buildUnifiedTimeline", () => {
     await expect(buildUnifiedTimeline([record])).resolves.toEqual(timeline);
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
-      records: [record],
+      records: [{ ...record, eventRecordId: "7" }],
     });
   });
 
@@ -56,7 +56,7 @@ describe("buildUnifiedTimeline", () => {
     await expect(buildUnifiedTimeline(visible)).resolves.toEqual(timeline);
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
-      records: [record],
+      records: [{ ...record, eventRecordId: "7" }],
     });
   });
 
@@ -71,7 +71,10 @@ describe("buildUnifiedTimeline", () => {
     await expect(buildUnifiedTimeline([record, otherSource])).resolves.toEqual(timeline);
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
-      records: [record, otherSource],
+      records: [
+        { ...record, eventRecordId: "7" },
+        { ...otherSource, eventRecordId: "7" },
+      ],
     });
   });
   it("filters a large cached record set without rebuilding the backend payload", async () => {
@@ -109,7 +112,7 @@ describe("buildUnifiedTimeline", () => {
 
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
-      records: [lossless],
+      records: [{ ...lossless, eventRecordId: exactId }],
     });
   });
 });
