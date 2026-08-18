@@ -217,9 +217,10 @@ fn expand_wildcard(
     if root.as_os_str().is_empty() {
         root.push(".");
     }
-    let recursive = Path::new(pattern)
-        .components()
-        .any(|component| component.as_os_str() == "**");
+    let recursive = Path::new(pattern).components().any(|component| {
+        let value = component.as_os_str().to_string_lossy();
+        value == "**" || value.contains('*') || value.contains('?') || value.contains('[')
+    });
     if let Ok(metadata) = fs::symlink_metadata(&root) {
         if is_reparse_or_symlink(&metadata) {
             coverage.push(SourceCoverage::Unsupported {
@@ -252,6 +253,25 @@ fn collect_wildcard_dir(
     inspected_work: &mut usize,
     paths: &mut Vec<PathBuf>,
 ) {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if is_reparse_or_symlink(&metadata) => {
+            coverage.push(SourceCoverage::Unsupported {
+                path: directory.to_string_lossy().to_string(),
+                reason: "symbolic links and reparse points are not followed during wildcard expansion"
+                    .to_string(),
+            });
+            return;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            coverage.push(SourceCoverage::AccessDenied {
+                path: directory.to_string_lossy().to_string(),
+                reason: error.to_string(),
+            });
+            return;
+        }
+        Err(_) => {}
+    }
     if depth >= MAX_SOURCE_MANIFEST_DEPTH {
         coverage.push(SourceCoverage::LimitReached {
             path: directory.to_string_lossy().to_string(),
