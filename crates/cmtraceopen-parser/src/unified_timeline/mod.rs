@@ -199,12 +199,13 @@ fn bundle_from_source(source: &str) -> Option<String> {
 
 /// Converts a parsed log entry, or reports why it cannot be placed.
 pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
+    let file = entry.file_path.clone();
     let source = entry
         .source_file
         .clone()
-        .unwrap_or_else(|| entry.file_path.clone());
+        .unwrap_or_else(|| file.clone());
     let origin = TimelineOrigin::Log {
-        file: source.clone(),
+        file,
         component: entry.component.clone(),
         line: entry.line_number,
         bundle: bundle_from_source(&source),
@@ -539,6 +540,22 @@ mod tests {
                 assert_eq!(machine, &None);
                 assert_eq!(bundle.as_deref(), Some("bundle"));
                 assert_eq!(*record_id, 99);
+            }
+            other => panic!("expected a log origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_origin_keeps_physical_file_separate_from_parser_source_token() {
+        let mut entry = log_entry(Some(1_000), "line", Severity::Info);
+        entry.source_file = Some("store.cs:1".into());
+        entry.file_path = "/logs/ccm.log".into();
+        let timeline = from_log_entries(&[entry]);
+
+        match &timeline.items[0].origin {
+            TimelineOrigin::Log { file, source, .. } => {
+                assert_eq!(file, "/logs/ccm.log");
+                assert_eq!(source, "store.cs:1");
             }
             other => panic!("expected a log origin, got {other:?}"),
         }
