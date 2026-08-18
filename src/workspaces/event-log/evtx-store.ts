@@ -76,6 +76,10 @@ function buildServerFilter(
   }
   return filter;
 }
+function hasInvalidEventIdFilter(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.length > 0 && parseEventIdSelectors(trimmed).invalid;
+}
 
 const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -291,8 +295,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           resetStreamedRecords([ch], generation);
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
-            maxEvents: null,
-            requestId: generation,
+            maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : null,
             filter: buildServerFilter(
               get().timeWindow,
               get().filterEventIds,
@@ -374,8 +377,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         try {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
-            maxEvents: maxEvents ?? null,
-            requestId: generation,
+            maxEvents: hasInvalidEventIdFilter(get().filterEventIds) ? 0 : maxEvents ?? null,
             filter: buildServerFilter(
               get().timeWindow,
               get().filterEventIds,
