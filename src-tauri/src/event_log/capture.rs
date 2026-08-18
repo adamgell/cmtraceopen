@@ -720,8 +720,7 @@ mod windows_capture {
         let publisher_enum = EvtHandle(publisher_enum);
         let mut captured = Vec::new();
         let mut failures = Vec::new();
-        let mut exhausted = false;
-        let source_os_build = current_os_build();
+        let mut hit_safety_bound = true;
 
         for _ in 0..MAX_PUBLISHERS {
             let mut publisher_buffer = vec![0u16; BUFFER_RETRY];
@@ -733,7 +732,7 @@ mod windows_capture {
                         break String::from_utf16_lossy(&publisher_buffer[..length]).trim_end_matches('\0').to_string();
                     }
                     Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => {
-                        exhausted = true;
+                        hit_safety_bound = false;
                         if captured.is_empty() && failures.is_empty() {
                             return Err(CaptureError::traversal("publisher enumeration returned no providers"));
                         }
@@ -742,18 +741,23 @@ mod windows_capture {
                     Err(error) if win32_code(&error) == ERROR_INSUFFICIENT_BUFFER.0 => {
                         let required = usize::try_from(used).unwrap_or(0);
                         if required == 0 || required > MAX_BUFFER_BYTES / 2 {
+                            hit_safety_bound = false;
                             failures.push(ProviderCaptureFailure { provider_name: "<publisher enumeration>".to_string(), error: format!("publisher name buffer size {required} exceeds bound") });
                             break String::new();
                         }
                         publisher_buffer.resize(required + 1, 0);
                     }
                     Err(error) => {
+                        hit_safety_bound = false;
                         failures.push(ProviderCaptureFailure { provider_name: "<publisher enumeration>".to_string(), error: error.to_string() });
                         break String::new();
                     }
                 }
             };
-            if publisher_name.is_empty() { break; }
+            if publisher_name.is_empty() {
+                hit_safety_bound = false;
+                break;
+            }
             let publisher_wide = wide(&publisher_name);
             match unsafe { EvtOpenPublisherMetadata(None, PCWSTR(publisher_wide.as_ptr()), PCWSTR::null(), LOCALE_NEUTRAL, 0) } {
                 Ok(handle) => {
@@ -784,7 +788,7 @@ mod windows_capture {
         }
         crate::event_log::provider_db::write_provider_database(db_path, &captured)
             .map_err(CaptureError::traversal)?;
-        if !exhausted {
+        if hit_safety_bound {
             failures.push(ProviderCaptureFailure {
                 provider_name: "<publisher enumeration>".to_string(),
                 error: "publisher enumeration exceeded bound".to_string(),
