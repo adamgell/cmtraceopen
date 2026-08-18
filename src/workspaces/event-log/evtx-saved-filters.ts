@@ -111,6 +111,9 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
       ) as EvtxGroupField[])
     : [];
 
+  const selectedChannels = Array.isArray(before.selectedChannels)
+    ? before.selectedChannels.filter((channel): channel is string => typeof channel === "string")
+    : undefined;
   return {
     beforeLoad: {
       levels: levels.length > 0 ? levels : [...ALL_LEVELS],
@@ -118,6 +121,7 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
       timeWindow: TIME_WINDOWS.includes(before.timeWindow as EvtxTimeWindow)
         ? (before.timeWindow as EvtxTimeWindow)
         : "24h",
+      selectedChannels,
     },
     onLoad: {
       search: typeof onLoad.search === "string" ? onLoad.search : "",

@@ -56,6 +56,7 @@ describe("useSavedFilterStore", () => {
       "Triage",
       sanitizeCriteria({
         afterLoad: { groupBy: ["provider", "eventId"] },
+        beforeLoad: { selectedChannels: ["Application", "Security"] },
         onLoad: {
           quickFilter: {
             mode: "allStrings",
@@ -68,6 +69,7 @@ describe("useSavedFilterStore", () => {
         },
       })
     );
+    expect(saved?.criteria.beforeLoad.selectedChannels).toEqual(["Application", "Security"]);
     expect(saved?.criteria.afterLoad.groupBy).toEqual(["provider", "eventId"]);
     expect(saved?.criteria.onLoad.quickFilter).toEqual({
       mode: "allStrings",

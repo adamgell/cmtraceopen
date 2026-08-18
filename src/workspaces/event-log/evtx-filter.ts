@@ -48,6 +48,7 @@ export interface EvtxBeforeLoadCriteria {
   levels: EvtxLevel[];
   eventIds: string;
   timeWindow: EvtxTimeWindow;
+  selectedChannels?: string[];
 }
 
 /** Criteria evaluated synchronously by the shared local visible selector as records arrive/render. */

@@ -696,6 +696,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       filterLevels: new Set(criteria.levels),
       filterEventIds: criteria.eventIds,
       timeWindow: criteria.timeWindow,
+      ...(criteria.selectedChannels
+        ? { selectedChannels: new Set(criteria.selectedChannels) }
+        : {}),
     });
     refreshBeforeLoad();
   },

@@ -168,6 +168,7 @@ export function EvtxFilterBar() {
           levels: [...state.filterLevels],
           eventIds: state.filterEventIds,
           timeWindow: state.timeWindow,
+          selectedChannels: [...state.selectedChannels],
         },
         onLoad: {
           search: state.filterSearch,
