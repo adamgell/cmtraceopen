@@ -17,6 +17,7 @@ export function EventLogWorkspace() {
   const isLoading = useEvtxStore((s) => s.isLoading);
   const records = useEvtxStore((s) => s.records);
   const channels = useEvtxStore((s) => s.channels);
+  const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
@@ -52,7 +53,9 @@ export function EventLogWorkspace() {
     };
   }, []);
 
-  const hasData = sourceMode !== null && (records.length > 0 || channels.length > 0);
+  const hasData =
+    sourceMode !== null &&
+    (records.length > 0 || channels.length > 0 || coverageGaps.length > 0);
 
   if (!hasData && !isLoading) {
     return <SourcePicker />;
