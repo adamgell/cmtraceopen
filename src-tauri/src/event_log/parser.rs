@@ -18,14 +18,16 @@ use super::models::{
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
+const MAX_ENTRIES_PER_FILE: usize = 100_000;
+const MAX_SOURCE_INPUTS: usize = 256;
+const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 
 /// Maximum number of files a source selection may hand to the EVTX parser.
 ///
 /// This is deliberately applied before parsing. A folder or wildcard is user input and must not
 /// turn into an unbounded parser workload.
 pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
-const MAX_SOURCE_INPUTS: usize = 4_096;
-const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
+const MAX_SOURCE_MANIFEST_WORK: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +103,7 @@ pub fn build_source_manifest_for_selections(
         entries: Vec::new(),
         coverage: Vec::new(),
     };
+    let mut inspected_work = 0usize;
     for (index, selection) in sources.iter().enumerate() {
         if index >= MAX_SOURCE_INPUTS {
             manifest.coverage.push(SourceCoverage::LimitReached {
@@ -111,11 +114,15 @@ pub fn build_source_manifest_for_selections(
         }
         let source = &selection.path;
         let requested_kind = selection.kind;
+        if let Some(gap) = gated_source(source, requested_kind) {
+            manifest.coverage.push(gap);
+            continue;
+        }
         let is_wildcard = is_wildcard_source(source)
             && !fs::symlink_metadata(source)
                 .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir());
         let paths = if is_wildcard {
-            expand_wildcard(source, &mut manifest.coverage)
+            expand_wildcard(source, &mut manifest.coverage, &mut inspected_work)
         } else {
             vec![PathBuf::from(source)]
         };
@@ -139,12 +146,15 @@ pub fn build_source_manifest_for_selections(
         for path in paths {
             expand_path(
                 &path,
-                if is_wildcard {
+                if is_wildcard
+                    && !matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
+                {
                     EventLogSourceKind::Wildcard
                 } else {
                     requested_kind
                 },
-                0,
+                path.components().count().min(MAX_SOURCE_MANIFEST_DEPTH),
+                &mut inspected_work,
                 &mut manifest,
             )?;
         }
@@ -155,11 +165,25 @@ pub fn build_source_manifest_for_selections(
             .cmp(&right.source_id)
             .then_with(|| left.path.cmp(&right.path))
     });
-    manifest.coverage.sort_by(|left, right| coverage_path(left).cmp(coverage_path(right)));
+    if manifest.coverage.len() > MAX_SOURCE_MANIFEST_ENTRIES {
+        manifest.coverage.truncate(MAX_SOURCE_MANIFEST_ENTRIES - 1);
+        record_manifest_limit(
+            &mut manifest,
+            Path::new("<source coverage>"),
+            "source coverage limit reached",
+        );
+    }
+    manifest
+        .coverage
+        .sort_by(|left, right| coverage_path(left).cmp(coverage_path(right)));
     Ok(manifest)
 }
 
-fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<PathBuf> {
+fn expand_wildcard(
+    pattern: &str,
+    coverage: &mut Vec<SourceCoverage>,
+    inspected_work: &mut usize,
+) -> Vec<PathBuf> {
     let options = glob::MatchOptions {
         case_sensitive: false,
         require_literal_separator: false,
@@ -183,19 +207,20 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
         }
     };
     let mut paths = Vec::new();
-    let mut inspected = 0usize;
     for result in matches {
-        if inspected >= MAX_SOURCE_MANIFEST_ENTRIES {
-            coverage.push(SourceCoverage::LimitReached {
-                path: pattern.to_string(),
-                reason: format!(
-                    "wildcard matches exceed the {} file manifest limit",
-                    MAX_SOURCE_MANIFEST_ENTRIES
-                ),
-            });
+        *inspected_work = inspected_work.saturating_add(1);
+        if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
+            if !coverage
+                .iter()
+                .any(|item| matches!(item, SourceCoverage::LimitReached { .. }))
+            {
+                coverage.push(SourceCoverage::LimitReached {
+                    path: pattern.to_string(),
+                    reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
+                });
+            }
             break;
         }
-        inspected += 1;
         match result {
             Ok(path) => paths.push(path),
             Err(error) => {
@@ -214,15 +239,21 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
             }
         }
     }
+    paths.sort_by(|left, right| normalize_source_path(left).cmp(&normalize_source_path(right)));
     paths
 }
-
 fn expand_path(
     path: &Path,
     requested_kind: EventLogSourceKind,
     depth: usize,
+    inspected_work: &mut usize,
     manifest: &mut EventLogSourceManifest,
 ) -> Result<(), String> {
+    *inspected_work = inspected_work.saturating_add(1);
+    if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
+        record_manifest_limit(manifest, path, "source expansion work limit reached");
+        return Ok(());
+    }
     if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
         record_manifest_limit(
             manifest,
@@ -326,23 +357,23 @@ fn expand_path(
                 });
             let coverage_path = coverage_path.to_string();
             let coverage_reason = coverage_reason.to_string();
-            let coverage = if child_error.contains("limit")
-                || child_error.contains("truncated")
+            let coverage = if coverage_reason.contains("limit")
+                || coverage_reason.contains("truncated")
             {
                 SourceCoverage::LimitReached {
                     path: coverage_path,
                     reason: coverage_reason,
                 }
-            } else if child_error.contains("unsupported")
-                || child_error.contains("symbolic link")
-                || child_error.contains("reparse point")
+            } else if coverage_reason.contains("unsupported")
+                || coverage_reason.contains("symbolic link")
+                || coverage_reason.contains("reparse point")
             {
                 SourceCoverage::Unsupported {
                     path: coverage_path,
                     reason: coverage_reason,
                 }
-            } else if child_error.contains("denied")
-                || child_error.contains("Permission denied")
+            } else if coverage_reason.contains("denied")
+                || coverage_reason.contains("Permission denied")
             {
                 SourceCoverage::AccessDenied {
                     path: coverage_path,
@@ -372,6 +403,7 @@ fn expand_path(
                 Path::new(&entry.path),
                 EventLogSourceKind::Folder,
                 depth + 1,
+                inspected_work,
                 manifest,
             )?;
         }
@@ -581,6 +613,17 @@ fn normalize_windows_path(raw: &str) -> String {
     {
         4
     } else if prefix == "\\\\?\\"
+        && {
+            let mut components = rest.split('\\');
+            components.next().is_some_and(|component| component.eq_ignore_ascii_case("GLOBALROOT"))
+                && components.next().is_some_and(|component| component.eq_ignore_ascii_case("Device"))
+                && components
+                    .next()
+                    .is_some_and(|component| component.to_ascii_lowercase().starts_with("harddiskvolumeshadowcopy"))
+        }
+    {
+        3
+    } else if prefix == "\\\\?\\"
         && rest.len() >= 2
         && rest.as_bytes()[1] == b':'
     {
@@ -707,7 +750,6 @@ fn coverage_path(coverage: &SourceCoverage) -> &str {
         | SourceCoverage::LimitReached { path, .. } => path,
     }
 }
-const MAX_ENTRIES_PER_FILE: usize = 100_000;
 
 /// Parse source selections after bounded expansion into a deterministic manifest.
 pub fn parse_evtx_files(
@@ -1151,6 +1193,13 @@ mod tests {
             r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Logs\Application.evtx"
         );
         assert_eq!(
+            normalize_source_path(Path::new(
+                r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\..\Application.evtx"
+            )),
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Application.evtx"
+        );
+
+        assert_eq!(
             normalize_source_path(Path::new(r"\\server\share\..\Application.evtx")),
             r"\\server\share\Application.evtx"
         );
@@ -1174,6 +1223,20 @@ mod tests {
         assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
         assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
         assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn explicit_archive_wildcard_is_gated_before_expansion() {
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: "archive-*.evtx".to_string(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build manifest");
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.iter().any(|coverage| matches!(
+            coverage,
+            SourceCoverage::Unsupported { path, .. } if path == "archive-*.evtx"
+        )));
     }
     #[test]
     fn existing_glob_metacharacter_directory_is_treated_as_literal() {
