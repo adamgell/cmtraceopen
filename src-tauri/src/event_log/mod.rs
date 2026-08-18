@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod capture;
 pub mod event_node;
 pub mod export;
 pub mod maps;
