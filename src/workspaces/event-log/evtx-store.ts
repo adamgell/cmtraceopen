@@ -174,6 +174,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       if (state.sourceMode === "live" && state.loadedChannels.size > 0) {
         refreshRequested = false;
         void state.refreshLoadedChannels();
+      } else if (!state.isLoading) {
+        refreshRequested = false;
       }
     });
   };
@@ -321,6 +323,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
           if (!loadError) loadError = `${ch}: ${msg}`;
+          set((s) => ({
+            coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${msg})`]),
+          }));
         }
       });
 
