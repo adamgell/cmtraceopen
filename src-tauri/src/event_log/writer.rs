@@ -121,6 +121,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
     let mut depth = 0usize;
     let mut root_seen = false;
     let mut declaration_seen = false;
+    let mut preamble_content_seen = false;
     loop {
         let event = reader.read_event().map_err(|error| {
             io::Error::new(
@@ -131,7 +132,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
         match event {
             quick_xml::events::Event::Eof => break,
             quick_xml::events::Event::Decl(_) => {
-                if declaration_seen || root_seen {
+                if declaration_seen || root_seen || preamble_content_seen {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML declaration is outside the prolog"));
                 }
                 declaration_seen = true;
@@ -182,6 +183,9 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 depth -= 1;
             }
             quick_xml::events::Event::Text(text) => {
+                if depth == 0 {
+                    preamble_content_seen = true;
+                }
                 let bytes = text.into_inner();
                 if has_illegal_xml_control(&bytes)
                     || (depth == 0 && !bytes.iter().all(u8::is_ascii_whitespace))
@@ -217,7 +221,15 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     "raw XML doctype is not allowed",
                 ));
             }
+            quick_xml::events::Event::PI(_) => {
+                if depth == 0 {
+                    preamble_content_seen = true;
+                }
+            }
             quick_xml::events::Event::Comment(comment) => {
+                if depth == 0 {
+                    preamble_content_seen = true;
+                }
                 if invalid_comment(comment) {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an invalid comment"));
                 }
@@ -561,6 +573,7 @@ fn strict_xml_validation_rejects_duplicate_attributes_and_invalid_comments() {
         r#"<Event><!DOCTYPE Event [ <!ENTITY x "y"> ] /></Event>"#,
         r#"<Event attr="&#x1;"/>"#,
         r#"<Event /><?xml version="1.0"?>"#,
+        r#"<?provider?><?xml version="1.0"?><Event/>"#,
         "<Event>bad\u{0001}</Event>",
     ] {
         let mut event = record("invalid");

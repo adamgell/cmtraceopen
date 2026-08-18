@@ -329,9 +329,19 @@ fn redact_xml_tag(tag: &str) -> String {
             }
         }
         output.push(quote as char);
+
         cursor = end + 1;
     }
     output
+}
+fn redact_xml_text(text: &str) -> String {
+    if let Ok(decoded) = quick_xml::escape::unescape(text) {
+        let redacted = redact_text(&decoded);
+        if redacted != decoded {
+            return redacted;
+        }
+    }
+    redact_text(text)
 }
 
 fn redact_raw_xml(xml: &str) -> String {
@@ -378,34 +388,34 @@ fn redact_raw_xml(xml: &str) -> String {
     let mut cursor = 0;
     while cursor < labeled.len() {
         let Some(relative_open) = labeled[cursor..].find('<') else {
-            output.push_str(&redact_text(&labeled[cursor..]));
+            output.push_str(&redact_xml_text(&labeled[cursor..]));
             break;
         };
         let opening = cursor + relative_open;
-        output.push_str(&redact_text(&labeled[cursor..opening]));
+        output.push_str(&redact_xml_text(&labeled[cursor..opening]));
         let tail = &labeled[opening..];
         if let Some(content) = tail.strip_prefix("<?") {
             if let Some(end) = content.find("?>") {
                 output.push_str("<?");
-                output.push_str(&redact_text(&content[..end]));
+                output.push_str(&redact_xml_text(&content[..end]));
                 output.push_str("?>");
                 cursor = opening + 2 + end + 2;
                 continue;
             }
             output.push_str("<?");
-            output.push_str(&redact_text(content));
+            output.push_str(&redact_xml_text(content));
             break;
         }
         if let Some(content) = tail.strip_prefix("<!--") {
             if let Some(end) = content.find("-->") {
                 output.push_str("<!--");
-                output.push_str(&redact_text(&content[..end]));
+                output.push_str(&redact_xml_text(&content[..end]));
                 output.push_str("-->");
                 cursor = opening + 4 + end + 3;
                 continue;
             }
             output.push_str("<!--");
-            output.push_str(&redact_text(content));
+            output.push_str(&redact_xml_text(content));
             break;
         }
         if let Some(content) = tail.strip_prefix("<![CDATA[") {
@@ -742,7 +752,7 @@ mod tests {
     #[test]
     fn raw_xml_attributes_and_processing_instructions_are_redacted() {
         let mut event = record("safe");
-        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><SerialNumber>ABC123456</SerialNumber><TargetUserName>CONTOSO\Jane Doe</TargetUserName><TenantId>99999999-8888-4777-8666-555555555555</TenantId><Password>hunter2</Password><Data Value="REMOTE-HOST" Name="RemoteHost" /><Data Name="Computer" Value="DESKTOP-JOHN" /><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
+        event.raw_xml = r#"<Event Computer="DESKTOP-JOHN"><SerialNumber>ABC123456</SerialNumber><TargetUserName>CONTOSO\Jane Doe</TargetUserName><TenantId>99999999-8888-4777-8666-555555555555</TenantId><Password>hunter2</Password><Data Value="REMOTE-HOST" Name="RemoteHost" /><Data Name="Computer" Value="DESKTOP-JOHN" /><Encoded>PASSWORD&#x3D;encoded-secret</Encoded><Message><?provider PASSWORD=hunter2?></Message></Event>"#.into();
         for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
             let output = export_records(&[event.clone()], format).expect("export");
             assert!(!output.contains("DESKTOP-JOHN"));
