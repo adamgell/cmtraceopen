@@ -35,7 +35,9 @@ vi.mock("@tanstack/react-virtual", () => ({
     getItemKey?: (index: number) => string | number;
   }) => {
     const measuredSize = (index: number) =>
-      virtualizerState.measuredSizes.get(index) ?? estimateSize();
+      virtualizerState.resizedSizes.get(index) ??
+      virtualizerState.measuredSizes.get(index) ??
+      estimateSize();
     const getTotalSize = () => {
       virtualizerState.totalSize = Array.from({ length: count }, (_, index) =>
         measuredSize(index)
@@ -69,7 +71,6 @@ vi.mock("@tanstack/react-virtual", () => ({
       measureElement: virtualizerState.measureElement,
       resizeItem: (index: number, size: number) => {
         virtualizerState.resizedSizes.set(index, size);
-        virtualizerState.measuredSizes.set(index, size);
         virtualizerState.recalculate();
       },
       scrollToIndex: vi.fn(),
@@ -255,6 +256,7 @@ describe("event-viewer shared font metrics", () => {
     );
     filterLarge.unmount();
 
+    virtualizerState.resizedSizes.clear();
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     const timelineLarge = render(<EvtxTimeline />);
