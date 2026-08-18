@@ -355,12 +355,17 @@ fn query_channel_inner(
     mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
 ) -> Result<ChannelScan, String> {
     let remote = source_label.starts_with("Remote:");
+    let coverage_channel = if let Some(machine) = source_label.strip_prefix("Remote: ") {
+        format!("{machine}/{channel}")
+    } else {
+        channel.to_string()
+    };
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
     // A filter that cannot be expressed is refused here rather than silently degraded to "*",
     // which would return everything and look like the filter simply matched a lot.
     let compiled = build_query(filter)
-        .map_err(|error| format!("cannot compile event query for {channel}: {error}"))?;
+        .map_err(|error| format!("cannot compile event query for {coverage_channel}: {error}"))?;
     let query_string = HSTRING::from(compiled.as_str());
     let query_handle = unsafe {
         EvtQuery(
@@ -373,12 +378,12 @@ fn query_channel_inner(
             EvtQueryChannelPath.0 | EvtQueryReverseDirection.0 | EvtQueryTolerateQueryErrors.0,
         )
     }
-    .map_err(|e| format_source_error(&format!("EvtQuery({channel})"), &e, remote))?;
+    .map_err(|e| format_source_error(&format!("EvtQuery({coverage_channel})"), &e, remote))?;
     let query_handle = OwnedEvtHandle::new(query_handle);
     log::info!("event=evtx_live_query channel=\"{channel}\" limit={limit}");
 
     let mut records = Vec::new();
-    let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
+    let mut publisher_metadata = HashMap::<String, PublisherMetadata>::new();
     let mut unparsable = 0usize;
     let mut unrenderable = 0usize;
     let mut message_failures = 0usize;
@@ -428,7 +433,7 @@ fn query_channel_inner(
                         error.code().0 as u32
                     );
                     gaps.push(format!(
-                        "{channel}: stopped after {} events, the channel could not be read further ({})",
+                        "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
                         produced,
                         format_source_error("EvtNext", &error, remote),
                     ));
@@ -465,7 +470,7 @@ fn query_channel_inner(
                 Err(error) => {
                     unrenderable += 1;
                     gaps.push(format!(
-                        "{channel}: event could not be rendered ({})",
+                        "{coverage_channel}: event could not be rendered ({})",
                         format_source_error("EvtRender", &error, remote)
                     ));
                     if unrenderable == 1 {
@@ -514,7 +519,7 @@ fn query_channel_inner(
                     Err(error) => {
                         message_failures += 1;
                         gaps.push(format!(
-                            "{channel}: event message could not be formatted ({})",
+                            "{coverage_channel}: event message could not be formatted ({})",
                             format_source_error("EvtFormatMessage", &error, remote)
                         ));
                         log::warn!(
@@ -548,12 +553,11 @@ fn query_channel_inner(
         records.append(&mut batch_records);
     }
 
-    if unparsable > 0 {
         // Counted and reported rather than passed over. Events that never arrived look exactly like
         // evidence that the thing being investigated did not happen.
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
         gaps.push(format!(
-            "{channel}: {unparsable} events could not be read and are missing from this view"
+            "{coverage_channel}: {unparsable} events could not be read and are missing from this view"
         ));
     }
     // Render and message failures already append one classified gap per failed event above.
@@ -681,28 +685,41 @@ fn render_event_xml(event_handle: EVT_HANDLE) -> Result<String, Error> {
 }
 
 #[cfg(target_os = "windows")]
+enum PublisherMetadata {
+    Open(OwnedEvtHandle),
+    Missing,
+    Failed(u32),
+}
+
+#[cfg(target_os = "windows")]
 fn format_event_message(
     event_handle: EVT_HANDLE,
     provider_name: &str,
     session: Option<EVT_HANDLE>,
-    cache: &mut HashMap<String, Option<OwnedEvtHandle>>,
+    cache: &mut HashMap<String, PublisherMetadata>,
 ) -> Result<Option<String>, Error> {
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
         let metadata = match unsafe {
             EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0)
         } {
-            Ok(handle) => Some(OwnedEvtHandle::new(handle)),
-            Err(error) if is_publisher_metadata_not_found(&error) => None,
-            Err(error) => return Err(error),
+            Ok(handle) => PublisherMetadata::Open(OwnedEvtHandle::new(handle)),
+            Err(error) if is_publisher_metadata_not_found(&error) => PublisherMetadata::Missing,
+            Err(error) => {
+                let code = win32_code(&error);
+                cache.insert(provider_name.to_string(), PublisherMetadata::Failed(code));
+                return Err(error);
+            }
         };
         cache.insert(provider_name.to_string(), metadata);
     }
 
-    let Some(Some(metadata)) = cache.get(provider_name) else {
-        return Ok(None);
+    let metadata = match cache.get(provider_name) {
+        Some(PublisherMetadata::Open(metadata)) => metadata,
+        Some(PublisherMetadata::Missing) => return Ok(None),
+        Some(PublisherMetadata::Failed(code)) => return Err(Error::from_win32(*code)),
+        None => unreachable!("publisher metadata cache insertion failed"),
     };
-
     let mut buffer_used = 0u32;
     let mut buffer = vec![0u16; 2048];
 

@@ -667,6 +667,26 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().loadError).toBe("Enter a valid remote computer name.");
   });
 
+  it("clears local data before a failed remote source switch", async () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      remoteMachine: null,
+      channels: [{ name: "Application", eventCount: 3, sourceType: "live" }],
+      records: [{ ...streamedRecord("Application"), id: 0 }],
+    });
+    invoke.mockRejectedValueOnce(new Error("access denied"));
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    const state = useEvtxStore.getState();
+    expect(state.remoteMachine).toBe("lab-host");
+    expect(state.channels).toEqual([]);
+    expect(state.records).toEqual([]);
+    expect(state.coverageGaps).toEqual([
+      "lab-host: remote source access denied (access denied)",
+    ]);
+  });
+
   it("records remote enumeration denial or unavailability as coverage", async () => {
     invoke.mockRejectedValueOnce(
       new Error("lab-host: remote source unavailable (error 53)")
@@ -729,11 +749,12 @@ describe("remote event sources", () => {
 
     await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
 
-    expect(useEvtxStore.getState().coverageGaps).toHaveLength(1);
-    expect(useEvtxStore.getState().coverageGaps).toContain(
-      "Security: not read (access denied)"
-    );
-    expect(useEvtxStore.getState().loadError).toBe("Security: access denied");
+    const state = useEvtxStore.getState();
+    expect(state.coverageGaps).toHaveLength(1);
+    expect(state.coverageGaps).toContain("lab-host/Security: not read (access denied)");
+    expect(state.loadError).toBe("lab-host/Security: access denied");
+    expect(state.sourceMode).toBeNull();
+    expect(state.records).toEqual([]);
   });
   it("keeps local source selection local after a remote attempt", async () => {
     invoke.mockImplementation(async (name: string) => {

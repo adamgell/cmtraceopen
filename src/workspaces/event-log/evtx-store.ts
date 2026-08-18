@@ -279,17 +279,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           );
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
-          if (!loadError) loadError = `${ch}: ${msg}`;
+          const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+          console.warn(`[evtx] Failed to query ${context}: ${msg}`);
+          if (!loadError) loadError = `${context}: ${msg}`;
           set((s) => ({
-            coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${msg})`]),
+            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+              `${context}: not read (${msg})`,
+            ]),
           }));
         }
       });
 
       await Promise.all(promises);
 
+      const finalState = get();
+      const remoteQueryFailed =
+        remoteMachine !== null &&
+        finalState.records.length === 0 &&
+        finalState.coverageGaps.length > 0;
       set({
+        sourceMode: remoteQueryFailed ? null : "live",
         isLoading: false,
         loadingChannel: null,
         loadingProgress: null,
@@ -319,7 +328,16 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   enumerateLocalChannels: async () => {
-    set({ remoteMachine: null });
+    set({
+      remoteMachine: null,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+    });
     await get().enumerateChannels();
   },
 
@@ -333,7 +351,17 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       });
       return;
     }
-    set({ remoteMachine: normalized, loadError: null });
+    set({
+      remoteMachine: normalized,
+      channels: [],
+      records: [],
+      sourceMode: null,
+      coverageGaps: [],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      loadError: null,
+    });
     await get().enumerateChannels();
   },
 
