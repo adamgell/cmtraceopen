@@ -461,9 +461,21 @@ fn normalize_windows_path(raw: &str) -> String {
     format!("{prefix}{}", components.join("\\"))
 }
 fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceManifest {
+    let mut coverage: Vec<SourceCoverage> = input
+        .coverage
+        .iter()
+        .take(MAX_SOURCE_MANIFEST_ENTRIES)
+        .cloned()
+        .collect();
+    if input.coverage.len() > MAX_SOURCE_MANIFEST_ENTRIES {
+        coverage.push(SourceCoverage::LimitReached {
+            path: "<manifest coverage>".to_string(),
+            reason: "source manifest coverage exceeds the file manifest limit".to_string(),
+        });
+    }
     let mut validated = EventLogSourceManifest {
         entries: Vec::new(),
-        coverage: input.coverage.clone(),
+        coverage,
     };
     for source in &input.entries {
         let path = Path::new(&source.path);
