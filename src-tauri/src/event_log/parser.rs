@@ -322,6 +322,10 @@ fn expand_path(
     }
 
     if !is_evtx_candidate(path) {
+        manifest.coverage.push(SourceCoverage::Unsupported {
+            path: path_string,
+            reason: "source path is not an EVTX file".to_string(),
+        });
         return Ok(());
     }
 

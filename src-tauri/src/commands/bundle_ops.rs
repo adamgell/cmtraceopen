@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -199,20 +200,39 @@ pub fn inspect_evidence_artifact(
 
 // ── Public helpers (used by file_ops::list_log_folder) ──────────────────
 
+/// A bounded recursive listing plus explicit traversal diagnostics.
+pub(crate) struct RecursiveCollection {
+    pub entries: Vec<FolderEntry>,
+    pub child_errors: Vec<String>,
+}
+
 /// Recursively collects all **text-parseable files** under `root`, returning
-/// them as flat `FolderEntry` items (no directory entries).  Used when opening
-/// an evidence bundle so that every nested artifact is included in the listing.
+/// them as flat `FolderEntry` items (no directory entries). Used when opening
+/// an evidence bundle so every nested artifact is included in the listing.
 ///
 /// Files with known binary extensions and files exceeding
 /// `BUNDLE_BATCH_MAX_FILE_SIZE` are excluded from the listing and logged as
-/// skipped.  They remain accessible from the sidebar for individual opening.
-pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
+/// skipped. They remain accessible from the sidebar for individual opening.
+pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
     let mut out = Vec::new();
+    let mut child_errors = Vec::new();
     let mut skipped_binary = 0u32;
     let mut skipped_large = 0u32;
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut visited = HashSet::new();
 
     'walk: while let Some(dir) = stack.pop() {
+        let identity = match fs::canonicalize(&dir) {
+            Ok(path) => path,
+            Err(error) => {
+                child_errors.push(format!("{}: {error}", dir.display()));
+                continue;
+            }
+        };
+        if !visited.insert(identity) {
+            child_errors.push(format!("{}: directory already visited", dir.display()));
+            continue;
+        }
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => {
@@ -238,8 +258,18 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
                     continue;
                 }
             };
-
             let entry_path = entry.path();
+            match unsafe_entry_reason(&entry_path) {
+                Ok(Some(reason)) => {
+                    child_errors.push(format!("{}: {reason}", entry_path.display()));
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    child_errors.push(format!("{}: {error}", entry_path.display()));
+                    continue;
+                }
+            }
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
@@ -247,6 +277,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
                         "event=collect_files_recursive_skip reason=metadata_error path=\"{}\" error=\"{e}\"",
                         entry_path.display()
                     );
+                    child_errors.push(format!("{}: {e}", entry_path.display()));
                     continue;
                 }
             };
@@ -292,13 +323,38 @@ pub(crate) fn collect_files_recursive(root: &Path) -> Vec<FolderEntry> {
         }
     }
 
+    if out.len() >= MAX_BUNDLE_ENTRIES {
+        child_errors.push(format!(
+            "{}: recursive listing reached the {} file limit",
+            root.display(),
+            MAX_BUNDLE_ENTRIES
+        ));
+    }
     log::info!(
         "event=collect_files_recursive_done root=\"{}\" included={} skipped_binary={skipped_binary} skipped_large={skipped_large}",
         root.display(),
         out.len()
     );
 
-    out
+    RecursiveCollection {
+        entries: out,
+        child_errors,
+    }
+}
+
+fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(Some("symbolic link or reparse point is not followed"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Ok(Some("symbolic link or reparse point is not followed"));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBundleMetadata> {

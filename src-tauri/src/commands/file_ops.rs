@@ -613,7 +613,9 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     if bundle_metadata.is_some() {
         // For evidence bundles, recursively collect all files from the entire
         // directory tree so that every nested artifact is loaded.
-        entries = collect_files_recursive(&requested_path);
+        let collected = collect_files_recursive(&requested_path);
+        entries = collected.entries;
+        child_errors.extend(collected.child_errors);
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
@@ -1043,8 +1045,35 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.path == evtx.to_string_lossy()));
-
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bundle_listing_rejects_symlinked_directories_with_child_coverage() {
+        use std::os::unix::fs::symlink;
+
+        let bundle_dir = create_temp_dir("file-ops-bundle-symlink");
+        let outside = create_temp_dir("file-ops-bundle-symlink-target");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        fs::create_dir_all(bundle_dir.join("evidence")).expect("create evidence");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        symlink(&outside, bundle_dir.join("evidence").join("linked"))
+            .expect("create directory symlink");
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result
+            .child_errors
+            .iter()
+            .any(|error| error.contains("symbolic link")));
+        assert!(!result
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("outside.log")));
+
+        fs::remove_dir_all(&bundle_dir).expect("remove bundle");
+        fs::remove_dir_all(&outside).expect("remove target");
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {
