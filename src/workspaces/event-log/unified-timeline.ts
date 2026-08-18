@@ -7,6 +7,30 @@
  */
 
 import type { EvtxRecord } from "./types";
+import type { LogEntry, LogSource } from "../../types/log";
+import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
+
+function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
+  if (source === null) return false;
+  const root = source.kind === "known" ? source.defaultPath : source.path;
+  const normalizedRoot = root.replace(/[\\/]+$/, "").toLowerCase();
+  const normalizedEntry = entry.filePath.toLowerCase();
+  return (
+    normalizedEntry === normalizedRoot ||
+    normalizedEntry.startsWith(`${normalizedRoot}/`) ||
+    normalizedEntry.startsWith(`${normalizedRoot}\\`)
+  );
+}
+
+export function scopeLogEntries(
+  entries: LogEntry[],
+  source: LogSource | null,
+  mode: SourceOpenMode
+): LogEntry[] {
+  return mode === "merged"
+    ? entries
+    : entries.filter((entry) => logEntryBelongsToSource(entry, source));
+}
 
 export type TimelineSeverity =
   | "verbose"

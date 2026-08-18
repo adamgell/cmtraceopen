@@ -10,20 +10,7 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { selectVisibleRecords } from "./evtx-filter";
-import type { LogEntry, LogSource } from "../../types/log";
-import { filterTimelineToRecords, type UnifiedTimeline } from "./unified-timeline";
-
-function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
-  if (source === null) return false;
-  const root = source.kind === "known" ? source.defaultPath : source.path;
-  const normalizedRoot = root.replace(/[\\/]+$/, "").toLowerCase();
-  const normalizedEntry = entry.filePath.toLowerCase();
-  return (
-    normalizedEntry === normalizedRoot ||
-    normalizedEntry.startsWith(`${normalizedRoot}/`) ||
-    normalizedEntry.startsWith(`${normalizedRoot}\\`)
-  );
-}
+import { filterTimelineToRecords, scopeLogEntries, type UnifiedTimeline } from "./unified-timeline";
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
@@ -36,10 +23,7 @@ export function EventLogWorkspace() {
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const scopedLogEntries = useMemo(
-    () =>
-      logSourceOpenMode === "merged"
-        ? logEntries
-        : logEntries.filter((entry) => logEntryBelongsToSource(entry, activeLogSource)),
+    () => scopeLogEntries(logEntries, activeLogSource, logSourceOpenMode),
     [logEntries, activeLogSource, logSourceOpenMode]
   );
   const records = useEvtxStore((s) => s.records);
