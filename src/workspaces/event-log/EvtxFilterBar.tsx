@@ -214,6 +214,7 @@ export function EvtxFilterBar() {
       {sourceMode === "live" && (
         <>
           <Dropdown
+            button={{ style: { fontSize: controlFontSize } }}
             size="small"
             value={EVTX_TIME_WINDOW_LABELS[timeWindow]}
             selectedOptions={[timeWindow]}
@@ -229,7 +230,7 @@ export function EvtxFilterBar() {
             }}
           >
             {TIME_WINDOWS.map((window) => (
-              <Option key={window} value={window}>
+              <Option key={window} value={window} style={{ fontSize: controlFontSize }}>
                 {EVTX_TIME_WINDOW_LABELS[window]}
               </Option>
             ))}
@@ -298,6 +299,7 @@ export function EvtxFilterBar() {
       />
 
       <Input
+        input={{ style: { fontSize: controlFontSize } }}
         value={filterEventIds}
         onChange={(_, data) => setFilterEventIds(data.value)}
         placeholder="Event IDs (comma sep.)"
@@ -306,6 +308,7 @@ export function EvtxFilterBar() {
       />
 
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         multiselect
         placeholder="Columns"
@@ -319,7 +322,7 @@ export function EvtxFilterBar() {
         }}
       >
         {choosableColumns.map((column) => (
-          <Option key={column.id} value={column.id} text={column.label}>
+          <Option key={column.id} value={column.id} text={column.label} style={{ fontSize: controlFontSize }}>
             {column.label}
           </Option>
         ))}
@@ -346,6 +349,7 @@ export function EvtxFilterBar() {
         them, so a keyboard-only operator could show and hide columns but never order them.
       */}
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         placeholder="Reorder"
         value={reorderTarget ? columnLabel(reorderTarget) : ""}
@@ -357,7 +361,7 @@ export function EvtxFilterBar() {
         }}
       >
         {columnConfig.order.map((id) => (
-          <Option key={id} value={id} text={columnLabel(id)}>
+          <Option key={id} value={id} text={columnLabel(id)} style={{ fontSize: controlFontSize }}>
             {columnLabel(id)}
           </Option>
         ))}
@@ -390,6 +394,7 @@ export function EvtxFilterBar() {
       </Button>
 
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         placeholder="Saved"
         value=""
@@ -401,15 +406,16 @@ export function EvtxFilterBar() {
           else if (data.optionValue) applySavedFilter(data.optionValue);
         }}
       >
-        <Option value="__save__">Save current...</Option>
+        <Option value="__save__" style={{ fontSize: controlFontSize }}>Save current...</Option>
         {orderedFilters.map((filter) => (
-          <Option key={filter.id} value={filter.id}>
+          <Option key={filter.id} value={filter.id} style={{ fontSize: controlFontSize }}>
             {filter.favorite ? `\u2605 ${filter.name}` : filter.name}
           </Option>
         ))}
       </Dropdown>
 
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         multiselect
         placeholder="Group by"
@@ -429,13 +435,14 @@ export function EvtxFilterBar() {
         }}
       >
         {GROUP_FIELDS.map((field) => (
-          <Option key={field} value={field}>
+          <Option key={field} value={field} style={{ fontSize: controlFontSize }}>
             {EVTX_GROUP_LABELS[field]}
           </Option>
         ))}
       </Dropdown>
 
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         placeholder="Export"
         value=""
@@ -448,7 +455,7 @@ export function EvtxFilterBar() {
         }}
       >
         {EXPORT_FORMATS.map((format) => (
-          <Option key={format.value} value={format.value}>
+          <Option key={format.value} value={format.value} style={{ fontSize: controlFontSize }}>
             {format.label}
           </Option>
         ))}
@@ -456,6 +463,7 @@ export function EvtxFilterBar() {
 
       {pendingName !== null && (
         <Input
+          input={{ style: { fontSize: controlFontSize } }}
           autoFocus
           size="small"
           value={pendingName}
@@ -478,6 +486,7 @@ export function EvtxFilterBar() {
       )}
 
       <Input
+        input={{ style: { fontSize: controlFontSize } }}
         value={filterSearch}
         onChange={(_, data) => setFilterSearch(data.value)}
         placeholder="Search..."
@@ -497,6 +506,7 @@ export function EvtxFilterBar() {
           Sort:
         </span>
         <Dropdown
+          button={{ style: { fontSize: controlFontSize } }}
           value={sortFieldLabel}
           selectedOptions={[sortField]}
           onOptionSelect={(_, data) => {
@@ -508,7 +518,7 @@ export function EvtxFilterBar() {
           style={{ minWidth: "100px" }}
         >
           {SORT_FIELDS.map((f) => (
-            <Option key={f} value={f}>
+            <Option key={f} value={f} style={{ fontSize: controlFontSize }}>
               {SORT_FIELD_LABELS[f]}
             </Option>
           ))}
@@ -522,7 +532,7 @@ export function EvtxFilterBar() {
             )
           }
           title={`Sort ${sortDirection === "asc" ? "ascending" : "descending"}`}
-          style={{ minWidth: "auto", padding: "2px 6px" }}
+          style={{ minWidth: "auto", padding: "2px 6px", fontSize: controlFontSize }}
         >
           {sortDirection === "asc" ? "\u2191" : "\u2193"}
         </Button>

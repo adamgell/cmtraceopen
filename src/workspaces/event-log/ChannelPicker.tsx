@@ -195,13 +195,24 @@ export function ChannelPicker() {
             onChange={(_, data) => setSearch(data.value)}
             placeholder="Filter channels..."
             size="small"
+            input={{ style: { fontSize: `${metrics.fontSize}px` } }}
             style={{ width: "100%" }}
           />
           <div style={{ display: "flex", gap: "4px" }}>
-            <Button size="small" appearance="subtle" onClick={selectAllChannels}>
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={selectAllChannels}
+              style={{ fontSize: `${metrics.fontSize}px` }}
+            >
               Select all
             </Button>
-            <Button size="small" appearance="subtle" onClick={deselectAllChannels}>
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={deselectAllChannels}
+              style={{ fontSize: `${metrics.fontSize}px` }}
+            >
               Deselect all
             </Button>
           </div>
@@ -213,7 +224,7 @@ export function ChannelPicker() {
                   appearance="primary"
                   disabled={isLoading}
                   onClick={loadSelectedChannels}
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, fontSize: `${metrics.fontSize}px` }}
                 >
                   {isLoading ? "Loading..." : `Load ${unloadedSelectedCount}`}
                 </Button>
@@ -224,6 +235,7 @@ export function ChannelPicker() {
                 disabled={isLoading}
                 onClick={refreshLoadedChannels}
                 title="Reload all loaded channels"
+                style={{ fontSize: `${metrics.fontSize}px` }}
               >
                 Refresh
               </Button>

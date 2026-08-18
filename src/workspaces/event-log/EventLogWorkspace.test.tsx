@@ -1,5 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const virtualizerState = vi.hoisted(() => ({
+  measured: [] as HTMLElement[],
+  items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
@@ -14,15 +18,20 @@ vi.mock("@tanstack/react-virtual", () => ({
     getItemKey?: (index: number) => string | number;
   }) => ({
     getTotalSize: () => count * estimateSize(),
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
+    getVirtualItems: () => {
+      const items = Array.from({ length: count }, (_, index) => ({
         index,
         size: estimateSize(),
         start: index * estimateSize(),
         end: (index + 1) * estimateSize(),
         key: getItemKey?.(index) ?? index,
-      })),
-    measureElement: vi.fn(),
+      }));
+      virtualizerState.items = items;
+      return items;
+    },
+    measureElement: (element: HTMLElement | null) => {
+      if (element) virtualizerState.measured.push(element);
+    },
     scrollToIndex: vi.fn(),
   }),
 }));
@@ -91,6 +100,8 @@ function seedEventLog() {
 describe("event-viewer shared font metrics", () => {
   beforeEach(() => {
     useEvtxStore.getState().reset();
+    virtualizerState.measured.length = 0;
+    virtualizerState.items.length = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
   });
 
@@ -117,10 +128,22 @@ describe("event-viewer shared font metrics", () => {
     const channelRow = screen.getByText("Application").closest("label") as HTMLElement;
     expect(channelTree.style.fontSize).toBe(`${smallList.fontSize}px`);
     expect(channelRow.style.height).toBe(`${smallList.rowHeight}px`);
+    expect(screen.getByPlaceholderText("Filter channels...").style.fontSize).toBe(
+      `${smallList.fontSize}px`
+    );
+    expect(screen.getByRole("button", { name: "Select all" }).style.fontSize).toBe(
+      `${smallList.fontSize}px`
+    );
     channel.unmount();
 
     const filter = render(<EvtxFilterBar />);
     expect(screen.getByRole("button", { name: "Crit" }).style.fontSize).toBe(
+      `${Math.max(11, smallList.fontSize - 1)}px`
+    );
+    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+      `${Math.max(11, smallList.fontSize - 1)}px`
+    );
+    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
     filter.unmount();
@@ -129,6 +152,15 @@ describe("event-viewer shared font metrics", () => {
     const timelineRoot = screen.getByRole("tree");
     const groupRow = screen.getByRole("treeitem");
     const virtualizerContent = timelineRoot.firstElementChild as HTMLElement;
+    const recordRow = screen.getByRole("option");
+    expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
+    expect(recordRow.style.lineHeight).toBe(`${smallList.rowLineHeight}px`);
+    expect(virtualizerState.measured).toContain(recordRow);
+    expect(virtualizerState.items[1]).toMatchObject({
+      index: 1,
+      size: smallList.rowHeight + 2,
+      start: smallList.rowHeight + 2,
+    });
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
     expect(virtualizerContent.style.height).toBe(`${(smallList.rowHeight + 2) * 2}px`);
     fireEvent.keyDown(timelineRoot, { key: "ArrowDown" });
@@ -155,16 +187,39 @@ describe("event-viewer shared font metrics", () => {
     const channelLarge = render(<ChannelPicker />);
     const largeChannelRow = screen.getByText("Application").closest("label") as HTMLElement;
     expect(largeChannelRow.style.height).toBe(`${largeList.rowHeight}px`);
+    expect(screen.getByPlaceholderText("Filter channels...").style.fontSize).toBe(
+      `${largeList.fontSize}px`
+    );
+    expect(screen.getByRole("button", { name: "Select all" }).style.fontSize).toBe(
+      `${largeList.fontSize}px`
+    );
     channelLarge.unmount();
 
     const filterLarge = render(<EvtxFilterBar />);
     expect(screen.getByRole("button", { name: "Crit" }).style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
+    expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
+      `${Math.max(11, largeList.fontSize - 1)}px`
+    );
+    expect(screen.getAllByRole("combobox")[0].style.fontSize).toBe(
+      `${Math.max(11, largeList.fontSize - 1)}px`
+    );
     filterLarge.unmount();
 
+    virtualizerState.measured.length = 0;
+    virtualizerState.items.length = 0;
     const timelineLarge = render(<EvtxTimeline />);
     const timelineRootLarge = screen.getByRole("tree");
+    const recordRowLarge = screen.getByRole("option");
+    expect(recordRowLarge.style.fontSize).toBe(`${largeList.fontSize}px`);
+    expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
+    expect(virtualizerState.measured).toContain(recordRowLarge);
+    expect(virtualizerState.items[1]).toMatchObject({
+      index: 1,
+      size: largeList.rowHeight + 2,
+      start: largeList.rowHeight + 2,
+    });
     const groupRowLarge = screen.getByRole("treeitem");
     const virtualizerContentLarge = timelineRootLarge.firstElementChild as HTMLElement;
     expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
