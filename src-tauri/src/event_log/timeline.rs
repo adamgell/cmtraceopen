@@ -8,8 +8,8 @@
 
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    from_log_entry, merge, TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline,
-    UnplacedItem, UnplacedReason,
+    from_log_entry, merge, timeline_sort_key, TimelineItem, TimelineOrigin, TimelineSeverity,
+    UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
 use super::event_node::parse_event_xml;
@@ -148,16 +148,22 @@ fn extract_activity_id(xml: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
- /// Converts one event, or reports why it has no position.
- pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
-     from_event_with_occurrence(record, 0)
- }
+/// Converts one event, or reports why it has no position.
+pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
+    from_event_with_occurrence(record, 0)
+}
 
 fn from_event_with_occurrence(
     record: &EvtxRecord,
     occurrence: usize,
 ) -> Result<TimelineItem, UnplacedItem> {
-    let origin = origin_of(record, occurrence);
+    from_event_with_origin(record, origin_of(record, occurrence))
+}
+
+fn from_event_with_origin(
+    record: &EvtxRecord,
+    origin: TimelineOrigin,
+) -> Result<TimelineItem, UnplacedItem> {
     if !timestamp_is_present(record) {
         return Err(UnplacedItem {
             origin,
@@ -173,25 +179,48 @@ fn from_event_with_occurrence(
     })
 }
 
-fn ordered_records(records: &[EvtxRecord]) -> Vec<(&EvtxRecord, usize)> {
-    let mut ordered: Vec<_> = records.iter().collect();
-    ordered.sort_by(|left, right| {
-        left.timestamp_epoch
-            .cmp(&right.timestamp_epoch)
-            .then_with(|| stable_event_id(left).cmp(&stable_event_id(right)))
-            .then_with(|| left.timestamp.cmp(&right.timestamp))
-            .then_with(|| left.message.cmp(&right.message))
-            .then_with(|| left.raw_xml.cmp(&right.raw_xml))
-    });
+fn origin_with_occurrence(
+    mut origin: TimelineOrigin,
+    record: &EvtxRecord,
+    occurrence: usize,
+) -> TimelineOrigin {
+    if record_id(record).is_none() {
+        if let TimelineOrigin::Event { stable_id, .. } = &mut origin {
+            *stable_id = format!("{}-{occurrence}", stable_event_id(record));
+        }
+    }
+    origin
+}
+
+struct OrderedRecord<'a> {
+    record: &'a EvtxRecord,
+    origin: TimelineOrigin,
+    occurrence: usize,
+}
+
+fn ordered_records(records: &[EvtxRecord]) -> Vec<OrderedRecord<'_>> {
+    let mut ordered: Vec<_> = records
+        .iter()
+        .map(|record| {
+            let origin = origin_of(record, 0);
+            let sort_key = timeline_sort_key(record.timestamp_epoch, &record.message, &origin);
+            (record, origin, sort_key)
+        })
+        .collect();
+    ordered.sort_by(|left, right| left.2.cmp(&right.2));
     let mut occurrence_by_key = std::collections::HashMap::new();
     ordered
         .into_iter()
-        .map(|record| {
+        .map(|(record, origin, _)| {
             let key = stable_event_id(record);
             let occurrence = occurrence_by_key.entry(key).or_insert(0);
             let current = *occurrence;
             *occurrence += 1;
-            (record, current)
+            OrderedRecord {
+                record,
+                origin: origin_with_occurrence(origin, record, current),
+                occurrence: current,
+            }
         })
         .collect()
 }
@@ -207,8 +236,13 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
             Err(reason) => unplaced.push(reason),
         }
     }
-    for (record, occurrence) in ordered_records(records) {
-        match from_event_with_occurrence(record, occurrence) {
+    for OrderedRecord {
+        record,
+        origin,
+        ..
+    } in ordered_records(records)
+    {
+        match from_event_with_origin(record, origin) {
             Ok(item) => placed.push(item),
             Err(item) => unplaced.push(item),
         }
@@ -238,10 +272,16 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
             *existing_occurrences.entry(base.to_string()).or_insert(0usize) += 1;
         }
     }
-    for (record, occurrence) in ordered_records(records) {
+    for OrderedRecord {
+        record,
+        origin,
+        occurrence,
+    } in ordered_records(records)
+    {
         let base = stable_event_id(record);
         let offset = existing_occurrences.get(&base).copied().unwrap_or_default();
-        match from_event_with_occurrence(record, occurrence + offset) {
+        let origin = origin_with_occurrence(origin, record, occurrence + offset);
+        match from_event_with_origin(record, origin) {
             Ok(item) => placed.push(item),
             Err(item) => unplaced.push(item),
         }
@@ -678,16 +718,17 @@ mod tests {
     }
 
     #[test]
-    fn equal_timestamp_event_append_keeps_input_order() {
-        let mut timeline = build(
-            &[],
-            &[record(5_000, "existing", EvtxLevel::Information)],
-        );
-        let mut appended = record(5_000, "appended", EvtxLevel::Information);
-        appended.id = 99;
-        append(&mut timeline, &[], &[appended]);
-        let messages: Vec<_> = timeline.items.iter().map(|item| item.message.as_str()).collect();
-        assert_eq!(messages, vec!["existing", "appended"]);
+    fn equal_identity_events_match_full_build_and_append_history() {
+        let existing = record(5_000, "existing", EvtxLevel::Information);
+        let appended = record(5_000, "appended", EvtxLevel::Information);
+        let full = build(&[], &[existing.clone(), appended.clone()]);
+
+        let mut split = build(&[], &[existing]);
+        append(&mut split, &[], &[appended]);
+
+        assert_eq!(split, full);
+        let messages: Vec<_> = split.items.iter().map(|item| item.message.as_str()).collect();
+        assert_eq!(messages, vec!["appended", "existing"]);
     }
 
     #[test]

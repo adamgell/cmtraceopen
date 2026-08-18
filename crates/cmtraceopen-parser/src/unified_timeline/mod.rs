@@ -243,35 +243,91 @@ fn key_part(value: &str) -> String {
     format!("{}:{value}", value.len())
 }
 
-fn origin_sort_key(origin: &TimelineOrigin) -> String {
+fn optional_text_key(value: Option<&str>) -> String {
+    value.map(key_part).unwrap_or_else(|| "none".to_string())
+}
+
+fn optional_number_key<T: std::fmt::Display>(value: Option<T>) -> String {
+    value
+        .map(|number| format!("some:{number}"))
+        .unwrap_or_else(|| "none".to_string())
+}
+
+/// Returns the canonical provenance key used for all timeline ordering.
+///
+/// Every serialized origin field participates, not just the primary identity. This keeps
+/// equal-identity records deterministic when a timeline is built in one batch or reconciled from
+/// several batches.
+pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
     match origin {
         TimelineOrigin::Log {
             source,
             file,
             line,
             component,
+            machine,
+            bundle,
             record_id,
-            ..
         } => format!(
-            "log|{}|{}|{line:010}|{record_id:020}|{}",
+            "log|{}|{}|{line:010}|{record_id:020}|{}|{}|{}",
             key_part(source),
             key_part(file),
-            key_part(component.as_deref().unwrap_or_default())
+            optional_text_key(component.as_deref()),
+            optional_text_key(machine.as_deref()),
+            optional_text_key(bundle.as_deref()),
         ),
-        TimelineOrigin::Event { stable_id, .. } => format!("event|{}", key_part(stable_id)),
+        TimelineOrigin::Event {
+            stable_id,
+            source,
+            machine,
+            bundle,
+            channel,
+            provider,
+            process_id,
+            activity_id,
+            event_id,
+            record_id,
+            record_id_text,
+        } => format!(
+            "event|{}|{}|{}|{}|{}|{}|{}|{}|{event_id:010}|{record_id:020}|{}",
+            key_part(stable_id),
+            key_part(source),
+            optional_text_key(machine.as_deref()),
+            optional_text_key(bundle.as_deref()),
+            key_part(channel),
+            key_part(provider),
+            optional_number_key(*process_id),
+            optional_text_key(activity_id.as_deref()),
+            optional_text_key(record_id_text.as_deref()),
+        ),
     }
+}
+
+/// Returns the canonical key for a placed timeline item.
+///
+/// The event adapter uses this same key before occurrence suffixes are assigned, so full builds
+/// and append reconciliation cannot disagree when otherwise identical timestamps are split across
+/// batches.
+pub fn timeline_sort_key(
+    timestamp_ms: i64,
+    message: &str,
+    origin: &TimelineOrigin,
+) -> (i64, String, String) {
+    (timestamp_ms, origin_sort_key(origin), message.to_string())
 }
 
 /// Merges already-converted items into one chronological timeline.
 ///
-/// Equal timestamps use deterministic source identity ordering, so channel completion order and
-/// append history cannot change the merged result.
+/// Equal timestamps use deterministic source and row identity ordering, so channel completion
+/// order and append history cannot change the merged result.
 pub fn merge(
     placed: impl IntoIterator<Item = TimelineItem>,
     unplaced: impl IntoIterator<Item = UnplacedItem>,
 ) -> UnifiedTimeline {
     let mut items: Vec<TimelineItem> = placed.into_iter().collect();
-    items.sort_by_cached_key(|item| (item.timestamp_ms, origin_sort_key(&item.origin)));
+    items.sort_by_cached_key(|item| {
+        timeline_sort_key(item.timestamp_ms, &item.message, &item.origin)
+    });
     let mut unplaced: Vec<UnplacedItem> = unplaced.into_iter().collect();
     unplaced.sort_by_cached_key(|item| origin_sort_key(&item.origin));
     UnifiedTimeline { items, unplaced }
@@ -378,14 +434,14 @@ mod tests {
     }
 
     #[test]
-    fn items_sharing_a_timestamp_keep_their_input_order() {
-        // A log line and an event in the same millisecond have no discoverable ordering, so the
-        // merge must not invent one by sorting on severity or source.
+    fn items_sharing_a_timestamp_use_canonical_row_order() {
+        // Equal timestamps cannot be ordered by time, so the complete row key must govern both
+        // one-shot builds and append reconciliation.
         let timeline = merge(
             [
-                event(5_000, "first supplied", TimelineSeverity::Error),
-                event(5_000, "second supplied", TimelineSeverity::Verbose),
-                event(5_000, "third supplied", TimelineSeverity::Critical),
+                event(5_000, "third supplied", TimelineSeverity::Error),
+                event(5_000, "first supplied", TimelineSeverity::Verbose),
+                event(5_000, "second supplied", TimelineSeverity::Critical),
             ],
             [],
         );
@@ -547,10 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn equal_timestamps_keep_supplied_order_for_live_reconciliation() {
+    fn equal_timestamps_use_canonical_order_for_live_reconciliation() {
         let mut timeline = UnifiedTimeline::default();
-        append(&mut timeline, &[log_entry(Some(5_000), "first", Severity::Info)]);
         append(&mut timeline, &[log_entry(Some(5_000), "second", Severity::Info)]);
+        append(&mut timeline, &[log_entry(Some(5_000), "first", Severity::Info)]);
 
         let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
         assert_eq!(messages, vec!["first", "second"]);
