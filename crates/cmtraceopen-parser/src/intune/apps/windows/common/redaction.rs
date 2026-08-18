@@ -113,7 +113,7 @@ fn sensitive_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|targetusername|tenant(?:id)?|aadtenantid)\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|targetusername|tenant(?:id)?|aadtenantid)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
         )
         .expect("sensitive field redaction pattern must compile")
     })
@@ -169,7 +169,7 @@ fn account_field_re() -> &'static Regex {
         // masked — see `split_leading_token`), while a malformed
         // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)",
+            r#"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)"#,
         )
         .expect("account field regex must compile")
     })
@@ -189,7 +189,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22<>]+)",
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22<>]+)"#,
         )
         .expect("host field regex must compile")
     })
@@ -216,7 +216,7 @@ fn tenant_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)",
+            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)"#,
         )
         .expect("tenant field regex must compile")
     })
@@ -791,6 +791,17 @@ mod tests {
         assert!(!redacted.contains("Doe"));
         assert!(!redacted.contains("Alice"));
         assert!(!redacted.contains("Smith"));
+        assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn quoted_json_field_names_are_redacted() {
+        let redacted = redact_text(
+            r#"{"serialNumber":"ABC123456","tenantId":"99999999-8888-4777-8666-555555555555","TargetUserName":"CONTOSO\Jane Doe"}"#,
+        );
+        assert!(!redacted.contains("ABC123456"));
+        assert!(!redacted.contains("99999999-8888"));
+        assert!(!redacted.contains("Jane Doe"));
         assert!(!redacted.contains("CONTOSO"));
     }
 }
