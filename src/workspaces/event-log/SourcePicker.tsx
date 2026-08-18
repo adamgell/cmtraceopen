@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Spinner, tokens } from "@fluentui/react-components";
+import { Button, Input, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -12,9 +12,11 @@ const EVTX_FILE_DIALOG_FILTERS = [
 export function SourcePicker() {
   const parseFiles = useEvtxStore((s) => s.parseFiles);
   const enumerateChannels = useEvtxStore((s) => s.enumerateChannels);
+  const enumerateRemoteChannels = useEvtxStore((s) => s.enumerateRemoteChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
+  const [remoteTarget, setRemoteTarget] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
   const isWindows = currentPlatform === "windows";
@@ -40,6 +42,16 @@ export function SourcePicker() {
     setLocalError(null);
     try {
       await enumerateChannels();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalError(message);
+    }
+  };
+
+  const handleRemoteEnumerate = async () => {
+    setLocalError(null);
+    try {
+      await enumerateRemoteChannels(remoteTarget);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
@@ -93,6 +105,44 @@ export function SourcePicker() {
               This computer
             </Button>
           )}
+        </div>
+      )}
+
+      {isWindows && !isLoading && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "8px",
+            width: "min(420px, 100%)",
+          }}
+        >
+          <div style={{ display: "flex", gap: "8px", width: "100%" }}>
+            <Input
+              value={remoteTarget}
+              onChange={(_, data) => setRemoteTarget(data.value)}
+              placeholder="Remote computer name"
+              aria-label="Remote computer name"
+              style={{ flex: 1 }}
+            />
+            <Button
+              appearance="secondary"
+              disabled={!remoteTarget.trim()}
+              onClick={() => void handleRemoteEnumerate()}
+            >
+              Remote computer
+            </Button>
+          </div>
+          <div
+            style={{
+              fontSize: "11px",
+              color: tokens.colorNeutralForeground3,
+              textAlign: "center",
+            }}
+          >
+            Uses your current Windows sign-in. Usernames, passwords, and tokens are not stored.
+          </div>
         </div>
       )}
 

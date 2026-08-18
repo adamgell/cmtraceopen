@@ -45,7 +45,7 @@ export type EvtxLevel = "Critical" | "Error" | "Warning" | "Information" | "Verb
 export interface EvtxChannelInfo {
   name: string;
   eventCount: number;
-  sourceType: "live" | { file: { path: string } };
+  sourceType: "live" | { remote: { machine: string } } | { file: { path: string } };
 }
 
 export interface EvtxParseResult {

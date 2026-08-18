@@ -89,6 +89,7 @@ pub struct EvtxChannelInfo {
 #[serde(rename_all = "camelCase")]
 pub enum ChannelSourceType {
     Live,
+    Remote { machine: String },
     File { path: String },
 }
 

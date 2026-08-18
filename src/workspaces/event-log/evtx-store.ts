@@ -37,6 +37,23 @@ function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
   return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
 }
 
+function invokeEventQuery<T>(
+  remoteMachine: string | null,
+  channels: string[],
+  maxEvents: number | null,
+  filter: EventQueryFilterSubset
+): Promise<T> {
+  if (remoteMachine) {
+    return invoke<T>("evtx_query_remote_channels", {
+      machine: remoteMachine,
+      channels,
+      maxEvents,
+      filter,
+    });
+  }
+  return invoke<T>("evtx_query_channels", { channels, maxEvents, filter });
+}
+
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
@@ -47,6 +64,8 @@ interface EvtxState {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
   sourceMode: EvtxSourceMode;
+  /** Remote target used for live queries; credentials stay in the Windows session only. */
+  remoteMachine: string | null;
   isLoading: boolean;
   loadingChannel: string | null;
   loadingProgress: number | null;
@@ -82,6 +101,7 @@ interface EvtxState {
   selectedRecordId: number | null;
 
   parseFiles: (paths: string[]) => Promise<void>;
+  enumerateRemoteChannels: (machine: string) => Promise<void>;
   enumerateChannels: () => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
@@ -126,6 +146,7 @@ function applyParseResult(
 
 export const useEvtxStore = create<EvtxState>()((set, get) => ({
   records: [],
+  remoteMachine: null,
   channels: [],
   sourceMode: null,
   isLoading: false,
@@ -147,10 +168,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   collapsedGroups: new Set<string>(),
   sortField: "time",
   sortDirection: "asc",
-  selectedRecordId: null,
-
   parseFiles: async (paths) => {
-    set({ isLoading: true, loadError: null });
+    set({ isLoading: true, loadError: null, remoteMachine: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
       const checked = assertParseResultShape(result);
@@ -164,8 +183,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   enumerateChannels: async () => {
     set({ isLoading: true, loadError: null });
     try {
-      // Step 1: Enumerate all channels
-      const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+      const remoteMachine = get().remoteMachine;
+      const channels = remoteMachine
+        ? await invoke<EvtxChannelInfo[]>("evtx_enumerate_remote_channels", {
+            machine: remoteMachine,
+          })
+        : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
@@ -224,11 +247,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const promises = availableCore.map(async (ch) => {
         try {
           resetStreamedRecords([ch]);
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: null,
-            filter: buildServerFilter(get().timeWindow),
-          });
+          const result = await invokeEventQuery<EvtxParseResult>(
+            remoteMachine,
+            [ch],
+            null,
+            buildServerFilter(get().timeWindow)
+          );
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
           const arrived = [...streamed.records, ...result.records];
@@ -252,6 +276,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
           if (!loadError) loadError = `${ch}: ${msg}`;
+          set((s) => ({
+            coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${ch}: not read (${msg})`]),
+          }));
         }
       });
 
@@ -270,8 +297,19 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     }
   },
 
+  enumerateRemoteChannels: async (machine) => {
+    const normalized = machine.trim();
+    set({ remoteMachine: normalized || null, loadError: null });
+    if (!normalized) {
+      set({ isLoading: false, loadError: "Enter a remote computer name." });
+      return;
+    }
+    await get().enumerateChannels();
+  },
+
   queryChannels: async (channels, maxEvents) => {
     set({ isLoading: true, loadError: null, selectedRecordId: null });
+    const remoteMachine = get().remoteMachine;
 
     // One request per channel rather than one request for all of them. The backend collects a
     // whole request's records into a single vector before replying, so asking for forty channels
@@ -289,11 +327,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const results = await Promise.all(
       channels.map(async (ch) => {
         try {
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: maxEvents ?? null,
-            filter: buildServerFilter(get().timeWindow),
-          });
+          const result = await invokeEventQuery<EvtxParseResult>(
+            remoteMachine,
+            [ch],
+            maxEvents ?? null,
+            buildServerFilter(get().timeWindow)
+          );
           return { channel: ch, result, error: null as string | null };
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -400,6 +439,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const state = get();
     const loaded = [...state.loadedChannels];
     if (loaded.length === 0) return;
+    const remoteMachine = state.remoteMachine;
     const startTime = performance.now();
     set({
       records: [],
@@ -419,15 +459,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const promises = loaded.map(async (ch) => {
       try {
         resetStreamedRecords([ch]);
-        const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-          channels: [ch],
-          maxEvents: null,
-          // The window is a server-side predicate and a refetch is the only thing that applies it.
-          // Omitting it here made the time-window control a no-op: selecting 1h triggered this
-          // refresh, which then fetched the channel unbounded and replaced the view with events
-          // outside the window the toolbar was still showing as selected.
-          filter: buildServerFilter(get().timeWindow),
-        });
+        const result = await invokeEventQuery<EvtxParseResult>(
+          remoteMachine,
+          [ch],
+          null,
+          buildServerFilter(get().timeWindow)
+        );
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
         const arrived = [...streamed.records, ...result.records];
@@ -551,6 +588,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       records: [],
       channels: [],
       sourceMode: null,
+      remoteMachine: null,
       isLoading: false,
       loadError: null,
       selectedChannels: new Set<string>(),

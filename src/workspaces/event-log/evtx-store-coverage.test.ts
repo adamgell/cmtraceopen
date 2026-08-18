@@ -601,3 +601,102 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.coverageGaps.some((g) => g.includes("Application"))).toBe(true);
   });
 });
+describe("remote event sources", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+      remoteMachine: null,
+    });
+  });
+
+  it("uses the remote command with only a machine name and preserves remote provenance", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_remote_channels") {
+        return [{ name: "Application", eventCount: 0, sourceType: { remote: { machine: "lab-host" } } }];
+      }
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 0, sourceType: { remote: { machine: "lab-host" } } }],
+        totalRecords: 0,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    expect(invoke).toHaveBeenCalledWith("evtx_enumerate_remote_channels", { machine: "lab-host" });
+    expect(invoke).toHaveBeenCalledWith(
+      "evtx_query_remote_channels",
+      expect.objectContaining({
+        machine: "lab-host",
+        channels: ["Application"],
+      })
+    );
+    expect(useEvtxStore.getState().channels[0]?.sourceType).toEqual({
+      remote: { machine: "lab-host" },
+    });
+    expect(useEvtxStore.getState().remoteMachine).toBe("lab-host");
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+
+  it("keeps denied remote sources distinct from an empty source", async () => {
+    invoke.mockResolvedValueOnce({
+      records: [],
+      channels: [
+        {
+          name: "Security",
+          eventCount: 0,
+          sourceType: { remote: { machine: "lab-host" } },
+        },
+      ],
+      totalRecords: 0,
+      parseErrors: 1,
+      errorMessages: ["lab-host/Security: access denied"],
+    });
+
+    useEvtxStore.setState({
+      remoteMachine: "lab-host",
+      channels: [
+        {
+          name: "Security",
+          eventCount: 0,
+          sourceType: { remote: { machine: "lab-host" } },
+        },
+      ],
+    });
+    await useEvtxStore.getState().queryChannels(["Security"]);
+
+
+    const state = useEvtxStore.getState();
+    expect(state.channels).toHaveLength(1);
+    expect(state.channels[0]?.eventCount).toBe(0);
+    expect(state.coverageGaps).toEqual(["lab-host/Security: access denied"]);
+  });
+  it("records a denied core channel during remote enumeration", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_remote_channels") {
+        return [
+          {
+            name: "Security",
+            eventCount: 0,
+            sourceType: { remote: { machine: "lab-host" } },
+          },
+        ];
+      }
+      throw new Error("access denied");
+    });
+
+    await useEvtxStore.getState().enumerateRemoteChannels("lab-host");
+
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Security: not read (access denied)"
+    );
+    expect(useEvtxStore.getState().loadError).toBe("Security: access denied");
+  });
+});
