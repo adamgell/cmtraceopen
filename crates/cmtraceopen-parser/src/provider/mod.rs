@@ -137,6 +137,9 @@ pub struct ProviderMetadata {
     /// Message table.
     #[serde(default)]
     pub messages: Vec<ProviderMessage>,
+    /// Level value to name.
+    #[serde(default)]
+    pub levels: BTreeMap<String, String>,
     /// Task value to name.
     #[serde(default)]
     pub tasks: BTreeMap<String, String>,

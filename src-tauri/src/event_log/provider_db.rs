@@ -10,9 +10,8 @@
 //! ```text
 //! CREATE TABLE "ProviderDetails" (
 //!   "ProviderName" TEXT COLLATE NOCASE, "VersionKey" TEXT,
-//!   "Events" BLOB, "Keywords" BLOB, "Maps" BLOB, "Messages" BLOB,
+//!   "Events" BLOB, "Keywords" BLOB, "Levels" BLOB, "Maps" BLOB, "Messages" BLOB,
 //!   "Opcodes" BLOB, "Parameters" BLOB, "Tasks" BLOB,
-//!   "SourceOsBuild" INTEGER, "SourceOsEdition" TEXT, ...
 //!   PRIMARY KEY ("ProviderName","VersionKey"))
 //! ```
 //!
@@ -180,7 +179,7 @@ impl ProviderDb {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT Events, Messages, Tasks, Keywords, Opcodes, SourceOsBuild \
+                "SELECT Events, Messages, Levels, Tasks, Keywords, Opcodes, SourceOsBuild \
                  FROM ProviderDetails WHERE ProviderName = ?1 \
                  ORDER BY SourceOsBuild DESC LIMIT 1",
             )
@@ -193,11 +192,12 @@ impl ProviderDb {
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
                 row.get::<_, Vec<u8>>(4)?,
-                row.get::<_, Option<u32>>(5)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, Option<u32>>(6)?,
             ))
         });
 
-        let (events, messages, tasks, keywords, opcodes, build) = match row {
+        let (events, messages, levels, tasks, keywords, opcodes, build) = match row {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(format!("cannot read provider {name}: {error}")),
@@ -207,6 +207,7 @@ impl ProviderDb {
             provider_name: name.to_string(),
             events: inflate_json(&events)?,
             messages: inflate_json(&messages)?,
+            levels: inflate_json(&levels)?,
             tasks: inflate_json(&tasks)?,
             keywords: inflate_json(&keywords)?,
             opcodes: inflate_json(&opcodes)?,
@@ -219,7 +220,7 @@ impl ProviderDb {
 const PROVIDER_DETAILS_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS "ProviderDetails" (
     "ProviderName" TEXT COLLATE NOCASE NOT NULL,
     "VersionKey" TEXT NOT NULL,
-    "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
+    "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Levels" BLOB NOT NULL, "Maps" BLOB NOT NULL,
     "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
     "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
     PRIMARY KEY ("ProviderName","VersionKey"));"#;
@@ -284,6 +285,7 @@ pub fn write_provider_database(
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
+        let levels = gzip_json(&metadata.levels)?;
         let maps = gzip_json(&empty_object)?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
@@ -293,14 +295,15 @@ pub fn write_provider_database(
         connection
             .execute(
                 r#"INSERT INTO ProviderDetails
-                   (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
+                   (ProviderName, VersionKey, Events, Keywords, Levels, Maps, Messages, Opcodes,
                     Parameters, Tasks, SourceOsBuild)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
                 rusqlite::params![
                     metadata.provider_name,
                     &captured.version_key,
                     events,
                     keywords,
+                    levels,
                     maps,
                     messages,
                     opcodes,
@@ -490,7 +493,7 @@ mod tests {
                 r#"CREATE TABLE "ProviderDetails" (
                      "ProviderName" TEXT COLLATE NOCASE NOT NULL,
                      "VersionKey" TEXT NOT NULL,
-                     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Maps" BLOB NOT NULL,
+                     "Events" BLOB NOT NULL, "Keywords" BLOB NOT NULL, "Levels" BLOB NOT NULL, "Maps" BLOB NOT NULL,
                      "Messages" BLOB NOT NULL, "Opcodes" BLOB NOT NULL, "Parameters" BLOB NOT NULL,
                      "Tasks" BLOB NOT NULL, "SourceOsBuild" INTEGER,
                      PRIMARY KEY ("ProviderName","VersionKey"));"#,
@@ -501,14 +504,15 @@ mod tests {
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
-                       (ProviderName, VersionKey, Events, Keywords, Maps, Messages, Opcodes,
+                       (ProviderName, VersionKey, Events, Keywords, Levels, Maps, Messages, Opcodes,
                         Parameters, Tasks, SourceOsBuild)
-                       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
+                       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
                     rusqlite::params![
                         name,
                         format!("vk1:{build}"),
                         gzip(events_json),
                         gzip(r#"{"1":"Error"}"#),
+                        gzip(r#"{"2":"Information"}"#),
                         gzip("{}"),
                         gzip("[]"),
                         gzip(r#"{"11":"Start"}"#),
@@ -695,6 +699,9 @@ mod tests {
                 short_id: 2,
                 text: Some("Enroll failed: (%1).".to_string()),
             }],
+            levels: [("2".to_string(), "Information".to_string())]
+                .into_iter()
+                .collect(),
             tasks: [("1".to_string(), "Enrollment".to_string())]
                 .into_iter()
                 .collect(),
@@ -729,6 +736,7 @@ mod tests {
             .expect("query")
             .expect("present");
         assert_eq!(read, metadata);
+        assert_eq!(read.levels.get("2").map(String::as_str), Some("Information"));
         let version_key: String = database
             .connection
             .query_row(

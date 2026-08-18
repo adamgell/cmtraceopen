@@ -129,7 +129,7 @@ mod windows_capture {
         }
     }
     fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
-        if target == 1 { raw_value & 0xFFFF } else { raw_value }
+        if target == 1 { (raw_value >> 16) & 0xFFFF } else { raw_value }
     }
     fn optional_string(value: OwnedVariant) -> Result<Option<String>, String> {
         match value {
@@ -137,6 +137,9 @@ mod windows_capture {
             OwnedVariant::String(value) => Ok(Some(value)),
             _ => Err("metadata string has an invalid type".to_string()),
         }
+    }
+    fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
+        channels.get(&(channel_id as u32)).cloned()
     }
 
     fn string(value: OwnedVariant) -> Option<String> {
@@ -297,7 +300,7 @@ mod windows_capture {
             )
         })
     }
-    unsafe fn format_message(metadata: EVT_HANDLE, message_id: u32) -> Option<String> {
+    unsafe fn format_message(metadata: EVT_HANDLE, message_id: u32) -> Result<Option<String>, String> {
         let mut used = 0u32;
         let initial = EvtFormatMessage(
             Some(metadata),
@@ -310,12 +313,13 @@ mod windows_capture {
         );
         if let Err(error) = initial {
             if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
-                return None;
+                return Err(format!("message {message_id} query failed: {error}"));
             }
         }
-        let units = usize::try_from(used).ok()?;
+        let units = usize::try_from(used)
+            .map_err(|_| format!("message {message_id} buffer size overflow"))?;
         if units == 0 || units > MAX_BUFFER_BYTES / 2 {
-            return None;
+            return Err(format!("message {message_id} exceeds bounded buffer"));
         }
         let mut buffer = vec![0u16; units];
         EvtFormatMessage(
@@ -327,33 +331,49 @@ mod windows_capture {
             Some(&mut buffer),
             &mut used,
         )
-        .ok()?;
-        let length = usize::try_from(used).ok()?.min(buffer.len());
-        Some(String::from_utf16_lossy(&buffer[..length]).trim_end_matches('\0').to_string())
+        .map_err(|error| format!("message {message_id} read failed: {error}"))?;
+        let length = usize::try_from(used)
+            .map_err(|_| format!("message {message_id} length overflow"))?
+            .min(buffer.len());
+        Ok(Some(
+            String::from_utf16_lossy(&buffer[..length])
+                .trim_end_matches('\0')
+                .to_string(),
+        ))
     }
 
-    unsafe fn collect_messages(metadata: EVT_HANDLE, ids: &mut BTreeMap<u64, ProviderMessage>) {
-        let mut add = |raw_id: Option<u64>| {
-            if let Some(raw_id) = raw_id {
+    unsafe fn collect_messages(
+        metadata: EVT_HANDLE,
+        ids: &mut BTreeMap<u64, ProviderMessage>,
+    ) -> Result<(), String> {
+        let mut add = |value: OwnedVariant| -> Result<(), String> {
+            if let Some(raw_id) = optional_number(value)? {
                 let short_id = raw_id as u32;
+                let text = format_message(metadata, short_id)?;
                 ids.entry(raw_id).or_insert_with(|| ProviderMessage {
                     raw_id,
                     short_id,
-                    text: format_message(metadata, short_id),
+                    text,
                 });
             }
+            Ok(())
         };
-        add(get_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID).ok().flatten().and_then(number));
+        if let Some(value) =
+            get_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)?
+        {
+            add(value)?;
+        }
         for property in [
             EvtPublisherMetadataLevelMessageID,
             EvtPublisherMetadataTaskMessageID,
             EvtPublisherMetadataOpcodeMessageID,
             EvtPublisherMetadataKeywordMessageID,
         ] {
-            if let Ok(Some(value)) = get_publisher_variant(metadata, property) {
-                add(number(value));
+            if let Some(value) = get_publisher_variant(metadata, property)? {
+                add(value)?;
             }
         }
+        Ok(())
     }
 
     unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<BTreeMap<u32, String>, String> {
@@ -373,19 +393,19 @@ mod windows_capture {
         let mut names = BTreeMap::new();
         for index in 0..count {
             let index = u32::try_from(index).map_err(|_| "channel reference index overflow".to_string())?;
-            let channel_index = number(object_property(
+            let channel_id = number(object_property(
                 array_handle.0.0,
                 index,
-                EvtPublisherMetadataChannelReferenceIndex.0 as u32,
+                EvtPublisherMetadataChannelReferenceID.0 as u32,
             )?)
-            .ok_or_else(|| "channel reference index has an invalid type".to_string())?;
+            .ok_or_else(|| "channel reference ID has an invalid type".to_string())?;
             let path = string(object_property(
                 array_handle.0.0,
                 index,
                 EvtPublisherMetadataChannelReferencePath.0 as u32,
             )?)
             .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
-            names.insert(channel_index as u32, path);
+            names.insert(channel_id as u32, path);
         }
         Ok(names)
     }
@@ -402,9 +422,10 @@ mod windows_capture {
         };
         let channels = channel_names(metadata_handle)?;
         let mut messages = BTreeMap::new();
-        collect_messages(metadata_handle, &mut messages);
+        collect_messages(metadata_handle, &mut messages)?;
 
         for (array_property, name_property, value_property, message_property, target) in [
+            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelName, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
             (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskName, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
             (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
             (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
@@ -434,14 +455,16 @@ mod windows_capture {
                 let target_map = match target {
                     0 => &mut metadata.tasks,
                     1 => &mut metadata.opcodes,
-                    _ => &mut metadata.keywords,
+                    2 => &mut metadata.keywords,
+                    _ => &mut metadata.levels,
                 };
                 target_map.insert(value.to_string(), name);
                 if let Some(message_id) = message_id {
-                    messages.entry(message_id).or_insert_with(|| ProviderMessage {
+                    let text = format_message(metadata_handle, message_id as u32)?;
+                    messages.entry(message_id).or_insert(ProviderMessage {
                         raw_id: message_id,
                         short_id: message_id as u32,
-                        text: format_message(metadata_handle, message_id as u32),
+                        text,
                     });
                 }
             }
@@ -477,15 +500,19 @@ mod windows_capture {
                 .into_iter()
                 .collect();
             let template = optional_string(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
-            let description = optional_number(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
-                .and_then(|message_id| {
-                    messages.entry(message_id).or_insert_with(|| ProviderMessage {
-                        raw_id: message_id,
-                        short_id: message_id as u32,
-                        text: format_message(metadata_handle, message_id as u32),
-                    });
-                    messages.get(&message_id).and_then(|message| message.text.clone())
+            let description = if let Some(message_id) =
+                optional_number(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
+            {
+                let text = format_message(metadata_handle, message_id as u32)?;
+                messages.entry(message_id).or_insert(ProviderMessage {
+                    raw_id: message_id,
+                    short_id: message_id as u32,
+                    text,
                 });
+                messages.get(&message_id).and_then(|message| message.text.clone())
+            } else {
+                None
+            };
             metadata.events.push(ProviderEvent {
                 description,
                 id,
@@ -619,9 +646,17 @@ mod windows_tests {
     }
 
     #[test]
-    fn opcode_metadata_uses_low_word_for_lookup() {
-        assert_eq!(metadata_key_value(1, 0x0002_000B), 11);
+    fn opcode_metadata_uses_high_word_while_task_keeps_low_word() {
+        assert_eq!(metadata_key_value(1, 0x000B_0002), 11);
+        assert_eq!(metadata_key_value(0, 0x0000_0007), 7);
         assert_eq!(metadata_key_value(2, 0x8000_0000_0000_0001), 0x8000_0000_0000_0001);
+    }
+
+    #[test]
+    fn channel_resolution_uses_reference_id_not_array_position() {
+        let channels = BTreeMap::from([(7, "Admin".to_string()), (42, "Operational".to_string())]);
+        assert_eq!(resolve_channel_name(&channels, 42).as_deref(), Some("Operational"));
+        assert_eq!(resolve_channel_name(&channels, 1), None);
     }
 }
 
