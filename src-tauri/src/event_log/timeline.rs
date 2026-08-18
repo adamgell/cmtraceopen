@@ -30,35 +30,53 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
     }
 }
 fn missing_record_digest(record: &EvtxRecord) -> String {
-    let input = format!(
-        "{}|{}|{}|{}|{}",
-        record.timestamp_epoch, record.event_id, record.provider, record.message, record.raw_xml
-    );
     let mut first = 2_166_136_261_u32;
     let mut second = first ^ 0x9e37_79b9;
-    for byte in input.bytes() {
-        first = (first ^ u32::from(byte)).wrapping_mul(16_777_619);
-        second = (second ^ u32::from(byte ^ 0xa5)).wrapping_mul(16_777_619);
-    }
+    let mut feed = |bytes: &[u8]| {
+        for &byte in bytes {
+            first = (first ^ u32::from(byte)).wrapping_mul(16_777_619);
+            second = (second ^ u32::from(byte ^ 0xa5)).wrapping_mul(16_777_619);
+        }
+    };
+    feed(record.timestamp_epoch.to_string().as_bytes());
+    feed(b"|");
+    feed(record.event_id.to_string().as_bytes());
+    feed(b"|");
+    feed(record.provider.as_bytes());
+    feed(b"|");
+    feed(record.message.as_bytes());
+    feed(b"|");
+    feed(record.raw_xml.as_bytes());
     format!("{first:08x}{second:08x}")
 }
 
-fn stable_event_id(record: &EvtxRecord) -> String {
+ fn stable_event_id(record: &EvtxRecord) -> String {
+     stable_event_id_with_occurrence(record, 0)
+ }
+
+fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> String {
     let source = format!("source{}:{}", record.source_label.len(), record.source_label);
     let channel = format!("channel{}:{}", record.channel.len(), record.channel);
+    let machine = record.computer.trim();
+    let machine = format!("machine{}:{}", machine.len(), machine);
+    let identity = format!("{source}|{machine}|{channel}");
     if record.event_record_id != 0 {
-        return format!("{source}|{channel}|record{}", record.event_record_id);
+        return format!("{identity}|record{}", record.event_record_id);
     }
 
-    format!("{source}|{channel}|missing{}", missing_record_digest(record))
+    format!(
+        "{identity}|missing{}-{}",
+        missing_record_digest(record),
+        occurrence
+    )
 }
 
-fn origin_of(record: &EvtxRecord) -> TimelineOrigin {
+fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
     TimelineOrigin::Event {
-        stable_id: stable_event_id(record),
+        stable_id: stable_event_id_with_occurrence(record, occurrence),
         source: record.source_label.clone(),
         machine: machine_of(&record.computer),
-        bundle: bundle_from_source(&record.source_label),
+        bundle: None,
         channel: record.channel.clone(),
         provider: record.provider.clone(),
         process_id: record.process_id,
@@ -73,13 +91,19 @@ fn machine_of(value: &str) -> Option<String> {
     (!value.is_empty() && !value.eq_ignore_ascii_case("unknown")).then(|| value.to_string())
 }
 
-fn bundle_from_source(source: &str) -> Option<String> {
-    let first = source.split(['/', '\\']).next()?;
-    if first.is_empty() || first.ends_with(':') || !source.contains(['/', '\\']) {
-        None
-    } else {
-        Some(first.to_string())
+fn timestamp_is_present(record: &EvtxRecord) -> bool {
+    if record.timestamp_epoch != 0 {
+        return true;
     }
+    if record.timestamp.trim().is_empty() {
+        return false;
+    }
+    chrono::DateTime::parse_from_rfc3339(record.timestamp.trim()).is_ok()
+        || chrono::NaiveDateTime::parse_from_str(
+            record.timestamp.trim(),
+            "%Y-%m-%dT%H:%M:%S%.f",
+        )
+        .is_ok()
 }
 
 /// Extracts only the provider-declared correlation ActivityID; absence remains explicit.
@@ -100,16 +124,19 @@ fn extract_activity_id(xml: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// Converts one event, or reports why it has no position.
-///
-/// A record whose timestamp did not parse carries `timestamp_epoch == 0`, which is 1970 and not a
-/// time any Windows event was written. Treating it as a real position would drop the event at the
-/// far left of every timeline and imply it happened first.
-pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
-    if record.timestamp_epoch == 0 {
-        return Err(UnplacedItem {
-            origin: origin_of(record),
+ /// Converts one event, or reports why it has no position.
+ pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
+     from_event_with_occurrence(record, 0)
+ }
 
+fn from_event_with_occurrence(
+    record: &EvtxRecord,
+    occurrence: usize,
+) -> Result<TimelineItem, UnplacedItem> {
+    let origin = origin_of(record, occurrence);
+    if !timestamp_is_present(record) {
+        return Err(UnplacedItem {
+            origin,
             reason: UnplacedReason::MissingTimestamp,
         });
     }
@@ -118,18 +145,31 @@ pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
         timestamp_ms: record.timestamp_epoch,
         severity: severity_of(record.level),
         message: record.message.clone(),
-        origin: origin_of(record),
+        origin,
     })
 }
 
-fn ordered_records(records: &[EvtxRecord]) -> Vec<&EvtxRecord> {
+fn ordered_records(records: &[EvtxRecord]) -> Vec<(&EvtxRecord, usize)> {
     let mut ordered: Vec<_> = records.iter().collect();
     ordered.sort_by(|left, right| {
         left.timestamp_epoch
             .cmp(&right.timestamp_epoch)
             .then_with(|| stable_event_id(left).cmp(&stable_event_id(right)))
+            .then_with(|| left.timestamp.cmp(&right.timestamp))
+            .then_with(|| left.message.cmp(&right.message))
+            .then_with(|| left.raw_xml.cmp(&right.raw_xml))
     });
+    let mut occurrence_by_key = std::collections::HashMap::new();
     ordered
+        .into_iter()
+        .map(|record| {
+            let key = stable_event_id(record);
+            let occurrence = occurrence_by_key.entry(key).or_insert(0);
+            let current = *occurrence;
+            *occurrence += 1;
+            (record, current)
+        })
+        .collect()
 }
 
 /// Builds one timeline from parsed log entries and events.
@@ -143,10 +183,10 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
             Err(reason) => unplaced.push(reason),
         }
     }
-    for record in ordered_records(records) {
-        match from_event(record) {
+    for (record, occurrence) in ordered_records(records) {
+        match from_event_with_occurrence(record, occurrence) {
             Ok(item) => placed.push(item),
-            Err(reason) => unplaced.push(reason),
+            Err(item) => unplaced.push(item),
         }
     }
 
@@ -163,8 +203,24 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
             Err(item) => unplaced.push(item),
         }
     }
-    for record in ordered_records(records) {
-        match from_event(record) {
+    let mut existing_occurrences = std::collections::HashMap::new();
+    for origin in placed
+        .iter()
+        .map(|item| &item.origin)
+        .chain(unplaced.iter().map(|item| &item.origin))
+    {
+        if let TimelineOrigin::Event { stable_id, .. } = origin {
+            let base = stable_id
+                .rsplit_once('-')
+                .map(|(base, _)| base)
+                .unwrap_or(stable_id.as_str());
+            *existing_occurrences.entry(base.to_string()).or_insert(0usize) += 1;
+        }
+    }
+    for (record, occurrence) in ordered_records(records) {
+        let base = stable_event_id(record);
+        let offset = existing_occurrences.get(&base).copied().unwrap_or_default();
+        match from_event_with_occurrence(record, occurrence + offset) {
             Ok(item) => placed.push(item),
             Err(item) => unplaced.push(item),
         }
@@ -250,6 +306,16 @@ mod tests {
     }
 
     #[test]
+    fn epoch_zero_with_valid_timestamp_is_placed() {
+        let mut event = record(0, "epoch", EvtxLevel::Information);
+        event.timestamp = "1970-01-01T00:00:00.000Z".to_string();
+        let timeline = build(&[], &[event]);
+        assert_eq!(timeline.items.len(), 1);
+        assert!(timeline.unplaced.is_empty());
+        assert_eq!(timeline.items[0].timestamp_ms, 0);
+    }
+
+    #[test]
     fn an_unplaced_event_still_identifies_itself() {
         let timeline = build(&[], &[record(0, "undated", EvtxLevel::Error)]);
         match &timeline.unplaced[0].origin {
@@ -328,7 +394,7 @@ mod tests {
             } => {
                 assert_eq!(source, "bundle/evidence/events.evtx");
                 assert_eq!(machine.as_deref(), Some("HOST-A"));
-                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(bundle, &None);
                 assert_eq!(*process_id, Some(4321));
                 assert_eq!(activity_id.as_deref(), Some("{1234}"));
             }
@@ -342,7 +408,7 @@ mod tests {
         source.source_label = "Remote: HOST-B".to_string();
         source.computer = "HOST-B".to_string();
         let expected_stable = format!(
-            "source14:Remote: HOST-B|channel{}:{}|record1234",
+            "source14:Remote: HOST-B|machine6:HOST-B|channel{}:{}|record1234",
             source.channel.len(),
             source.channel
         );
@@ -388,9 +454,28 @@ mod tests {
 
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1]);
-        assert!(ids[0].starts_with("source5:a/b#c|channel5:d/e#f|missing"));
+        assert!(ids[0].starts_with("source5:a/b#c|machine11:TESTHOST-01|channel5:d/e#f|missing"));
         assert!(ids.iter().all(|id| id.len() < 128));
         assert!(ids.iter().all(|id| !id.contains("secret")));
+    }
+
+    #[test]
+    fn identical_missing_ids_get_deterministic_occurrence_suffixes() {
+        let mut event = record(1_000, "same", EvtxLevel::Information);
+        event.event_record_id = 0;
+        let timeline = build(&[], &[event.clone(), event]);
+        let ids: Vec<_> = timeline
+            .items
+            .iter()
+            .map(|item| match &item.origin {
+                TimelineOrigin::Event { stable_id, .. } => stable_id.clone(),
+                other => panic!("expected event origin, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(ids[0].ends_with("-0") || ids[0].ends_with("-1"));
+        assert!(ids[1].ends_with("-0") || ids[1].ends_with("-1"));
     }
 
     #[test]
@@ -425,13 +510,13 @@ mod tests {
             origins,
             vec![
                 (
-                    r"source33:C:\evidence\folder-a\capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
+                    r"source33:C:\evidence\folder-a\capture.evtx|machine6:HOST-A|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
                     r"C:\evidence\folder-a\capture.evtx".to_string(),
                     Some("HOST-A".to_string()),
                     1234,
                 ),
                 (
-                    r"source33:D:\evidence\folder-b\capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
+                    r"source33:D:\evidence\folder-b\capture.evtx|machine6:HOST-B|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234".to_string(),
                     r"D:\evidence\folder-b\capture.evtx".to_string(),
                     Some("HOST-B".to_string()),
                     1234,
@@ -482,8 +567,8 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "source4:Live|channel8:Security|record5678".to_string(),
-                "source4:Live|channel8:Security|record1234".to_string(),
+                "source4:Live|machine11:TESTHOST-01|channel8:Security|record5678".to_string(),
+                "source4:Live|machine11:TESTHOST-01|channel8:Security|record1234".to_string(),
             ]
         );
     }

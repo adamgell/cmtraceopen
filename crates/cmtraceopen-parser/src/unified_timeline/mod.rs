@@ -188,31 +188,19 @@ impl UnifiedTimeline {
     }
 }
 
-fn bundle_from_source(source: &str) -> Option<String> {
-    let first = source.split(['/', '\\']).next()?;
-    if first.is_empty() || first.ends_with(':') || !source.contains(['/', '\\']) {
-        None
-    } else {
-        Some(first.to_string())
-    }
-}
 
 /// Converts a parsed log entry, or reports why it cannot be placed.
 pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
     let file = entry.file_path.clone();
-    let source = entry
-        .source_file
-        .clone()
-        .unwrap_or_else(|| file.clone());
     let origin = TimelineOrigin::Log {
-        file,
+        file: file.clone(),
         component: entry.component.clone(),
         line: entry.line_number,
-        bundle: bundle_from_source(&source),
+        bundle: None,
         // LogEntry::host_name is DHCP client payload, not the machine that emitted the log.
         machine: None,
         record_id: entry.id,
-        source,
+        source: file,
     };
 
     match entry.timestamp {
@@ -573,9 +561,9 @@ mod tests {
                 record_id,
                 ..
             } => {
-                assert_eq!(source, "bundle/evidence/dhcp.log");
+                assert_eq!(source, "C:/logs/IntuneManagementExtension.log");
                 assert_eq!(machine, &None);
-                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(bundle, &None);
                 assert_eq!(*record_id, 99);
             }
             other => panic!("expected a log origin, got {other:?}"),
@@ -592,7 +580,7 @@ mod tests {
         match &timeline.items[0].origin {
             TimelineOrigin::Log { file, source, .. } => {
                 assert_eq!(file, "/logs/ccm.log");
-                assert_eq!(source, "store.cs:1");
+                assert_eq!(source, "/logs/ccm.log");
             }
             other => panic!("expected a log origin, got {other:?}"),
         }

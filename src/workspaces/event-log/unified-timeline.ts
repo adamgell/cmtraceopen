@@ -72,13 +72,31 @@ function missingRecordDigest(record: EvtxRecord): string {
   return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
 }
 
-function stableRecordIdentity(record: EvtxRecord): string {
+function eventIdentityPrefix(record: EvtxRecord): string {
   const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
+  const machineValue = record.computer?.trim() ?? "";
+  const machine = machineValue
+    ? `machine${utf8Encoder.encode(machineValue).length}:${machineValue}|`
+    : "";
   const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
+  return `${source}|${machine}${channel}`;
+}
+
+function stableRecordIdentity(record: EvtxRecord): string {
+  const prefix = eventIdentityPrefix(record);
   if (record.eventRecordId !== 0) {
-    return `${source}|${channel}|record${record.eventRecordId}`;
+    return Number.isSafeInteger(record.eventRecordId)
+      ? `${prefix}|record${record.eventRecordId}`
+      : `${prefix}|record`;
   }
-  return `${source}|${channel}|missing${missingRecordDigest(record)}`;
+  return `${prefix}|missing${missingRecordDigest(record)}-0`;
+}
+
+function matchesEventRecord(origin: Extract<TimelineOrigin, { kind: "event" }>, record: EvtxRecord): boolean {
+  if (record.eventRecordId === 0 || Number.isSafeInteger(record.eventRecordId)) {
+    return origin.stableId === stableRecordIdentity(record);
+  }
+  return origin.stableId.startsWith(`${eventIdentityPrefix(record)}|record`);
 }
 
 /**
@@ -91,9 +109,9 @@ export function filterTimelineToRecords(
   timeline: UnifiedTimeline,
   records: EvtxRecord[]
 ): UnifiedTimeline {
-  const visibleKeys = new Set(records.map(stableRecordIdentity));
   const keep = (origin: TimelineOrigin) =>
-    origin.kind === "log" || visibleKeys.has(origin.stableId);
+    origin.kind === "log" ||
+    records.some((record) => origin.kind === "event" && matchesEventRecord(origin, record));
   return {
     items: timeline.items.filter((item) => keep(item.origin)),
     unplaced: timeline.unplaced.filter((item) => keep(item.origin)),

@@ -199,4 +199,25 @@ describe("filterTimelineToRecords", () => {
     expect(filtered.items.map((item) => item.message)).toEqual(["visible"]);
     expect(filtered.unplaced).toHaveLength(1);
   });
+
+  it("keeps an unsafe numeric EventRecordID by its backend stable identity", () => {
+    const unsafeOrigin: TimelineOrigin = {
+      ...eventOrigin,
+      stableId: "source4:Live|machine4:HOST|channel8:Security|record9007199254740993",
+      machine: "HOST",
+      channel: "Security",
+      recordId: Number.MAX_SAFE_INTEGER + 2,
+    };
+    const unsafeRecord = {
+      sourceLabel: "Live",
+      computer: "HOST",
+      channel: "Security",
+      eventRecordId: Number.MAX_SAFE_INTEGER + 2,
+    } as EvtxRecord;
+    const filtered = filterTimelineToRecords(
+      timeline({ items: [{ timestampMs: 1, severity: "info", message: "unsafe", origin: unsafeOrigin }] }),
+      [unsafeRecord]
+    );
+    expect(filtered.items.map((item) => item.message)).toEqual(["unsafe"]);
+  });
 });

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
 import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
+import { useLogStore } from "../../stores/log-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
@@ -20,6 +21,7 @@ const MAX_DETAIL_RATIO = 0.7;
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const logEntries = useLogStore((s) => s.entries);
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const filterLevels = useEvtxStore((s) => s.filterLevels);
@@ -81,7 +83,7 @@ export function EventLogWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    if (records.length === 0) {
+    if (records.length === 0 && logEntries.length === 0) {
       setTimeline({ items: [], unplaced: [] });
       setTimelineError(null);
       return () => {
@@ -89,7 +91,7 @@ export function EventLogWorkspace() {
       };
     }
 
-    void buildUnifiedTimeline(records)
+    void buildUnifiedTimeline(records, logEntries)
       .then((nextTimeline) => {
         if (cancelled) return;
         setTimeline(nextTimeline);
@@ -105,9 +107,10 @@ export function EventLogWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [records]);
+  }, [logEntries, records]);
 
-  const hasData = sourceMode !== null && (records.length > 0 || channels.length > 0);
+  const hasData =
+    logEntries.length > 0 || (sourceMode !== null && (records.length > 0 || channels.length > 0));
 
   if (!hasData && !isLoading) {
     return <SourcePicker />;
