@@ -324,6 +324,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             [...checked.errorMessages, ...streamedGaps, ...shortfallGaps]
           );
         } catch (e) {
+          if (get().loadGeneration !== generation) return;
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
           if (!loadError) loadError = `${ch}: ${msg}`;
