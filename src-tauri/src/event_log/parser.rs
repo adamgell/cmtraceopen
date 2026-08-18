@@ -184,11 +184,6 @@ fn expand_wildcard(
     coverage: &mut Vec<SourceCoverage>,
     inspected_work: &mut usize,
 ) -> Vec<PathBuf> {
-    let options = glob::MatchOptions {
-        case_sensitive: false,
-        require_literal_separator: false,
-        require_literal_leading_dot: false,
-    };
     if pattern.matches('[').count() != pattern.matches(']').count() {
         coverage.push(SourceCoverage::InvalidPattern {
             path: pattern.to_string(),
@@ -196,8 +191,8 @@ fn expand_wildcard(
         });
         return Vec::new();
     }
-    let matches = match glob::glob_with(pattern, options) {
-        Ok(matches) => matches,
+    let matcher = match glob::Pattern::new(&pattern.to_lowercase()) {
+        Ok(matcher) => matcher,
         Err(error) => {
             coverage.push(SourceCoverage::InvalidPattern {
                 path: pattern.to_string(),
@@ -206,42 +201,140 @@ fn expand_wildcard(
             return Vec::new();
         }
     };
-    let mut paths = Vec::new();
-    for result in matches {
-        *inspected_work = inspected_work.saturating_add(1);
-        if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
-            if !coverage
-                .iter()
-                .any(|item| matches!(item, SourceCoverage::LimitReached { .. }))
-            {
-                coverage.push(SourceCoverage::LimitReached {
-                    path: pattern.to_string(),
-                    reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
-                });
-            }
+    let mut root = PathBuf::new();
+    for component in Path::new(pattern).components() {
+        let component = component.as_os_str().to_string_lossy();
+        if component.contains('*') || component.contains('?') || component.contains('[') {
             break;
         }
-        match result {
-            Ok(path) => paths.push(path),
-            Err(error) => {
-                let error_path = error.path().to_string_lossy().to_string();
-                let io_error = error.into_error();
-                if io_error.kind() == std::io::ErrorKind::PermissionDenied {
-                    coverage.push(SourceCoverage::AccessDenied {
-                        path: error_path,
-                        reason: format!("wildcard entry access was denied: {io_error}"),
-                    });
-                } else {
-                    coverage.push(SourceCoverage::Missing {
-                        path: error_path,
-                        reason: format!("wildcard entry could not be read: {io_error}"),
-                    });
-                }
-            }
+        root.push(component.as_ref());
+    }
+    if root.as_os_str().is_empty() {
+        root.push(".");
+    }
+    let recursive = pattern.contains("**");
+    if let Ok(metadata) = fs::symlink_metadata(&root) {
+        if is_reparse_or_symlink(&metadata) {
+            coverage.push(SourceCoverage::Unsupported {
+                path: root.to_string_lossy().to_string(),
+                reason: "symbolic links and reparse points are not followed during wildcard expansion"
+                    .to_string(),
+            });
+            return Vec::new();
         }
     }
+    let mut paths = Vec::new();
+    collect_wildcard_dir(
+        &root,
+        &matcher,
+        recursive,
+        0,
+        coverage,
+        inspected_work,
+        &mut paths,
+    );
     paths.sort_by(|left, right| normalize_source_path(left).cmp(&normalize_source_path(right)));
     paths
+}
+fn collect_wildcard_dir(
+    directory: &Path,
+    matcher: &glob::Pattern,
+    recursive: bool,
+    depth: usize,
+    coverage: &mut Vec<SourceCoverage>,
+    inspected_work: &mut usize,
+    paths: &mut Vec<PathBuf>,
+) {
+    if depth >= MAX_SOURCE_MANIFEST_DEPTH {
+        coverage.push(SourceCoverage::LimitReached {
+            path: directory.to_string_lossy().to_string(),
+            reason: format!("wildcard nesting exceeds {MAX_SOURCE_MANIFEST_DEPTH} levels"),
+        });
+        return;
+    }
+    let read_dir = match fs::read_dir(directory) {
+        Ok(read_dir) => read_dir,
+        Err(error) => {
+            let path = directory.to_string_lossy().to_string();
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                coverage.push(SourceCoverage::AccessDenied { path, reason: error.to_string() });
+            } else {
+                coverage.push(SourceCoverage::Missing { path, reason: error.to_string() });
+            }
+            return;
+        }
+    };
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(error) => coverage.push(SourceCoverage::Missing {
+                path: directory.to_string_lossy().to_string(),
+                reason: format!("wildcard child could not be read: {error}"),
+            }),
+        }
+        if entries.len() > MAX_SOURCE_MANIFEST_ENTRIES {
+            coverage.push(SourceCoverage::LimitReached {
+                path: directory.to_string_lossy().to_string(),
+                reason: format!("wildcard directory exceeds the {} entry limit", MAX_SOURCE_MANIFEST_ENTRIES),
+            });
+            break;
+        }
+    }
+    entries.sort_by_cached_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+    for entry in entries {
+        *inspected_work = inspected_work.saturating_add(1);
+        if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
+            coverage.push(SourceCoverage::LimitReached {
+                path: directory.to_string_lossy().to_string(),
+                reason: format!("source expansion work exceeds {MAX_SOURCE_MANIFEST_WORK}"),
+            });
+            return;
+        }
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                coverage.push(SourceCoverage::Missing {
+                    path: path.to_string_lossy().to_string(),
+                    reason: error.to_string(),
+                });
+                continue;
+            }
+        };
+        if is_reparse_or_symlink(&metadata) {
+            coverage.push(SourceCoverage::Unsupported {
+                path: path.to_string_lossy().to_string(),
+                reason: "symbolic links and reparse points are not followed during wildcard expansion"
+                    .to_string(),
+            });
+            continue;
+        }
+        if matcher.matches_path(Path::new(&path.to_string_lossy().to_lowercase())) {
+            paths.push(path.clone());
+            if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+                coverage.push(SourceCoverage::LimitReached {
+                    path: directory.to_string_lossy().to_string(),
+                    reason: format!(
+                        "wildcard matches exceed the {} file manifest limit",
+                        MAX_SOURCE_MANIFEST_ENTRIES
+                    ),
+                });
+                return;
+            }
+        }
+        if recursive && metadata.is_dir() {
+            collect_wildcard_dir(
+                &path,
+                matcher,
+                recursive,
+                depth + 1,
+                coverage,
+                inspected_work,
+                paths,
+            );
+        }
+    }
 }
 fn expand_path(
     path: &Path,
@@ -402,7 +495,11 @@ fn expand_path(
             }
             expand_path(
                 Path::new(&entry.path),
-                EventLogSourceKind::Folder,
+                if matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss) {
+                    requested_kind
+                } else {
+                    EventLogSourceKind::Folder
+                },
                 depth + 1,
                 inspected_work,
                 manifest,
