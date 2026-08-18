@@ -15,7 +15,13 @@ import { EVTX_TIME_WINDOW_MS } from "./types";
 
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
-import type { EvtxGroupField } from "./evtx-filter";
+import {
+  DEFAULT_QUICK_FILTER,
+  parseEventIdSelectors,
+  type EvtxEventIdSelector,
+  type EvtxGroupField,
+  type EvtxQuickFilter,
+} from "./evtx-filter";
 import {
   defaultColumnConfig,
   moveColumn,
@@ -25,21 +31,43 @@ import {
   type EvtxColumnId,
 } from "./evtx-columns";
 
-/**
- * Builds the filter handed to the backend, which compiles it to XPath.
- *
- * Only the time window is pushed down today. Level and provider stay client-side because the
- * existing controls filter records already in memory; moving them server-side changes what a
- * reload fetches, which is a behavioural change worth making deliberately rather than implicitly.
- */
-function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
-  if (timeWindow === "all") return {};
-  return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
-}
-
+type ServerFilter = EventQueryFilterSubset & {
+  eventIds?: EvtxEventIdSelector[];
+  eventIdMode?: "include";
+};
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
+
+
+/**
+ * Builds the filter handed to the backend, which compiles it to XPath.
+ *
+ * Only criteria with an exact XPath equivalent are pushed down. Text, case sensitivity, visible
+ * column scope and hide mode stay local; sending an approximation would silently broaden or narrow
+ * the query compared with the rows the operator sees.
+ */
+function buildServerFilter(
+  timeWindow: EvtxTimeWindow,
+  filterEventIds: string,
+  filterLevels: Set<EvtxLevel>
+): ServerFilter {
+  const filter: ServerFilter =
+    timeWindow === "all"
+      ? {}
+      : { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
+
+  const parsedIds = parseEventIdSelectors(filterEventIds);
+  if (parsedIds.selectors.length > 0 && !parsedIds.invalid) {
+    filter.eventIds = parsedIds.selectors;
+    filter.eventIdMode = "include";
+  }
+
+  if (filterLevels.size > 0 && filterLevels.size < ALL_LEVELS.length) {
+    filter.levels = [...filterLevels].map((level) => ALL_LEVELS.indexOf(level) + 1);
+  }
+  return filter;
+}
 
 const ALL_LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -66,13 +94,10 @@ interface EvtxState {
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
   filterSearch: string;
+  /** The on-load and after-load quick criteria are retained across every refetch. */
+  quickFilter: EvtxQuickFilter;
   timeWindow: EvtxTimeWindow;
-  /**
-   * Which clock event times are shown in.
-   *
-   * Defaults to local, which is the clock an admin comparing against a user's report is thinking
-   * in. UTC is one click away because that is the clock every other log in an escalation is in.
-   */
+  /** Which clock event times are shown in. */
   timeZoneMode: EvtxTimeZoneMode;
   columnConfig: EvtxColumnConfig;
   groupBy: EvtxGroupField[];
@@ -95,6 +120,7 @@ interface EvtxState {
   toggleFilterLevel: (level: EvtxLevel) => void;
   setFilterEventIds: (eventIds: string) => void;
   setFilterSearch: (search: string) => void;
+  setQuickFilter: (filter: EvtxQuickFilter) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
   toggleColumnVisible: (id: EvtxColumnId) => void;
@@ -140,6 +166,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
+  quickFilter: { ...DEFAULT_QUICK_FILTER },
   timeZoneMode: "local" as EvtxTimeZoneMode,
   timeWindow: "24h",
   columnConfig: defaultColumnConfig(),
@@ -227,7 +254,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: null,
-            filter: buildServerFilter(get().timeWindow),
+            filter: buildServerFilter(
+              get().timeWindow,
+              get().filterEventIds,
+              get().filterLevels
+            ),
           });
           const checked = assertParseResultShape(result);
           const streamed = drainStreamedRecords(ch);
@@ -292,7 +323,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: maxEvents ?? null,
-            filter: buildServerFilter(get().timeWindow),
+            filter: buildServerFilter(
+              get().timeWindow,
+              get().filterEventIds,
+              get().filterLevels
+            ),
           });
           return { channel: ch, result, error: null as string | null };
         } catch (e) {
@@ -426,7 +461,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // Omitting it here made the time-window control a no-op: selecting 1h triggered this
           // refresh, which then fetched the channel unbounded and replaced the view with events
           // outside the window the toolbar was still showing as selected.
-          filter: buildServerFilter(get().timeWindow),
+          filter: buildServerFilter(
+            get().timeWindow,
+            get().filterEventIds,
+            get().filterLevels
+          ),
         });
         const checked = assertParseResultShape(result);
         const streamed = drainStreamedRecords(ch);
@@ -527,6 +566,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
   setFilterEventIds: (eventIds) => set({ filterEventIds: eventIds }),
   setFilterSearch: (search) => set({ filterSearch: search }),
+  setQuickFilter: (filter) => set({ quickFilter: { ...filter } }),
   setTimeWindow: (window) => set({ timeWindow: window }),
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
@@ -559,9 +599,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadingProgress: null,
       loadStartTime: null,
       loadElapsedMs: null,
-      filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
+      quickFilter: { ...DEFAULT_QUICK_FILTER },
       timeWindow: "24h",
       // Reset with everything else. Gaps describe records that are gone, so surviving a reset
       // would report a hole in a set no longer on screen, and a zone left over from a previous

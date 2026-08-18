@@ -5,14 +5,135 @@
  * Importing the store from a test fires that subscription, so anything worth unit-testing lives
  * here where it can be imported without a Tauri runtime.
  */
-import type { EvtxLevel, EvtxRecord } from "./types";
+import {
+  EVTX_TIME_WINDOW_MS,
+  type EvtxLevel,
+  type EvtxRecord,
+  type EvtxTimeWindow,
+} from "./types";
+import {
+  availableColumns,
+  columnValue,
+  discoverMappedProperties,
+  type EvtxColumnId,
+} from "./evtx-columns";
 import { eventDateKey, type EvtxTimeZoneMode } from "./evtx-time";
+
+/** The six quick-filter grammars supported by the event viewer. */
+export type EvtxQuickFilterMode =
+  | "oneString"
+  | "multipleWords"
+  | "multipleStrings"
+  | "allWords"
+  | "allStrings"
+  | "eventIds";
+
+/** Which rendered event columns a quick filter searches. */
+export type EvtxQuickFilterScope = "allColumns" | "visibleColumns";
+
+/** Whether matching records are retained or removed. */
+export type EvtxQuickFilterAction = "show" | "hide";
+
+/** Interactive filter state shared by local evaluation, persistence, and the UI. */
+export interface EvtxQuickFilter {
+  mode: EvtxQuickFilterMode;
+  query: string;
+  scope: EvtxQuickFilterScope;
+  action: EvtxQuickFilterAction;
+  caseSensitive: boolean;
+  /** The next triage lane consumes this flag when it renders match highlights. */
+  highlight: boolean;
+}
+
+
+export const DEFAULT_QUICK_FILTER: EvtxQuickFilter = {
+  mode: "oneString",
+  query: "",
+  scope: "allColumns",
+  action: "show",
+  caseSensitive: false,
+  highlight: true,
+};
+/** Tests the same inclusive lower boundary used by the server's `timediff <=` XPath predicate. */
+export function isWithinTimeWindow(
+  timestampEpoch: number,
+  window: EvtxTimeWindow,
+  nowEpoch = Date.now()
+): boolean {
+  if (window === "all") return true;
+  return timestampEpoch >= nowEpoch - EVTX_TIME_WINDOW_MS[window];
+}
 
 /**
  * Parses the Event ID filter box into a set, or null when it constrains nothing.
  *
  * Accepts comma or space separated ids and inclusive `low-high` ranges, matching what operators
  * expect from the incumbent tools.
+ */
+export interface EvtxEventIdSelector {
+  kind: "single" | "range";
+  id?: number;
+  low?: number;
+  high?: number;
+}
+
+export interface EvtxEventIdSelectorParseResult {
+  selectors: EvtxEventIdSelector[];
+  invalid: boolean;
+}
+
+/** Parses IDs without expanding ranges, for the server-side XPath contract. */
+export function parseEventIdSelectors(raw: string): EvtxEventIdSelectorParseResult {
+  const trimmed = raw.trim();
+  if (!trimmed) return { selectors: [], invalid: false };
+  const selectors: EvtxEventIdSelector[] = [];
+  let invalid = false;
+  for (const token of trimmed.split(/[\s,]+/).filter(Boolean)) {
+    const range = token.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const low = Number(range[1]);
+      const high = Number(range[2]);
+      if (
+        !Number.isSafeInteger(low) ||
+        !Number.isSafeInteger(high) ||
+        low > MAX_EVENT_ID ||
+        high > MAX_EVENT_ID
+      ) {
+        invalid = true;
+        continue;
+      }
+      selectors.push({
+        kind: "range",
+        low: Math.min(low, high),
+        high: Math.max(low, high),
+      });
+      continue;
+    }
+    if (!/^\d+$/.test(token)) {
+      invalid = true;
+      continue;
+    }
+    const id = Number(token);
+    if (!Number.isSafeInteger(id) || id > MAX_EVENT_ID) {
+      invalid = true;
+      continue;
+    }
+    selectors.push({ kind: "single", id });
+  }
+  return { selectors, invalid };
+}
+
+
+/**
+ * Largest value a Windows Event ID can hold.
+ *
+ * The field is 16 bits, so nothing above this can match an event and expanding past it only costs
+ * time. Used to bound range expansion rather than to reject input: an operator mid-way through
+ * typing a number should see no result, not an error.
+ */
+const MAX_EVENT_ID = 65535;
+/**
+ * Parses the Event ID filter box into a set, or null when it constrains nothing.
  */
 export function parseEventIdFilter(raw: string): Set<number> | null {
   const trimmed = raw.trim();
@@ -24,27 +145,16 @@ export function parseEventIdFilter(raw: string): Set<number> | null {
       const low = Number(range[1]);
       const high = Number(range[2]);
       const [from, to] = low <= high ? [low, high] : [high, low];
-      // Clamped to the range an Event ID can actually occupy. This runs on every keystroke, so
-      // "4624-46240000" typed halfway would otherwise build a set of tens of millions on the UI
-      // thread and freeze the tab before the operator finished the number.
       if (from > MAX_EVENT_ID) continue;
       for (let id = from; id <= Math.min(to, MAX_EVENT_ID); id += 1) ids.add(id);
       continue;
     }
+    if (!/^\d+$/.test(token)) continue;
     const single = Number(token);
-    if (Number.isInteger(single)) ids.add(single);
+    if (Number.isSafeInteger(single) && single <= MAX_EVENT_ID) ids.add(single);
   }
   return ids.size > 0 ? ids : null;
 }
-
-/**
- * Largest value a Windows Event ID can hold.
- *
- * The field is 16 bits, so nothing above this can match an event and expanding past it only costs
- * time. Used to bound range expansion rather than to reject input: an operator mid-way through
- * typing a number should see no result, not an error.
- */
-const MAX_EVENT_ID = 65535;
 
 /** The subset of store state that decides which records are on screen. */
 export interface VisibleRecordsInput {
@@ -53,6 +163,114 @@ export interface VisibleRecordsInput {
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
   filterSearch: string;
+  quickFilter?: EvtxQuickFilter;
+  /** The ordered column ids currently shown by the grid. */
+  visibleColumns?: readonly EvtxColumnId[];
+}
+
+function normalizeText(value: string, caseSensitive: boolean): string {
+  return caseSensitive ? value : value.toLocaleLowerCase();
+}
+
+function queryParts(query: string, separator: RegExp, caseSensitive: boolean): string[] {
+  return query
+    .split(separator)
+    .map((part) => normalizeText(part.trim(), caseSensitive))
+    .filter(Boolean);
+}
+
+function searchableValues(
+  record: EvtxRecord,
+  scope: EvtxQuickFilterScope,
+  visibleColumns: readonly EvtxColumnId[] | undefined,
+  caseSensitive: boolean
+): string[] {
+  const columns =
+    scope === "visibleColumns" && visibleColumns
+      ? visibleColumns
+      : availableColumns(discoverMappedProperties([record])).map((column) => column.id);
+  const values = columns.map((id) => columnValue(record, id));
+  // EventData is the source for mapped/inserted values when no map column exists. It is included in
+  // all-columns mode, but never leaks into visible-column matching unless a rendered column carries
+  // it.
+  if (scope === "allColumns") {
+    values.push(...record.eventData.map((field) => field.value));
+  }
+  return values.map((value) => normalizeText(value, caseSensitive)).filter(Boolean);
+}
+
+/** True when a record's quick-filter grammar matches at least one searched value. */
+export function matchesQuickFilter(
+  record: EvtxRecord,
+  quickFilter: EvtxQuickFilter,
+  visibleColumns?: readonly EvtxColumnId[]
+): boolean {
+  const query = quickFilter.query.trim();
+  if (!query) return false;
+
+  if (quickFilter.mode === "eventIds") {
+    const parsed = parseEventIdSelectors(query);
+    if (parsed.invalid || parsed.selectors.length === 0) return false;
+    const ids = parseEventIdFilter(query);
+    return ids !== null && ids.has(record.eventId);
+  }
+
+  const values = searchableValues(
+    record,
+    quickFilter.scope,
+    visibleColumns,
+    quickFilter.caseSensitive
+  );
+  const normalizedQuery = normalizeText(query, quickFilter.caseSensitive);
+  const contains = (term: string) => values.some((value) => value.includes(term));
+
+  switch (quickFilter.mode) {
+    case "oneString":
+      return contains(normalizedQuery);
+    case "multipleWords": {
+      const words = queryParts(query, /\s+/, quickFilter.caseSensitive);
+      return words.some(contains);
+    }
+    case "multipleStrings": {
+      const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
+      return strings.some(contains);
+    }
+    case "allWords": {
+      const words = queryParts(query, /\s+/, quickFilter.caseSensitive);
+      return words.every(contains);
+    }
+    case "allStrings": {
+      const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
+      return strings.every(contains);
+    }
+  }
+}
+
+/** A record's final visibility after all filter stages have been evaluated. */
+export function recordMatchesVisibleFilter(
+  record: EvtxRecord,
+  input: Pick<VisibleRecordsInput, "filterEventIds" | "filterSearch" | "filterLevels" | "selectedChannels"> & {
+    quickFilter?: EvtxQuickFilter;
+    visibleColumns?: readonly EvtxColumnId[];
+  }
+): boolean {
+  if (!input.selectedChannels.has(record.channel)) return false;
+  if (!input.filterLevels.has(record.level)) return false;
+  const eventIdSet = parseEventIdFilter(input.filterEventIds);
+  if (eventIdSet && !eventIdSet.has(record.eventId)) return false;
+  const search = input.filterSearch.trim().toLocaleLowerCase();
+  if (
+    search &&
+    !record.message.toLocaleLowerCase().includes(search) &&
+    !record.provider.toLocaleLowerCase().includes(search)
+  ) {
+    return false;
+  }
+
+  const quickFilter = input.quickFilter;
+  if (!quickFilter || !quickFilter.query.trim()) return true;
+  const matched = matchesQuickFilter(record, quickFilter, input.visibleColumns);
+  return quickFilter.action === "hide" ? !matched : matched;
 }
 
 /**
@@ -63,21 +281,7 @@ export interface VisibleRecordsInput {
  * worse than no export at all.
  */
 export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
-  const eventIdSet = parseEventIdFilter(input.filterEventIds);
-  const search = input.filterSearch.trim().toLowerCase();
-  return input.records.filter((r) => {
-    if (!input.selectedChannels.has(r.channel)) return false;
-    if (!input.filterLevels.has(r.level)) return false;
-    if (eventIdSet && !eventIdSet.has(r.eventId)) return false;
-    if (
-      search &&
-      !r.message.toLowerCase().includes(search) &&
-      !r.provider.toLowerCase().includes(search)
-    ) {
-      return false;
-    }
-    return true;
-  });
+  return input.records.filter((record) => recordMatchesVisibleFilter(record, input));
 }
 
 /** A field the event list can group by. */

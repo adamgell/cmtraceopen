@@ -23,6 +23,31 @@ describe("useSavedFilterStore", () => {
     expect(saved.lastUsed).not.toBeNull();
     expect(useSavedFilterStore.getState().savedFilters).toHaveLength(1);
   });
+  it("persists every quick-filter mode and grouping criterion", () => {
+    const saved = useSavedFilterStore.getState().save(
+      "Triage",
+      sanitizeCriteria({
+        groupBy: ["provider", "eventId"],
+        quickFilter: {
+          mode: "allStrings",
+          query: "boot,failed",
+          scope: "visibleColumns",
+          action: "hide",
+          caseSensitive: true,
+          highlight: false,
+        },
+      })
+    );
+    expect(saved?.criteria.groupBy).toEqual(["provider", "eventId"]);
+    expect(saved?.criteria.quickFilter).toEqual({
+      mode: "allStrings",
+      query: "boot,failed",
+      scope: "visibleColumns",
+      action: "hide",
+      caseSensitive: true,
+      highlight: false,
+    });
+  });
 
   it("saving under an existing name updates rather than duplicating", () => {
     const first = saveNamed("Boot");

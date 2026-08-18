@@ -384,7 +384,15 @@ describe("the time window reaches the service", () => {
   });
 
   const filterOf = (call: number) =>
-    (invoke.mock.calls[call]?.[1] as { filter?: { time?: { milliseconds: number } } })?.filter;
+    (
+      invoke.mock.calls[call]?.[1] as {
+        filter?: {
+          time?: { milliseconds: number };
+          eventIds?: unknown[];
+          levels?: number[];
+        };
+      }
+    )?.filter;
 
   it("sends the selected window when a channel is queried", () => {
     invoke.mockResolvedValueOnce(result("Application", []));
@@ -416,6 +424,43 @@ describe("the time window reaches the service", () => {
 
     expect(filterOf(0)?.time).toBeUndefined();
   });
+  it("pushes only valid Event ID ranges into the before-load query", async () => {
+    useEvtxStore.setState({ filterEventIds: "4624-4626" });
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(filterOf(0)?.eventIds).toEqual([
+      { kind: "range", low: 4624, high: 4626 },
+    ]);
+  });
+
+  it("pushes selected levels into the before-load query", async () => {
+    useEvtxStore.setState({ filterLevels: new Set(["Error", "Warning"]) });
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    expect(filterOf(0)?.levels).toEqual([2, 3]);
+  });
+
+  it("keeps on-load quick-filter state when a time-window refresh refetches", async () => {
+    const quickFilter = {
+      mode: "allWords" as const,
+      query: "boot failed",
+      scope: "visibleColumns" as const,
+      action: "hide" as const,
+      caseSensitive: true,
+      highlight: true,
+    };
+    useEvtxStore.setState({ quickFilter, timeWindow: "1h" });
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    invoke.mockResolvedValueOnce(result("Application", []));
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    expect(useEvtxStore.getState().quickFilter).toEqual(quickFilter);
+  });
+
 
   it("drops a non-string gap the reader sent rather than rendering it", () => {
     // The guard normalizes, but only if callers use what it returns. Ignoring the return value

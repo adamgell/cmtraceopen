@@ -8,7 +8,7 @@ import {
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
-  parseEventIdFilter,
+  recordMatchesVisibleFilter,
   buildGroupedRows,
   type EvtxRow,
 } from "./evtx-filter";
@@ -57,6 +57,7 @@ export function EvtxTimeline() {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const groupBy = useEvtxStore((s) => s.groupBy);
@@ -74,28 +75,28 @@ export function EvtxTimeline() {
   );
 
   const rowEstimate = metrics.rowHeight + 2;
-
-  const eventIdSet = useMemo(
-    () => parseEventIdFilter(filterEventIds),
-    [filterEventIds]
+  const filteredRecords = useMemo(
+    () =>
+      records.filter((record) =>
+        recordMatchesVisibleFilter(record, {
+          selectedChannels,
+          filterLevels,
+          filterEventIds,
+          filterSearch,
+          quickFilter,
+          visibleColumns: columnConfig.order,
+        })
+      ),
+    [
+      records,
+      selectedChannels,
+      filterLevels,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      columnConfig.order,
+    ]
   );
-
-  const searchLower = useMemo(
-    () => filterSearch.trim().toLowerCase(),
-    [filterSearch]
-  );
-
-  const filteredRecords = useMemo(() => {
-    return records.filter((r) => {
-      if (!selectedChannels.has(r.channel)) return false;
-      if (!filterLevels.has(r.level)) return false;
-      if (eventIdSet && !eventIdSet.has(r.eventId)) return false;
-      if (searchLower && !r.message.toLowerCase().includes(searchLower) && !r.provider.toLowerCase().includes(searchLower)) {
-        return false;
-      }
-      return true;
-    });
-  }, [records, selectedChannels, filterLevels, eventIdSet, searchLower]);
 
   const sortedRecords = useMemo(() => {
     return [...filteredRecords].sort((a, b) =>

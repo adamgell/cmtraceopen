@@ -31,10 +31,26 @@ describe("sanitizeCriteria", () => {
       search: "logon",
       timeWindow: "7d",
       groupBy: ["level", "provider"],
+      quickFilter: {
+        mode: "allWords",
+        query: "boot failed",
+        scope: "visibleColumns",
+        action: "hide",
+        caseSensitive: true,
+        highlight: false,
+      },
     });
     expect(criteria.levels).toEqual(["Error", "Warning"]);
     expect(criteria.timeWindow).toBe("7d");
     expect(criteria.groupBy).toEqual(["level", "provider"]);
+    expect(criteria.quickFilter).toEqual({
+      mode: "allWords",
+      query: "boot failed",
+      scope: "visibleColumns",
+      action: "hide",
+      caseSensitive: true,
+      highlight: false,
+    });
   });
 
   it("drops unrecognised levels and group fields rather than trusting the file", () => {

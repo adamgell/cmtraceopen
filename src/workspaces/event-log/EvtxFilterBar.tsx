@@ -1,8 +1,22 @@
 import { useMemo, useState } from "react";
-import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
+import {
+  Button,
+  Checkbox,
+  Dropdown,
+  Input,
+  Option,
+  tokens,
+} from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
+import {
+  selectVisibleRecords,
+  EVTX_GROUP_LABELS,
+  type EvtxGroupField,
+  type EvtxQuickFilterMode,
+  type EvtxQuickFilterScope,
+  type EvtxQuickFilterAction,
+} from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -59,6 +73,31 @@ const SORT_FIELD_LABELS: Record<EvtxSortField, string> = {
 
 const SORT_FIELDS: EvtxSortField[] = ["time", "eventId", "level", "provider", "channel"];
 
+const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
+  oneString: "One string",
+  multipleWords: "Any words",
+  multipleStrings: "Any strings",
+  allWords: "All words",
+  allStrings: "All strings",
+  eventIds: "Event IDs",
+};
+const QUICK_FILTER_MODES: EvtxQuickFilterMode[] = [
+  "oneString",
+  "multipleWords",
+  "multipleStrings",
+  "allWords",
+  "allStrings",
+  "eventIds",
+];
+const QUICK_FILTER_SCOPE_LABELS: Record<EvtxQuickFilterScope, string> = {
+  allColumns: "All columns",
+  visibleColumns: "Visible columns",
+};
+const QUICK_FILTER_ACTION_LABELS: Record<EvtxQuickFilterAction, string> = {
+  show: "Show matches",
+  hide: "Hide matches",
+};
+
 export function EvtxFilterBar() {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const toggleFilterLevel = useEvtxStore((s) => s.toggleFilterLevel);
@@ -66,6 +105,8 @@ export function EvtxFilterBar() {
   const setFilterEventIds = useEvtxStore((s) => s.setFilterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
+  const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const setSortField = useEvtxStore((s) => s.setSortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
@@ -129,6 +170,7 @@ export function EvtxFilterBar() {
         search: state.filterSearch,
         timeWindow: state.timeWindow,
         groupBy: state.groupBy,
+        quickFilter: state.quickFilter,
       })
     );
     setPendingName(null);
@@ -142,6 +184,7 @@ export function EvtxFilterBar() {
     setFilterLevels(new Set(criteria.levels));
     setFilterEventIds(criteria.eventIds);
     setFilterSearch(criteria.search);
+    setQuickFilter(criteria.quickFilter);
     setGroupBy(criteria.groupBy);
     // The time window is a server-side predicate, so applying it has to refetch.
     if (criteria.timeWindow !== useEvtxStore.getState().timeWindow) {
@@ -154,7 +197,11 @@ export function EvtxFilterBar() {
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
   const exportVisible = async (format: (typeof EXPORT_FORMATS)[number]) => {
-    const records = selectVisibleRecords(useEvtxStore.getState());
+    const state = useEvtxStore.getState();
+    const records = selectVisibleRecords({
+      ...state,
+      visibleColumns: state.columnConfig.order,
+    });
     if (records.length === 0) {
       setExportState("Nothing to export");
       return;
@@ -473,6 +520,91 @@ export function EvtxFilterBar() {
           {exportState}
         </span>
       )}
+
+      <Input
+        value={quickFilter.query}
+        onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
+        placeholder={quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."}
+        aria-label="Quick filter query"
+        size="small"
+        style={{ width: "180px" }}
+      />
+      <Dropdown
+        size="small"
+        value={QUICK_FILTER_MODE_LABELS[quickFilter.mode]}
+        selectedOptions={[quickFilter.mode]}
+        title="Quick filter matching grammar"
+        onOptionSelect={(_, data) => {
+          if (data.optionValue) {
+            setQuickFilter({
+              ...quickFilter,
+              mode: data.optionValue as EvtxQuickFilterMode,
+            });
+          }
+        }}
+      >
+        {QUICK_FILTER_MODES.map((mode) => (
+          <Option key={mode} value={mode}>
+            {QUICK_FILTER_MODE_LABELS[mode]}
+          </Option>
+        ))}
+      </Dropdown>
+      <Dropdown
+        size="small"
+        value={QUICK_FILTER_SCOPE_LABELS[quickFilter.scope]}
+        selectedOptions={[quickFilter.scope]}
+        title="Quick filter column scope"
+        onOptionSelect={(_, data) => {
+          if (data.optionValue) {
+            setQuickFilter({
+              ...quickFilter,
+              scope: data.optionValue as EvtxQuickFilterScope,
+            });
+          }
+        }}
+      >
+        {(Object.keys(QUICK_FILTER_SCOPE_LABELS) as EvtxQuickFilterScope[]).map((scope) => (
+          <Option key={scope} value={scope}>
+            {QUICK_FILTER_SCOPE_LABELS[scope]}
+          </Option>
+        ))}
+      </Dropdown>
+      <Dropdown
+        size="small"
+        value={QUICK_FILTER_ACTION_LABELS[quickFilter.action]}
+        selectedOptions={[quickFilter.action]}
+        title="Quick filter show or hide behavior"
+        onOptionSelect={(_, data) => {
+          if (data.optionValue) {
+            setQuickFilter({
+              ...quickFilter,
+              action: data.optionValue as EvtxQuickFilterAction,
+            });
+          }
+        }}
+      >
+        {(Object.keys(QUICK_FILTER_ACTION_LABELS) as EvtxQuickFilterAction[]).map((action) => (
+          <Option key={action} value={action}>
+            {QUICK_FILTER_ACTION_LABELS[action]}
+          </Option>
+        ))}
+      </Dropdown>
+      <Checkbox
+        checked={quickFilter.caseSensitive}
+        label="Case"
+        title="Case-sensitive quick filter"
+        onChange={(_, data) =>
+          setQuickFilter({ ...quickFilter, caseSensitive: data.checked === true })
+        }
+      />
+      <Checkbox
+        checked={quickFilter.highlight}
+        label="Highlight"
+        title="Highlight quick-filter matches"
+        onChange={(_, data) =>
+          setQuickFilter({ ...quickFilter, highlight: data.checked === true })
+        }
+      />
 
       <Input
         value={filterSearch}

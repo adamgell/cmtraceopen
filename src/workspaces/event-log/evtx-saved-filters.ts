@@ -6,7 +6,14 @@
  * serialization rules are testable without a Zustand or Tauri runtime.
  */
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
-import type { EvtxGroupField } from "./evtx-filter";
+import {
+  DEFAULT_QUICK_FILTER,
+  type EvtxGroupField,
+  type EvtxQuickFilter,
+  type EvtxQuickFilterAction,
+  type EvtxQuickFilterMode,
+  type EvtxQuickFilterScope,
+} from "./evtx-filter";
 
 /** Everything a saved filter restores. */
 export interface EvtxFilterCriteria {
@@ -15,6 +22,7 @@ export interface EvtxFilterCriteria {
   search: string;
   timeWindow: EvtxTimeWindow;
   groupBy: EvtxGroupField[];
+  quickFilter: EvtxQuickFilter;
 }
 
 export interface EvtxSavedFilter {
@@ -36,6 +44,35 @@ export const ALL_LEVELS: EvtxLevel[] = [
   "Verbose",
 ];
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
+const QUICK_FILTER_MODES: EvtxQuickFilterMode[] = [
+  "oneString",
+  "multipleWords",
+  "multipleStrings",
+  "allWords",
+  "allStrings",
+  "eventIds",
+];
+const QUICK_FILTER_SCOPES: EvtxQuickFilterScope[] = ["allColumns", "visibleColumns"];
+const QUICK_FILTER_ACTIONS: EvtxQuickFilterAction[] = ["show", "hide"];
+
+/** Revalidates the interactive grammar when a filter is loaded from disk. */
+export function sanitizeQuickFilter(input: unknown): EvtxQuickFilter {
+  const raw = isRecord(input) ? input : {};
+  return {
+    mode: QUICK_FILTER_MODES.includes(raw.mode as EvtxQuickFilterMode)
+      ? (raw.mode as EvtxQuickFilterMode)
+      : DEFAULT_QUICK_FILTER.mode,
+    query: typeof raw.query === "string" ? raw.query : "",
+    scope: QUICK_FILTER_SCOPES.includes(raw.scope as EvtxQuickFilterScope)
+      ? (raw.scope as EvtxQuickFilterScope)
+      : DEFAULT_QUICK_FILTER.scope,
+    action: QUICK_FILTER_ACTIONS.includes(raw.action as EvtxQuickFilterAction)
+      ? (raw.action as EvtxQuickFilterAction)
+      : DEFAULT_QUICK_FILTER.action,
+    caseSensitive: raw.caseSensitive === true,
+    highlight: raw.highlight !== false,
+  };
+}
 const GROUP_FIELDS: EvtxGroupField[] = [
   "level",
   "provider",
@@ -88,6 +125,7 @@ export function sanitizeCriteria(input: unknown): EvtxFilterCriteria {
       ? (raw.timeWindow as EvtxTimeWindow)
       : "24h",
     groupBy,
+    quickFilter: sanitizeQuickFilter(raw.quickFilter),
   };
 }
 
