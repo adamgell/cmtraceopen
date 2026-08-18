@@ -111,8 +111,10 @@ mod windows_capture {
     use std::collections::BTreeMap;
     use sha2::{Digest, Sha256};
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS};
-    use windows::Win32::System::EventLog::*;
+    use windows::Win32::Foundation::{
+        ERROR_EVT_MESSAGE_ID_NOT_FOUND, ERROR_EVT_MESSAGE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
+        ERROR_NO_MORE_ITEMS,
+    };
 
     use winreg::enums::HKEY_LOCAL_MACHINE;
     const MAX_PUBLISHERS: usize = 100_000;
@@ -352,6 +354,12 @@ mod windows_capture {
         })
         .map(Some)
     }
+    unsafe fn optional_publisher_variant(
+        metadata: EVT_HANDLE,
+        property: EVT_PUBLISHER_METADATA_PROPERTY_ID,
+    ) -> Option<OwnedVariant> {
+        get_publisher_variant(metadata, property).ok().flatten()
+    }
 
     unsafe fn get_event_variant(
         metadata: EVT_HANDLE,
@@ -418,7 +426,11 @@ mod windows_capture {
             &mut used,
         );
         if let Err(error) = initial {
-            if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
+            let code = win32_code(&error);
+            if code == ERROR_EVT_MESSAGE_NOT_FOUND.0 || code == ERROR_EVT_MESSAGE_ID_NOT_FOUND.0 {
+                return Ok(None);
+            }
+            if code != ERROR_INSUFFICIENT_BUFFER.0 {
                 return Err(format!("message {message_id} query failed: {error}"));
             }
         }
@@ -428,7 +440,7 @@ mod windows_capture {
             return Err(format!("message {message_id} exceeds bounded buffer"));
         }
         let mut buffer = vec![0u16; units];
-        EvtFormatMessage(
+        if let Err(error) = EvtFormatMessage(
             Some(metadata),
             None,
             message_id,
@@ -436,8 +448,13 @@ mod windows_capture {
             EvtFormatMessageId.0 as u32,
             Some(&mut buffer),
             &mut used,
-        )
-        .map_err(|error| format!("message {message_id} read failed: {error}"))?;
+        ) {
+            let code = win32_code(&error);
+            if code == ERROR_EVT_MESSAGE_NOT_FOUND.0 || code == ERROR_EVT_MESSAGE_ID_NOT_FOUND.0 {
+                return Ok(None);
+            }
+            return Err(format!("message {message_id} read failed: {error}"));
+        }
         let length = usize::try_from(used)
             .map_err(|_| format!("message {message_id} length overflow"))?
             .min(buffer.len());
@@ -465,7 +482,7 @@ mod windows_capture {
             Ok(())
         };
         if let Some(value) =
-            get_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)?
+            optional_publisher_variant(metadata, EvtPublisherMetadataPublisherMessageID)
         {
             add(value)?;
         }
@@ -474,7 +491,7 @@ mod windows_capture {
 
     unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<BTreeMap<u32, String>, String> {
         let Some(OwnedVariant::Handle(array_handle)) =
-            get_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?
+            optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)
         else {
             return Ok(BTreeMap::new());
         };
@@ -526,8 +543,11 @@ mod windows_capture {
             (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
             (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
         ] {
-            let array_values = get_publisher_variant(metadata_handle, array_property)?;
-            let Some(OwnedVariant::Handle(array_handle)) = array_values else { continue };
+            let Some(OwnedVariant::Handle(array_handle)) =
+                optional_publisher_variant(metadata_handle, array_property)
+            else {
+                continue;
+            };
             let array_handle = EvtHandle(array_handle);
             let mut count = 0u32;
             EvtGetObjectArraySize(array_handle.0.0, &mut count)
