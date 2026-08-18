@@ -197,7 +197,7 @@ export function EvtxFilterBar() {
     const state = useEvtxStore.getState();
     const records = selectVisibleRecords({
       ...state,
-      timeWindow: state.sourceMode === "live" ? state.timeWindow : undefined,
+      timeWindow: state.timeWindow,
       visibleColumns: state.columnConfig.order,
       timeZoneMode: state.timeZoneMode,
     });
