@@ -11,26 +11,40 @@ const virtualizerState = vi.hoisted(() => ({
   resizeObserverCalls: 0,
   visibleCount: null as number | null,
   recalculate: () => undefined,
+  measureElementSize: (element: HTMLElement) => {
+    const hasLevelBadge = Array.from(element.children).some(
+      (child) => (child as HTMLElement).style.padding === "2px 6px"
+    );
+    return element.getAttribute("role") === "treeitem"
+      ? Number.parseFloat(element.style.height)
+      : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
+  },
   measureElement: (element: HTMLElement | null) => {
     virtualizerState.measureCalls += 1;
     if (!element) return;
     const index = Number(element.dataset.index);
-    const hasLevelBadge = Array.from(element.children).some(
-      (child) => (child as HTMLElement).style.padding === "2px 6px"
-    );
-    const measured =
-      element.getAttribute("role") === "treeitem"
-        ? Number.parseFloat(element.style.height)
-        : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
+    if (virtualizerState.measuredSizes.has(index)) return;
     if (!virtualizerState.measured.includes(element)) {
       virtualizerState.measured.push(element);
     }
-    virtualizerState.resizeObserver(index, measured);
+    virtualizerState.measuredSizes.set(
+      index,
+      virtualizerState.measureElementSize(element)
+    );
+    virtualizerState.recalculate();
   },
   resizeObserver: (index: number, size: number) => {
     virtualizerState.resizeObserverCalls += 1;
     virtualizerState.measuredSizes.set(index, size);
     virtualizerState.recalculate();
+  },
+  notifyResize: () => {
+    for (const element of virtualizerState.measured) {
+      virtualizerState.resizeObserver(
+        Number(element.dataset.index),
+        virtualizerState.measureElementSize(element)
+      );
+    }
   },
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -281,6 +295,7 @@ describe("event-viewer shared font metrics", () => {
     filterLarge.unmount();
 
     virtualizerState.resizedSizes.clear();
+    virtualizerState.measuredSizes.clear();
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     const timelineLarge = render(<EvtxTimeline />);
@@ -351,6 +366,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.initialItems[0].size).toBe(smallList.rowHeight);
     const initialResizeObserverCalls = virtualizerState.resizeObserverCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    virtualizerState.notifyResize();
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.measureCalls).toBeGreaterThan(initialMeasureCalls);
     expect(virtualizerState.resizeObserverCalls).toBeGreaterThan(initialResizeObserverCalls);
