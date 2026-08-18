@@ -214,7 +214,7 @@ pub async fn evtx_query_channels(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events, filter, app, state);
+        let _ = (channels, max_events, filter, request_id, app, state);
         Err("Live event log queries are only available on Windows.".to_string())
     }
 }
