@@ -125,7 +125,6 @@ mod windows_capture {
     fn optional_number(value: OwnedVariant) -> Result<Option<u64>, String> {
         match value {
             OwnedVariant::Null => Ok(None),
-            OwnedVariant::Number(0) => Ok(None),
             OwnedVariant::Number(value) => Ok(Some(value)),
             _ => Err("metadata value has an invalid type".to_string()),
         }
@@ -150,6 +149,36 @@ mod windows_capture {
         let opcode = ((raw_value >> 16) & 0xFFFF) as u32;
         let task = (raw_value & 0xFFFF) as u32;
         (opcode, (task != 0).then_some(task))
+    }
+    fn base32(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        let mut output = String::new();
+        let mut buffer = 0u16;
+        let mut bits = 0u8;
+        for &byte in bytes {
+            buffer = (buffer << 8) | u16::from(byte);
+            bits += 8;
+            while bits >= 5 {
+                bits -= 5;
+                output.push(ALPHABET[((buffer >> bits) & 31) as usize] as char);
+            }
+        }
+        if bits != 0 {
+            output.push(ALPHABET[((buffer << (5 - bits)) & 31) as usize] as char);
+        }
+        output
+    }
+    fn canonical_version_key(identity: &[(&str, &str, &[u8])]) -> String {
+        let mut digest = Sha256::new();
+        for (label, path, content) in identity {
+            digest.update(label.as_bytes());
+            digest.update((label.len() as u64).to_le_bytes());
+            digest.update(path.as_bytes());
+            digest.update((path.len() as u64).to_le_bytes());
+            digest.update(content);
+            digest.update((content.len() as u64).to_le_bytes());
+        }
+        format!("vk1:{}", base32(&digest.finalize()))
     }
     fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
         channels.get(&(channel_id as u32)).cloned()
@@ -494,7 +523,7 @@ mod windows_capture {
             let version = optional_number(get_event_variant(event_handle.0, EventMetadataEventVersion)?)?
                 .unwrap_or(0) as u32;
             let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
-                .ok_or_else(|| "event metadata is missing channel index".to_string())?;
+                .unwrap_or(0);
             let log_name = channels.get(&(channel_index as u32)).cloned();
             let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
                 .map(|value| value as u32);
@@ -550,25 +579,22 @@ mod windows_capture {
                 .and_then(string)
                 .unwrap_or_default())
         };
-        let identity = [
-            read(EvtPublisherMetadataPublisherGuid)?,
-            read(EvtPublisherMetadataResourceFilePath)?,
-            read(EvtPublisherMetadataParameterFilePath)?,
-            read(EvtPublisherMetadataMessageFilePath)?,
-        ];
-        if identity.iter().all(String::is_empty) {
+        let guid = read(EvtPublisherMetadataPublisherGuid)?;
+        let resource = read(EvtPublisherMetadataResourceFilePath)?;
+        let parameter = read(EvtPublisherMetadataParameterFilePath)?;
+        let message = read(EvtPublisherMetadataMessageFilePath)?;
+        if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
             return Err("publisher metadata has no identity fields for VersionKey".to_string());
         }
-        let mut digest = Sha256::new();
-        for part in &identity {
-            digest.update(part.as_bytes());
-            digest.update([0]);
-        }
-        let digest = digest.finalize();
-        Ok(format!(
-            "vk1:{}",
-            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
-        ))
+        let resource_content = std::fs::read(&resource).unwrap_or_else(|_| vec![0]);
+        let parameter_content = std::fs::read(&parameter).unwrap_or_else(|_| vec![0]);
+        let message_content = std::fs::read(&message).unwrap_or_else(|_| vec![0]);
+        Ok(canonical_version_key(&[
+            ("guid", &guid, guid.as_bytes()),
+            ("resource", &resource, resource_content.as_slice()),
+            ("parameter", &parameter, parameter_content.as_slice()),
+            ("message", &message, message_content.as_slice()),
+        ]))
     }
 
     fn current_os_build() -> Option<u32> {
@@ -665,9 +691,24 @@ mod windows_tests {
         assert_eq!(optional_number(OwnedVariant::Null).expect("null is valid"), None);
         assert_eq!(optional_string(OwnedVariant::Null).expect("null is valid"), None);
     }
+
     #[test]
-    fn zero_and_message_sentinel_values_are_absent() {
-        assert_eq!(optional_number(OwnedVariant::Number(0)).expect("zero is valid"), None);
+    fn version_keys_are_canonical_base32_and_include_file_content() {
+        let first = canonical_version_key(&[("resource", "same.dll", b"one")]);
+        let second = canonical_version_key(&[("resource", "same.dll", b"two")]);
+        assert!(first.starts_with("vk1:"));
+        assert!(first[4..]
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || b"234567".contains(&byte)));
+        assert_ne!(first, second, "same path with changed content needs a new version");
+    }
+    #[test]
+    fn zero_event_values_are_preserved_but_message_sentinel_is_absent() {
+        assert_eq!(optional_number(OwnedVariant::Number(0)).expect("zero is valid"), Some(0));
+        assert_eq!(
+            optional_message_id(OwnedVariant::Number(0)).expect("zero message id is valid"),
+            Some(0)
+        );
         assert_eq!(
             optional_message_id(OwnedVariant::Number(u32::MAX as u64)).expect("sentinel is valid"),
             None
