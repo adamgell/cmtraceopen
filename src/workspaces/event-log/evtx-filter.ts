@@ -8,6 +8,45 @@
 import type { EvtxLevel, EvtxRecord } from "./types";
 import { eventDateKey, type EvtxTimeZoneMode } from "./evtx-time";
 
+export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
+export type EvtxSortDirection = "asc" | "desc";
+
+const LEVEL_ORDER: Record<EvtxLevel, number> = {
+  Critical: 0,
+  Error: 1,
+  Warning: 2,
+  Information: 3,
+  Verbose: 4,
+};
+
+export function sortRecords(
+  records: readonly EvtxRecord[],
+  field: EvtxSortField,
+  direction: EvtxSortDirection
+): EvtxRecord[] {
+  return [...records].sort((a, b) => {
+    let comparison = 0;
+    switch (field) {
+      case "time":
+        comparison = a.timestampEpoch - b.timestampEpoch;
+        break;
+      case "eventId":
+        comparison = a.eventId - b.eventId;
+        break;
+      case "level":
+        comparison = LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level];
+        break;
+      case "provider":
+        comparison = a.provider.localeCompare(b.provider);
+        break;
+      case "channel":
+        comparison = a.channel.localeCompare(b.channel);
+        break;
+    }
+    return direction === "asc" ? comparison : -comparison;
+  });
+}
+
 /**
  * Parses the Event ID filter box into a set, or null when it constrains nothing.
  *

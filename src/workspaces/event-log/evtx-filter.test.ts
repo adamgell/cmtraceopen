@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseEventIdFilter } from "./evtx-filter";
-
+import { parseEventIdFilter, sortRecords } from "./evtx-filter";
+import type { EvtxRecord } from "./types";
 describe("parseEventIdFilter", () => {
   it("returns null when the box constrains nothing", () => {
     expect(parseEventIdFilter("")).toBeNull();
@@ -72,5 +72,17 @@ describe("event id range bounds", () => {
   it("still expands an ordinary range", () => {
     const ids = parseEventIdFilter("4624-4626");
     expect([...ids!].sort((a, b) => a - b)).toEqual([4624, 4625, 4626]);
+  });
+});
+
+
+describe("sortRecords", () => {
+  it("preserves the active timeline order for exports", () => {
+    const records = [
+      { eventId: 2, timestampEpoch: 20, level: "Information", provider: "P", channel: "C" },
+      { eventId: 1, timestampEpoch: 10, level: "Error", provider: "P", channel: "C" },
+    ] as EvtxRecord[];
+    expect(sortRecords(records, "time", "asc").map((record) => record.eventId)).toEqual([1, 2]);
+    expect(sortRecords(records, "time", "desc").map((record) => record.eventId)).toEqual([2, 1]);
   });
 });

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
+import { selectVisibleRecords, sortRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -153,7 +153,12 @@ export function EvtxFilterBar() {
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
-    const records = selectVisibleRecords(useEvtxStore.getState());
+    const state = useEvtxStore.getState();
+    const records = sortRecords(
+      selectVisibleRecords(state),
+      state.sortField,
+      state.sortDirection
+    );
     if (records.length === 0) {
       setExportState("Nothing to export");
       return;
