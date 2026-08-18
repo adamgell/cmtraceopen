@@ -50,26 +50,35 @@ fn missing_record_digest(record: &EvtxRecord) -> String {
     format!("{first:08x}{second:08x}")
 }
 
+fn record_id(record: &EvtxRecord) -> Option<u64> {
+    record
+        .event_record_id_text
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .or_else(|| (record.event_record_id != 0).then_some(record.event_record_id))
+}
+
 fn stable_event_id(record: &EvtxRecord) -> String {
     let source = format!("source{}:{}", record.source_label.len(), record.source_label);
     let channel = format!("channel{}:{}", record.channel.len(), record.channel);
     let machine = record.computer.trim();
     let machine = format!("machine{}:{}", machine.len(), machine);
     let identity = format!("{source}|{machine}|{channel}");
-    if record.event_record_id != 0 {
-        return format!("{identity}|record{}", record.event_record_id);
+    if let Some(event_record_id) = record_id(record) {
+        return format!("{identity}|record{event_record_id}");
     }
     format!("{identity}|missing{}", missing_record_digest(record))
 }
 
 fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> String {
     let base = stable_event_id(record);
-    if record.event_record_id != 0 {
+    if record_id(record).is_some() {
         return base;
     }
     format!("{base}-{occurrence}")
-}
 
+}
 fn stable_event_base_from_id(stable_id: &str) -> &str {
     if stable_id.contains("|missing") {
         stable_id.rsplit_once('-').map(|(base, _)| base).unwrap_or(stable_id)
@@ -555,6 +564,20 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn lossless_event_record_id_text_controls_stable_identity() {
+        let mut event = record(1_000, "exact", EvtxLevel::Information);
+        event.event_record_id = 9_007_199_254_740_992;
+        event.event_record_id_text = Some("9007199254740993".to_string());
+
+        let timeline = build(&[], &[event]);
+        let stable_id = match &timeline.items[0].origin {
+            TimelineOrigin::Event { stable_id, .. } => stable_id,
+            other => panic!("expected event origin, got {other:?}"),
+        };
+        assert!(stable_id.ends_with("|record9007199254740993"));
     }
 
     #[test]
