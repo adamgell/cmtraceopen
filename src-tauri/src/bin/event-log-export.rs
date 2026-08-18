@@ -52,8 +52,7 @@ struct ManifestFilter {
 struct Manifest {
     #[serde(default)]
     sources: Vec<String>,
-    #[serde(default)]
-    records: Vec<EvtxRecord>,
+    records: Option<Vec<EvtxRecord>>,
     #[serde(default)]
     total_records: u64,
     #[serde(default)]
@@ -68,6 +67,10 @@ impl Cli {
     fn from_manifest_json(input: &str) -> Result<Self, String> {
         let manifest: Manifest =
             serde_json::from_str(input).map_err(|error| format!("invalid source manifest: {error}"))?;
+        if !manifest.sources.is_empty() && manifest.records.is_some() {
+            return Err("source manifest cannot contain both sources and records".to_owned());
+        }
+        let records = manifest.records.unwrap_or_default();
         let filter = Filter {
             channels: manifest.filter.selected_channels,
             levels: manifest.filter.filter_levels,
@@ -78,7 +81,7 @@ impl Cli {
         Ok(Self {
             sources: manifest.sources,
             manifest: None,
-            records: manifest.records,
+            records,
             format: ExportFormat::Json,
             output: None,
             filter,
@@ -198,12 +201,12 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
     let mut event_ids = BTreeSet::new();
     for part in input.split([',', ' ', '\t']).filter(|part| !part.is_empty()) {
         if let Some((low, high)) = part.split_once('-') {
-            let low = low
-                .parse::<u32>()
-                .map_err(|_| format!("invalid event-ID range {part:?}"))?;
-            let high = high
-                .parse::<u32>()
-                .map_err(|_| format!("invalid event-ID range {part:?}"))?;
+            let Ok(low) = low.parse::<u32>() else {
+                continue;
+            };
+            let Ok(high) = high.parse::<u32>() else {
+                continue;
+            };
             let from = low.min(high);
             let to = high.max(low).min(MAX_EVENT_ID);
             if from <= to {
@@ -215,10 +218,9 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
                 }
             }
         } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES {
-            event_ids.insert(
-                part.parse::<u32>()
-                    .map_err(|_| format!("invalid event ID {part:?}"))?,
-            );
+            if let Ok(value) = part.parse::<u32>() {
+                event_ids.insert(value);
+            }
         }
     }
     Ok(event_ids.into_iter().collect())
@@ -281,6 +283,20 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     Ok(cli)
 }
 
+fn coverage_report(coverage: &Coverage, exported_records: u64) -> String {
+    let mut report = format!(
+        "coverage: sourceRecords={} exportedRecords={} parseErrors={} gaps={}",
+        coverage.total_records,
+        exported_records,
+        coverage.parse_errors,
+        coverage.error_messages.len()
+    );
+    for error in &coverage.error_messages {
+        report.push_str(&format!("\ncoverage-gap: {error}"));
+    }
+    report
+}
+
 fn run_with_args<I, S>(args: I, stdout: &mut dyn Write) -> Result<String, String>
 where
     I: IntoIterator<Item = S>,
@@ -293,21 +309,17 @@ where
             &records,
             cli.format,
             Some(path),
-        )?,
+        ),
         None => app_lib::event_log::writer::write_records(stdout, cli.format, &records)
-            .map_err(|error| error.to_string())?,
-    };
-    let mut report = format!(
-        "coverage: sourceRecords={} exportedRecords={} parseErrors={} gaps={}",
-        cli.coverage.total_records,
-        stats.records,
-        cli.coverage.parse_errors,
-        cli.coverage.error_messages.len()
-    );
-    for error in cli.coverage.error_messages {
-        report.push_str(&format!("\ncoverage-gap: {error}"));
+            .map_err(|error| error.to_string()),
     }
-    Ok(report)
+    .map_err(|error| {
+        format!(
+            "{}\nexport failed: {error}",
+            coverage_report(&cli.coverage, 0)
+        )
+    })?;
+    Ok(coverage_report(&cli.coverage, stats.records))
 }
 
 fn run() -> Result<(), String> {
@@ -470,6 +482,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_manifest_internal_source_record_conflicts_without_precedence() {
+        let record = serde_json::to_string(&make_record()).expect("record");
+        assert!(Cli::from_manifest_json(&format!(
+            r#"{{"sources":["events.evtx"],"records":[{record}]}}"#
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn accepts_source_only_manifests_without_inventing_records() {
+        let cli = Cli::from_manifest_json(r#"{"sources":["events.evtx"]}"#).expect("source manifest");
+        assert_eq!(cli.sources, vec!["events.evtx"]);
+        assert!(cli.records.is_empty());
+    }
+
+    #[test]
     fn preserves_empty_manifest_selections_as_match_none() {
         let cli = Cli::from_manifest_json(
             r#"{"records":[],"filter":{"selectedChannels":[],"filterLevels":[]}}"#,
@@ -508,6 +536,9 @@ mod tests {
                 .len(),
             65_535
         );
+        assert_eq!(parse_event_ids("326,abc").expect("mixed tokens"), vec![326]);
+        assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
+        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![326]);
     }
     #[test]
     fn run_writes_direct_file_and_returns_coverage_report() {

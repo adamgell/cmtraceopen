@@ -169,7 +169,7 @@ fn account_field_re() -> &'static Regex {
         // masked — see `split_leading_token`), while a malformed
         // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)",
+            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)",
         )
         .expect("account field regex must compile")
     })
@@ -780,5 +780,17 @@ mod tests {
             r"ComputerName: DESKTOP-AB12CD RunAsUser = CONTOSO\John Doe, S-1-5-21-397955417-626881126-188441444-1010 ran msiexec PASSWORD=hunter2 from \\FILESRV01\share for adele.vance@contoso.example TenantId: 99999999-8888-4777-8666-555555555555",
         );
         assert_eq!(once, redact_text(&once));
+    }
+
+    #[test]
+    fn labeled_multiword_identity_fields_mask_the_entire_value() {
+        let redacted = redact_text(
+            r"TargetUserName=CONTOSO\Jane Doe, SubjectUserName=CONTOSO\Alice Smith, SubjectDomainName=CONTOSO",
+        );
+        assert!(!redacted.contains("Jane"));
+        assert!(!redacted.contains("Doe"));
+        assert!(!redacted.contains("Alice"));
+        assert!(!redacted.contains("Smith"));
+        assert!(!redacted.contains("CONTOSO"));
     }
 }

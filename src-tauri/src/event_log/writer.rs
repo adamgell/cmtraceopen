@@ -398,7 +398,7 @@ fn xml_formats_reject_records_without_raw_xml() {
 #[test]
 fn raw_xml_computer_and_subject_fields_are_redacted_without_consuming_tags() {
     let event = EvtxRecord {
-        raw_xml: "<Event><System><Computer>DESKTOP-JOHN</Computer><SubjectUserName>CONTOSO\\Jane Doe</SubjectUserName><SubjectDomainName>CONTOSO</SubjectDomainName></System><ns:RemoteHost>REMOTE-HOST-2</ns:RemoteHost><RemoteHost>REMOTE-HOST-3</RemoteHost><ns:Data Name=\"SubjectUserName\"><![CDATA[CONTOSO\\Bob Doe]]></ns:Data><ns:Data Name=\"RemoteHost\"><![CDATA[REMOTE-HOST]]></ns:Data></Event>".into(),
+        raw_xml: "<Event><System><Computer>DESKTOP-JOHN</Computer><SubjectUserName>CONTOSO\\Jane Doe</SubjectUserName><SubjectDomainName>CONTOSO</SubjectDomainName></System><ns:RemoteHost>REMOTE-HOST-2</ns:RemoteHost><RemoteHost>REMOTE-HOST-3</RemoteHost><ns:Data Name=\"SubjectUserName\">\n <![CDATA[\n CONTOSO\\Bob Doe\n ]]>\n</ns:Data><ns:Data Name=\"RemoteHost\"><![CDATA[REMOTE-HOST]]></ns:Data><Data><![CDATA[TenantId=99999999-8888-4777-8666-555555555555]]></Data><Message><![CDATA[PASSWORD=hunter2]]></Message><!-- SubjectUserName=CONTOSO\\Comment User --><Next /></Event>".into(),
         ..record("safe")
     };
     let mut output = Cursor::new(Vec::new());
@@ -411,6 +411,12 @@ fn raw_xml_computer_and_subject_fields_are_redacted_without_consuming_tags() {
     assert!(!output.contains("REMOTE-HOST"));
     assert!(!output.contains("REMOTE-HOST-2"));
     assert!(!output.contains("REMOTE-HOST-3"));
+    assert!(!output.contains("99999999-8888"));
+    assert!(!output.contains("hunter2"));
+    assert!(!output.contains("Comment User"));
+    assert!(output.contains("<Message><![CDATA["));
+    assert!(output.contains("</Message><!--"));
+    assert!(output.contains("--><Next />"));
     assert!(!output.contains(">CONTOSO<"));
     let mut reader = quick_xml::Reader::from_str(&output);
     let mut buffer = Vec::new();

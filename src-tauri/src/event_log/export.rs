@@ -218,6 +218,21 @@ fn redact_labeled_value(label: &str, value: &str) -> String {
         .to_owned()
 }
 
+fn redact_xml_value(label: &str, value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return value.to_owned();
+    }
+    let start = value.find(trimmed).expect("trimmed value is present");
+    let end = start + trimmed.len();
+    format!(
+        "{}{}{}",
+        &value[..start],
+        redact_labeled_value(label, trimmed),
+        &value[end..]
+    )
+}
+
 fn event_data_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -232,7 +247,7 @@ fn cdata_event_data_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)<!\[CDATA\[(?P<value>.*?)\]\]>(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
+            r#"(?is)(?P<open><(?:[\w.-]+:)?Data\b[^>]*\bName\s*=\s*["'](?P<label>[^"']+)["'][^>]*>)(?P<leading>\s*)<!\[CDATA\[(?P<value>.*?)\]\]>(?P<trailing>\s*)(?P<close></(?:[\w.-]+:)?Data\s*>)"#,
         )
         .expect("CDATA event data redaction pattern must compile")
     })
@@ -280,7 +295,7 @@ fn redact_raw_xml(xml: &str) -> String {
         format!(
             "{}{}{}",
             &captures["open"],
-            redact_labeled_value(&captures["label"], &captures["value"]),
+            redact_xml_value(&captures["label"], &captures["value"]),
             &captures["close"],
         )
     });
@@ -293,15 +308,17 @@ fn redact_raw_xml(xml: &str) -> String {
         format!(
             "{}{}{}",
             &captures["open"],
-            redact_labeled_value(label, &captures["value"]),
+            redact_xml_value(label, &captures["value"]),
             &captures["close"],
         )
     });
     let labeled = cdata_event_data_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
         format!(
-            "{}<![CDATA[{}]]>{}",
+            "{}{}<![CDATA[{}]]>{}{}",
             &captures["open"],
-            redact_labeled_value(&captures["label"], &captures["value"]),
+            &captures["leading"],
+            redact_xml_value(&captures["label"], &captures["value"]),
+            &captures["trailing"],
             &captures["close"],
         )
     });
@@ -314,6 +331,31 @@ fn redact_raw_xml(xml: &str) -> String {
         };
         let opening = cursor + relative_open;
         output.push_str(&redact_text(&labeled[cursor..opening]));
+        let tail = &labeled[opening..];
+        if let Some(content) = tail.strip_prefix("<!--") {
+            if let Some(end) = content.find("-->") {
+                output.push_str("<!--");
+                output.push_str(&redact_text(&content[..end]));
+                output.push_str("-->");
+                cursor = opening + 4 + end + 3;
+                continue;
+            }
+            output.push_str("<!--");
+            output.push_str(&redact_text(content));
+            break;
+        }
+        if let Some(content) = tail.strip_prefix("<![CDATA[") {
+            if let Some(end) = content.find("]]>") {
+                output.push_str("<![CDATA[");
+                output.push_str(&redact_text(&content[..end]));
+                output.push_str("]]>");
+                cursor = opening + 9 + end + 3;
+                continue;
+            }
+            output.push_str("<![CDATA[");
+            output.push_str(&redact_text(content));
+            break;
+        }
         let mut end = opening + 1;
         let mut quote = None;
         while end < labeled.len() {
@@ -653,8 +695,7 @@ mod tests {
                 value: "CONTOSO".into(),
             },
         ];
-        event.raw_xml =
-            "<Event><Data>TenantId=99999999-8888-4777-8666-555555555555</Data></Event>".into();
+        event.raw_xml = "<Event><Data>TenantId=99999999-8888-4777-8666-555555555555</Data><Message><![CDATA[PASSWORD=hunter2]]></Message><!-- SubjectUserName=CONTOSO\\Comment User --></Event>".into();
         event.mapped = vec![crate::event_log::maps::MappedColumn {
             property: "RemoteHost".into(),
             text: "REMOTE-HOST".into(),
@@ -670,6 +711,7 @@ mod tests {
         assert!(!json.contains("hunter2"));
         assert!(!json.contains("ABC123456"));
         assert!(!json.contains("REMOTE-HOST"));
+        assert!(!json.contains("Comment User"));
         let xml = export_records(&[event.clone()], ExportFormat::Xml).expect("XML export");
         assert!(!xml.contains("John Doe"));
         assert!(!xml.contains("Jane Doe"));
@@ -677,10 +719,13 @@ mod tests {
         assert!(!xml.contains("\"value\":\"CONTOSO\""));
         assert!(!xml.contains("hunter2"));
         assert!(!xml.contains("REMOTE-HOST"));
+        assert!(!xml.contains("Comment User"));
         assert!(!xml.contains("ABC123456"));
         assert!(!xml.contains("99999999-8888"));
 
         let raw = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
+        assert!(!raw.contains("Comment User"));
+        assert!(!raw.contains("hunter2"));
         assert!(!raw.contains("99999999-8888"));
         assert!(raw.contains("[tenant:") || raw.contains("[sensitive:"));
     }
