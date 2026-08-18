@@ -19,14 +19,14 @@ export function SourcePicker() {
   const remoteMachine = useEvtxStore((s) => s.remoteMachine);
   const currentPlatform = useUiStore((s) => s.currentPlatform);
   const [remoteTarget, setRemoteTarget] = useState(remoteMachine ?? "");
+  const [remoteTargetDirty, setRemoteTargetDirty] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (remoteMachine && remoteMachine !== remoteTarget) {
+    if (!remoteTargetDirty && remoteMachine && remoteMachine !== remoteTarget) {
       setRemoteTarget(remoteMachine);
     }
-  }, [remoteMachine, remoteTarget]);
-
+  }, [remoteMachine, remoteTarget, remoteTargetDirty]);
   const isWindows = currentPlatform === "windows";
 
   const handleOpenFiles = async () => {
@@ -129,8 +129,10 @@ export function SourcePicker() {
           <div style={{ display: "flex", gap: "8px", width: "100%" }}>
             <Input
               value={remoteTarget}
-              onChange={(_, data) => setRemoteTarget(data.value)}
-              placeholder="Remote computer name"
+              onChange={(_, data) => {
+                setRemoteTargetDirty(true);
+                setRemoteTarget(data.value);
+              }}
               aria-label="Remote computer name"
               style={{ flex: 1 }}
             />

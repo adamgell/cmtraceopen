@@ -80,6 +80,16 @@ describe("SourcePicker remote source", () => {
     );
   });
 
+  it("keeps an edited target when persisted remote state changes after failure", async () => {
+    useEvtxStore.setState({ remoteMachine: "old-host" });
+    render(<SourcePicker />);
+
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Remote computer name"]');
+    fireEvent.change(input!, { target: { value: "new-host" } });
+    useEvtxStore.setState({ remoteMachine: "failed-host" });
+    await waitFor(() => expect(input?.value).toBe("new-host"));
+  });
+
   it("shows channel coverage gaps alongside the source error", () => {
     useEvtxStore.setState({
       loadError: "lab-host: remote source access denied",
