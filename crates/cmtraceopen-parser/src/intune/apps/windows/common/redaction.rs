@@ -11,6 +11,8 @@
 //! visibly mention the same user. The projection is idempotent: replacement
 //! tokens cannot themselves match a rule.
 
+const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
+const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -102,6 +104,45 @@ fn msi_property_re() -> &'static Regex {
         )
         .expect("msi property regex must compile")
     })
+}
+
+/// Organization-owned identifiers and device inventory values are sensitive
+/// when they occur in an explicitly labelled field. Bare GUIDs remain visible
+/// because they are often correlation keys rather than tenant identity.
+fn sensitive_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|tenant(?:id)?|aadtenantid)\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]]+)"#,
+        )
+        .expect("sensitive field redaction pattern must compile")
+    })
+}
+
+fn is_redaction_token(value: &str) -> bool {
+    let value = value.trim_matches(|character| character == '"' || character == '\'');
+    let Some(body) = value.strip_prefix('[').and_then(|value| value.strip_suffix(']')) else {
+        return false;
+    };
+    let Some((kind, hash)) = body.split_once(':') else {
+        return false;
+    };
+    !kind.is_empty()
+        && kind.chars().all(|character| character.is_ascii_lowercase())
+        && hash.len() == 16
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn redact_sensitive_field(value: &str) -> String {
+    let quote = value.chars().next().filter(|character| *character == '"' || *character == '\'');
+    let inner = quote
+        .and_then(|quote| value.strip_prefix(quote).and_then(|value| value.strip_suffix(quote)))
+        .unwrap_or(value);
+    if is_redaction_token(inner) {
+        return value.to_owned();
+    }
+    let redacted = stable_token("sensitive", inner);
+    quote.map_or(redacted.clone(), |quote| format!("{quote}{redacted}{quote}"))
 }
 
 /// An account named in an explicit field.
@@ -285,6 +326,9 @@ fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
 
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
+    if value.len() > MAX_REDACTION_INPUT_BYTES {
+        return REMOVED_OVERSIZE.to_owned();
+    }
     let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
         stable_token("upn", &caps[0])
     });
@@ -305,6 +349,14 @@ pub fn redact_text(value: &str) -> String {
 
     let masked = tenant_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         format!("{}{}", &caps["field"], stable_token("tenant", &caps["value"]))
+    });
+
+    let masked = sensitive_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        format!(
+            "{}{}",
+            &caps["field"],
+            redact_sensitive_field(&caps["value"])
+        )
     });
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
@@ -702,6 +754,24 @@ mod tests {
             "got {redacted:?}"
         );
         assert_eq!(redacted, redact_text(&redacted), "and it stays idempotent");
+    }
+
+    #[test]
+    fn labeled_serial_hardware_and_tenant_values_are_masked() {
+        let redacted = redact_text(
+            r#"serialNumber: ABC123456 hardwareHash=AA-BB-CC tenantId={99999999-8888-4777-8666-555555555555}"#,
+        );
+        assert!(!redacted.contains("ABC123456"), "got {redacted:?}");
+        assert!(!redacted.contains("AA-BB-CC"), "got {redacted:?}");
+        assert!(!redacted.contains("99999999-8888"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn oversized_text_is_replaced_instead_of_partially_exported() {
+        let input = format!("prefix {}", "secret-user@example.com ".repeat(20_000));
+        let redacted = redact_text(&input);
+        assert!(redacted.contains("[redacted: oversized text omitted]"));
+        assert!(!redacted.contains("secret-user@example.com"));
     }
 
     #[test]

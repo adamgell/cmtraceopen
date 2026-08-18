@@ -19,15 +19,14 @@ import {
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 import { timeZoneLabel } from "./evtx-time";
+import {
+  EVTX_EXPORT_FORMATS,
+  exportPayload,
+  isValidExportByteCount,
+} from "./evtx-export";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
-const EXPORT_FORMATS = [
-  { value: "csv", label: "CSV", extension: "csv" },
-  { value: "tsv", label: "TSV", extension: "tsv" },
-  { value: "json", label: "JSON", extension: "json" },
-  { value: "xml", label: "Event XML", extension: "xml" },
-] as const;
 
 const GROUP_FIELDS: EvtxGroupField[] = ["level", "provider", "channel", "eventId", "day"];
 
@@ -153,7 +152,7 @@ export function EvtxFilterBar() {
 
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
-  const exportVisible = async (format: (typeof EXPORT_FORMATS)[number]) => {
+  const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
     const records = selectVisibleRecords(useEvtxStore.getState());
     if (records.length === 0) {
       setExportState("Nothing to export");
@@ -169,10 +168,7 @@ export function EvtxFilterBar() {
       // The delimited writers read neither rawXml nor eventData, and rawXml dominates the payload:
       // sending them for a CSV export serializes every record's XML and field list across the IPC
       // bridge for nothing, which on a hundred-thousand-record export is the bulk of the transfer.
-      const payload =
-        format.value === "csv" || format.value === "tsv"
-          ? records.map(({ rawXml: _rawXml, eventData: _eventData, ...rest }) => rest)
-          : records;
+      const payload = exportPayload(format.value, records);
       const bytes = await invoke<unknown>("evtx_export_records", {
         records: payload,
         format: format.value,
@@ -183,7 +179,7 @@ export function EvtxFilterBar() {
       // would believe a file was written.
       // A safe integer, not merely finite: a count past Number.MAX_SAFE_INTEGER would format into
       // a confidently wrong size.
-      if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) {
+      if (!isValidExportByteCount(bytes)) {
         setExportState("Export failed: the writer did not report how much it wrote");
         return;
       }
@@ -440,11 +436,11 @@ export function EvtxFilterBar() {
         style={{ minWidth: "96px" }}
         title="Export the events currently shown, using the same filters as the list"
         onOptionSelect={(_, data) => {
-          const format = EXPORT_FORMATS.find((f) => f.value === data.optionValue);
+          const format = EVTX_EXPORT_FORMATS.find((f) => f.value === data.optionValue);
           if (format) void exportVisible(format);
         }}
       >
-        {EXPORT_FORMATS.map((format) => (
+        {EVTX_EXPORT_FORMATS.map((format) => (
           <Option key={format.value} value={format.value}>
             {format.label}
           </Option>
