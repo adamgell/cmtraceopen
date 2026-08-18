@@ -68,15 +68,18 @@ export function SourcePicker() {
   };
 
   const handleEnumerate = async () => {
+    if (!beginOpening()) return;
     setLocalError(null);
     try {
       await enumerateChannels();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
+    } finally {
+      finishOpening();
     }
-  };
 
+  };
   const displayError = loadError ?? localError;
 
   return (
@@ -123,7 +126,7 @@ export function SourcePicker() {
             Open folder recursively...
           </Button>
           {isWindows && (
-            <Button appearance="secondary" onClick={() => void handleEnumerate()}>
+            <Button appearance="secondary" disabled={isOpening} onClick={() => void handleEnumerate()}>
               This computer
             </Button>
           )}
