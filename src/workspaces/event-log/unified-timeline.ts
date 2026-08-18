@@ -188,6 +188,11 @@ export function filterTimelineToRecords(
   records: EvtxRecord[]
 ): UnifiedTimeline {
   const { keys, unsafePrefixes } = stableRecordIdentities(records);
+  const visibleMissingBases = new Set(
+    records
+      .filter((record) => record.eventRecordId === 0 && exactRecordIdText(record) === null)
+      .map((record) => stableRecordBase(record))
+  );
   const canonicalMissingBases = new Set<string>();
   for (const item of [...timeline.items, ...timeline.unplaced]) {
     if (item.origin.kind !== "event") continue;
@@ -206,7 +211,13 @@ export function filterTimelineToRecords(
     if (origin.kind === "log") return true;
     if (keys.has(origin.stableId)) return true;
     const missingMatch = origin.stableId.match(/^(.*\|missing[0-9a-f]+)-\d+$/);
-    if (missingMatch && canonicalMissingBases.has(missingMatch[1])) return true;
+    if (
+      missingMatch &&
+      visibleMissingBases.has(missingMatch[1]) &&
+      canonicalMissingBases.has(missingMatch[1])
+    ) {
+      return true;
+    }
     const marker = origin.stableId.lastIndexOf("|record");
     const prefix = origin.stableId.replace(/record\d+$/, "record");
     return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;

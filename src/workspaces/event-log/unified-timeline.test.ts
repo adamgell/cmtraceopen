@@ -230,6 +230,13 @@ describe("filterTimelineToRecords", () => {
       [missingRecord]
     );
     expect(filtered.items.map((item) => item.message)).toEqual(["missing"]);
+
+    expect(
+      filterTimelineToRecords(
+        timeline({ items: [{ timestampMs: 1, severity: "info", message: "missing", origin }] }),
+        []
+      ).items
+    ).toEqual([]);
   });
 
   it("keeps an unsafe numeric EventRecordID by its backend stable identity", () => {
