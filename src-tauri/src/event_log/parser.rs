@@ -157,6 +157,11 @@ fn expand_path(
     manifest: &mut EventLogSourceManifest,
 ) -> Result<(), String> {
     if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+        record_manifest_limit(
+            manifest,
+            path,
+            "source selection exceeds the file manifest limit",
+        );
         return Ok(());
     }
 
@@ -171,6 +176,27 @@ fn expand_path(
         }
     }
 
+    match first_reparse_component(path) {
+        Ok(Some(component)) => {
+            manifest.coverage.push(SourceCoverage::Unsupported {
+                path: path_string.clone(),
+                reason: format!(
+                    "symbolic link or reparse-point ancestor is not followed: {}",
+                    component.to_string_lossy()
+                ),
+            });
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            manifest.coverage.push(SourceCoverage::AccessDenied {
+                path: path_string.clone(),
+                reason: "source ancestor metadata access was denied".to_string(),
+            });
+            return Ok(());
+        }
+        Err(error) => return Err(format!("cannot inspect source ancestors {path_string}: {error}")),
+    }
 
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -269,6 +295,49 @@ fn expand_path(
 }
 
 
+fn record_manifest_limit(manifest: &mut EventLogSourceManifest, path: &Path, reason: &str) {
+    if manifest
+        .coverage
+        .iter()
+        .any(|coverage| matches!(coverage, SourceCoverage::LimitReached { .. }))
+    {
+        return;
+    }
+    manifest.coverage.push(SourceCoverage::LimitReached {
+        path: path.to_string_lossy().to_string(),
+        reason: reason.to_string(),
+    });
+}
+
+fn first_reparse_component(path: &Path) -> std::io::Result<Option<PathBuf>> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata)
+                if is_reparse_or_symlink(&metadata)
+                    && !is_platform_temp_alias(ancestor) =>
+            {
+                return Ok(Some(ancestor.to_path_buf()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+fn is_platform_temp_alias(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        return path == Path::new("/var") || path == Path::new("/tmp");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -337,7 +406,14 @@ fn is_evtx_candidate(path: &Path) -> bool {
         || lower.ends_with(".evtx~")
 }
 fn normalize_source_path(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('\\', "/");
+    let raw = path.to_string_lossy();
+    let windows_native = raw.starts_with("\\\\")
+        || raw.starts_with("//")
+        || (raw.len() >= 3 && raw.as_bytes()[1] == b':' && raw.as_bytes()[2] == b'\\');
+    if windows_native {
+        return normalize_windows_path(&raw);
+    }
+
     let is_absolute = raw.starts_with('/');
     let mut components: Vec<&str> = Vec::new();
     for component in raw.split('/') {
@@ -358,6 +434,98 @@ fn normalize_source_path(path: &Path) -> String {
     } else {
         normalized
     }
+}
+
+fn normalize_windows_path(raw: &str) -> String {
+    let raw = raw.replace('/', "\\");
+    let (prefix, rest) = if raw.starts_with("\\\\?\\") {
+        ("\\\\?\\".to_string(), &raw[4..])
+    } else if raw.starts_with("\\\\") {
+        ("\\\\".to_string(), &raw[2..])
+    } else if raw.len() >= 3 && raw.as_bytes()[1] == b':' {
+        (raw[..3].to_string(), &raw[3..])
+    } else {
+        (String::new(), raw.as_str())
+    };
+    let mut components: Vec<&str> = Vec::new();
+    for component in rest.split('\\') {
+        match component {
+            "" | "." => {}
+            ".." if components.last().is_some_and(|last| *last != "..") => {
+                components.pop();
+            }
+            ".." => {}
+            value => components.push(value),
+        }
+    }
+    format!("{prefix}{}", components.join("\\"))
+}
+fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceManifest {
+    let mut validated = EventLogSourceManifest {
+        entries: Vec::new(),
+        coverage: input.coverage.clone(),
+    };
+    for source in &input.entries {
+        let path = Path::new(&source.path);
+        if validated.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+            record_manifest_limit(
+                &mut validated,
+                path,
+                "source manifest exceeds the file manifest limit",
+            );
+            break;
+        }
+        let kind = classify_source_kind(&source.path, source.kind);
+        if let Some(gap) = gated_source(&source.path, kind) {
+            validated.coverage.push(gap);
+            continue;
+        }
+        match first_reparse_component(path) {
+            Ok(Some(component)) => {
+                validated.coverage.push(SourceCoverage::Unsupported {
+                    path: source.path.clone(),
+                    reason: format!(
+                        "symbolic link or reparse-point ancestor is not followed: {}",
+                        component.to_string_lossy()
+                    ),
+                });
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                validated.coverage.push(SourceCoverage::AccessDenied {
+                    path: source.path.clone(),
+                    reason: "source ancestor metadata access was denied".to_string(),
+                });
+                continue;
+            }
+            Err(_) => {
+                validated.coverage.push(SourceCoverage::Missing {
+                    path: source.path.clone(),
+                    reason: "source ancestor metadata could not be read".to_string(),
+                });
+                continue;
+            }
+        }
+        if !is_evtx_candidate(path) {
+            validated.coverage.push(SourceCoverage::Unsupported {
+                path: source.path.clone(),
+                reason: "manifest entry is not an EVTX filename".to_string(),
+            });
+            continue;
+        }
+        let normalized_path = normalize_source_path(path);
+        let source_id = normalized_path.to_lowercase();
+        if validated.entries.iter().any(|entry| entry.source_id == source_id) {
+            continue;
+        }
+        validated.entries.push(EventLogSource {
+            source_id,
+            path: normalized_path,
+            kind,
+        });
+    }
+    validated
 }
 
 fn coverage_path(coverage: &SourceCoverage) -> &str {
@@ -386,6 +554,7 @@ pub fn parse_evtx_manifest(
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
 ) -> Result<EvtxParseResult, String> {
+    let manifest = validate_source_manifest(manifest);
     let mut all_records = Vec::new();
     let mut channels = Vec::new();
     let mut parse_errors = manifest.coverage.len() as u32;
@@ -785,6 +954,120 @@ mod tests {
         assert_eq!(manifest.entries[0].path, normalize_source_path(&member));
         assert!(manifest.coverage.is_empty());
         std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+
+    #[test]
+    fn normalization_preserves_windows_unc_verbatim_and_vss_prefixes() {
+        assert_eq!(
+            normalize_source_path(Path::new(r"\\server\share\logs\..\Application.evtx")),
+            r"\\server\share\Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new(r"\\?\C:\logs\.\Application.evtx")),
+            r"\\?\C:\logs\Application.evtx"
+        );
+        assert_eq!(
+            normalize_source_path(Path::new(
+                r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Logs\Application.evtx"
+            )),
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Logs\Application.evtx"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_ancestor_is_rejected_before_following_outside_tree() {
+        let root = std::env::temp_dir().join(format!("cmtrace-event-symlink-root-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("cmtrace-event-symlink-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        std::fs::write(outside.join("Outside.evtx"), b"outside").expect("write outside");
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("create symlink");
+
+        let manifest = build_source_manifest(&[
+            root.join("link").join("Outside.evtx").to_string_lossy().to_string(),
+        ])
+        .expect("build manifest");
+
+        assert!(manifest.entries.is_empty());
+        assert!(matches!(
+            manifest.coverage.as_slice(),
+            [SourceCoverage::Unsupported { .. }]
+        ));
+        let wildcard = build_source_manifest(&[
+            root.join("link").join("*.evtx").to_string_lossy().to_string(),
+        ])
+        .expect("build wildcard manifest");
+        assert!(wildcard.entries.is_empty());
+        assert!(wildcard
+            .coverage
+            .iter()
+            .any(|coverage| matches!(coverage, SourceCoverage::Unsupported { .. })));
+        std::fs::remove_dir_all(&root).expect("remove root");
+        std::fs::remove_dir_all(&outside).expect("remove outside");
+    }
+
+    #[test]
+    fn direct_manifest_entries_over_cap_report_limit_coverage() {
+        let entries = (0..=MAX_SOURCE_MANIFEST_ENTRIES)
+            .map(|index| EventLogSource {
+                source_id: format!("/logs/{index}.evtx"),
+                path: format!("/logs/{index}.evtx"),
+                kind: EventLogSourceKind::File,
+            })
+            .collect();
+        let manifest = validate_source_manifest(&EventLogSourceManifest {
+            entries,
+            coverage: Vec::new(),
+        });
+        assert_eq!(manifest.entries.len(), MAX_SOURCE_MANIFEST_ENTRIES);
+        assert!(manifest
+            .coverage
+            .iter()
+            .any(|coverage| matches!(coverage, SourceCoverage::LimitReached { .. })));
+    }
+
+    #[test]
+    fn parsing_direct_manifest_is_bounded_and_reports_oversize_coverage() {
+        let (maps, providers) = empty_state();
+        let entries = (0..=MAX_SOURCE_MANIFEST_ENTRIES)
+            .map(|index| EventLogSource {
+                source_id: format!("/missing/{index}.evtx"),
+                path: format!("/missing/{index}.evtx"),
+                kind: EventLogSourceKind::File,
+            })
+            .collect();
+        let result = parse_evtx_manifest(
+            &EventLogSourceManifest {
+                entries,
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+        )
+        .expect("parse bounded manifest");
+        assert_eq!(result.parse_errors as usize, MAX_SOURCE_MANIFEST_ENTRIES + 1);
+        assert!(result
+            .error_messages
+            .iter()
+            .any(|message| message.contains("source manifest exceeds")));
+    }
+
+    #[test]
+    fn wildcard_matches_over_cap_report_limit_coverage() {
+        let root = std::env::temp_dir().join(format!("cmtrace-event-wildcard-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create wildcard root");
+        for index in 0..=MAX_SOURCE_MANIFEST_ENTRIES {
+            std::fs::write(root.join(format!("{index:04}.evtx")), b"evtx").expect("write wildcard member");
+        }
+        let pattern = root.join("*.evtx").to_string_lossy().to_string();
+        let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
+        assert_eq!(manifest.entries.len(), MAX_SOURCE_MANIFEST_ENTRIES);
+        assert!(manifest
+            .coverage
+            .iter()
+            .any(|coverage| matches!(coverage, SourceCoverage::LimitReached { .. })));
+        std::fs::remove_dir_all(root).expect("remove wildcard root");
     }
 
     #[test]

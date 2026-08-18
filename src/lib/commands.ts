@@ -8,7 +8,7 @@ import type {
   ParseResult,
   WorkspaceId,
 } from "../types/log";
-import type { EventLogSourceManifest } from "../workspaces/event-log/types";
+import type { EventLogSourceManifest, EvtxParseResult } from "../workspaces/event-log/types";
 import type {
   EvidenceArtifactPreview,
   EvidenceBundleDetails,
@@ -313,8 +313,8 @@ export async function expandEventLogSources(
 
 export async function parseEventLogManifest(
   manifest: EventLogSourceManifest,
-): Promise<ParseResult> {
-  return invokeCommand<ParseResult>("evtx_parse_manifest", { manifest });
+): Promise<EvtxParseResult> {
+  return invokeCommand<EvtxParseResult>("evtx_parse_manifest", { manifest });
 }
 
 export async function inspectEvidenceBundle(
