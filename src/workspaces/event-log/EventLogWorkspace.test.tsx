@@ -5,6 +5,7 @@ const virtualizerState = vi.hoisted(() => ({
   measuredSizes: new Map<number, number>(),
   items: [] as Array<{ index: number; size: number; start: number; end: number; key: string | number }>,
   totalSize: 0,
+  resizedSizes: new Map<number, number>(),
   recalculate: () => undefined,
   measureElement: (element: HTMLElement | null) => {
     if (!element) return;
@@ -66,6 +67,11 @@ vi.mock("@tanstack/react-virtual", () => ({
       getTotalSize,
       getVirtualItems,
       measureElement: virtualizerState.measureElement,
+      resizeItem: (index: number, size: number) => {
+        virtualizerState.resizedSizes.set(index, size);
+        virtualizerState.measuredSizes.set(index, size);
+        virtualizerState.recalculate();
+      },
       scrollToIndex: vi.fn(),
     };
   },
@@ -138,6 +144,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     virtualizerState.measuredSizes.clear();
+    virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
   });
@@ -320,6 +327,8 @@ describe("event-viewer shared font metrics", () => {
     expect(timeline.getByRole("option")).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
+    expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 2);
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + largeList.rowHeight + 2

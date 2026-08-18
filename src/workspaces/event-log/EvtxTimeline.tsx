@@ -165,13 +165,20 @@ export function EvtxTimeline() {
     [virtualizer.measureElement]
   );
 
-  // Persisted font-size changes alter rendered row heights. Re-measure the committed row nodes
-  // without clearing valid item sizes, so grouped rows and records keep real cumulative offsets.
+  // Persisted font-size changes alter rendered row heights. Update every row's cached size,
+  // including rows currently outside the viewport, then refresh connected nodes for actual DOM
+  // measurements. Avoiding measure() preserves TanStack Virtual's valid item-size cache.
   useEffect(() => {
+    rows.forEach((row, index) => {
+      virtualizer.resizeItem(
+        index,
+        row.kind === "group" ? metrics.rowHeight : metrics.rowHeight + 2
+      );
+    });
     for (const element of rowElementsRef.current.values()) {
       if (element.isConnected) virtualizer.measureElement(element);
     }
-  }, [metrics.rowHeight, virtualizer.measureElement]);
+  }, [metrics.rowHeight, rows, virtualizer.measureElement, virtualizer.resizeItem]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
