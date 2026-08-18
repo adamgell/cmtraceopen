@@ -376,7 +376,7 @@ fn query_channel_inner(
     let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
     let mut unparsable = 0usize;
     let mut unrenderable = 0usize;
-
+    let mut message_failures = 0usize;
     let mut gaps = Vec::new();
     let mut batch = EVENT_FETCH_BATCH;
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
@@ -459,6 +459,10 @@ fn query_channel_inner(
                 Ok(xml) => xml,
                 Err(error) => {
                     unrenderable += 1;
+                    gaps.push(format!(
+                        "{channel}: event could not be rendered ({})",
+                        format_source_error("EvtRender", &error, remote)
+                    ));
                     if unrenderable == 1 {
                         log::warn!(
                             "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
@@ -503,7 +507,11 @@ fn query_channel_inner(
                 ) {
                     Ok(message) => message,
                     Err(error) => {
-                        unrenderable += 1;
+                        message_failures += 1;
+                        gaps.push(format!(
+                            "{channel}: event message could not be formatted ({})",
+                            format_source_error("EvtFormatMessage", &error, remote)
+                        ));
                         log::warn!(
                             "event=evtx_metadata_failed channel=\"{channel}\" error=\"{}\"",
                             format_source_error("EvtFormatMessage", &error, remote)
@@ -547,6 +555,14 @@ fn query_channel_inner(
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
         gaps.push(format!(
             "{channel}: {unrenderable} events could not be rendered and are missing from this view"
+        ));
+    }
+    if message_failures > 0 {
+        log::warn!(
+            "event=evtx_live_query_gap channel=\"{channel}\" message_failures={message_failures}"
+        );
+        gaps.push(format!(
+            "{channel}: {message_failures} event messages could not be formatted"
         ));
     }
     log::info!(
@@ -672,10 +688,13 @@ fn format_event_message(
 ) -> Result<Option<String>, Error> {
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
-        let metadata =
-            unsafe { EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0) }
-                .ok()
-                .map(OwnedEvtHandle::new);
+        let metadata = match unsafe {
+            EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0)
+        } {
+            Ok(handle) => Some(OwnedEvtHandle::new(handle)),
+            Err(error) if is_publisher_metadata_not_found(&error) => None,
+            Err(error) => return Err(error),
+        };
         cache.insert(provider_name.to_string(), metadata);
     }
 
@@ -801,6 +820,13 @@ fn is_message_not_found(error: &Error) -> bool {
     win32_code(error) == 15027
 }
 
+#[cfg(target_os = "windows")]
+fn is_publisher_metadata_not_found(error: &Error) -> bool {
+    // ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND and ERROR_FILE_NOT_FOUND mean that
+    // this provider has no message table; other failures must remain visible.
+    matches!(win32_code(error), 15007 | 2 | 1168)
+}
+
 #[cfg(test)]
 #[cfg(target_os = "windows")]
 mod tests {
@@ -828,6 +854,15 @@ mod tests {
             println!("  XML prefix: {}", &r.raw_xml[..r.raw_xml.len().min(300)]);
         }
     }
+    #[test]
+    fn remote_render_and_metadata_errors_preserve_source_taxonomy() {
+        assert!(format_remote_code("EvtRender", 5).contains("access denied"));
+        assert!(format_remote_code("EvtOpenPublisherMetadata", 53)
+            .contains("remote source unavailable"));
+        assert!(!is_publisher_metadata_not_found(&Error::from_win32(5)));
+        assert!(is_publisher_metadata_not_found(&Error::from_win32(15007)));
+    }
+
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -1047,30 +1082,56 @@ mod live_service_tests {
         }
     }
 
+    #[test]
+    #[ignore = "requires a reachable Windows source and intentionally invalid credentials"]
+    fn remote_credential_failure_is_not_reported_as_an_empty_channel() {
+        let machine = std::env::var("CMTRACE_REMOTE_DENIED_MACHINE")
+            .expect("set CMTRACE_REMOTE_DENIED_MACHINE for the Windows credential scenario");
+        let error = enumerate_remote_channels(&machine).expect_err("remote access should fail");
+        assert!(
+            error.contains("credentials rejected"),
+            "credential failure must remain explicit: {error}"
+        );
+        assert!(!error.contains("0 events"));
+    }
+
     #[ignore = "requires a reachable Windows Event Log source"]
     #[test]
     fn remote_session_and_event_handles_are_closed_at_scope_end() {
         let machine = std::env::var("CMTRACE_REMOTE_MACHINE")
             .expect("set CMTRACE_REMOTE_MACHINE for the Windows cleanup scenario");
-        let scan = query_remote_channel_streamed(
-            &machine,
-            CHANNEL,
-            &EventQueryFilter::default(),
-            &no_maps(),
-            Some(10),
-            |_, _| {},
-            |_| {},
-        )
-        .expect("remote query succeeds");
-        if scan.records.is_empty() {
-            assert_eq!(scan.delivered, 0);
-        } else {
-            assert!(scan
-                .records
-                .iter()
-                .all(|record| record.source_label.starts_with("Remote: ")));
+        let normalized = normalize_remote_machine_name(&machine).expect("valid remote machine");
+        for _attempt in 0..3 {
+            let scan = query_remote_channel_streamed(
+                &machine,
+                CHANNEL,
+                &EventQueryFilter::default(),
+                &no_maps(),
+                Some(10),
+                |_, _| {},
+                |_| {},
+            )
+            .expect("remote query succeeds");
+            assert!(
+                scan.delivered >= scan.records.len(),
+                "streamed delivery count must include every returned record"
+            );
+            if scan.records.is_empty() {
+                assert_eq!(scan.delivered, 0);
+            } else {
+                assert!(scan
+                    .records
+                    .iter()
+                    .all(|record| record.source_label == format!("Remote: {normalized}")));
+            }
+
+            let (session, opened_machine) = open_remote_session(&machine).expect("session reopens");
+            assert_eq!(opened_machine, normalized);
+            assert_ne!(session.raw().0, 0);
+            drop(session);
         }
-        // query_remote_channel_streamed owns the session, query, event, and publisher metadata
-        // handles. Returning from this scope drops every one of those guards.
+        // Repeated successful queries and session opens exercise the RAII guards: a leaked session,
+        // query, event, or publisher-metadata handle would eventually exhaust the Event Log RPC
+        // resource quota rather than pass this loop.
     }
 }

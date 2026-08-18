@@ -645,6 +645,20 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().coverageGaps).toEqual([]);
   });
 
+  it("canonicalizes UNC remote names in empty-source coverage", async () => {
+    invoke.mockResolvedValueOnce([]);
+
+    await useEvtxStore.getState().enumerateRemoteChannels("\\\\lab-host");
+
+    expect(invoke).toHaveBeenCalledWith("evtx_enumerate_remote_channels", {
+      machine: "lab-host",
+    });
+    expect(useEvtxStore.getState().remoteMachine).toBe("lab-host");
+    expect(useEvtxStore.getState().coverageGaps).toEqual([
+      "lab-host: remote source is empty (no channels available)",
+    ]);
+  });
+
   it("keeps denied remote sources distinct from an empty source", async () => {
     invoke.mockResolvedValueOnce({
       records: [],

@@ -37,6 +37,7 @@ function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilterSubset {
   return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
 }
 
+
 function invokeEventQuery<T>(
   remoteMachine: string | null,
   channels: string[],
@@ -307,7 +308,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   enumerateRemoteChannels: async (machine) => {
-    const normalized = machine.trim();
+    const normalized = machine.trim().replace(/^[/\\]+/, "");
     set({ remoteMachine: normalized || null, loadError: null });
     if (!normalized) {
       set({ isLoading: false, loadError: "Enter a remote computer name." });
