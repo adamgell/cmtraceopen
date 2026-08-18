@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -39,6 +40,8 @@ fn source_label_for_path(path: &Path) -> String {
 pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
 /// Bounds the number of per-region diagnostics while preserving the parser error count.
 const MAX_COVERAGE_GAPS_PER_FILE: usize = 4_096;
+/// Bounds the combined diagnostics returned for a multi-file source selection.
+const MAX_COVERAGE_GAPS_RESULT: usize = MAX_SOURCE_MANIFEST_ENTRIES;
 const MAX_SOURCE_MANIFEST_WORK: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1282,6 +1285,42 @@ fn bound_coverage_gaps(gaps: &mut Vec<EvtxCoverageGap>, source: &str) {
         format!("{omitted} additional recovery gaps were coalesced"),
     ));
 }
+fn bound_result_coverage(
+    gaps: &mut Vec<EvtxCoverageGap>,
+    messages: &mut Vec<String>,
+) {
+    if gaps.len() > MAX_COVERAGE_GAPS_RESULT {
+        let omitted = gaps.len() - (MAX_COVERAGE_GAPS_RESULT - 1);
+        let omitted_sources: BTreeSet<&str> = gaps[MAX_COVERAGE_GAPS_RESULT - 1..]
+            .iter()
+            .map(|gap| gap.source.as_str())
+            .collect();
+        let preview = omitted_sources
+            .iter()
+            .take(8)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let reason = format!(
+            "{omitted} additional recovery gaps across {} sources were coalesced; affected sources include {preview}",
+            omitted_sources.len()
+        );
+        gaps.truncate(MAX_COVERAGE_GAPS_RESULT - 1);
+        gaps.push(EvtxCoverageGap::new(
+            "<coverage>",
+            EvtxCoverageGapKind::Limit,
+            reason.clone(),
+        ));
+        messages.truncate(MAX_COVERAGE_GAPS_RESULT - 1);
+        messages.push(format!("<coverage>: {reason}"));
+    } else if messages.len() > MAX_COVERAGE_GAPS_RESULT {
+        let omitted = messages.len() - (MAX_COVERAGE_GAPS_RESULT - 1);
+        messages.truncate(MAX_COVERAGE_GAPS_RESULT - 1);
+        messages.push(format!(
+            "<coverage>: {omitted} additional recovery messages were coalesced"
+        ));
+    }
+}
 
 
 /// Parse source selections after bounded expansion into a deterministic manifest.
@@ -1415,6 +1454,7 @@ pub fn parse_evtx_manifest(
             break;
         }
     }
+    bound_result_coverage(&mut coverage_gaps, &mut error_messages);
 
     all_records.sort_by_key(|record| record.timestamp_epoch);
     for (index, record) in all_records.iter_mut().enumerate() {
@@ -1816,6 +1856,35 @@ mod tests {
             Some(EvtxCoverageGapKind::Limit)
         );
         assert!(gaps.last().is_some_and(|gap| gap.reason.contains("additional")));
+    }
+
+    #[test]
+    fn aggregate_recovery_diagnostics_are_bounded_across_many_sources() {
+        let mut gaps: Vec<_> = (0..=MAX_COVERAGE_GAPS_RESULT)
+            .map(|source_id| {
+                EvtxCoverageGap::new(
+                    format!("/damaged/{source_id}.evtx"),
+                    EvtxCoverageGapKind::File,
+                    "unreadable",
+                )
+            })
+            .collect();
+        let mut messages: Vec<_> = gaps.iter().map(format_coverage_gap).collect();
+
+        bound_result_coverage(&mut gaps, &mut messages);
+
+        assert_eq!(gaps.len(), MAX_COVERAGE_GAPS_RESULT);
+        assert_eq!(messages.len(), MAX_COVERAGE_GAPS_RESULT);
+        assert_eq!(
+            gaps.last().map(|gap| gap.kind),
+            Some(EvtxCoverageGapKind::Limit)
+        );
+        assert!(gaps.last().is_some_and(|gap| {
+            gap.reason.contains("additional") && gap.reason.contains("/damaged/")
+        }));
+        assert!(messages.last().is_some_and(|message| {
+            message.contains("additional") && message.contains("/damaged/")
+        }));
     }
 
     #[test]
