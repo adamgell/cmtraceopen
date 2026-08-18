@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openEventLogSource } from "./open-event-log-source";
+import { openEventLogSource, openEventLogSources } from "./open-event-log-source";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -11,7 +11,6 @@ const EVTX_FILE_DIALOG_FILTERS = [
 ];
 
 export function SourcePicker() {
-  const parseFiles = useEvtxStore((s) => s.parseFiles);
   const enumerateChannels = useEvtxStore((s) => s.enumerateChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
@@ -30,7 +29,7 @@ export function SourcePicker() {
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
-      await parseFiles(paths);
+      await openEventLogSources(paths.map((path) => ({ kind: "file" as const, path })));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);

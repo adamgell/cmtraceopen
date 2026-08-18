@@ -55,6 +55,19 @@ pub async fn evtx_parse_files(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Parses an already-expanded manifest without rebuilding it from paths.
+#[tauri::command]
+pub async fn evtx_parse_manifest(
+    manifest: EventLogSourceManifest,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxParseResult, String> {
+    let maps = state.event_maps.clone();
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(move || parser::parse_evtx_manifest(&manifest, &maps, &providers))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
 #[tauri::command]
 pub async fn evtx_enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
     #[cfg(target_os = "windows")]

@@ -68,6 +68,7 @@ export type EventLogSourceCoverage =
   | { kind: "unsupported"; path: string; reason: string }
   | { kind: "accessDenied"; path: string; reason: string }
   | { kind: "missing"; path: string; reason: string }
+  | { kind: "invalidPattern"; path: string; reason: string }
   | { kind: "limitReached"; path: string; reason: string };
 
 export interface EventLogSourceManifest {

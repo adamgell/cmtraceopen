@@ -50,6 +50,7 @@ pub enum SourceCoverage {
     Unsupported { path: String, reason: String },
     AccessDenied { path: String, reason: String },
     Missing { path: String, reason: String },
+    InvalidPattern { path: String, reason: String },
     LimitReached { path: String, reason: String },
 }
 
@@ -115,27 +116,38 @@ fn expand_wildcard(pattern: &str, coverage: &mut Vec<SourceCoverage>) -> Vec<Pat
         require_literal_separator: false,
         require_literal_leading_dot: false,
     };
-    match glob::glob_with(pattern, options) {
-        Ok(matches) => matches
-            .filter_map(|result| match result {
-                Ok(path) => Some(path),
-                Err(error) => {
-                    coverage.push(SourceCoverage::Missing {
-                        path: pattern.to_string(),
-                        reason: format!("wildcard entry could not be read: {error}"),
-                    });
-                    None
-                }
-            })
-            .collect(),
+    let matches = match glob::glob_with(pattern, options) {
+        Ok(matches) => matches,
         Err(error) => {
-            coverage.push(SourceCoverage::Missing {
+            coverage.push(SourceCoverage::InvalidPattern {
                 path: pattern.to_string(),
-                reason: format!("invalid wildcard: {error}"),
+                reason: format!("invalid wildcard pattern: {error}"),
             });
-            Vec::new()
+            return Vec::new();
+        }
+    };
+
+    let mut paths = Vec::new();
+    for result in matches {
+        if paths.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+            coverage.push(SourceCoverage::LimitReached {
+                path: pattern.to_string(),
+                reason: format!(
+                    "wildcard matches exceed the {} file manifest limit",
+                    MAX_SOURCE_MANIFEST_ENTRIES
+                ),
+            });
+            break;
+        }
+        match result {
+            Ok(path) => paths.push(path),
+            Err(error) => coverage.push(SourceCoverage::Missing {
+                path: pattern.to_string(),
+                reason: format!("wildcard entry could not be read: {error}"),
+            }),
         }
     }
+    paths
 }
 
 fn expand_path(
@@ -145,24 +157,22 @@ fn expand_path(
     manifest: &mut EventLogSourceManifest,
 ) -> Result<(), String> {
     if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
-        manifest.coverage.push(SourceCoverage::LimitReached {
-            path: path.to_string_lossy().to_string(),
-            reason: format!(
-                "source selection exceeds the {} file manifest limit",
-                MAX_SOURCE_MANIFEST_ENTRIES
-            ),
-        });
         return Ok(());
     }
 
     let path_string = path.to_string_lossy().to_string();
     let kind = classify_source_kind(&path_string, requested_kind);
-    if let Some(gap) = gated_source(&path_string, kind) {
-        manifest.coverage.push(gap);
-        return Ok(());
+    // VSS paths are a privileged source type even when the requested path does not exist locally.
+    // Report the platform/elevation boundary instead of masking it as a generic missing path.
+    if matches!(kind, EventLogSourceKind::Vss) {
+        if let Some(gap) = gated_source(&path_string, kind) {
+            manifest.coverage.push(gap);
+            return Ok(());
+        }
     }
 
-    let metadata = match fs::metadata(path) {
+
+    let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             manifest.coverage.push(SourceCoverage::Missing {
@@ -180,6 +190,15 @@ fn expand_path(
         }
         Err(error) => return Err(format!("cannot inspect source {path_string}: {error}")),
     };
+
+    if is_reparse_or_symlink(&metadata) {
+        manifest.coverage.push(SourceCoverage::Unsupported {
+            path: path_string,
+            reason: "symbolic links and reparse points are not followed during source expansion"
+                .to_string(),
+        });
+        return Ok(());
+    }
 
     if metadata.is_dir() {
         if depth >= MAX_SOURCE_MANIFEST_DEPTH {
@@ -207,6 +226,16 @@ fn expand_path(
             }
         };
         for entry in listing.entries {
+            if manifest.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
+                manifest.coverage.push(SourceCoverage::LimitReached {
+                    path: path_string.clone(),
+                    reason: format!(
+                        "source selection exceeds the {} file manifest limit",
+                        MAX_SOURCE_MANIFEST_ENTRIES
+                    ),
+                });
+                break;
+            }
             expand_path(
                 Path::new(&entry.path),
                 EventLogSourceKind::Folder,
@@ -214,6 +243,11 @@ fn expand_path(
                 manifest,
             )?;
         }
+        return Ok(());
+    }
+
+    if let Some(gap) = gated_source(&path_string, kind) {
+        manifest.coverage.push(gap);
         return Ok(());
     }
 
@@ -232,6 +266,23 @@ fn expand_path(
         kind,
     });
     Ok(())
+}
+
+
+fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        if metadata.file_type().is_symlink() {
+            return true;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    false
 }
 
 fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
@@ -276,16 +327,37 @@ fn is_vss_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\").to_lowercase();
     normalized.contains("globalroot\\device\\harddiskvolumeshadowcopy")
 }
-
 fn is_evtx_candidate(path: &Path) -> bool {
-    let lower = path.to_string_lossy().to_lowercase();
+    let lower = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
     lower.ends_with(".evtx")
         || lower.contains(".evtx.")
         || lower.ends_with(".evtx~")
 }
-
 fn normalize_source_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let is_absolute = raw.starts_with('/');
+    let mut components: Vec<&str> = Vec::new();
+    for component in raw.split('/') {
+        match component {
+            "" | "." if components.is_empty() && !is_absolute => {}
+            "" | "." => {}
+            ".." if components.last().is_some_and(|last| *last != "..") => {
+                components.pop();
+            }
+            ".." if !is_absolute => components.push(component),
+            ".." => {}
+            value => components.push(value),
+        }
+    }
+    let normalized = components.join("/");
+    if is_absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    }
 }
 
 fn coverage_path(coverage: &SourceCoverage) -> &str {
@@ -293,6 +365,7 @@ fn coverage_path(coverage: &SourceCoverage) -> &str {
         SourceCoverage::Unsupported { path, .. }
         | SourceCoverage::AccessDenied { path, .. }
         | SourceCoverage::Missing { path, .. }
+        | SourceCoverage::InvalidPattern { path, .. }
         | SourceCoverage::LimitReached { path, .. } => path,
     }
 }
@@ -323,6 +396,7 @@ pub fn parse_evtx_manifest(
             SourceCoverage::Unsupported { path, reason }
             | SourceCoverage::AccessDenied { path, reason }
             | SourceCoverage::Missing { path, reason }
+            | SourceCoverage::InvalidPattern { path, reason }
             | SourceCoverage::LimitReached { path, reason } => format!("{path}: {reason}"),
         })
         .collect();
@@ -331,13 +405,16 @@ pub fn parse_evtx_manifest(
         let path = Path::new(&source.path);
         match parse_single_file(path, maps, providers) {
             Ok(file) => {
-                let records = file.records;
+                let mut records = file.records;
+                for record in &mut records {
+                    // A basename is ambiguous when a recursive folder contains two files with the
+                    // same name. Keep the manifest's normalized member path on every event so the
+                    // merged timeline can identify the originating source.
+                    record.source_label = source.path.clone();
+                }
                 parse_errors += file.parse_errors;
                 error_messages.extend(file.messages);
-                let source_label = path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source.path.clone());
+                let source_label = source.path.clone();
 
                 let mut channel_counts: std::collections::HashMap<String, u64> =
                     std::collections::HashMap::new();
@@ -687,6 +764,26 @@ mod tests {
         assert_eq!(duplicate.entries.len(), 1);
         assert_eq!(duplicate.entries[0].source_id, duplicate.entries[0].path.to_lowercase());
 
+        std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+
+    #[test]
+    fn archive_named_folders_still_recurse_into_regular_evtx_members() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-folder-{}",
+            std::process::id()
+        ));
+        let archive_folder = root.join("Archive-logs");
+        std::fs::create_dir_all(&archive_folder).expect("create archive-named folder");
+        let member = archive_folder.join("Application.evtx");
+        std::fs::write(&member, b"member").expect("write regular member");
+
+        let manifest = build_source_manifest(&[archive_folder.to_string_lossy().to_string()])
+            .expect("build manifest");
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].path, normalize_source_path(&member));
+        assert!(manifest.coverage.is_empty());
         std::fs::remove_dir_all(root).expect("remove source tree");
     }
 

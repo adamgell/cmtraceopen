@@ -9,6 +9,7 @@ import type {
   EvtxLevel,
   EvtxParseResult,
   EvtxTimeWindow,
+  EventLogSourceManifest,
   EventQueryFilterSubset,
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
@@ -61,6 +62,7 @@ interface EvtxState {
    * complete picture, which is how absent events get mistaken for evidence that nothing happened.
    */
   coverageGaps: string[];
+  sourceManifest: EventLogSourceManifest | null;
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
   filterLevels: Set<EvtxLevel>;
@@ -80,8 +82,8 @@ interface EvtxState {
   sortField: EvtxSortField;
   sortDirection: EvtxSortDirection;
   selectedRecordId: number | null;
-
   parseFiles: (paths: string[]) => Promise<void>;
+  parseManifest: (manifest: EventLogSourceManifest) => Promise<void>;
   enumerateChannels: () => Promise<void>;
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
@@ -129,12 +131,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   channels: [],
   sourceMode: null,
   isLoading: false,
+  loadError: null,
   loadingChannel: null,
   loadingProgress: null,
   loadStartTime: null,
   loadElapsedMs: null,
-  loadError: null,
   coverageGaps: [],
+  sourceManifest: null,
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
@@ -158,6 +161,21 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
+    }
+  },
+
+  parseManifest: async (manifest) => {
+    set({ isLoading: true, loadError: null, sourceManifest: manifest });
+    try {
+      const result = await invoke<EvtxParseResult>("evtx_parse_manifest", { manifest });
+      const checked = assertParseResultShape(result);
+      set({
+        ...applyParseResult({ ...result, errorMessages: checked.errorMessages }, "files"),
+        sourceManifest: manifest,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      set({ isLoading: false, loadError: message, sourceManifest: manifest });
     }
   },
 
@@ -567,7 +585,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       // would report a hole in a set no longer on screen, and a zone left over from a previous
       // session would silently reinterpret the next one's timestamps.
       coverageGaps: [],
-      timeZoneMode: "local",
+      sourceManifest: null,
       columnConfig: defaultColumnConfig(),
       groupBy: [],
       collapsedGroups: new Set<string>(),

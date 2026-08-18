@@ -311,6 +311,12 @@ export async function expandEventLogSources(
   return invokeCommand<EventLogSourceManifest>("evtx_expand_sources", { paths });
 }
 
+export async function parseEventLogManifest(
+  manifest: EventLogSourceManifest,
+): Promise<ParseResult> {
+  return invokeCommand<ParseResult>("evtx_parse_manifest", { manifest });
+}
+
 export async function inspectEvidenceBundle(
   path: string,
 ): Promise<EvidenceBundleDetails> {

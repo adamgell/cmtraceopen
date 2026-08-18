@@ -354,6 +354,8 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_expand_sources,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_parse_manifest,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_enumerate_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,

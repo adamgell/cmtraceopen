@@ -7,9 +7,9 @@ export type EventLogOpenSource =
   | { kind: "wildcard"; path: string }
   | { kind: "vss"; path: string };
 
-/** Expand a selected source once, then hand only the bounded manifest to the parser. */
-export async function openEventLogSource(source: EventLogOpenSource): Promise<void> {
-  const manifest = await expandEventLogSources([source.path]);
+/** Expand selected sources once and hand the complete manifest to the store. */
+export async function openEventLogSources(sources: EventLogOpenSource[]): Promise<void> {
+  const manifest = await expandEventLogSources(sources.map((source) => source.path));
   if (manifest.entries.length === 0) {
     const details = manifest.coverage
       .map((gap) => `${gap.path}: ${gap.reason}`)
@@ -17,5 +17,9 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
     throw new Error(details || "No .evtx files were found for this source.");
   }
 
-  await useEvtxStore.getState().parseFiles(manifest.entries.map((entry) => entry.path));
+  await useEvtxStore.getState().parseManifest(manifest);
+}
+
+export async function openEventLogSource(source: EventLogOpenSource): Promise<void> {
+  await openEventLogSources([source]);
 }
