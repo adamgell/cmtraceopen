@@ -123,6 +123,16 @@ describe("coverage gaps through the store", () => {
     expect(state.loadError).toContain("access denied");
     expect(state.isLoading).toBe(false);
   });
+  it("clears a load error without ending an active load", () => {
+    useEvtxStore.setState({ isLoading: true, loadError: "stale error" });
+
+    useEvtxStore.getState().setLoadError(null);
+
+    expect(useEvtxStore.getState()).toMatchObject({
+      isLoading: true,
+      loadError: null,
+    });
+  });
 });
 
 describe("a multi-channel query is delivered one channel at a time", () => {

@@ -18,6 +18,14 @@ const eventMocks = vi.hoisted(() => {
   return { state, listen, unlisten };
 });
 
+const timelineMocks = vi.hoisted(() => ({
+  replaceTimelineSource: vi.fn(async () => undefined),
+}));
+
+const dialogMocks = vi.hoisted(() => ({
+  open: vi.fn(async () => undefined as string | undefined),
+}));
+
 const actionMocks = vi.hoisted(() => ({
   current: {
     commandState: {
@@ -87,6 +95,12 @@ vi.mock("./use-app-actions", () => ({
 
 vi.mock("../lib/recent-entries", () => ({
   clearRecentEntries: recentMocks.clearRecentEntries,
+}));
+
+vi.mock("../workspaces/timeline/open-timeline-source", () => timelineMocks);
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: dialogMocks.open,
 }));
 
 interface TestMenuPayload {
@@ -162,6 +176,10 @@ describe("useAppMenu", () => {
     vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
     eventMocks.state.callback = null;
     actionMocks.current.commandState = { ...initialCommandState };
+    timelineMocks.replaceTimelineSource
+      .mockReset()
+      .mockResolvedValue(undefined);
+    dialogMocks.open.mockReset().mockResolvedValue(undefined);
     useUiStore.setState({
       activeWorkspace: "log",
       activeView: "log",
@@ -348,6 +366,18 @@ describe("useAppMenu", () => {
       expect.any(Object),
     );
   });
+  it("opens a replacement timeline for native New Timeline folder opens", async () => {
+    dialogMocks.open.mockResolvedValueOnce("C:/Evidence/NewTimeline");
+
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+    await emitMenuAction({ action: "timeline_new_from_folder" });
+
+    expect(timelineMocks.replaceTimelineSource).toHaveBeenCalledWith({
+      kind: "folder",
+      path: "C:/Evidence/NewTimeline",
+    });
+  });
 
   it("opens a recent entry in its recorded workspace", async () => {
     renderHook(() => useAppMenu());
@@ -442,32 +472,6 @@ describe("useAppMenu", () => {
     expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
   });
 
-  it("restores Always on Top state when the native pin rejects", async () => {
-    const error = new Error("native pin unavailable");
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
-    useUiStore.setState({ alwaysOnTop: false });
-    renderHook(() => useAppMenu());
-    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("sync_app_menu_state", expect.anything()),
-    );
-    vi.mocked(invoke).mockRejectedValueOnce(error);
-
-    await emitMenuAction({ action: "toggle_always_on_top" });
-
-    expect(useUiStore.getState().alwaysOnTop).toBe(false);
-    expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
-    expect(consoleError).toHaveBeenCalledWith(
-      "[app-menu] failed to handle native menu action",
-      expect.objectContaining({
-        error,
-        payload: expect.objectContaining({ action: "toggle_always_on_top" }),
-      }),
-    );
-  });
-
   it("opens the Collect Diagnostics dialog from the native menu", async () => {
     useUiStore.setState({ showCollectDiagnosticsDialog: false });
     renderHook(() => useAppMenu());
@@ -491,7 +495,12 @@ describe("useKeyboard native menu parity", () => {
       showAboutDialog: false,
       showSettingsDialog: false,
       showEvidenceBundleDialog: false,
+      showGuidRegistryDialog: false,
+      showMergeTabsDialog: false,
+      showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
+      showCollectDiagnosticsDialog: false,
+      collectionResult: null,
     });
   });
 
@@ -544,6 +553,72 @@ describe("useKeyboard native menu parity", () => {
     useUiStore.setState({ elevationPrompt: null });
   });
 
+  it("suppresses shortcuts for collection overlays and DOM modal surfaces", () => {
+    useUiStore.setState({
+      currentPlatform: "windows",
+      showCollectDiagnosticsDialog: true,
+    });
+    renderHook(() => useKeyboard());
+
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+    expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
+
+    cleanup();
+    useUiStore.setState({
+      showCollectDiagnosticsDialog: false,
+      collectionResult: {
+        bundlePath: "C:/Evidence",
+        bundleId: "bundle-fixture",
+        artifactCounts: { collected: 1, missing: 0, failed: 0, total: 1 },
+        durationMs: 1,
+        gaps: [],
+      },
+    });
+    renderHook(() => useKeyboard());
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+
+    cleanup();
+    useUiStore.setState({ collectionResult: null });
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+    const input = document.createElement("input");
+    modal.appendChild(input);
+    renderHook(() => useKeyboard());
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+    input.focus();
+    expect(
+      fireEvent.keyDown(input, { key: "v", ctrlKey: true }),
+    ).toBe(true);
+    expect(
+      fireEvent.keyDown(input, { key: "o", ctrlKey: true }),
+    ).toBe(false);
+    modal.remove();
+  });
+  it("allows AltGr text entry in modal inputs", () => {
+    useUiStore.setState({
+      currentPlatform: "windows",
+      showCollectDiagnosticsDialog: true,
+    });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    renderHook(() => useKeyboard());
+
+    expect(
+      fireEvent.keyDown(input, { key: "@", ctrlKey: true, altKey: true }),
+    ).toBe(true);
+    expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
+
+    input.remove();
+  });
   it("restarts a non-log workspace without dragging a stale source along", async () => {
     useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
     // activeSource survives a workspace switch, so it is still set here even

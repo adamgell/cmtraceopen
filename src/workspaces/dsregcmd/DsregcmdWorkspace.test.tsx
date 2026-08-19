@@ -11,7 +11,7 @@ import type {
   DsregcmdWhfbPolicyEvidence,
 } from "./types";
 import type { EventLogAnalysis, EventLogEntry } from "../../types/event-log";
-import { createTestVirtualizer } from "../../test-utils/virtualizer";
+import { useUiStore } from "../../stores/ui-store";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -25,8 +25,18 @@ vi.mock("../../hooks/use-app-actions", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
-    createTestVirtualizer(options),
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 28,
+        size: 28,
+      })),
+    getTotalSize: () => count * 28,
+    measureElement: vi.fn(),
+    scrollToIndex: vi.fn(),
+  }),
 }));
 
 function policyValue(
@@ -42,7 +52,7 @@ function policyValue(
   };
 }
 
-function nullFacts(): DsregcmdFacts {
+function fixtureFacts(): DsregcmdFacts {
   return {
     joinState: {
       azureAdJoined: true,
@@ -217,7 +227,7 @@ function eventLogAnalysis(): EventLogAnalysis {
 
 function analysisResult(): DsregcmdAnalysisResult {
   return {
-    facts: nullFacts(),
+    facts: fixtureFacts(),
     derived: {
       joinType: "HybridEntraIdJoined",
       joinTypeLabel: "Hybrid Entra ID joined",
@@ -332,6 +342,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  useUiStore.setState({ currentPlatform: "windows" });
   useDsregcmdStore.getState().clear();
 });
 

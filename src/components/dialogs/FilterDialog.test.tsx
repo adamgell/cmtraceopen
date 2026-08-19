@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { useFilterStore } from "../../stores/filter-store";
 import { FilterDialog } from "./FilterDialog";
+
+  afterEach(() => {
+    useFilterStore.getState().clearFilter();
+  });
 
 describe("FilterDialog", () => {
   it("exposes a dialog landmark when open", () => {
@@ -17,12 +22,12 @@ describe("FilterDialog", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
   });
 
-  it("traps focus and restores focus to the opener", () => {
+  it("traps focus and restores the opener when closed", () => {
     const opener = document.createElement("button");
-    document.body.append(opener);
+    document.body.appendChild(opener);
     opener.focus();
 
-    const view = render(
+    const rendered = render(
       <FilterDialog
         isOpen
         onClose={() => {}}
@@ -31,23 +36,102 @@ describe("FilterDialog", () => {
       />,
     );
     const dialog = screen.getByRole("dialog", { name: "Filter" });
-    const focusable = Array.from(
-      dialog.querySelectorAll<HTMLElement>("button, input, select"),
-    );
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
+    const input = dialog.querySelector("input");
+    const tabWrapTarget = dialog.querySelector("select");
+    const close = screen.getByRole("button", { name: "Cancel" });
 
-    expect(dialog.contains(document.activeElement)).toBe(true);
-    last?.focus();
+    expect(input).not.toBeNull();
+    expect(tabWrapTarget).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+
+    close.focus();
     fireEvent.keyDown(window, { key: "Tab" });
-    expect(document.activeElement).toBe(first);
-
-    first?.focus();
+    expect(document.activeElement).toBe(tabWrapTarget);
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(last);
+    expect(document.activeElement).toBe(close);
 
-    view.unmount();
+    opener.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(tabWrapTarget);
+
+    rendered.rerender(
+      <FilterDialog
+        isOpen={false}
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[]}
+      />,
+    );
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+
+  it("returns focus to the first clause when a focused remove control unmounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const rendered = render(
+      <FilterDialog
+        isOpen
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[
+          { field: "Message", op: "Contains", value: "first" },
+          { field: "Component", op: "Equals", value: "second" },
+        ]}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Filter" });
+    const input = dialog.querySelector("input");
+    const selects = dialog.querySelectorAll("select");
+    const removeButtons = screen.getAllByRole("button", {
+      name: "Remove clause",
+    });
+
+    expect(input).not.toBeNull();
+    expect(selects.length).toBe(4);
+    expect(removeButtons.length).toBe(2);
+
+    const focusedRemoveButton = removeButtons[1];
+    focusedRemoveButton.focus();
+    fireEvent.click(focusedRemoveButton);
+
+    expect(document.activeElement).toBe(input);
+    dialog.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(selects[0]);
+
+    rendered.rerender(
+      <FilterDialog
+        isOpen={false}
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[]}
+      />,
+    );
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+  it("moves focus to the dialog surface when filtering disables controls", () => {
+    render(
+      <FilterDialog
+        isOpen
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[]}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Filter" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    act(() => {
+      useFilterStore.getState().setIsFiltering(true);
+    });
+
+    expect(document.activeElement).toBe(dialog);
   });
 });

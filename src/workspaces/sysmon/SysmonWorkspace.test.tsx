@@ -4,7 +4,6 @@ import { SysmonWorkspace } from "./SysmonWorkspace";
 import { useSysmonStore } from "./sysmon-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { SysmonAnalysisResult, SysmonEvent } from "./types";
-import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -16,9 +15,20 @@ vi.mock("../../hooks/use-app-actions", () => ({
 vi.mock("../../lib/commands", () => ({
   analyzeSysmonLogs: vi.fn(),
 }));
+
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
-    createTestVirtualizer(options),
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 28,
+        size: 28,
+      })),
+    getTotalSize: () => count * 28,
+    measureElement: vi.fn(),
+    scrollToIndex: vi.fn(),
+  }),
 }));
 
 function event(): SysmonEvent {
@@ -83,6 +93,7 @@ function analysis(): SysmonAnalysisResult {
 afterEach(() => {
   cleanup();
   useSysmonStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
 });
 
 beforeEach(() => {

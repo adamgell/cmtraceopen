@@ -1,5 +1,8 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPathAsLogSource } from "../../lib/log-source";
+import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
 import { DeploymentWorkspace } from "./DeploymentWorkspace";
 import {
   useDeploymentStore,
@@ -7,6 +10,10 @@ import {
   type DeploymentLogFile,
 } from "./deployment-store";
 
+
+vi.mock("../../lib/log-source", () => ({
+  loadPathAsLogSource: vi.fn().mockResolvedValue(null),
+}));
 function file(overrides: Partial<DeploymentLogFile> = {}): DeploymentLogFile {
   return {
     path: "C:\\Windows\\Logs\\Software\\app.log",
@@ -84,6 +91,10 @@ function seedReady() {
 afterEach(() => {
   cleanup();
   useDeploymentStore.getState().reset();
+  useLogStore.getState().setPendingScrollTarget(null);
+  useUiStore
+    .getState()
+    .setActiveView(useUiStore.getInitialState().activeView);
 });
 
 beforeEach(() => {
@@ -115,10 +126,10 @@ describe("DeploymentWorkspace fixtures", () => {
     expect(screen.getByText("Failed Deployments")).toBeInTheDocument();
     expect(screen.getByText("Broken App")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open in Log Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "1 errors" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 error" })).toBeInTheDocument();
     expect(screen.getByText("Installation failed with 1603")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "1 errors" }));
+    fireEvent.click(screen.getByRole("button", { name: "1 error" }));
     expect(screen.getByText(/L42/)).toBeInTheDocument();
     expect(screen.getByText("CustomAction failed")).toBeInTheDocument();
 
@@ -127,5 +138,22 @@ describe("DeploymentWorkspace fixtures", () => {
     expect(screen.getByText("Deferred Burn")).toBeInTheDocument();
     expect(screen.getByText("Other / Unclassified (1)")).toBeInTheDocument();
     expect(screen.getAllByText("Application").length).toBeGreaterThan(0);
+  });
+  it("DEP-003 opens the failing file at its first error line", async () => {
+    seedReady();
+    render(<DeploymentWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in Log Viewer" }));
+
+    expect(useLogStore.getState().pendingScrollTarget).toEqual({
+      filePath: "C:\\Windows\\Logs\\Software\\fail.log",
+      lineNumber: 42,
+    });
+    expect(useUiStore.getState().activeView).toBe("log");
+    await waitFor(() =>
+      expect(loadPathAsLogSource).toHaveBeenCalledWith(
+        "C:\\Windows\\Logs\\Software\\fail.log",
+      ),
+    );
   });
 });

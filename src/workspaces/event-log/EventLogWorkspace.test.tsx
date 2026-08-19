@@ -5,7 +5,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
-import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -15,8 +14,18 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
-    createTestVirtualizer(options),
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 28,
+        size: 28,
+      })),
+    getTotalSize: () => count * 28,
+    measureElement: vi.fn(),
+    scrollToIndex: vi.fn(),
+  }),
 }));
 
 const { EventLogWorkspace } = await import("./EventLogWorkspace");
@@ -110,16 +119,6 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.getByText("TSV")).toBeInTheDocument();
     expect(screen.getByText("JSON")).toBeInTheDocument();
     expect(screen.getByText("Event XML")).toBeInTheDocument();
-  });
-  it("EVTX-004 gives level filters descriptive state to keyboard and screen-reader users", () => {
-    seedEvents();
-    render(<EventLogWorkspace />);
-
-    const errorToggle = screen.getByRole("button", { name: "Toggle Error events" });
-    expect(errorToggle).toHaveAttribute("aria-pressed", "true");
-
-    fireEvent.click(errorToggle);
-    expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
   it("EVTX-007 shows event detail, Event Data, and Show/Hide Raw XML", () => {

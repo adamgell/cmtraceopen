@@ -9,7 +9,7 @@ import type { LogEntry } from "../../types/log";
 const severityColumn = getColumnDef("severity");
 const messageColumn = getColumnDef("message");
 if (!severityColumn || !messageColumn) {
-  throw new Error("LogRow story requires severity and message column definitions");
+  throw new Error("severity and message columns must exist");
 }
 const visibleColumns = [severityColumn, messageColumn];
 
@@ -91,7 +91,7 @@ describe("LogRow error codes and markers", () => {
     const { onClick, onToggleMarker, onSetMarkerCategory } = renderRow({
       marker: { lineId: 4, category: "bug", color: "#ef4444", added: "2026-07-26T12:00:00Z" },
     });
-    const gutter = screen.getByRole("option").firstElementChild as HTMLElement;
+    const gutter = screen.getByTestId("log-row-marker-gutter");
     fireEvent.click(gutter);
     expect(onToggleMarker).toHaveBeenCalledWith("C:/Windows/CCM/Logs/AppEnforce.log", 4);
     expect(onClick).not.toHaveBeenCalled();

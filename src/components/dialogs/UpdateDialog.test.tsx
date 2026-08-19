@@ -30,8 +30,8 @@ function renderDialog(
     onSkipVersion: vi.fn(),
     ...overrides,
   };
-  const view = render(<UpdateDialog {...props} />);
-  return { props, view };
+  const rendered = render(<UpdateDialog {...props} />);
+  return { props, ...rendered };
 }
 
 const availableUpdate = (overrides: Partial<UpdateInfo> = {}): UpdateInfo => ({
@@ -51,46 +51,66 @@ describe("UpdateDialog", () => {
     expect(dialog).toHaveAttribute("aria-modal", "true");
   });
 
-  it("traps focus and restores focus to the opener", () => {
+  it("traps focus and restores the opener when closed", () => {
     const opener = document.createElement("button");
-    document.body.append(opener);
+    document.body.appendChild(opener);
     opener.focus();
 
-    const { view } = renderDialog({ isChecking: true });
+    const { rerender } = renderDialog({ isChecking: true });
     const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
     const cancel = screen.getByRole("button", { name: "Cancel" });
 
     expect(dialog.contains(document.activeElement)).toBe(true);
-    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
     fireEvent.keyDown(window, { key: "Tab" });
     expect(document.activeElement).toBe(cancel);
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(cancel);
 
-    view.unmount();
+    opener.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+
+    rerender(
+      <UpdateDialog
+        isOpen={false}
+        onClose={vi.fn()}
+        updateInfo={null}
+        isChecking={false}
+        isDownloading={false}
+        downloadProgress={0}
+        onCheckForUpdates={vi.fn().mockResolvedValue(null)}
+        onDownloadAndInstall={vi.fn()}
+        onOpenReleasePage={vi.fn()}
+        onSkipVersion={vi.fn()}
+      />,
+    );
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
-  it("keeps focus inside the dialog when downloading starts", () => {
-    const { props, view } = renderDialog({
+  it("restores focus when update content removes the focused control", () => {
+    const { props, rerender } = renderDialog({
       updateInfo: availableUpdate(),
     });
-    const downloadButton = screen.getByRole("button", { name: "Download & install" });
-    downloadButton.focus();
+    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
+    const download = screen.getByRole("button", {
+      name: "Download & install",
+    });
+    download.focus();
 
-    view.rerender(
+    rerender(
       <UpdateDialog
         {...props}
-        isDownloading={true}
-        downloadProgress={0.42}
+        updateInfo={availableUpdate()}
+        isDownloading
+        downloadProgress={0.5}
       />,
     );
 
-    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
     expect(dialog.contains(document.activeElement)).toBe(true);
-    view.unmount();
+    expect(document.activeElement).toBe(dialog);
   });
-
 
   it("shows Cancel while checking", () => {
     const { props } = renderDialog({ isChecking: true });

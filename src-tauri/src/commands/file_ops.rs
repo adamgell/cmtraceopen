@@ -189,9 +189,11 @@ pub fn open_log_file(
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ParseProgressPayload {
+    request_id: u64,
     file_path: String,
     file_name: String,
     completed: u32,
+    global_completed: u32,
     total: u32,
     entries: u32,
     file_size: u64,
@@ -201,6 +203,8 @@ struct ParseProgressPayload {
 #[tauri::command]
 pub fn parse_files_batch(
     paths: Vec<String>,
+    request_id: u64,
+    completed_offset: u32,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Vec<ParseResult>, crate::error::AppError> {
@@ -244,9 +248,11 @@ pub fn parse_files_batch(
                     let _ = app.emit(
                         "parse-progress",
                         ParseProgressPayload {
+                            request_id,
                             file_path: path.clone(),
                             file_name,
                             completed: done,
+                            global_completed: completed_offset.saturating_add(done),
                             total,
                             entries: result.entries.len() as u32,
                             file_size: result.file_size,
@@ -266,9 +272,11 @@ pub fn parse_files_batch(
                     let _ = app.emit(
                         "parse-progress",
                         ParseProgressPayload {
+                            request_id,
                             file_path: path.clone(),
                             file_name,
                             completed: done,
+                            global_completed: completed_offset.saturating_add(done),
                             total,
                             entries: 0,
                             file_size: 0,

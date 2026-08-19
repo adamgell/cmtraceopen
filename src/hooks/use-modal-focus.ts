@@ -9,6 +9,12 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(", ");
 
+function getFocusableControls(surface: HTMLElement): HTMLElement[] {
+  return Array.from(
+    surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  );
+}
+
 export function useModalFocus(
   isOpen: boolean,
   surfaceRef: RefObject<HTMLElement | null>,
@@ -29,34 +35,32 @@ export function useModalFocus(
         ? preferred
         : surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ?? surface;
     target?.focus();
-
     return () => {
       if (previouslyFocused?.isConnected) {
         previouslyFocused.focus();
       }
     };
   }, [initialFocusRef, isOpen, surfaceRef]);
-
   useEffect(() => {
     if (!isOpen || focusKey == null) return;
 
     const surface = surfaceRef.current;
     if (!surface) return;
 
+    const focusable = getFocusableControls(surface);
     const active =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    if (active && surface.contains(active)) return;
+    if (active && focusable.includes(active)) return;
 
     const preferred = initialFocusRef?.current;
     const target =
       preferred && !preferred.hasAttribute("disabled")
         ? preferred
-        : surface.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ?? surface;
+        : focusable[0] ?? surface;
     target.focus();
   }, [focusKey, initialFocusRef, isOpen, surfaceRef]);
-
   useEffect(() => {
     if (!isOpen) return;
 
@@ -66,9 +70,7 @@ export function useModalFocus(
       const surface = surfaceRef.current;
       if (!surface) return;
 
-      const focusable = Array.from(
-        surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-      );
+      const focusable = getFocusableControls(surface);
       if (focusable.length === 0) {
         event.preventDefault();
         surface.focus();
@@ -82,7 +84,7 @@ export function useModalFocus(
           ? document.activeElement
           : null;
 
-      if (!active || !surface.contains(active)) {
+      if (!active || !focusable.includes(active)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
         return;
@@ -101,4 +103,5 @@ export function useModalFocus(
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, surfaceRef]);
+
 }

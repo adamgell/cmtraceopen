@@ -13,7 +13,6 @@ import { IntuneDashboard } from "./IntuneDashboard";
 import { IntuneSidebar } from "./IntuneSidebar";
 import { useIntuneStore } from "./intune-store";
 import type { IntuneResultMetadata } from "./types";
-import { createTestVirtualizer } from "../../test-utils/virtualizer";
 import {
   ANALYZED_PATH,
   APP_GUID,
@@ -45,8 +44,39 @@ vi.mock("../../hooks/use-app-actions", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
-    createTestVirtualizer(options),
+  useVirtualizer: ({
+    count,
+    estimateSize,
+    getItemKey,
+  }: {
+    count: number;
+    estimateSize: (index: number) => number;
+    getItemKey?: (index: number) => string | number;
+  }) => ({
+    getTotalSize: () => {
+      let total = 0;
+      for (let index = 0; index < count; index += 1) {
+        total += estimateSize(index);
+      }
+      return total;
+    },
+    getVirtualItems: () => {
+      let start = 0;
+      return Array.from({ length: count }, (_, index) => {
+        const size = estimateSize(index);
+        const item = {
+          index,
+          key: getItemKey?.(index) ?? index,
+          size,
+          start,
+        };
+        start += size;
+        return item;
+      });
+    },
+    scrollToIndex: vi.fn(),
+    measureElement: vi.fn(),
+  }),
 }));
 
 function seedReadyResults(metadata?: Partial<IntuneResultMetadata>) {

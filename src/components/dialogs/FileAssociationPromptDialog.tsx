@@ -25,9 +25,13 @@ export function FileAssociationPromptDialog({
 }: FileAssociationPromptDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const surfaceRef = useRef<HTMLDivElement>(null);
-
-  useModalFocus(isOpen, surfaceRef);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(
+    isOpen,
+    dialogRef,
+    undefined,
+    isSubmitting ? "submitting" : "idle",
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -99,7 +103,7 @@ export function FileAssociationPromptDialog({
       }}
     >
       <div
-        ref={surfaceRef}
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Associate log files with CMTrace Open?"

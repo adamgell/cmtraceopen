@@ -1,18 +1,15 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useTimelineStore } from "../stores/timeline-store";
 import { useUiStore } from "../stores/ui-store";
 import { useDragDrop } from "./use-drag-drop";
 
 const {
   openPathForActiveWorkspaceMock,
   loadFilesAsLogSourceMock,
-  buildTimelineFromSourcesMock,
   onDragDropEventMock,
 } = vi.hoisted(() => ({
   openPathForActiveWorkspaceMock: vi.fn(),
   loadFilesAsLogSourceMock: vi.fn(),
-  buildTimelineFromSourcesMock: vi.fn(),
   onDragDropEventMock: vi.fn(),
 }));
 
@@ -32,20 +29,15 @@ vi.mock("../lib/log-source", () => ({
   loadFilesAsLogSource: loadFilesAsLogSourceMock,
 }));
 
-vi.mock("../components/timeline/hooks/useTimelineBundle", () => ({
-  buildTimelineFromSources: buildTimelineFromSourcesMock,
-}));
-
-// Static import is safe: use-app-actions, log-source, and timeline bundle are mocked above.
+// Static imports are safe: app actions and log-source are mocked above.
 
 type DropHandler = (event: {
   payload: { type: string; paths: string[] };
 }) => Promise<void> | void;
 
 function latestHandler(): DropHandler {
-  const handler = onDragDropEventMock.mock.calls[onDragDropEventMock.mock.calls.length - 1]?.[0] as
-    | DropHandler
-    | undefined;
+  const calls = onDragDropEventMock.mock.calls;
+  const handler = calls[calls.length - 1]?.[0] as DropHandler | undefined;
   if (!handler) {
     throw new Error("onDragDropEvent was not registered");
   }
@@ -57,13 +49,11 @@ describe("useDragDrop", () => {
     vi.clearAllMocks();
     onDragDropEventMock.mockResolvedValue(() => undefined);
     openPathForActiveWorkspaceMock.mockResolvedValue(undefined);
-    loadFilesAsLogSourceMock.mockResolvedValue(undefined);
-    buildTimelineFromSourcesMock.mockResolvedValue(undefined);
+    loadFilesAsLogSourceMock.mockResolvedValue(true);
     useUiStore.setState({
       activeWorkspace: "log",
       activeView: "log",
     });
-    useTimelineStore.getState().reset();
   });
 
   it("opens a single dropped path on the active workspace", async () => {
@@ -112,31 +102,56 @@ describe("useDragDrop", () => {
     expect(loadFilesAsLogSourceMock).not.toHaveBeenCalled();
   });
 
-  it("unions dropped paths into the timeline workspace", async () => {
+  it("routes every timeline drop through the active workspace opener", async () => {
     useUiStore.setState({
       activeWorkspace: "timeline",
       activeView: "timeline",
     });
-    useTimelineStore.getState().setBundle({
-      sources: [{ path: "/tmp/existing.log" }],
-    } as never);
     renderHook(() => useDragDrop());
 
     await latestHandler()({
       payload: {
         type: "drop",
-        paths: ["/tmp/existing.log", "/tmp/new.log"],
+        paths: ["/tmp/ime.log", "/tmp/empty-folder"],
       },
     });
 
-    await waitFor(() => {
-      expect(buildTimelineFromSourcesMock).toHaveBeenCalledWith([
-        { path: "/tmp/existing.log" },
-        { path: "/tmp/new.log" },
-      ]);
-    });
-    expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      1,
+      "/tmp/ime.log",
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/empty-folder",
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2);
     expect(loadFilesAsLogSourceMock).not.toHaveBeenCalled();
+  });
+  it("continues opening timeline drops after one path fails", async () => {
+    useUiStore.setState({
+      activeWorkspace: "timeline",
+      activeView: "timeline",
+    });
+    openPathForActiveWorkspaceMock
+      .mockRejectedValueOnce(new Error("unreadable"))
+      .mockResolvedValue(undefined);
+    renderHook(() => useDragDrop());
+
+    await latestHandler()({
+      payload: {
+        type: "drop",
+        paths: ["/tmp/unreadable.log", "/tmp/readable.log"],
+      },
+    });
+
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      1,
+      "/tmp/unreadable.log",
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/readable.log",
+    );
   });
 
   it("ignores non-drop drag events and empty path lists", async () => {

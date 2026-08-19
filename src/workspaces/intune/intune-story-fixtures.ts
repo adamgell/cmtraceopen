@@ -107,7 +107,6 @@ export const REPEAT_FAILED_EVENT: IntuneEvent = {
   endTime: "2026-04-01T19:10:20.000Z",
   startTimeEpoch: Date.parse("2026-04-01T19:10:00.000Z"),
   endTimeEpoch: Date.parse("2026-04-01T19:10:20.000Z"),
-  detail: FAILED_EVENT.detail.replace("> L12 ", "> L40 "),
   lineNumber: 40,
 };
 

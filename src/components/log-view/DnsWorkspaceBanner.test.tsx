@@ -58,7 +58,7 @@ describe("DnsWorkspaceBanner", () => {
     cleanup();
   });
 
-  it("offers a DNS/DHCP handoff and dismisses for the session", () => {
+  it("offers a DNS/DHCP handoff and dismisses each path for the session", () => {
     render(<DnsWorkspaceBanner />);
     expect(
       screen.getByText(/This looks like a DNS debug log/),
@@ -79,7 +79,15 @@ describe("DnsWorkspaceBanner", () => {
     render(<DnsWorkspaceBanner />);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText(/This looks like a DNS debug log/)).toBeNull();
+
     cleanup();
+    useLogStore.setState({ openFilePath: "C:/Logs/DNSServer/DNSServer_debug-2.log" });
+    render(<DnsWorkspaceBanner />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText(/This looks like a DNS debug log/)).toBeNull();
+
+    cleanup();
+    useLogStore.setState({ openFilePath: "C:/Logs/DNSServer/DNSServer_debug.log" });
     render(<DnsWorkspaceBanner />);
     expect(screen.queryByText(/This looks like a DNS debug log/)).toBeNull();
   });

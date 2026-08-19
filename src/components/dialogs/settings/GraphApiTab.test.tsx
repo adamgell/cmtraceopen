@@ -1441,5 +1441,8 @@ describe("GraphApiTab delegated capabilities", () => {
     expect(
       screen.getByText(/Graph API integration is only available on Windows/),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Sign in with Windows" }),
+    ).not.toBeInTheDocument();
   });
 });

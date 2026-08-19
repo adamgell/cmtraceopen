@@ -31,7 +31,6 @@ const analyzeIntuneLogsMock = vi.mocked(analyzeIntuneLogs);
 
 beforeEach(() => {
   useIntuneStore.getState().clear();
-  useUiStore.setState(useUiStore.getInitialState(), true);
   analyzeIntuneLogsMock.mockReset();
   analyzeIntuneLogsMock.mockResolvedValue({
     events: STORY_EVENTS,
@@ -55,10 +54,17 @@ beforeEach(() => {
 });
 
 describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
+  function createOnOpen(workspaceId: Parameters<typeof createIntuneOnOpenSource>[0]) {
+    const onOpen = createIntuneOnOpenSource(workspaceId);
+    if (!onOpen) {
+      throw new Error("createIntuneOnOpenSource must return a handler");
+    }
+    return onOpen;
+  }
+
   it("forwards graphApiEnabled and does not include live event logs for a file source", async () => {
     useUiStore.setState({ graphApiEnabled: true });
-    const onOpen = createIntuneOnOpenSource("intune");
-    if (!onOpen) throw new Error("Intune workspace must expose an open handler");
+    const onOpen = createOnOpen("intune");
 
     await onOpen({ kind: "file", path: "C:/Logs/IME/AppWorkload.log" }, "test.open-file");
 
@@ -71,8 +77,7 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
 
   it("includes live event logs only for the known windows-intune-ime-logs source", async () => {
     useUiStore.setState({ graphApiEnabled: false });
-    const onOpen = createIntuneOnOpenSource("new-intune");
-    if (!onOpen) throw new Error("New Intune workspace must expose an open handler");
+    const onOpen = createOnOpen("new-intune");
 
     await onOpen(
       {
@@ -88,6 +93,27 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
       "C:/ProgramData/Microsoft/IntuneManagementExtension/Logs",
       expect.any(String),
       { includeLiveEventLogs: true, graphApiEnabled: false },
+    );
+  });
+
+  it("excludes live event logs for other known sources", async () => {
+    useUiStore.setState({ graphApiEnabled: false });
+    const onOpen = createOnOpen("intune");
+
+    await onOpen(
+      {
+        kind: "known",
+        sourceId: "windows-cbs-logs",
+        defaultPath: "C:/Windows/Logs/CBS",
+        pathKind: "folder",
+      },
+      "test.known-source",
+    );
+
+    expect(analyzeIntuneLogsMock).toHaveBeenCalledWith(
+      "C:/Windows/Logs/CBS",
+      expect.any(String),
+      { includeLiveEventLogs: false, graphApiEnabled: false },
     );
   });
 });

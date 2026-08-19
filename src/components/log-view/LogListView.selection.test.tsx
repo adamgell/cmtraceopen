@@ -97,59 +97,49 @@ describe("LogListView selection and jump fixtures", () => {
     );
   });
 
-  it("toggles additive selection with Ctrl/Cmd+click and ranges with Shift+click", () => {
+  it("toggles additive selection with Ctrl/Cmd+click", () => {
     render(<LogListView />);
     fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
     fireEvent.click(screen.getByText("Policy evaluation 3 completed"), { metaKey: true });
+    fireEvent.click(screen.getByText("Policy evaluation 4 completed"), { ctrlKey: true });
+    expect(screen.getByText("Policy evaluation 4 completed").closest("[role='option']")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
     expect(screen.getByText("Policy evaluation 1 completed").closest("[role='option']")).toHaveStyle({
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
+  });
+
+  it("expands a Shift-click range and excludes rows outside the range", () => {
+    render(<LogListView />);
+    fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
+    fireEvent.click(screen.getByText("Policy evaluation 3 completed"), { metaKey: true });
     fireEvent.click(screen.getByText("Policy evaluation 5 completed"), { shiftKey: true });
-    expect(screen.getByText("Policy evaluation 4 completed").closest("[role='option']")).toHaveStyle({
+
+    expect(screen.getByText("Policy evaluation 5 completed").closest("[role='option']")).toHaveStyle({
+      outline: "1px solid rgba(59, 130, 246, 0.5)",
+    });
+    expect(screen.getByText("Policy evaluation 3 completed").closest("[role='option']")).toHaveStyle({
+      outline: "1px solid rgba(59, 130, 246, 0.5)",
+    });
+    expect(screen.getByText("Policy evaluation 2 completed").closest("[role='option']")).not.toHaveStyle({
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
   });
-
-  it("supports additive selection with Ctrl+click", () => {
-    render(<LogListView />);
-    fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
-    fireEvent.click(screen.getByText("Policy evaluation 3 completed"), {
-      ctrlKey: true,
-    });
-
-    expect(
-      screen.getByText("Policy evaluation 1 completed").closest("[role='option']"),
-    ).toHaveStyle({ outline: "1px solid rgba(59, 130, 246, 0.5)" });
-    const additiveRow = screen
-      .getByText("Policy evaluation 3 completed")
-      .closest("[role='option']");
-    expect(additiveRow).toHaveStyle({ outline: "1px solid rgba(59, 130, 246, 0.5)" });
-    expect(additiveRow).toHaveAttribute("data-selected", "true");
-    expect(additiveRow).toHaveAttribute("aria-selected", "true");
-  });
-
-  it("selects every displayed row on Ctrl/Cmd+A", () => {
-    render(<LogListView />);
-    const list = screen.getByRole("listbox", { name: "Log entries" });
-    fireEvent.keyDown(list, { key: "a", metaKey: true });
-    for (const id of [1, 2, 3, 4, 5]) {
-      expect(screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']")).toHaveStyle({
-        outline: "1px solid rgba(59, 130, 246, 0.5)",
-      });
-    }
-  });
-
-  it("supports select-all with Ctrl+A", () => {
-    render(<LogListView />);
-    const list = screen.getByRole("listbox", { name: "Log entries" });
-    fireEvent.keyDown(list, { key: "a", ctrlKey: true });
-
-    for (const id of [1, 2, 3, 4, 5]) {
-      expect(
-        screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']"),
-      ).toHaveStyle({ outline: "1px solid rgba(59, 130, 246, 0.5)" });
-    }
-  });
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    "selects every displayed row on select-all (%o)",
+    (modifier) => {
+      render(<LogListView />);
+      const list = screen.getByRole("listbox", { name: "Log entries" });
+      fireEvent.keyDown(list, { key: "a", ...modifier });
+      for (const id of [1, 2, 3, 4, 5]) {
+        expect(screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']")).toHaveStyle({
+          outline: "1px solid rgba(59, 130, 246, 0.5)",
+        });
+      }
+    },
+  );
 
   it("consumes a matching pending scroll target and selects the first line at or after the target", () => {
     render(<LogListView />);

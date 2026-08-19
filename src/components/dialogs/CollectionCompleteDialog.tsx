@@ -4,6 +4,7 @@ import { CheckmarkRegular, DismissRegular } from "@fluentui/react-icons";
 import type { CollectionResult } from "../../lib/commands";
 import { loadPathAsLogSource } from "../../lib/log-source";
 import { useUiStore } from "../../stores/ui-store";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getThemeById } from "../../lib/themes";
 import { useModalFocus } from "../../hooks/use-modal-focus";
 
@@ -16,6 +17,8 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
   const surfaceRef = useRef<HTMLDivElement>(null);
   useModalFocus(result != null, surfaceRef);
   const [showGaps, setShowGaps] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(result !== null, dialogRef);
   const themeId = useUiStore((s) => s.themeId);
   const statusPalette = useMemo(
     () => getThemeById(themeId).severityPalette.status,
@@ -56,7 +59,7 @@ export function CollectionCompleteDialog({ result, onClose }: CollectionComplete
       }}
     >
       <div
-        ref={surfaceRef}
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={isError ? "Collection Failed" : "Collection Complete"}

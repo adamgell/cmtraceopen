@@ -8,6 +8,8 @@ import type {
 
 interface TimelineState {
   bundle: TimelineBundle | null;
+  timelineGeneration: number;
+  loadError: string | null;
   selectedIncidentId: number | null;
   brushRange: [number, number] | null;
   laneVisibility: Record<number, boolean>;
@@ -17,6 +19,7 @@ interface TimelineState {
   entryCache: Map<string, TimelineEntry[]>;
 
   setBundle(b: TimelineBundle | null): void;
+  setLoadError(error: string | null): void;
   reset(): void;
   setBrushRange(r: [number, number]): void;
   clearBrushRange(): void;
@@ -35,6 +38,8 @@ const MAX_ENTRY_CACHE = 128;
 
 export const useTimelineStore = create<TimelineState>((set, get) => ({
   bundle: null,
+  timelineGeneration: 0,
+  loadError: null,
   selectedIncidentId: null,
   brushRange: null,
   laneVisibility: {},
@@ -47,15 +52,20 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     b?.sources.forEach((s) => {
       laneVisibility[s.idx] = true;
     });
-    set({
+    set((state) => ({
       bundle: b,
+      loadError: null,
+      timelineGeneration: state.timelineGeneration + 1,
       selectedIncidentId: null,
       brushRange: null,
       laneVisibility,
       soloSourceIdx: null,
       bucketCache: new Map(),
       entryCache: new Map(),
-    });
+    }));
+  },
+  setLoadError(error) {
+    set({ loadError: error });
   },
 
   reset() {

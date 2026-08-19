@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useModalFocus } from "../../hooks/use-modal-focus";
 import type { UpdateInfo } from "../../hooks/use-update-checker";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface UpdateDialogProps {
@@ -29,17 +30,16 @@ export function UpdateDialog({
   onOpenReleasePage,
   onSkipVersion,
 }: UpdateDialogProps) {
-  const surfaceRef = useRef<HTMLDivElement>(null);
-  const focusKey = [
-    isChecking,
-    isDownloading,
-    updateInfo?.available ?? false,
-    updateInfo?.newVersion ?? "",
-    updateInfo?.canAutoUpdate ?? false,
-    Boolean(updateInfo?.error),
-  ].join(":");
-  useModalFocus(isOpen, surfaceRef, undefined, focusKey);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const focusKey = isChecking
+    ? "checking"
+    : isDownloading
+      ? "downloading"
+      : updateInfo?.available
+        ? "available"
+        : "idle";
 
+  useModalFocus(isOpen, dialogRef, undefined, focusKey);
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -254,7 +254,7 @@ export function UpdateDialog({
       }}
     >
       <div
-        ref={surfaceRef}
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Check for Updates"

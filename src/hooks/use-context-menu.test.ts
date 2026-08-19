@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { LogEntry } from "../types/log";
 
-const menuItemNew = vi.hoisted(() => vi.fn(async (opts: { id: string; text: string }) => opts));
+const menuItemNew = vi.hoisted(
+  () => vi.fn(async (opts: { id: string; text: string; action?: () => void }) => opts),
+);
 const predefinedNew = vi.hoisted(() => vi.fn(async (opts: { item: string }) => opts));
 const menuNew = vi.hoisted(() =>
   vi.fn(async ({ items }: { items: unknown[] }) => ({
@@ -16,8 +18,10 @@ vi.mock("@tauri-apps/api/menu", () => ({
   Menu: { new: menuNew },
 }));
 
+const writeText = vi.hoisted(() => vi.fn(async (_text: string) => undefined));
+
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
-  writeText: vi.fn(),
+  writeText,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -26,6 +30,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useContextMenu } from "./use-context-menu";
 import { renderHook } from "@testing-library/react";
+import { useFilterStore } from "../stores/filter-store";
 import { useMarkerStore } from "../stores/marker-store";
 
 function entry(overrides: Partial<LogEntry> = {}): LogEntry {
@@ -62,6 +67,8 @@ describe("useContextMenu", () => {
     menuItemNew.mockClear();
     predefinedNew.mockClear();
     menuNew.mockClear();
+    writeText.mockClear();
+    useFilterStore.getState().clearFilter();
     useMarkerStore.setState({
       markersByFile: new Map(),
       categories: [
@@ -95,5 +102,31 @@ describe("useContextMenu", () => {
     expect(labels.some((label) => label.startsWith("Include:"))).toBe(true);
     expect(labels.some((label) => label.startsWith("Exclude:"))).toBe(true);
     expect(menuNew).toHaveBeenCalled();
+  });
+
+  it("runs copy and include-filter actions for the selected entry", async () => {
+    const selectedEntry = entry();
+    const { result } = renderHook(() => useContextMenu());
+    await result.current.showContextMenu(selectedEntry, {
+      preventDefault: vi.fn(),
+    } as unknown as React.MouseEvent);
+
+    const copyMessage = menuItemNew.mock.calls.find(
+      ([opts]) => opts.id === "copy-message",
+    )?.[0];
+    const includeFilter = menuItemNew.mock.calls.find(
+      ([opts]) => opts.id === "include-filter",
+    )?.[0];
+
+    expect(copyMessage?.action).toBeTypeOf("function");
+    expect(includeFilter?.action).toBeTypeOf("function");
+
+    copyMessage?.action?.();
+    expect(writeText).toHaveBeenCalledWith(selectedEntry.message);
+
+    includeFilter?.action?.();
+    expect(useFilterStore.getState().clauses).toEqual([
+      { field: "Message", value: selectedEntry.message, op: "Contains" },
+    ]);
   });
 });

@@ -55,7 +55,11 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
     "esp-diagnostics",
   ],
   get_known_log_sources: [],
-  get_file_association_prompt_status: "dismissed",
+  get_file_association_prompt_status: {
+    supported: false,
+    shouldPrompt: false,
+    isAssociated: false,
+  },
   get_esp_elevation_state: {
     isElevated: false,
     restartSupported: true,

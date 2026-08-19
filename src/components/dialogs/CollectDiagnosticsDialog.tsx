@@ -16,6 +16,8 @@ interface CollectDiagnosticsDialogProps {
 }
 
 export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnosticsDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(isOpen, dialogRef);
   const setCollectionProgress = useUiStore((s) => s.setCollectionProgress);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -203,7 +205,7 @@ export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnostics
       }}
     >
       <div
-        ref={surfaceRef}
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Collect Diagnostics"
