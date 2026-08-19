@@ -48,6 +48,48 @@ describe("ui-store", () => {
     });
   });
 
+  describe("DNS banner dismissal", () => {
+    it("persists dismissed paths across rehydration", async () => {
+      await useUiStore.persist.clearStorage();
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+
+      useUiStore.getState().dismissDnsBannerPath("C:/Logs/DnsServer.log");
+
+      const persistedStorage = localStorage.getItem("cmtraceopen-ui-preferences");
+      const persisted = JSON.parse(persistedStorage ?? "{}");
+      expect(persisted.state?.dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
+
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+      if (persistedStorage) {
+        localStorage.setItem("cmtraceopen-ui-preferences", persistedStorage);
+      }
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
+    });
+
+    it("filters invalid dismissed paths during rehydration", async () => {
+      localStorage.setItem(
+        "cmtraceopen-ui-preferences",
+        JSON.stringify({
+          state: {
+            dismissedDnsBannerPaths: ["C:/Logs/DnsServer.log", 42, null],
+          },
+        }),
+      );
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
+    });
+  });
+
   describe("persisted preferences", () => {
     it("finishes hydration when no preferences have been stored yet", async () => {
       await useUiStore.persist.clearStorage();

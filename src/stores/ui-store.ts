@@ -273,6 +273,16 @@ const sanitizePersistedUiState = (
   delete sanitized.graphApiCapability;
   delete sanitized.graphApiLastAttempt;
 
+  if (sanitized.dismissedDnsBannerPaths !== undefined) {
+    sanitized.dismissedDnsBannerPaths = Array.isArray(
+      sanitized.dismissedDnsBannerPaths
+    )
+      ? sanitized.dismissedDnsBannerPaths.filter(
+          (path): path is string => typeof path === "string"
+        )
+      : [];
+  }
+
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
     const base = Number.isFinite(raw) ? raw : DEFAULT_LOG_LIST_FONT_SIZE;
@@ -673,6 +683,7 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         alwaysOnTop: state.alwaysOnTop,
+        dismissedDnsBannerPaths: state.dismissedDnsBannerPaths,
         graphApiEnabled: state.graphApiEnabled,
         recentSessions: state.recentSessions,
       }),

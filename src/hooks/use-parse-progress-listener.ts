@@ -5,6 +5,8 @@ import { useLogStore } from "../stores/log-store";
 const PARSE_PROGRESS_EVENT = "parse-progress";
 
 interface ParseProgressPayload {
+  /** Source-load generation that owns this batch. */
+  requestId: number;
   filePath: string;
   fileName: string;
   /** Files completed within the current batch (1-based). */
@@ -57,6 +59,9 @@ export function useParseProgressListener() {
         // for the next load is handled by the effect above on the
         // null → non-null transition.
         if (state.folderLoadProgress === null) {
+          return;
+        }
+        if (p.requestId !== state.folderLoadRequestId) {
           return;
         }
 

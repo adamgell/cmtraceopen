@@ -10,11 +10,18 @@ import type { EvidenceBundleMetadata } from "../types/evidence";
 import { useLogStore, setCachedTabSnapshot, clearAllTabSnapshots } from "../stores/log-store";
 import type { TabEntrySnapshot } from "./tab-snapshot-cache";
 import { useUiStore } from "../stores/ui-store";
-import { loadLogSource, loadSelectedLogFile, switchToTab } from "./log-source";
+import {
+  loadFilesAsLogSource,
+  loadLogSource,
+  loadPathAsLogSource,
+  loadSelectedLogFile,
+  switchToTab,
+} from "./log-source";
 
 const commands = vi.hoisted(() => ({
   getKnownLogSources: vi.fn(),
   listLogSourceFolder: vi.fn(),
+  inspectPathKind: vi.fn(),
   openLogFile: vi.fn(),
   openLogSourceFile: vi.fn(),
   parseFilesBatch: vi.fn(),
@@ -107,7 +114,10 @@ describe("Device Inventory known-source routing", () => {
 
     expect(result.selectedFilePath).toBeNull();
     expect(commands.listLogSourceFolder).toHaveBeenCalledWith(deviceInventoryFolder);
-    expect(commands.parseFilesBatch).toHaveBeenCalledWith([folderEntries[0].path]);
+    expect(commands.parseFilesBatch).toHaveBeenCalledWith(
+      [folderEntries[0].path],
+      expect.any(Number),
+    );
     expect(commands.openLogSourceFile).not.toHaveBeenCalled();
   });
 
@@ -618,6 +628,62 @@ describe("switchToTab", () => {
     expect(useLogStore.getState().entries[0]?.message).toBe("AppEnforce line");
     expect(useLogStore.getState().activeSource).toEqual(fileSourceA);
   });
+  it("clears stale folder progress when switching tabs", async () => {
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    useLogStore.setState({
+      openFilePath: fileA,
+      entries: snapshotFor(fileA, "AppEnforce line").entries,
+      folderLoadProgress: 0.5,
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+
+    expect(useLogStore.getState().folderLoadProgress).toBeNull();
+  });
+  it("ignores a stale source load after a later tab switch", async () => {
+    const fileSourceA: LogSource = { kind: "file", path: fileA };
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    const fileBSnapshot = snapshotFor(fileB, "CIAgent line");
+    setCachedTabSnapshot(fileB, fileBSnapshot);
+    useLogStore.setState({
+      openFilePath: fileA,
+      selectedSourceFilePath: fileA,
+      entries: snapshotFor(fileA, "AppEnforce line").entries,
+      activeSource: fileSourceA,
+    });
+
+    const sourceResult = deferred<ParseResult>();
+    commands.openLogSourceFile.mockReturnValueOnce(sourceResult.promise);
+
+    const pendingLoad = loadLogSource(fileSourceA);
+    await vi.waitFor(() => {
+      expect(commands.openLogSourceFile).toHaveBeenCalledWith(fileSourceA);
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+    expect(useLogStore.getState().openFilePath).toBe(fileB);
+    expect(useLogStore.getState().entries[0]?.message).toBe("CIAgent line");
+
+    sourceResult.resolve({
+      ...parseResult,
+      filePath: fileA,
+      entries: [makeEntry(1, fileA, "AppEnforce line")],
+    });
+    await pendingLoad;
+
+    expect(useLogStore.getState().openFilePath).toBe(fileB);
+    expect(useLogStore.getState().entries[0]?.message).toBe("CIAgent line");
+    expect(useLogStore.getState().activeSource).toEqual(fileSourceB);
+  });
   it("ignores stale loads from overlapping migrated-tab switches", async () => {
     const fileC = "C:/Windows/CCM/Logs/Start.log";
     const fileSourceA: LogSource = { kind: "file", path: fileA };
@@ -663,5 +729,110 @@ describe("switchToTab", () => {
       kind: "file",
       path: fileC,
     });
+  });
+});
+
+describe("source loading progress ownership", () => {
+  const folderSource: LogSource = { kind: "folder", path: "C:/Windows/CCM/Logs" };
+  const sourceEntries: FolderEntry[] = [
+    {
+      name: "AppEnforce.log",
+      path: "C:/Windows/CCM/Logs/AppEnforce.log",
+      isDir: false,
+      sizeBytes: 1,
+      modifiedUnixMs: null,
+    },
+  ];
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLogStore.getState().clear();
+    useUiStore.getState().clearTabs();
+    clearAllTabSnapshots();
+    commands.stopTail.mockResolvedValue(undefined);
+    commands.listLogSourceFolder.mockResolvedValue({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: sourceEntries,
+      bundleMetadata: null,
+    });
+  });
+
+  it("clears progress when a progressive source load fails", async () => {
+    commands.parseFilesBatch.mockRejectedValueOnce(new Error("batch failed"));
+
+    await expect(loadLogSource(folderSource)).rejects.toThrow("batch failed");
+
+    expect(useLogStore.getState().folderLoadProgress).toBeNull();
+    expect(useLogStore.getState().sourceStatus.kind).toBe("error");
+  });
+
+  it("ignores a path probe superseded by a newer source load", async () => {
+    useLogStore.setState({
+      folderLoadProgress: 0.5,
+      folderLoadRequestId: 123,
+    });
+    const pathKind = deferred<"file" | "folder" | "unknown">();
+    commands.inspectPathKind.mockReturnValueOnce(pathKind.promise);
+    const stalePathLoad = loadPathAsLogSource(
+      "C:/Windows/CCM/Logs/Stale.log",
+    );
+    expect(useLogStore.getState().folderLoadProgress).toBeNull();
+    expect(useLogStore.getState().folderLoadRequestId).toBeNull();
+    await vi.waitFor(() => {
+      expect(commands.inspectPathKind).toHaveBeenCalledWith(
+        "C:/Windows/CCM/Logs/Stale.log",
+      );
+    });
+
+    commands.openLogSourceFile.mockResolvedValueOnce({
+      ...parseResult,
+      filePath: "C:/Windows/CCM/Logs/Current.log",
+    });
+    await loadLogSource({
+      kind: "file",
+      path: "C:/Windows/CCM/Logs/Current.log",
+    });
+
+    pathKind.resolve("file");
+
+    await expect(stalePathLoad).resolves.toBeNull();
+    expect(commands.openLogSourceFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the folder lane after a current file load fails", async () => {
+    commands.inspectPathKind.mockResolvedValue("file");
+    commands.openLogSourceFile.mockRejectedValueOnce(new Error("is a directory"));
+    commands.parseFilesBatch.mockResolvedValueOnce([]);
+
+    const result = await loadPathAsLogSource("C:/Windows/CCM/Logs");
+
+    expect(result?.source).toEqual(folderSource);
+    expect(commands.listLogSourceFolder).toHaveBeenCalledWith(folderSource);
+  });
+
+  it("clears prior progress before starting a multi-file load", async () => {
+    const stopTailRequest = deferred<void>();
+    useLogStore.setState({
+      openFilePath: "C:/Windows/CCM/Logs/Current.log",
+      folderLoadProgress: 0.5,
+    });
+    commands.stopTail.mockReturnValueOnce(stopTailRequest.promise);
+    commands.parseFilesBatch.mockResolvedValueOnce([]);
+
+    const pendingLoad = loadFilesAsLogSource([
+      "C:/Windows/CCM/Logs/AppEnforce.log",
+      "C:/Windows/CCM/Logs/CIAgent.log",
+    ]);
+    await vi.waitFor(() => {
+      expect(commands.stopTail).toHaveBeenCalledWith(
+        "C:/Windows/CCM/Logs/Current.log",
+      );
+    });
+
+    expect(useLogStore.getState().folderLoadProgress).toBeNull();
+
+    stopTailRequest.resolve();
+    await pendingLoad;
   });
 });
