@@ -279,10 +279,14 @@ function normalizeCommandInvokeError(
 
 type CommandDecoder<T> = (value: unknown, commandName: string) => T;
 
-async function invokeCommand<T>(
-  commandName: string,
+async function invokeCommand<Name extends CommandName>(
+  commandName: Name,
   args?: Record<string, unknown>,
-): Promise<T> {
+): Promise<CommandResponse<Name>>;
+async function invokeCommand(
+  commandName: CommandName,
+  args?: Record<string, unknown>,
+): Promise<CommandResponse<CommandName>> {
   let response: unknown;
   try {
     response = await invoke<unknown>(commandName, args);
@@ -294,7 +298,7 @@ async function invokeCommand<T>(
   if (!decoder) {
     throw new Error(`No response decoder registered for '${commandName}'.`);
   }
-  return decoder(response, commandName) as T;
+  return decoder(response, commandName);
 }
 
 function isCommandRecord(value: unknown): value is Record<string, unknown> {
@@ -390,9 +394,7 @@ function isFolderEntryResponse(value: unknown): boolean {
   );
 }
 
-function isFolderListingResponse(
-  value: unknown,
-): value is FolderListingResult {
+function isFolderListingResponse(value: unknown): value is FolderListingResult {
   return (
     isCommandRecord(value) &&
     isLogSourceKind(value.sourceKind) &&
@@ -425,10 +427,7 @@ function decodeRecordResponse<T>(
   commandName: string,
   fields: Record<string, CommandFieldValidator> = {},
 ): T {
-  if (
-    !isCommandRecord(value) ||
-    !hasCommandFields(value, fields)
-  ) {
+  if (!isCommandRecord(value) || !hasCommandFields(value, fields)) {
     return invalidCommandResponse(commandName);
   }
   return value as T;
@@ -454,7 +453,10 @@ function decodeStringArrayResponse(
   value: unknown,
   commandName: string,
 ): string[] {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
     return invalidCommandResponse(commandName);
   }
   return value;
@@ -564,10 +566,7 @@ function decodeParseResults(
   return value;
 }
 
-function decodeParseResult(
-  value: unknown,
-  commandName: string,
-): ParseResult {
+function decodeParseResult(value: unknown, commandName: string): ParseResult {
   if (!isParseResultResponse(value)) {
     return invalidCommandResponse(commandName);
   }
@@ -609,7 +608,7 @@ function decodeFolderListingResult(
 }
 
 export async function openLogFile(path: string): Promise<ParseResult> {
-  return invokeCommand<ParseResult>("open_log_file", { path });
+  return invokeCommand("open_log_file", { path });
 }
 
 /** Parse multiple files in parallel on the Rust side (Rayon thread pool).
@@ -619,22 +618,19 @@ export async function parseFilesBatch(
   paths: string[],
   requestId: number,
 ): Promise<ParseResult[]> {
-  return invokeCommand<ParseResult[]>(
-    "parse_files_batch",
-    { paths, requestId },
-  );
+  return invokeCommand("parse_files_batch", { paths, requestId });
 }
 
 export async function listLogFolder(
   path: string,
 ): Promise<FolderListingResult> {
-  return invokeCommand<FolderListingResult>("list_log_folder", { path });
+  return invokeCommand("list_log_folder", { path });
 }
 
 export async function inspectEvidenceBundle(
   path: string,
 ): Promise<EvidenceBundleDetails> {
-  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", {
+  return invokeCommand("inspect_evidence_bundle", {
     path,
   });
 }
@@ -644,7 +640,7 @@ export async function inspectEvidenceArtifact(
   intakeKind: EvidenceArtifactIntakeKind,
   originPath?: string | null,
 ): Promise<EvidenceArtifactPreview> {
-  return invokeCommand<EvidenceArtifactPreview>("inspect_evidence_artifact", {
+  return invokeCommand("inspect_evidence_artifact", {
     path,
     intakeKind,
     originPath: originPath ?? null,
@@ -654,11 +650,11 @@ export async function inspectEvidenceArtifact(
 export async function parseRegistryFile(
   path: string,
 ): Promise<RegistryParseResult> {
-  return invokeCommand<RegistryParseResult>("parse_registry_file", { path });
+  return invokeCommand("parse_registry_file", { path });
 }
 
 export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {
-  return invokeCommand<KnownSourceMetadata[]>("get_known_log_sources");
+  return invokeCommand("get_known_log_sources");
 }
 
 export async function openLogSourceFile(
@@ -696,7 +692,7 @@ export async function listLogSourceFolder(
 export async function openLogFolderAggregate(
   path: string,
 ): Promise<AggregateParseResult> {
-  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", {
+  return invokeCommand("open_log_folder_aggregate", {
     path,
   });
 }
@@ -724,7 +720,7 @@ export async function startTail(
   nextId: number,
   nextLine: number,
 ): Promise<void> {
-  return invokeCommand<void>("start_tail", {
+  return invokeCommand("start_tail", {
     path,
     format,
     byteOffset,
@@ -734,15 +730,15 @@ export async function startTail(
 }
 
 export async function stopTail(path: string): Promise<void> {
-  return invokeCommand<void>("stop_tail", { path });
+  return invokeCommand("stop_tail", { path });
 }
 
 export async function pauseTail(path: string): Promise<void> {
-  return invokeCommand<void>("pause_tail", { path });
+  return invokeCommand("pause_tail", { path });
 }
 
 export async function resumeTail(path: string): Promise<void> {
-  return invokeCommand<void>("resume_tail", { path });
+  return invokeCommand("resume_tail", { path });
 }
 
 export async function analyzeIntuneLogs(
@@ -750,7 +746,7 @@ export async function analyzeIntuneLogs(
   requestId: string,
   options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean },
 ): Promise<IntuneAnalysisResult> {
-  return invokeCommand<IntuneAnalysisResult>("analyze_intune_logs", {
+  return invokeCommand("analyze_intune_logs", {
     path,
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
@@ -763,7 +759,7 @@ export async function analyzeSysmonLogs(
   requestId: string,
   options?: { includeLiveEventLogs?: boolean },
 ): Promise<SysmonAnalysisResult> {
-  return invokeCommand<SysmonAnalysisResult>("analyze_sysmon_logs", {
+  return invokeCommand("analyze_sysmon_logs", {
     path,
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
@@ -774,20 +770,20 @@ export async function analyzeDsregcmd(
   input: string,
   bundlePath?: string | null,
 ): Promise<DsregcmdAnalysisResult> {
-  return invokeCommand<DsregcmdAnalysisResult>("analyze_dsregcmd", {
+  return invokeCommand("analyze_dsregcmd", {
     input,
     bundlePath: bundlePath ?? null,
   });
 }
 
 export async function captureDsregcmd(): Promise<DsregcmdCaptureResult> {
-  return invokeCommand<DsregcmdCaptureResult>("capture_dsregcmd");
+  return invokeCommand("capture_dsregcmd");
 }
 
 export async function inspectPathKind(
   path: string,
 ): Promise<"file" | "folder" | "unknown"> {
-  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", {
+  return invokeCommand("inspect_path_kind", {
     path,
   });
 }
@@ -796,37 +792,37 @@ export async function writeTextOutputFile(
   path: string,
   contents: string,
 ): Promise<void> {
-  return invokeCommand<void>("write_text_output_file", { path, contents });
+  return invokeCommand("write_text_output_file", { path, contents });
 }
 
 export async function loadDsregcmdSource(
   kind: "file" | "folder",
   path: string,
 ): Promise<DsregcmdResolvedSource> {
-  return invokeCommand<DsregcmdResolvedSource>("load_dsregcmd_source", {
+  return invokeCommand("load_dsregcmd_source", {
     kind,
     path,
   });
 }
 
 export async function getInitialFilePaths(): Promise<string[]> {
-  return invokeCommand<string[]>("get_initial_file_paths");
+  return invokeCommand("get_initial_file_paths");
 }
 
 export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
-  return invokeCommand<WorkspaceId | null>("get_initial_workspace");
+  return invokeCommand("get_initial_workspace");
 }
 
 // --- Application-wide elevation ---
 
 export async function getAppElevationState(): Promise<AppElevationState> {
-  return invokeCommand<AppElevationState>("get_app_elevation_state");
+  return invokeCommand("get_app_elevation_state");
 }
 
 export async function restartAsAdministrator(
   request: ElevationRequest,
 ): Promise<RelaunchResult> {
-  return invokeCommand<RelaunchResult>("restart_as_administrator", {
+  return invokeCommand("restart_as_administrator", {
     request,
   });
 }
@@ -838,34 +834,31 @@ export async function restartAsAdministrator(
  * already consumed — because a failed restore must never stop the app starting.
  */
 export async function getInitialElevationRestore(): Promise<RestoreTicket | null> {
-  return invokeCommand<RestoreTicket | null>("get_initial_elevation_restore");
+  return invokeCommand("get_initial_elevation_restore");
 }
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
-  return invokeCommand<WorkspaceId[]>("get_available_workspaces");
+  return invokeCommand("get_available_workspaces");
 }
 
 export async function discoverSccmEnvironment(): Promise<SccmEnvironmentDiscovery> {
-  return invokeCommand<SccmEnvironmentDiscovery>("discover_sccm_environment");
+  return invokeCommand("discover_sccm_environment");
 }
 
 export async function captureSccmDiagnostics(): Promise<SccmCaptureResult> {
-  return invokeCommand<SccmCaptureResult>("capture_sccm_diagnostics");
+  return invokeCommand("capture_sccm_diagnostics");
 }
 
 export async function authorizeSccmAdvancedCapture(
   request: SccmAdvancedCaptureAuthorizationRequest,
 ): Promise<SccmAdvancedCaptureCapability> {
-  return invokeCommand<SccmAdvancedCaptureCapability>(
-    "authorize_sccm_advanced_capture",
-    { request },
-  );
+  return invokeCommand("authorize_sccm_advanced_capture", { request });
 }
 
 export async function captureSccmAdvancedDiagnostics(
   capabilityHandle: string,
 ): Promise<SccmCaptureResult> {
-  return invokeCommand<SccmCaptureResult>("capture_sccm_advanced_diagnostics", {
+  return invokeCommand("capture_sccm_advanced_diagnostics", {
     capabilityHandle,
   });
 }
@@ -873,17 +866,17 @@ export async function captureSccmAdvancedDiagnostics(
 export async function cancelSccmAdvancedCapture(
   capabilityHandle: string,
 ): Promise<void> {
-  return invokeCommand<void>("cancel_sccm_advanced_capture", {
+  return invokeCommand("cancel_sccm_advanced_capture", {
     capabilityHandle,
   });
 }
 
 export async function revealInFileManager(path: string): Promise<void> {
-  return invokeCommand<void>("reveal_in_file_manager", { path });
+  return invokeCommand("reveal_in_file_manager", { path });
 }
 
 export async function getUpdatePolicy(): Promise<UpdatePolicy> {
-  return invokeCommand<UpdatePolicy>("get_update_policy");
+  return invokeCommand("get_update_policy");
 }
 
 export interface DnsLoggingStatus {
@@ -894,11 +887,11 @@ export interface DnsLoggingStatus {
 }
 
 export async function checkDnsLoggingStatus(): Promise<DnsLoggingStatus> {
-  return invokeCommand<DnsLoggingStatus>("check_dns_logging_status");
+  return invokeCommand("check_dns_logging_status");
 }
 
 export async function enableDnsDebugLogging(): Promise<string> {
-  return invokeCommand<string>("enable_dns_debug_logging");
+  return invokeCommand("enable_dns_debug_logging");
 }
 
 export interface DnsDhcpCollectionProgress {
@@ -930,38 +923,31 @@ export async function collectDnsDhcpFromDomain(
   outputRoot?: string,
   servers?: string[],
 ): Promise<DnsDhcpCollectionResult> {
-  return invokeCommand<DnsDhcpCollectionResult>(
-    "collect_dns_dhcp_from_domain",
-    {
-      requestId,
-      outputRoot: outputRoot ?? null,
-      servers: servers ?? null,
-    },
-  );
+  return invokeCommand("collect_dns_dhcp_from_domain", {
+    requestId,
+    outputRoot: outputRoot ?? null,
+    servers: servers ?? null,
+  });
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
-  return invokeCommand<FileAssociationPromptStatus>(
-    "get_file_association_prompt_status",
-  );
+  return invokeCommand("get_file_association_prompt_status");
 }
 
 export async function associateLogFilesWithApp(): Promise<void> {
-  return invokeCommand<void>("associate_log_files_with_app");
+  return invokeCommand("associate_log_files_with_app");
 }
 
 export async function setFileAssociationPromptSuppressed(
   suppressed: boolean,
 ): Promise<void> {
-  return invokeCommand<void>("set_file_association_prompt_suppressed", {
+  return invokeCommand("set_file_association_prompt_suppressed", {
     suppressed,
   });
 }
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
-  return invokeCommand<SystemDateTimePreferences>(
-    "get_system_date_time_preferences",
-  );
+  return invokeCommand("get_system_date_time_preferences");
 }
 
 // --- Diagnostics Collection ---
@@ -988,7 +974,7 @@ export async function collectDiagnostics(
   outputRoot?: string | null,
   enabledFamilies?: string[] | null,
 ): Promise<CollectionResult> {
-  return invokeCommand<CollectionResult>("collect_diagnostics", {
+  return invokeCommand("collect_diagnostics", {
     requestId,
     outputRoot: outputRoot ?? null,
     enabledFamilies: enabledFamilies ?? null,
@@ -998,14 +984,14 @@ export async function collectDiagnostics(
 // --- ESP Diagnostics ---
 
 export async function getEspElevationState(): Promise<EspElevationState> {
-  return invokeCommand<EspElevationState>("get_esp_elevation_state");
+  return invokeCommand("get_esp_elevation_state");
 }
 
 export async function analyzeEspEvidence(
   path: string,
   requestId: string,
 ): Promise<EspDiagnosticsSnapshot> {
-  return invokeCommand<EspDiagnosticsSnapshot>("analyze_esp_evidence", {
+  return invokeCommand("analyze_esp_evidence", {
     path,
     requestId,
   });
@@ -1024,7 +1010,7 @@ export async function exportEspSession(
   snapshot: EspDiagnosticsSnapshot,
   meta: EspSessionCaptureMeta,
 ): Promise<void> {
-  return invokeCommand<void>("export_esp_session", {
+  return invokeCommand("export_esp_session", {
     destination,
     snapshot,
     meta,
@@ -1034,7 +1020,7 @@ export async function exportEspSession(
 export async function startEspDiagnosticsSession(
   requestId: string,
 ): Promise<EspSessionEnvelope> {
-  return invokeCommand<EspSessionEnvelope>("start_esp_diagnostics_session", {
+  return invokeCommand("start_esp_diagnostics_session", {
     requestId,
   });
 }
@@ -1042,7 +1028,7 @@ export async function startEspDiagnosticsSession(
 export async function getEspDiagnosticsSession(
   sessionId: string,
 ): Promise<EspSessionEnvelope> {
-  return invokeCommand<EspSessionEnvelope>("get_esp_diagnostics_session", {
+  return invokeCommand("get_esp_diagnostics_session", {
     sessionId,
   });
 }
@@ -1050,17 +1036,17 @@ export async function getEspDiagnosticsSession(
 export async function stopEspDiagnosticsSession(
   sessionId: string,
 ): Promise<void> {
-  return invokeCommand<void>("stop_esp_diagnostics_session", { sessionId });
+  return invokeCommand("stop_esp_diagnostics_session", { sessionId });
 }
 
 export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
-  return invokeCommand<EspRelaunchResult>("restart_esp_as_administrator");
+  return invokeCommand("restart_esp_as_administrator");
 }
 
 export async function graphFetchEspDiagnostics(
   request: EspGraphRequest,
 ): Promise<EspGraphOverlay> {
-  return invokeCommand<EspGraphOverlay>("graph_fetch_esp_diagnostics", {
+  return invokeCommand("graph_fetch_esp_diagnostics", {
     request,
   });
 }
@@ -1068,19 +1054,19 @@ export async function graphFetchEspDiagnostics(
 export async function espFlipAppInstalled(
   appId: string,
 ): Promise<EspAppFlipResult> {
-  return invokeCommand<EspAppFlipResult>("esp_flip_app_installed", { appId });
+  return invokeCommand("esp_flip_app_installed", { appId });
 }
 
 export async function espRestoreAppState(
   backup: EspAppFlipBackup,
 ): Promise<void> {
-  return invokeCommand<void>("esp_restore_app_state", { backup });
+  return invokeCommand("esp_restore_app_state", { backup });
 }
 
 export async function graphCancelEspDiagnostics(
   requestId: string,
 ): Promise<void> {
-  return invokeCommand<void>("graph_cancel_esp_diagnostics", { requestId });
+  return invokeCommand("graph_cancel_esp_diagnostics", { requestId });
 }
 
 // --- Graph API (Windows only, opt-in) ---
@@ -1306,62 +1292,47 @@ export async function graphReserveInteractiveOperation(
   kind: GraphInteractiveOperationKind,
 ): Promise<GraphInteractiveOperationTicket> {
   const commandName = "graph_reserve_interactive_operation";
-  return decodeGraphInteractiveOperationTicket(
-    await invokeCommand<unknown>(commandName, { kind }),
-    commandName,
-  );
+  return invokeCommand(commandName, { kind });
 }
 
 export async function graphAuthenticate(
   attemptId: string,
 ): Promise<GraphAuthAttemptResult> {
   const commandName = "graph_authenticate";
-  return decodeGraphAuthAttemptResult(
-    await invokeCommand<unknown>(commandName, { attemptId }),
-    commandName,
-  );
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphCancelAuthentication(
   attemptId: string,
 ): Promise<boolean> {
   const commandName = "graph_cancel_authentication";
-  const result = await invokeCommand<unknown>(commandName, { attemptId });
-  return typeof result === "boolean"
-    ? result
-    : invalidGraphResponse(commandName);
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphRequestMissingPermissions(
   attemptId: string,
 ): Promise<GraphPermissionUpgradeResult> {
   const commandName = "graph_request_missing_permissions";
-  return decodeGraphPermissionUpgradeResult(
-    await invokeCommand<unknown>(commandName, { attemptId }),
-    commandName,
-  );
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
   const commandName = "graph_get_auth_status";
-  return decodeGraphAuthStatus(
-    await invokeCommand<unknown>(commandName),
-    commandName,
-  );
+  return invokeCommand(commandName);
 }
 
 export async function graphSignOut(): Promise<void> {
-  return invokeCommand<void>("graph_sign_out");
+  return invokeCommand("graph_sign_out");
 }
 
 export async function graphResolveGuids(
   guids: string[],
 ): Promise<GraphResolutionResult> {
-  return invokeCommand<GraphResolutionResult>("graph_resolve_guids", { guids });
+  return invokeCommand("graph_resolve_guids", { guids });
 }
 
 export async function graphFetchAllApps(): Promise<GraphAppInfo[]> {
-  return invokeCommand<GraphAppInfo[]>("graph_fetch_all_apps");
+  return invokeCommand("graph_fetch_all_apps");
 }
 
 // --- macOS Diagnostics ---
@@ -1378,29 +1349,29 @@ import type {
 } from "../workspaces/macos-diag/types";
 
 export async function macosScanEnvironment(): Promise<MacosDiagEnvironment> {
-  return invokeCommand<MacosDiagEnvironment>("macos_scan_environment");
+  return invokeCommand("macos_scan_environment");
 }
 
 export async function macosScanIntuneLogs(): Promise<MacosIntuneLogScanResult> {
-  return invokeCommand<MacosIntuneLogScanResult>("macos_scan_intune_logs");
+  return invokeCommand("macos_scan_intune_logs");
 }
 
 export async function macosListProfiles(): Promise<MacosProfilesResult> {
-  return invokeCommand<MacosProfilesResult>("macos_list_profiles");
+  return invokeCommand("macos_list_profiles");
 }
 
 export async function macosInspectDefender(): Promise<MacosDefenderResult> {
-  return invokeCommand<MacosDefenderResult>("macos_inspect_defender");
+  return invokeCommand("macos_inspect_defender");
 }
 
 export async function macosListPackages(): Promise<MacosPackagesResult> {
-  return invokeCommand<MacosPackagesResult>("macos_list_packages");
+  return invokeCommand("macos_list_packages");
 }
 
 export async function macosGetPackageInfo(
   packageId: string,
 ): Promise<MacosPackageInfo> {
-  return invokeCommand<MacosPackageInfo>("macos_get_package_info", {
+  return invokeCommand("macos_get_package_info", {
     packageId,
   });
 }
@@ -1408,7 +1379,7 @@ export async function macosGetPackageInfo(
 export async function macosGetPackageFiles(
   packageId: string,
 ): Promise<MacosPackageFiles> {
-  return invokeCommand<MacosPackageFiles>("macos_get_package_files", {
+  return invokeCommand("macos_get_package_files", {
     packageId,
   });
 }
@@ -1424,7 +1395,7 @@ export async function macosQueryUnifiedLog(
   const fmt = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   const timeRange = { start: fmt(start), end: fmt(now) };
-  return invokeCommand<MacosUnifiedLogResult>("macos_query_unified_log", {
+  return invokeCommand("macos_query_unified_log", {
     presetId,
     timeRange,
     resultCap,
@@ -1438,27 +1409,21 @@ import type { SecureBootAnalysisResult } from "../workspaces/secureboot/types";
 export async function analyzeSecureBoot(
   path?: string | null,
 ): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("analyze_secureboot", {
+  return invokeCommand("analyze_secureboot", {
     path: path ?? null,
   });
 }
 
 export async function rescanSecureBoot(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("rescan_secureboot", {});
+  return invokeCommand("rescan_secureboot", {});
 }
 
 export async function runSecureBootDetection(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>(
-    "run_secureboot_detection",
-    {},
-  );
+  return invokeCommand("run_secureboot_detection", {});
 }
 
 export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>(
-    "run_secureboot_remediation",
-    {},
-  );
+  return invokeCommand("run_secureboot_remediation", {});
 }
 
 function decodeSecureBootAnalysisResult(
@@ -1475,10 +1440,7 @@ function decodeSecureBootAnalysisResult(
     scriptResult: isNullableCommandRecord,
   });
 }
-
-type UntypedCommandDecoder = CommandDecoder<unknown>;
-
-const COMMAND_DECODERS: Record<string, UntypedCommandDecoder> = {
+const COMMAND_DECODERS = {
   open_log_file: decodeParseResult,
   parse_files_batch: decodeParseResults,
   list_log_folder: decodeFolderListingResult,
@@ -1831,4 +1793,9 @@ const COMMAND_DECODERS: Record<string, UntypedCommandDecoder> = {
   rescan_secureboot: decodeSecureBootAnalysisResult,
   run_secureboot_detection: decodeSecureBootAnalysisResult,
   run_secureboot_remediation: decodeSecureBootAnalysisResult,
-};
+} satisfies Record<string, CommandDecoder<unknown>>;
+
+type CommandName = keyof typeof COMMAND_DECODERS;
+type CommandResponse<Name extends CommandName> = ReturnType<
+  (typeof COMMAND_DECODERS)[Name]
+>;
