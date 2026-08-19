@@ -52,16 +52,33 @@ type ServerFilter = EventQueryFilterSubset & {
   eventIdMode?: "include";
 };
 function compareStoredRecords(a: EvtxRecord, b: EvtxRecord): number {
+  const aTextId = a.eventRecordIdText?.trim();
+  const bTextId = b.eventRecordIdText?.trim();
+  const aId = aTextId && !/^0+$/.test(aTextId) ? aTextId : String(a.eventRecordId);
+  const bId = bTextId && !/^0+$/.test(bTextId) ? bTextId : String(b.eventRecordId);
   return (
     a.timestampEpoch - b.timestampEpoch ||
     a.sourceLabel.localeCompare(b.sourceLabel) ||
     a.channel.localeCompare(b.channel) ||
-    a.eventRecordId - b.eventRecordId ||
+    (aId < bId ? -1 : aId > bId ? 1 : 0) ||
     a.eventId - b.eventId
   );
 }
 function recordKey(record: EvtxRecord): string {
-  return `${record.channel}\u0000${record.eventRecordId}\u0000${record.eventId}\u0000${record.timestampEpoch}`;
+  const textId = record.eventRecordIdText?.trim();
+  const recordId =
+    textId && !/^0+$/.test(textId)
+      ? `text:${record.eventRecordIdText}`
+      : record.eventRecordId !== 0
+        ? `number:${String(record.eventRecordId)}`
+        : `missing:${record.rawXml || [
+            record.provider,
+            record.eventId,
+            record.timestampEpoch,
+            record.computer,
+            record.message,
+          ].join("\u0000")}`;
+  return `${record.sourceLabel}\u0000${record.channel}\u0000${recordId}`;
 }
 function appendUniqueRecords(existing: EvtxRecord[], incoming: EvtxRecord[]): EvtxRecord[] {
   const keys = new Set(existing.map(recordKey));
@@ -91,13 +108,16 @@ function aggregateTailMode(modes: EvtxLiveMode[]): EvtxLiveMode {
 
 let requestGeneration = 0;
 let activeRequestId = "initial";
+let tailGeneration = 0;
 let activeTailRequestId: string | null = null;
+let activeTailSourceRequestId: string | null = null;
 let activeTailChannels = new Set<string>();
 
 function beginRequest(): string {
   const staleTailRequestId = activeTailRequestId;
   const staleTailChannels = activeTailChannels;
   activeTailRequestId = null;
+  activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   if (staleTailRequestId) {
     for (const channel of staleTailChannels) {
@@ -1008,9 +1028,11 @@ loadGeneration: generation,
     if (state.sourceMode !== "live") return [];
     const channels = [...state.loadedChannels];
     if (channels.length === 0) return [];
-    const requestId = activeRequestId;
+    const sourceRequestId = activeRequestId;
+    const requestId = `event-log-tail-${++tailGeneration}`;
     const remoteMachine = state.remoteMachine;
     activeTailRequestId = requestId;
+    activeTailSourceRequestId = sourceRequestId;
     activeTailChannels = new Set(channels);
     const statuses = await Promise.all(
       channels.map(async (channel) => {
@@ -1034,7 +1056,7 @@ loadGeneration: generation,
         }
       })
     );
-    if (!isCurrentRequest(requestId)) return [];
+    if (!isCurrentRequest(sourceRequestId) || activeTailRequestId !== requestId) return [];
     const modes = statuses.map((status) => status.mode);
     const gaps = statuses.flatMap((status) => status.coverageGaps);
     activeTailChannels = new Set(
@@ -1053,14 +1075,21 @@ loadGeneration: generation,
     const requestId = state.tailRequestId;
     if (!requestId) return;
     const channels = [...state.tailChannels];
-    activeTailRequestId = null;
+    const sequenceSnapshots = new Map(
+      channels.map((channel) => [
+        channel,
+        new Set(tailSequences.get(tailSequenceKey(requestId, channel)) ?? []),
+      ])
+    );
+    activeTailSourceRequestId = null;
     activeTailChannels = new Set<string>();
+    tailSequences.clear();
     set({
       tailMode: null,
       tailRequestId: null,
       tailChannels: new Set<string>(),
     });
-    await Promise.all(
+    const statuses = await Promise.all(
       channels.map((channel) =>
         invoke<EvtxTailStatus>("evtx_stop_tail", {
           requestId,
@@ -1068,6 +1097,21 @@ loadGeneration: generation,
         }).catch(() => undefined)
       )
     );
+    const finalGaps = statuses.flatMap((status, index) => {
+      if (!status) return [];
+      const received = sequenceSnapshots.get(channels[index]) ?? new Set<number>();
+      return Array.from({ length: status.nextSequence }, (_, sequence) =>
+        received.has(sequence)
+          ? null
+          : `${status.channel}: live tail batch ${sequence} was not received`
+      ).filter((gap): gap is string => gap !== null);
+    });
+    if (finalGaps.length > 0) {
+      set((current) => ({
+        tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, finalGaps),
+      }));
+    }
+    tailSequences.clear();
   },
 
   clearChannel: async (channel, confirmed) => {
@@ -1077,8 +1121,13 @@ loadGeneration: generation,
     if (wasTailing) {
       await invoke("evtx_stop_tail", { requestId, channel }).catch(() => undefined);
       activeTailChannels.delete(channel);
+      tailSequences.delete(tailSequenceKey(requestId, channel));
     }
-    const result = await invoke<EvtxClearResult>("evtx_clear_channel", { channel, confirmed });
+    const response = await invoke<{ channel: string; result: EvtxClearResult }>(
+      "evtx_clear_channel",
+      { channel, confirmed, remoteMachine: state.remoteMachine }
+    );
+    const result = response.result;
     if (result.status === "cleared") {
       set((current) => ({
         records: current.records.filter((record) => record.channel !== channel),
@@ -1394,7 +1443,8 @@ listen<{ channel: string; requestId: string; sequenceCount: number; totalRecords
 listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
   const payload = event.payload;
   if (
-    !isCurrentRequest(payload.requestId) ||
+    activeTailSourceRequestId === null ||
+    !isCurrentRequest(activeTailSourceRequestId) ||
     activeTailRequestId !== payload.requestId ||
     !activeTailChannels.has(payload.channel)
   ) {
@@ -1420,18 +1470,11 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
   if (payload.coverageGaps.length > 0) missing.push(...payload.coverageGaps);
 
   useEvtxStore.setState((state) => {
-    const known = new Set(
-      state.records.map((record) => `${record.channel}\u0000${record.eventRecordId}`)
+    const merged = mergeRecordsPreservingSelection(
+      state.records,
+      state.selectedRecordId,
+      payload.records
     );
-    const appended = payload.records.filter((record) => {
-      const identity = `${record.channel}\u0000${record.eventRecordId}`;
-      if (known.has(identity)) return false;
-      known.add(identity);
-      return true;
-    });
-    const records = [...state.records, ...appended];
-    records.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
-    for (let index = 0; index < records.length; index++) records[index].id = index;
     const existingMode = state.tailMode;
     const mode =
       existingMode === null || existingMode === payload.mode
@@ -1440,7 +1483,7 @@ listen<EvtxTailBatch>("evtx-tail-batch", (event) => {
           ? payload.mode
           : "mixed";
     return {
-      records,
+      ...merged,
       tailMode: mode,
       tailRequestId: payload.requestId,
       tailChannels: new Set([...state.tailChannels, payload.channel]),

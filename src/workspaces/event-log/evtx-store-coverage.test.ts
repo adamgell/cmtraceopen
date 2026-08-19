@@ -1212,6 +1212,56 @@ describe("records that arrive in batches while the query runs", () => {
     const state = useEvtxStore.getState();
     expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
   });
+  it("preserves exact large IDs, source boundaries, and distinct missing-ID XML records", async () => {
+    const largeId = {
+      ...record("Application", 10),
+      eventRecordId: Number("9007199254740993"),
+      eventRecordIdText: "9007199254740993",
+      sourceLabel: "Live",
+    };
+    const secondLargeId = {
+      ...largeId,
+      eventRecordIdText: "9007199254740994",
+    };
+    const firstSource = { ...record("Application", 20), eventRecordId: 55, sourceLabel: "one.evtx" };
+    const secondSource = { ...firstSource, sourceLabel: "two.evtx" };
+    const firstMissing = {
+      ...record("Application", 30),
+      eventRecordId: 0,
+      eventRecordIdText: null,
+      rawXml: "<Event><Provider Name=\"one\" /></Event>",
+    };
+    const secondMissing = {
+      ...firstMissing,
+      rawXml: "<Event><Provider Name=\"two\" /></Event>",
+    };
+    invoke.mockResolvedValueOnce({
+      records: [
+        largeId,
+        secondLargeId,
+        firstSource,
+        secondSource,
+        firstMissing,
+        secondMissing,
+        { ...largeId },
+      ],
+      channels: [{ name: "Application", eventCount: 7, sourceType: "live" as const }],
+      totalRecords: 7,
+      parseErrors: 0,
+      errorMessages: [],
+    });
+
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const records = useEvtxStore.getState().records;
+    expect(records).toHaveLength(6);
+    expect(records.map((item) => item.eventRecordIdText)).toEqual(
+      expect.arrayContaining(["9007199254740993", "9007199254740994"])
+    );
+    expect(records.filter((item) => item.eventRecordId === 55)).toHaveLength(2);
+    expect(records.filter((item) => item.eventRecordId === 0)).toHaveLength(2);
+  });
+
 });
 describe("remote event sources", () => {
   beforeEach(() => {

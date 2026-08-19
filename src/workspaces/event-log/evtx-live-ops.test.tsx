@@ -58,11 +58,42 @@ describe("event-log live operations", () => {
         };
       }
       if (name === "evtx_clear_channel") {
-        return { status: "cleared", channel: args.channel };
+        return { channel: args.channel, result: { status: "cleared", channel: args.channel } };
       }
       return undefined;
     });
   });
+  function tailRecord(eventRecordId: number) {
+    return {
+      id: 0,
+      eventRecordId,
+      timestamp: "2026-01-01T00:00:00Z",
+      timestampEpoch: eventRecordId,
+      provider: "Test",
+      channel: "Application",
+      eventId: 1,
+      level: "Information",
+      computer: "TEST",
+      message: "event",
+      eventData: [],
+      rawXml: `<Event><EventRecordID>${eventRecordId}</EventRecordID></Event>`,
+      sourceLabel: "Live",
+    };
+  }
+
+  it("returns the nested clear status and forwards the selected remote host", async () => {
+    useEvtxStore.setState({ remoteMachine: "lab-host" });
+
+    const result = await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(result).toEqual({ status: "cleared", channel: "Application" });
+    expect(invoke).toHaveBeenCalledWith("evtx_clear_channel", {
+      channel: "Application",
+      confirmed: true,
+      remoteMachine: "lab-host",
+    });
+  });
+
 
   it("exposes subscription and polling transitions and stops both channels", async () => {
     const statuses = await useEvtxStore.getState().startLiveTail();
@@ -83,6 +114,105 @@ describe("event-log live operations", () => {
       expect.objectContaining({ channel: "System" })
     );
     expect(useEvtxStore.getState().tailMode).toBeNull();
+  });
+
+  it("accepts sequence zero after restarting the live tail with a fresh request", async () => {
+    await useEvtxStore.getState().startLiveTail();
+    const handler = listeners.get("evtx-tail-batch");
+    const firstRequestId = useEvtxStore.getState().tailRequestId;
+    handler?.({
+      payload: {
+        requestId: firstRequestId,
+        channel: "Application",
+        sequence: 0,
+        mode: "subscription",
+        records: [tailRecord(11)],
+        coverageGaps: [],
+      },
+    });
+    await useEvtxStore.getState().stopLiveTail();
+
+    await useEvtxStore.getState().startLiveTail();
+    const secondRequestId = useEvtxStore.getState().tailRequestId;
+    expect(secondRequestId).not.toBe(firstRequestId);
+    handler?.({
+      payload: {
+        requestId: secondRequestId,
+        channel: "Application",
+        sequence: 0,
+        mode: "subscription",
+        records: [tailRecord(12)],
+        coverageGaps: [],
+      },
+    });
+
+    expect(useEvtxStore.getState().records.map((record) => record.eventRecordId)).toContain(12);
+  });
+
+  it("records final sequence gaps reported when stopping a live tail", async () => {
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: false,
+          nextSequence: 2,
+          coverageGaps: [],
+        };
+      }
+      return undefined;
+    });
+    await useEvtxStore.getState().startLiveTail();
+    const handler = listeners.get("evtx-tail-batch");
+    const requestId = useEvtxStore.getState().tailRequestId;
+    handler?.({
+      payload: {
+        requestId,
+        channel: "Application",
+        sequence: 0,
+        mode: "subscription",
+        records: [tailRecord(21)],
+        coverageGaps: [],
+      },
+    });
+
+    await useEvtxStore.getState().stopLiveTail();
+
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail batch 1 was not received"
+    );
+  });
+
+  it("keeps the selected record when an earlier tail row shifts numeric ids", async () => {
+    const selected = tailRecord(100);
+    useEvtxStore.setState({ records: [selected], selectedRecordId: 0 });
+    await useEvtxStore.getState().startLiveTail();
+    const handler = listeners.get("evtx-tail-batch");
+    const requestId = useEvtxStore.getState().tailRequestId;
+    handler?.({
+      payload: {
+        requestId,
+        channel: "Application",
+        sequence: 0,
+        mode: "subscription",
+        records: [tailRecord(1)],
+        coverageGaps: [],
+      },
+    });
+
+    const state = useEvtxStore.getState();
+    expect(state.records[state.selectedRecordId ?? -1]?.eventRecordId).toBe(100);
   });
 
   it("reports a dropped sequence and rejects stale source-generation batches", async () => {
