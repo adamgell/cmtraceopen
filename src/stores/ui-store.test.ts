@@ -54,6 +54,9 @@ describe("ui-store", () => {
       useUiStore.setState({ dismissedDnsBannerPaths: [] });
 
       useUiStore.getState().dismissDnsBannerPath("C:/Logs/DnsServer.log");
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
 
       const persisted = JSON.parse(
         localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
