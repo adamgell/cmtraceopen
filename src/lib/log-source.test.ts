@@ -112,7 +112,8 @@ describe("Device Inventory known-source routing", () => {
   it("loads the Device Inventory folder through the batch loader without a selected file", async () => {
     const result = await loadLogSource(deviceInventoryFolder);
 
-    expect(result.selectedFilePath).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.selectedFilePath).toBeNull();
     expect(commands.listLogSourceFolder).toHaveBeenCalledWith(deviceInventoryFolder);
     expect(commands.parseFilesBatch).toHaveBeenCalledWith(
       [folderEntries[0].path],
@@ -126,7 +127,8 @@ describe("Device Inventory known-source routing", () => {
     async (source) => {
       const result = await loadLogSource(source);
 
-      expect(result.selectedFilePath).toBe(parseResult.filePath);
+      expect(result).not.toBeNull();
+      expect(result?.selectedFilePath).toBe(parseResult.filePath);
       expect(commands.openLogSourceFile).toHaveBeenCalledWith(source);
       expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
     }
@@ -678,7 +680,7 @@ describe("switchToTab", () => {
       filePath: fileA,
       entries: [makeEntry(1, fileA, "AppEnforce line")],
     });
-    await pendingLoad;
+    await expect(pendingLoad).resolves.toBeNull();
 
     expect(useLogStore.getState().openFilePath).toBe(fileB);
     expect(useLogStore.getState().entries[0]?.message).toBe("CIAgent line");
@@ -798,6 +800,31 @@ describe("source loading progress ownership", () => {
 
     await expect(stalePathLoad).resolves.toBeNull();
     expect(commands.openLogSourceFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null when a progressive folder load is superseded", async () => {
+    const pendingBatch = deferred<ParseResult[]>();
+    commands.parseFilesBatch.mockReturnValueOnce(pendingBatch.promise);
+
+    const staleFolderLoad = loadLogSource(folderSource);
+    await vi.waitFor(() => {
+      expect(commands.parseFilesBatch).toHaveBeenCalledWith(
+        [sourceEntries[0].path],
+        expect.any(Number),
+      );
+    });
+
+    commands.openLogSourceFile.mockResolvedValueOnce({
+      ...parseResult,
+      filePath: "C:/Windows/CCM/Logs/Current.log",
+    });
+    await loadLogSource({
+      kind: "file",
+      path: "C:/Windows/CCM/Logs/Current.log",
+    });
+
+    pendingBatch.resolve([]);
+    await expect(staleFolderLoad).resolves.toBeNull();
   });
 
   it("falls back to the folder lane after a current file load fails", async () => {

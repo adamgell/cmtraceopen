@@ -372,8 +372,8 @@ export function useAppActions(): AppActionHandlers {
       useFilterStore.getState().clearFilter();
 
       try {
-        await loadLogSource(source);
-        return true;
+        const result = await loadLogSource(source);
+        return result !== null;
       } catch (error) {
         console.error("[app-actions] failed to load source", {
           source,
@@ -459,10 +459,10 @@ export function useAppActions(): AppActionHandlers {
 
       useUiStore.getState().ensureLogViewVisible("drag-drop.path-open");
       useFilterStore.getState().clearFilter();
-      await loadPathAsLogSource(path, {
+      const result = await loadPathAsLogSource(path, {
         fallbackToFolder: true,
       });
-      if (isRecordableWorkspace(activeWorkspace)) {
+      if (result !== null && isRecordableWorkspace(activeWorkspace)) {
         void recordRecentPath(path, activeWorkspace);
       }
     },

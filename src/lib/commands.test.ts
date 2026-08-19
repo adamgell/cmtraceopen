@@ -12,7 +12,9 @@ import {
   graphCancelAuthentication,
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
+  listLogFolder,
   openLogFile,
+  parseFilesBatch,
   revealInFileManager,
 } from "./commands";
 import { readAccessDenied } from "./source-error";
@@ -78,6 +80,74 @@ function makeHostileErrorProxy(secretPrefix: string): {
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("parse and folder IPC response validation", () => {
+  it("preserves valid parser and folder responses", async () => {
+    const parseResult = {
+      entries: [
+        {
+          id: 0,
+          lineNumber: 1,
+          message: "line",
+          component: null,
+          timestamp: null,
+          timestampDisplay: null,
+          severity: "Info",
+          thread: null,
+          threadDisplay: null,
+          sourceFile: null,
+          format: "Simple",
+          filePath: "C:\\Logs\\App.log",
+          timezoneOffset: null,
+        },
+      ],
+      formatDetected: "Simple",
+      parserSelection: {
+        parser: "simple",
+        implementation: "simple",
+        provenance: "dedicated",
+        parseQuality: "structured",
+        recordFraming: "physicalLine",
+        dateOrder: null,
+        specialization: null,
+      },
+      totalLines: 0,
+      parseErrors: 0,
+      filePath: "C:\\Logs\\App.log",
+      fileSize: 0,
+      byteOffset: 0,
+    };
+    const folderListing = {
+      sourceKind: "folder",
+      source: { kind: "folder", path: "C:\\Logs" },
+      entries: [],
+      bundleMetadata: null,
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([parseResult])
+      .mockResolvedValueOnce(folderListing);
+
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7)).resolves.toEqual([
+      parseResult,
+    ]);
+    await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
+  });
+
+  it("rejects malformed parser and folder responses", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([{ filePath: "C:\\Logs\\App.log" }])
+      .mockResolvedValueOnce({
+        sourceKind: "folder",
+        source: { kind: "folder", path: "C:\\Logs" },
+        entries: [{ name: "App.log", path: "C:\\Logs\\App.log" }],
+      });
+
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7)).rejects.toThrow(
+      "invalid response",
+    );
+    await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");
+  });
 });
 
 function validGraphStatus() {

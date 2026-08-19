@@ -280,12 +280,147 @@ function normalizeCommandInvokeError(
 async function invokeCommand<T>(
   commandName: string,
   args?: Record<string, unknown>,
+  decoder?: (value: unknown) => T,
 ): Promise<T> {
+  let response: unknown;
   try {
-    return await invoke<T>(commandName, args);
+    response = await invoke<unknown>(commandName, args);
   } catch (error) {
     throw normalizeCommandInvokeError(commandName, error);
   }
+  return decoder ? decoder(response) : (response as T);
+}
+
+function isCommandRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFiniteCommandNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNullableCommandNumber(value: unknown): value is number | null {
+  return value === null || isFiniteCommandNumber(value);
+}
+
+function isNullableCommandString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isParserSelectionResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.parser === "string" &&
+    typeof value.implementation === "string" &&
+    typeof value.provenance === "string" &&
+    typeof value.parseQuality === "string" &&
+    typeof value.recordFraming === "string" &&
+    isNullableCommandString(value.dateOrder) &&
+    (value.specialization === undefined ||
+      isNullableCommandString(value.specialization))
+  );
+}
+
+function isLogEntryResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.id) &&
+    isFiniteCommandNumber(value.lineNumber) &&
+    typeof value.message === "string" &&
+    isNullableCommandString(value.component) &&
+    isNullableCommandNumber(value.timestamp) &&
+    isNullableCommandString(value.timestampDisplay) &&
+    typeof value.severity === "string" &&
+    isNullableCommandNumber(value.thread) &&
+    isNullableCommandString(value.threadDisplay) &&
+    isNullableCommandString(value.sourceFile) &&
+    typeof value.format === "string" &&
+    typeof value.filePath === "string" &&
+    isNullableCommandNumber(value.timezoneOffset)
+  );
+}
+
+function isParseResultResponse(value: unknown): value is ParseResult {
+  return (
+    isCommandRecord(value) &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isLogEntryResponse) &&
+    typeof value.formatDetected === "string" &&
+    isParserSelectionResponse(value.parserSelection) &&
+    isFiniteCommandNumber(value.totalLines) &&
+    isFiniteCommandNumber(value.parseErrors) &&
+    typeof value.filePath === "string" &&
+    isFiniteCommandNumber(value.fileSize) &&
+    isFiniteCommandNumber(value.byteOffset)
+  );
+}
+
+function isLogSourceKind(value: unknown): boolean {
+  return value === "file" || value === "folder" || value === "known";
+}
+
+function isLogSourceResponse(value: unknown): boolean {
+  if (!isCommandRecord(value) || !isLogSourceKind(value.kind)) {
+    return false;
+  }
+  if (value.kind === "file" || value.kind === "folder") {
+    return typeof value.path === "string";
+  }
+  return (
+    typeof value.sourceId === "string" &&
+    typeof value.defaultPath === "string" &&
+    (value.pathKind === "file" || value.pathKind === "folder")
+  );
+}
+
+function isFolderEntryResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.path === "string" &&
+    typeof value.isDir === "boolean" &&
+    isNullableCommandNumber(value.sizeBytes) &&
+    isNullableCommandNumber(value.modifiedUnixMs)
+  );
+}
+
+function isFolderListingResponse(
+  value: unknown,
+): value is FolderListingResult {
+  return (
+    isCommandRecord(value) &&
+    isLogSourceKind(value.sourceKind) &&
+    isLogSourceResponse(value.source) &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isFolderEntryResponse) &&
+    (value.bundleMetadata === undefined ||
+      value.bundleMetadata === null ||
+      isCommandRecord(value.bundleMetadata))
+  );
+}
+
+function invalidCommandResponse(commandName: string): never {
+  throw new Error(`Command '${commandName}' returned an invalid response.`);
+}
+
+function decodeParseResults(
+  value: unknown,
+  commandName: string,
+): ParseResult[] {
+  if (!Array.isArray(value) || !value.every(isParseResultResponse)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeFolderListingResult(
+  value: unknown,
+  commandName: string,
+): FolderListingResult {
+  if (!isFolderListingResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
 }
 
 export async function openLogFile(path: string): Promise<ParseResult> {
@@ -299,13 +434,23 @@ export async function parseFilesBatch(
   paths: string[],
   requestId: number,
 ): Promise<ParseResult[]> {
-  return invokeCommand<ParseResult[]>("parse_files_batch", { paths, requestId });
+  const commandName = "parse_files_batch";
+  return invokeCommand(
+    commandName,
+    { paths, requestId },
+    (value) => decodeParseResults(value, commandName),
+  );
 }
 
 export async function listLogFolder(
   path: string,
 ): Promise<FolderListingResult> {
-  return invokeCommand<FolderListingResult>("list_log_folder", { path });
+  const commandName = "list_log_folder";
+  return invokeCommand(
+    commandName,
+    { path },
+    (value) => decodeFolderListingResult(value, commandName),
+  );
 }
 
 export async function inspectEvidenceBundle(

@@ -530,10 +530,10 @@ export async function refreshCurrentLogSource(trigger: string): Promise<boolean>
     selectedFilePath: context.selectedFilePath,
   });
 
-  await loadLogSource(context.source, {
+  const result = await loadLogSource(context.source, {
     selectedFilePath: context.selectedFilePath,
   });
-  return true;
+  return result !== null;
 }
 export async function refreshKnownLogSources(): Promise<KnownSourceMetadata[]> {
   console.info("[log-source] refreshing known source metadata");
@@ -1136,7 +1136,7 @@ export async function loadLogSource(
   source: LogSource,
   options: LoadLogSourceOptions = {},
   existingGeneration?: number,
-): Promise<LoadLogSourceResult> {
+): Promise<LoadLogSourceResult | null> {
   // A new source load supersedes any pending tab restoration. Path probes pass
   // their already-claimed generation through so a current load error can still
   // take its documented folder fallback.
@@ -1159,21 +1159,11 @@ export async function loadLogSource(
     if (source.kind === "file") {
       await stopCurrentTailIfNeeded(source.path);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: null,
-          parseResult: null,
-        };
+        return null;
       }
       const result = await openLogSourceFile(source);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: result.filePath,
-          parseResult: result,
-        };
+        return null;
       }
 
       state.setSourceEntries([]);
@@ -1198,12 +1188,7 @@ export async function loadLogSource(
     if (source.kind === "folder") {
       const listing = await listLogSourceFolder(source);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: null,
-          parseResult: null,
-        };
+        return null;
       }
 
       state.setActiveSource(source);
@@ -1213,14 +1198,12 @@ export async function loadLogSource(
       if (!requestedFilePath) {
         await stopCurrentTailIfNeeded(null);
         if (!isCurrentTabSwitch(loadGeneration)) {
-          return {
-            source,
-            entries: [],
-            selectedFilePath: null,
-            parseResult: null,
-          };
+          return null;
         }
         await loadFolderProgressive(source, listing.entries, loadGeneration);
+        if (!isCurrentTabSwitch(loadGeneration)) {
+          return null;
+        }
 
         return {
           source,
@@ -1243,12 +1226,7 @@ export async function loadLogSource(
         ? state.knownSources
         : await refreshKnownLogSources();
     if (!isCurrentTabSwitch(loadGeneration)) {
-      return {
-        source,
-        entries: [],
-        selectedFilePath: null,
-        parseResult: null,
-      };
+      return null;
     }
 
     const metadata = knownSources.find((item) => item.id === source.sourceId);
@@ -1260,21 +1238,11 @@ export async function loadLogSource(
     if (source.pathKind === "file") {
       await stopCurrentTailIfNeeded(source.defaultPath);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: null,
-          parseResult: null,
-        };
+        return null;
       }
       const result = await openLogSourceFile(source);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: result.filePath,
-          parseResult: result,
-        };
+        return null;
       }
 
       state.setSourceEntries([]);
@@ -1296,12 +1264,7 @@ export async function loadLogSource(
 
     const listing = await listLogSourceFolder(source);
     if (!isCurrentTabSwitch(loadGeneration)) {
-      return {
-        source,
-        entries: [],
-        selectedFilePath: null,
-        parseResult: null,
-      };
+      return null;
     }
 
     state.setActiveSource(source);
@@ -1311,14 +1274,12 @@ export async function loadLogSource(
     if (!requestedFilePath) {
       await stopCurrentTailIfNeeded(null);
       if (!isCurrentTabSwitch(loadGeneration)) {
-        return {
-          source,
-          entries: [],
-          selectedFilePath: null,
-          parseResult: null,
-        };
+        return null;
       }
       await loadFolderProgressive(source, listing.entries, loadGeneration);
+      if (!isCurrentTabSwitch(loadGeneration)) {
+        return null;
+      }
 
       return {
         source,
@@ -1336,12 +1297,7 @@ export async function loadLogSource(
     );
   } catch (error) {
     if (!isCurrentTabSwitch(loadGeneration)) {
-      return {
-        source,
-        entries: [],
-        selectedFilePath: null,
-        parseResult: null,
-      };
+      return null;
     }
     const { kind, message, accessDenied } = classifySourceError(error);
 
@@ -1390,7 +1346,7 @@ async function recoverOrLoadSelectedFolderFile(
   entries: FolderEntry[],
   requestedFilePath: string,
   loadGeneration: number,
-): Promise<LoadLogSourceResult> {
+): Promise<LoadLogSourceResult | null> {
   try {
     const result = await loadSelectedLogFile(
       requestedFilePath,
@@ -1398,12 +1354,7 @@ async function recoverOrLoadSelectedFolderFile(
       loadGeneration,
     );
     if (!result || !isCurrentTabSwitch(loadGeneration)) {
-      return {
-        source,
-        entries: [],
-        selectedFilePath: null,
-        parseResult: null,
-      };
+      return null;
     }
 
     return {
