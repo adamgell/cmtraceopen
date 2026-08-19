@@ -818,10 +818,12 @@ fn expand_path(
         return Ok(());
     }
 
-    if !is_evtx_candidate(path) {
+    if !is_evtx_candidate(path)
+        && !(matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
+    {
         manifest.coverage.push(SourceCoverage::Unsupported {
             path: path_string,
-            reason: "source path is not an EVTX file".to_string(),
+            reason: "source path is not an EVTX file or supported diagnostic ZIP".to_string(),
         });
         return Ok(());
     }
@@ -911,10 +913,7 @@ fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> Event
         EventLogSourceKind::Vss
     } else if !matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
         && !fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
-        && path
-            .rsplit(['\\', '/'])
-            .next()
-            .is_some_and(|name| name.to_ascii_lowercase().starts_with("archive-"))
+        && is_archive_candidate(Path::new(path))
     {
         EventLogSourceKind::Archive
     } else {
@@ -933,28 +932,28 @@ fn source_kind_priority(kind: EventLogSourceKind) -> u8 {
 }
 
 fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> {
-    if !matches!(kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss) {
+    if !matches!(kind, EventLogSourceKind::Vss) {
         return None;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        return Some(SourceCoverage::Unsupported {
+        Some(SourceCoverage::Unsupported {
             path: path.to_string(),
-            reason: "archived and VSS event-log sources are only available on Windows".to_string(),
-        });
+            reason: "VSS event-log sources are only available on Windows".to_string(),
+        })
     }
 
     #[cfg(target_os = "windows")]
     {
         if !crate::elevation::current_elevation_state().is_elevated {
-            return Some(SourceCoverage::AccessDenied {
+            Some(SourceCoverage::AccessDenied {
                 path: path.to_string(),
-                reason: "archived and VSS event-log sources require an elevated process"
-                    .to_string(),
-            });
+                reason: "VSS event-log sources require an elevated process".to_string(),
+            })
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -979,6 +978,12 @@ fn is_evtx_candidate(path: &Path) -> bool {
     lower.ends_with(".evtx")
         || lower.contains(".evtx.")
         || lower.ends_with(".evtx~")
+}
+fn is_archive_candidate(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case("MDMDiagReport.zip")
+            || name.to_string_lossy().to_ascii_lowercase().ends_with(".zip"))
+        .unwrap_or(false)
 }
 fn normalize_source_path(path: &Path) -> String {
     let raw = path.to_string_lossy();
@@ -1169,10 +1174,13 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
                 continue;
             }
         }
-        if !is_evtx_candidate(path) {
+        if !is_evtx_candidate(path)
+            && !(matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
+        {
             validated.coverage.push(SourceCoverage::Unsupported {
                 path: source.path.clone(),
-                reason: "manifest entry is not an EVTX filename".to_string(),
+                reason: "manifest entry is not an EVTX filename or supported diagnostic ZIP"
+                    .to_string(),
             });
             continue;
         }
@@ -1363,83 +1371,58 @@ pub fn parse_evtx_manifest(
             break;
         }
         total_source_bytes = total_source_bytes.saturating_add(source_bytes);
-        match parse_single_file(path, maps, providers) {
-            Ok(file) => {
-                let mut records = file.records;
-                for record in &mut records {
-                    // A basename is ambiguous when a recursive folder contains two files with the
-                    // same name. Keep the manifest's normalized member path on every event so the
-                    // merged timeline can identify the originating source.
-                    record.source_label = source.path.clone();
-                }
-                if records.len() > MAX_SOURCE_RECORDS.saturating_sub(total_source_records) {
-                    let remaining = MAX_SOURCE_RECORDS.saturating_sub(total_source_records);
-                    records.truncate(remaining);
-                    parse_errors = parse_errors.saturating_add(1);
-                    error_messages.push(format!(
-                        "{}: source manifest record budget of {} records was exhausted; later files were not parsed",
-                        source.path, MAX_SOURCE_RECORDS
-                    ));
-                }
-                total_source_records = total_source_records.saturating_add(records.len());
-                parse_errors += file.parse_errors;
-                coverage_gaps.extend(file.coverage_gaps.iter().cloned().map(|mut gap| {
-                    gap.source = source.path.clone();
-                    gap
-                }));
-                error_messages.extend(
-                    file.messages
-                        .into_iter()
-                        .map(|message| format!("{}: {message}", source.path)),
-                );
-                error_messages.extend(
-                    coverage_gaps
-                        .iter()
-                        .rev()
-                        .take(file.coverage_gaps.len())
-                        .rev()
-                        .map(format_coverage_gap),
-                );
-                let source_label = source_label_for_path(path);
-
-                let mut channel_counts: std::collections::HashMap<String, u64> =
-                    std::collections::HashMap::new();
-                for record in &records {
-                    *channel_counts.entry(record.channel.clone()).or_insert(0) += 1;
-                }
-
-                if channel_counts.is_empty() {
-                    // No records — still emit an entry keyed by the full source path so the file
-                    // appears in the picker without colliding with a same-named member.
-                    channels.push(EvtxChannelInfo {
-                        name: source_label,
-                        event_count: 0,
-                        source_type: ChannelSourceType::File {
-                            path: source.path.clone(),
-                        },
-                    });
-                } else {
-                    for (channel_name, count) in channel_counts {
-                        channels.push(EvtxChannelInfo {
-                            name: channel_name,
-                            event_count: count,
-                            source_type: ChannelSourceType::File {
-                                path: source.path.clone(),
-                            },
-                        });
+        if matches!(source.kind, EventLogSourceKind::Archive) {
+            match super::archive::parse_archive(path, maps, providers) {
+                Ok(archive) => {
+                    parse_errors = parse_errors.saturating_add(archive.parse_errors);
+                    coverage_gaps.extend(archive.coverage);
+                    error_messages.extend(archive.messages);
+                    for member in archive.members {
+                        append_parsed_file(
+                            &member.source_label,
+                            member.parsed,
+                            &mut all_records,
+                            &mut channels,
+                            &mut parse_errors,
+                            &mut coverage_gaps,
+                            &mut error_messages,
+                            &mut total_source_records,
+                        );
                     }
                 }
-                all_records.extend(records);
+                Err(gap) => {
+                    log::warn!(
+                        "event=evtx_archive_parse_error file=\"{}\" error=\"{}\"",
+                        source.path,
+                        gap.reason
+                    );
+                    parse_errors = parse_errors.saturating_add(1);
+                    error_messages.push(format_coverage_gap(&gap));
+                    coverage_gaps.push(gap);
+                }
             }
-            Err(gap) => {
-                log::warn!(
-                    "event=evtx_parse_error file=\"{}\" error=\"{}\"",
-                    source.path,
-                    gap.reason
-                );
-                parse_errors += 1;
-                error_messages.push(format_coverage_gap(&gap));
-                coverage_gaps.push(gap);
+        } else {
+            match parse_single_file(path, maps, providers) {
+                Ok(file) => append_parsed_file(
+                    &source.path,
+                    file,
+                    &mut all_records,
+                    &mut channels,
+                    &mut parse_errors,
+                    &mut coverage_gaps,
+                    &mut error_messages,
+                    &mut total_source_records,
+                ),
+                Err(gap) => {
+                    log::warn!(
+                        "event=evtx_parse_error file=\"{}\" error=\"{}\"",
+                        source.path,
+                        gap.reason
+                    );
+                    parse_errors = parse_errors.saturating_add(1);
+                    error_messages.push(format_coverage_gap(&gap));
+                    coverage_gaps.push(gap);
+                }
             }
         }
         if source_index + 1 < manifest.entries.len()
@@ -1472,16 +1455,82 @@ pub fn parse_evtx_manifest(
     })
 }
 
-/// What one file yielded, including why anything was missing from it.
-struct ParsedFile {
-    records: Vec<EvtxRecord>,
-    /// Records that could not be read. Kept as a count because a damaged file can produce
-    /// thousands, and thousands of near-identical strings are not worth carrying.
-    parse_errors: u32,
-    /// Operator-facing explanations, already summarised.
-    messages: Vec<String>,
-    coverage_gaps: Vec<EvtxCoverageGap>,
+fn append_parsed_file(
+    source_path: &str,
+    file: ParsedFile,
+    all_records: &mut Vec<EvtxRecord>,
+    channels: &mut Vec<EvtxChannelInfo>,
+    parse_errors: &mut u32,
+    coverage_gaps: &mut Vec<EvtxCoverageGap>,
+    error_messages: &mut Vec<String>,
+    total_source_records: &mut usize,
+) {
+    let mut records = file.records;
+    for record in &mut records {
+        record.source_label = source_path.to_string();
+    }
+    if records.len() > MAX_SOURCE_RECORDS.saturating_sub(*total_source_records) {
+        let remaining = MAX_SOURCE_RECORDS.saturating_sub(*total_source_records);
+        records.truncate(remaining);
+        *parse_errors = (*parse_errors).saturating_add(1);
+        error_messages.push(format!(
+            "{source_path}: source manifest record budget of {MAX_SOURCE_RECORDS} records was exhausted; later files were not parsed"
+        ));
+    }
+    *total_source_records = (*total_source_records).saturating_add(records.len());
+    *parse_errors = (*parse_errors).saturating_add(file.parse_errors);
+    coverage_gaps.extend(file.coverage_gaps.iter().cloned().map(|mut gap| {
+        gap.source = source_path.to_string();
+        gap
+    }));
+    error_messages.extend(
+        file.messages
+            .into_iter()
+            .map(|message| format!("{source_path}: {message}")),
+    );
+    error_messages.extend(
+        file.coverage_gaps
+            .iter()
+            .map(format_coverage_gap),
+    );
+
+    let mut channel_counts = std::collections::HashMap::<String, u64>::new();
+    for record in &records {
+        *channel_counts.entry(record.channel.clone()).or_insert(0) += 1;
+    }
+    if channel_counts.is_empty() {
+        channels.push(EvtxChannelInfo {
+            name: source_path.to_string(),
+            event_count: 0,
+            source_type: ChannelSourceType::File {
+                path: source_path.to_string(),
+            },
+        });
+    } else {
+        channels.extend(channel_counts.into_iter().map(|(name, event_count)| {
+            EvtxChannelInfo {
+                name,
+                event_count,
+                source_type: ChannelSourceType::File {
+                    path: source_path.to_string(),
+                },
+            }
+        }));
+    }
+    all_records.extend(records);
 }
+
+/// What one file yielded, including why anything was missing from it.
+#[derive(Debug)]
+pub(crate) struct ParsedFile {
+    pub(crate) records: Vec<EvtxRecord>,
+    /// Records that could not be read.
+    pub(crate) parse_errors: u32,
+    /// Operator-facing explanations, already summarised.
+    pub(crate) messages: Vec<String>,
+    pub(crate) coverage_gaps: Vec<EvtxCoverageGap>,
+}
+
 
 
 /// Parse a single .evtx file.
@@ -1496,15 +1545,45 @@ fn parse_single_file(
     providers: &RwLock<ProviderStore>,
 ) -> Result<ParsedFile, EvtxCoverageGap> {
     let source_path = path.to_string_lossy().into_owned();
-    let mut parser = EvtxParser::from_path(path).map_err(|error| {
+    let parser = EvtxParser::from_path(path).map_err(|error| {
         EvtxCoverageGap::new(
             source_path.clone(),
             EvtxCoverageGapKind::File,
             format!("failed to open EVTX file: {error}"),
         )
     })?;
-    let source_label = source_label_for_path(path);
+    parse_evtx_parser(parser, &source_path, &source_label_for_path(path), maps, providers)
+}
 
+pub(crate) fn parse_evtx_buffer(
+    bytes: Vec<u8>,
+    source_label: &str,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<ParsedFile, EvtxCoverageGap> {
+    let parser = EvtxParser::from_buffer(bytes).map_err(|error| {
+        EvtxCoverageGap::new(
+            source_label,
+            EvtxCoverageGapKind::File,
+            format!("failed to parse EVTX member: {error}"),
+        )
+    })?;
+    parse_evtx_parser(parser, source_label, source_label, maps, providers)
+}
+
+fn parse_evtx_parser<T>(
+    mut parser: EvtxParser<T>,
+    source_path: &str,
+    source_label: &str,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<ParsedFile, EvtxCoverageGap>
+where
+    T: std::io::Read + std::io::Seek,
+{
+
+    let source_path = source_path.to_string();
+    let source_label = source_label.to_string();
 
     let mut records = Vec::new();
     let mut parse_errors = 0u32;
@@ -1537,7 +1616,7 @@ fn parse_single_file(
         if records.len() >= MAX_ENTRIES_PER_FILE {
             log::warn!(
                 "event=evtx_entry_cap_reached file=\"{}\" cap={}",
-                path.display(),
+                source_path,
                 MAX_ENTRIES_PER_FILE
             );
             truncated = true;
@@ -1549,7 +1628,7 @@ fn parse_single_file(
             Err(error) => {
                 log::warn!(
                     "event=evtx_record_skip file=\"{}\" error=\"{}\"",
-                    path.display(),
+                    source_path,
                     error
                 );
                 parse_errors += 1;
@@ -1569,7 +1648,7 @@ fn parse_single_file(
             Err(error) => {
                 log::warn!(
                     "event=evtx_record_unparsable file=\"{}\" error=\"{}\"",
-                    path.display(),
+                    source_path,
                     error
                 );
                 parse_errors += 1;
@@ -1637,6 +1716,12 @@ fn parse_single_file(
             thread_id: system.thread_id,
             user_sid: system.user_sid,
             keywords: system.keywords,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             mapped,
         });
     }
@@ -2038,25 +2123,31 @@ mod tests {
         assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
         assert_eq!(
             classify_source_kind(
-                r"C:\Windows\System32\winevt\Logs\Archive-Application.evtx",
+                r"C:\Windows\System32\winevt\Logs\MDMDiagReport.zip",
                 EventLogSourceKind::File
             ),
             EventLogSourceKind::Archive
         );
     }
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn explicit_archive_wildcard_is_gated_before_expansion() {
+    fn explicit_archive_wildcard_is_expanded_without_platform_gate() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-wildcard-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive wildcard root");
+        let pattern = root.join("archive-*.zip").to_string_lossy().to_string();
         let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
-            path: "archive-*.evtx".to_string(),
+            path: pattern.clone(),
             kind: EventLogSourceKind::Archive,
         }])
         .expect("build manifest");
         assert!(manifest.entries.is_empty());
         assert!(manifest.coverage.iter().any(|coverage| matches!(
             coverage,
-            SourceCoverage::Unsupported { path, .. } if path == "archive-*.evtx"
+            SourceCoverage::Missing { path, .. } if path == &pattern
         )));
+        std::fs::remove_dir_all(root).expect("remove archive wildcard root");
     }
     #[test]
     fn existing_glob_metacharacter_directory_is_treated_as_literal() {
@@ -2230,12 +2321,12 @@ mod tests {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            assert_eq!(manifest.entries.len(), 1);
-            assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Wildcard);
+            assert_eq!(manifest.entries.len(), 2);
             assert!(manifest
-                .coverage
+                .entries
                 .iter()
-                .any(|coverage| matches!(coverage, SourceCoverage::Unsupported { .. })));
+                .all(|entry| entry.kind == EventLogSourceKind::Wildcard));
+            assert!(manifest.coverage.is_empty());
         }
 
 

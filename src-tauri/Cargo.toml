@@ -41,6 +41,7 @@ event-log = [
     "dep:serde_norway",
     "dep:rusqlite",
     "dep:flate2",
+    "dep:zip",
 ]
 collector = []
 deployment = []
