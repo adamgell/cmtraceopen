@@ -97,16 +97,31 @@ pub struct EvtxRecord {
     /// Emitting process, from `Execution/@ProcessID`.
     #[serde(default)]
     pub process_id: Option<u32>,
+    /// Provider-declared correlation ActivityID from `System/Correlation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+    /// Provider-declared related ActivityID from `System/Correlation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_activity_id: Option<String>,
+    /// Session identifier promoted from explicit event XML/data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Device identifier promoted from explicit event XML/data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// User identifier promoted from explicit event XML/data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    /// Process start evidence from explicit event XML/data; paired with `process_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_start_time: Option<String>,
     /// Emitting thread, from `Execution/@ThreadID`.
     #[serde(default)]
     pub thread_id: Option<u32>,
     /// Security identifier from `Security/@UserID`.
-    ///
-    /// Kept as the raw SID. Resolving it to an account name needs `LookupAccountSidW` and a cache,
-    /// and is only meaningful on a machine that knows the domain, so it is a separate concern.
     #[serde(default)]
     pub user_sid: Option<String>,
-    /// Keyword bitmask as written by the provider, for example `0x8020000000000000`.
+    /// Keyword bitmask as written by the provider.
     #[serde(default)]
     pub keywords: Option<String>,
     /// Columns produced by an EvtxECmd map, empty when no map covers this event type.

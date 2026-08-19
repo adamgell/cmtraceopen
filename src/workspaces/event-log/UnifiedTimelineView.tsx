@@ -52,6 +52,12 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
   });
 
   const counts = useMemo(() => timelineCounts(timeline), [timeline]);
+  const correlationCounts = useMemo(() => {
+    const result = { exact: 0, candidate: 0, ambiguous: 0 };
+    for (const edge of timeline.edges ?? []) result[edge.strength] += 1;
+    return result;
+  }, [timeline]);
+  const coverageGapCount = timeline.coverageGaps?.length ?? 0;
   const dropped = useMemo(() => unplacedSummary(timeline), [timeline]);
 
   const fontSize = metrics.fontSize;
@@ -84,6 +90,35 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
             title="These carried no timestamp, so placing them would invent a sequence the evidence does not support"
           >
             {dropped}
+          </span>
+        )}
+        {correlationCounts.exact > 0 && (
+          <span title="Unique explicit identity matches within one normalized machine">
+            exact {correlationCounts.exact}
+          </span>
+        )}
+        {correlationCounts.candidate > 0 && (
+          <span
+            style={{ color: tokens.colorNeutralForeground4 }}
+            title="Secondary identity only; not a causal relationship"
+          >
+            candidate {correlationCounts.candidate}
+          </span>
+        )}
+        {correlationCounts.ambiguous > 0 && (
+          <span
+            style={{ color: tokens.colorPaletteMarigoldForeground1 }}
+            title="Contradictory or duplicate exact candidates remain unresolved"
+          >
+            ambiguous {correlationCounts.ambiguous}
+          </span>
+        )}
+        {coverageGapCount > 0 && (
+          <span
+            style={{ color: tokens.colorPaletteMarigoldForeground1 }}
+            title="Missing or unsupported identity coverage prevents a stronger conclusion"
+          >
+            coverage gaps {coverageGapCount}
           </span>
         )}
       </div>

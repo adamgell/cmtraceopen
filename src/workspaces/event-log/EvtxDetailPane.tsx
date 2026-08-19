@@ -165,6 +165,61 @@ export function EvtxDetailPane() {
         </div>
       )}
 
+      {(record.activityId ||
+        record.relatedActivityId ||
+        record.sessionId ||
+        record.deviceId ||
+        record.userId ||
+        record.processStartTime) && (
+        <div
+          style={{
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
+            padding: "8px",
+            borderRadius: "4px",
+            backgroundColor: tokens.colorNeutralBackground2,
+          }}
+        >
+          <div
+            style={{
+              fontSize: `${labelFontSize}px`,
+              fontWeight: 600,
+              color: tokens.colorNeutralForeground3,
+              textTransform: "uppercase",
+              marginBottom: "4px",
+            }}
+          >
+            Correlation identity
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "max-content 1fr",
+              gap: "2px 12px",
+              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+              fontSize: `${monoFontSize}px`,
+            }}
+          >
+            {[
+              ["Activity ID", record.activityId],
+              ["Related activity ID", record.relatedActivityId],
+              ["Session ID", record.sessionId],
+              ["Device ID", record.deviceId],
+              ["User ID", record.userId ?? record.userSid],
+              ["Process start", record.processStartTime],
+            ]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <div key={label} style={{ display: "contents" }}>
+                  <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>
+                  <span style={{ color: tokens.colorNeutralForeground1, wordBreak: "break-all" }}>
+                    {value}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Event Data key-value table */}
       {record.eventData.length > 0 && (
         <div>

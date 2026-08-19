@@ -59,13 +59,17 @@ export type TimelineOrigin =
       channel: string;
       provider: string;
       processId: number | null;
-      activityId: string | null;
+      activityId?: string | null;
+      relatedActivityId?: string | null;
+      sessionId?: string | null;
+      deviceId?: string | null;
+      userId?: string | null;
+      processStartTime?: string | null;
       eventId: number;
       /** Lossless decimal EventRecordID, when supplied by the backend. */
       recordIdText?: string | null;
       /** EventRecordID, scoped to the event channel. */
       recordId: number;
-
     };
 export interface TimelineItem {
   timestampMs: number;
@@ -79,9 +83,56 @@ export interface UnplacedItem {
   reason: "missingTimestamp";
 }
 
+export type TimelineCorrelationKeyKind =
+  | "activityId"
+  | "relatedActivityId"
+  | "providerChannelEventRecord"
+  | "processStart"
+  | "sessionId"
+  | "deviceId"
+  | "userId"
+  | "secondary";
+
+export interface TimelineCorrelationKey {
+  kind: TimelineCorrelationKeyKind;
+  value: string;
+}
+
+export type TimelineCorrelationStrength = "exact" | "candidate" | "ambiguous";
+export type TimelineCorrelationConfidence = "high" | "low" | "unknown";
+
+export interface TimelineCorrelationEvidence {
+  originId: string;
+  field: string;
+  value: string;
+}
+
+export interface TimelineCoverageGap {
+  source: string;
+  reason: string;
+}
+
+export interface TimelineCorrelationEdge {
+  id: string;
+  fromId: string;
+  toId: string | null;
+  key: TimelineCorrelationKey;
+  strength: TimelineCorrelationStrength;
+  confidence: TimelineCorrelationConfidence;
+  candidateIds: string[];
+  evidence: TimelineCorrelationEvidence[];
+  coverage: {
+    state: "covered" | "gap";
+    gap?: TimelineCoverageGap | null;
+  };
+}
+
 export interface UnifiedTimeline {
   items: TimelineItem[];
   unplaced: UnplacedItem[];
+  /** Defaulted by Rust for older producers that do not emit correlation edges. */
+  edges?: TimelineCorrelationEdge[];
+  coverageGaps?: TimelineCoverageGap[];
 }
 
 const utf8Encoder = new TextEncoder();
@@ -210,10 +261,24 @@ export function filterTimelineToRecords(
     const prefix = origin.stableId.replace(/record\d+$/, "record");
     return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;
   };
-  return {
-    items: timeline.items.filter((item) => keep(item.origin)),
-    unplaced: timeline.unplaced.filter((item) => keep(item.origin)),
-  };
+  const items = timeline.items.filter((item) => keep(item.origin));
+  const unplaced = timeline.unplaced.filter((item) => keep(item.origin));
+  const visibleIds = new Set(
+    [...items, ...unplaced]
+      .filter((item) => item.origin.kind === "event")
+      .map((item) => item.origin.stableId),
+  );
+  const edges = (timeline.edges ?? []).filter(
+    (edge) =>
+      visibleIds.has(edge.fromId) &&
+      (edge.toId === null ||
+        visibleIds.has(edge.toId) ||
+        edge.candidateIds.some((candidate) => visibleIds.has(candidate))),
+  );
+  const coverageGaps = (timeline.coverageGaps ?? []).filter(
+    (gap) => gap.source.length === 0 || visibleIds.has(gap.source),
+  );
+  return { items, unplaced, edges, coverageGaps };
 }
 
 export const TIMELINE_SEVERITY_RANK: Record<TimelineSeverity, number> = {
@@ -262,6 +327,11 @@ export function originDetail(origin: TimelineOrigin): string {
     origin.bundle ? `bundle ${origin.bundle}` : null,
     origin.processId !== null ? `process ${origin.processId}` : null,
     origin.activityId ? `activity ${origin.activityId}` : null,
+    origin.relatedActivityId ? `related ${origin.relatedActivityId}` : null,
+    origin.sessionId ? `session ${origin.sessionId}` : null,
+    origin.deviceId ? `device ${origin.deviceId}` : null,
+    origin.userId ? `user ${origin.userId}` : null,
+    origin.processStartTime ? `process start ${origin.processStartTime}` : null,
     `stable ${origin.stableId}`,
   ]
     .filter((part): part is string => part !== null)
@@ -276,13 +346,7 @@ export function originDetail(origin: TimelineOrigin): string {
   return `${origin.channel} / ${origin.provider} / event ${origin.eventId} / record ${record} / ${provenance}`;
 }
 
-/** True when the item came from a Windows event rather than a text log. */
-export function isEventOrigin(origin: TimelineOrigin): boolean {
-  return origin.kind === "event";
-}
-
-/**
- * Human-readable summary of what could not be placed.
+/** Human-readable summary of what could not be placed.
  *
  * Returns null when nothing was dropped, so the caller can hide the notice entirely rather than
  * showing a reassuring "0 items" that invites no attention.

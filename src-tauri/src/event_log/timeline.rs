@@ -8,14 +8,12 @@
 
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    from_log_entry, merge, timeline_sort_key, TimelineItem, TimelineOrigin, TimelineSeverity,
-    UnifiedTimeline, UnplacedItem, UnplacedReason,
+    correlate_timeline, from_log_entry, merge, normalize_machine_identity, timeline_sort_key,
+    TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
 use super::event_node::parse_event_xml;
 use super::models::{EvtxLevel, EvtxRecord};
-
-/// Maps the record's level back to a timeline severity.
 ///
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
 /// decoded form. Information is the resting state, matching how the decoder treats a level it does
@@ -50,6 +48,16 @@ fn missing_record_digest(record: &EvtxRecord) -> String {
     format!("{first:08x}{second:08x}")
 }
 
+fn record_id_text(record: &EvtxRecord) -> Option<String> {
+    let value = record.event_record_id_text.as_deref()?.trim();
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.to_string())
+}
+
+fn usable_record_id_text(record: &EvtxRecord) -> Option<String> {
+    record_id_text(record).filter(|value| value.bytes().any(|byte| byte != b'0'))
+}
+
 fn record_id(record: &EvtxRecord) -> Option<u64> {
     record
         .event_record_id_text
@@ -65,6 +73,9 @@ fn stable_event_id(record: &EvtxRecord) -> String {
     let machine = record.computer.trim();
     let machine = format!("machine{}:{}", machine.len(), machine);
     let identity = format!("{source}|{machine}|{channel}");
+    if let Some(event_record_id) = usable_record_id_text(record) {
+        return format!("{identity}|record{event_record_id}");
+    }
     if let Some(event_record_id) = record_id(record) {
         return format!("{identity}|record{event_record_id}");
     }
@@ -73,11 +84,10 @@ fn stable_event_id(record: &EvtxRecord) -> String {
 
 fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> String {
     let base = stable_event_id(record);
-    if record_id(record).is_some() {
+    if usable_record_id_text(record).is_some() || record_id(record).is_some() {
         return base;
     }
     format!("{base}-{occurrence}")
-
 }
 fn stable_event_base_from_id(stable_id: &str) -> &str {
     if stable_id.contains("|missing") {
@@ -86,8 +96,36 @@ fn stable_event_base_from_id(stable_id: &str) -> &str {
         stable_id
     }
 }
+fn raw_correlation_ids(xml: &str) -> (Option<String>, Option<String>) {
+    let Ok(root) = parse_event_xml(xml) else {
+        return (None, None);
+    };
+    if root.name != "Event" {
+        return (None, None);
+    }
+    let Some(system) = root.children.iter().find(|child| child.name == "System") else {
+        return (None, None);
+    };
+    let Some(correlation) = system
+        .children
+        .iter()
+        .find(|child| child.name == "Correlation")
+    else {
+        return (None, None);
+    };
+    let value = |name: &str| {
+        correlation
+            .attribute(name)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    (value("ActivityID"), value("RelatedActivityID"))
+}
+
 
 fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
+    let (raw_activity_id, raw_related_activity_id) = raw_correlation_ids(&record.raw_xml);
     TimelineOrigin::Event {
         stable_id: stable_event_id_with_occurrence(record, occurrence),
         source: record.source_label.clone(),
@@ -96,16 +134,20 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         channel: record.channel.clone(),
         provider: record.provider.clone(),
         process_id: record.process_id,
-        activity_id: extract_activity_id(&record.raw_xml),
+        activity_id: record.activity_id.clone().or(raw_activity_id),
+        related_activity_id: record.related_activity_id.clone().or(raw_related_activity_id),
+        session_id: record.session_id.clone(),
+        device_id: record.device_id.clone(),
+        user_id: record.user_id.clone().or_else(|| record.user_sid.clone()),
+        process_start_time: record.process_start_time.clone(),
         event_id: record.event_id,
         record_id: record.event_record_id,
-        record_id_text: record_id(record).map(|value| value.to_string()),
+        record_id_text: record_id_text(record),
     }
 }
 
 fn machine_of(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty() && !value.eq_ignore_ascii_case("unknown")).then(|| value.to_string())
+    normalize_machine_identity(Some(value))
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
@@ -113,7 +155,6 @@ fn bundle_from_source(source: &str) -> Option<String> {
         .split(['/', '\\'])
         .find(|part| part.eq_ignore_ascii_case("bundle"))
         .map(str::to_string)
-
 }
 fn timestamp_is_present(record: &EvtxRecord) -> bool {
     if record.timestamp_epoch != 0 {
@@ -130,23 +171,6 @@ fn timestamp_is_present(record: &EvtxRecord) -> bool {
         .is_ok()
 }
 
-/// Extracts only the provider-declared correlation ActivityID; absence remains explicit.
-///
-/// The correlation element is scoped to the event's `System` block. Looking for the attribute by
-/// substring would accept unrelated provider data (or `RelatedActivityID`) as a causal identity.
-fn extract_activity_id(xml: &str) -> Option<String> {
-    let root = parse_event_xml(xml).ok()?;
-    if root.name != "Event" {
-        return None;
-    }
-    let system = root.children.iter().find(|child| child.name == "System")?;
-    let correlation = system
-        .children
-        .iter()
-        .find(|child| child.name == "Correlation")?;
-    let value = correlation.attribute("ActivityID")?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
 
 /// Converts one event, or reports why it has no position.
 pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, Box<UnplacedItem>> {
@@ -184,7 +208,7 @@ fn origin_with_occurrence(
     record: &EvtxRecord,
     occurrence: usize,
 ) -> TimelineOrigin {
-    if record_id(record).is_none() {
+    if usable_record_id_text(record).is_none() && record_id(record).is_none() {
         if let TimelineOrigin::Event { stable_id, .. } = &mut origin {
             *stable_id = format!("{}-{occurrence}", stable_event_id(record));
         }
@@ -225,6 +249,13 @@ fn ordered_records(records: &[EvtxRecord]) -> Vec<OrderedRecord<'_>> {
         .collect()
 }
 
+/// Recomputes correlation from stable origin fields after each merge or append.
+fn refresh_correlations(timeline: &mut UnifiedTimeline) {
+    let (edges, gaps) = correlate_timeline(&timeline.items, &timeline.unplaced);
+    timeline.edges = edges;
+    timeline.coverage_gaps = gaps;
+}
+
 /// Builds one timeline from parsed log entries and events.
 pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
     let mut placed = Vec::with_capacity(entries.len() + records.len());
@@ -248,7 +279,9 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
         }
     }
 
-    merge(placed, unplaced)
+    let mut timeline = merge(placed, unplaced);
+    refresh_correlations(&mut timeline);
+    timeline
 }
 
 /// Appends new log and event records while preserving existing placed and unplaced items.
@@ -287,6 +320,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
         }
     }
     *timeline = merge(placed, unplaced);
+    refresh_correlations(timeline);
 }
 
 #[cfg(test)]
@@ -314,6 +348,12 @@ mod tests {
             task: None,
             opcode: None,
             process_id: None,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             thread_id: None,
             user_sid: None,
             keywords: None,
@@ -704,6 +744,33 @@ mod tests {
             TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
             other => panic!("expected event origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_populates_exact_activity_edge_and_coverage_state() {
+        let mut first = record(1_000, "first", EvtxLevel::Information);
+        first.event_record_id = 1;
+        first.event_record_id_text = Some("1".into());
+        first.activity_id = Some("{activity}".into());
+        let mut second = record(2_000, "second", EvtxLevel::Error);
+        second.event_record_id = 2;
+        second.event_record_id_text = Some("2".into());
+        second.activity_id = Some("{activity}".into());
+
+        let timeline = build(&[], &[first, second]);
+        assert_eq!(timeline.edges.len(), 1);
+        assert_eq!(
+            timeline.edges[0].key.kind,
+            cmtraceopen_parser::unified_timeline::TimelineCorrelationKeyKind::ActivityId
+        );
+        assert_eq!(
+            timeline.edges[0].strength,
+            cmtraceopen_parser::unified_timeline::TimelineCorrelationStrength::Exact
+        );
+        assert_eq!(
+            timeline.edges[0].coverage.state,
+            cmtraceopen_parser::unified_timeline::TimelineCorrelationCoverageState::Covered
+        );
     }
 
     #[test]

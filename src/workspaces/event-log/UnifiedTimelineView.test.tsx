@@ -79,4 +79,54 @@ describe("UnifiedTimelineView", () => {
     expect(screen.getByText("machine unknown · capture.evtx")).toBeInTheDocument();
     expect(screen.getByText("No timestamp")).toBeInTheDocument();
   });
+
+  it("shows exact, candidate, ambiguous, and coverage states", () => {
+    render(
+      <UnifiedTimelineView
+        timeline={{
+          ...timeline,
+          edges: [
+            {
+              id: "exact-edge",
+              fromId: timeline.items[0].origin.kind === "event" ? timeline.items[0].origin.stableId : "",
+              toId: timeline.unplaced[0].origin.kind === "event" ? timeline.unplaced[0].origin.stableId : null,
+              key: { kind: "activityId", value: "{activity}" },
+              strength: "exact",
+              confidence: "high",
+              candidateIds: [],
+              evidence: [],
+              coverage: { state: "covered" },
+            },
+            {
+              id: "candidate-edge",
+              fromId: "candidate",
+              toId: "candidate-target",
+              key: { kind: "secondary", value: "process:1" },
+              strength: "candidate",
+              confidence: "low",
+              candidateIds: [],
+              evidence: [],
+              coverage: { state: "covered" },
+            },
+            {
+              id: "ambiguous-edge",
+              fromId: "ambiguous",
+              toId: "ambiguous-target",
+              key: { kind: "sessionId", value: "session" },
+              strength: "ambiguous",
+              confidence: "unknown",
+              candidateIds: ["ambiguous-target", "other-target"],
+              evidence: [],
+              coverage: { state: "gap", gap: { source: "ambiguous", reason: "duplicate" } },
+            },
+          ],
+          coverageGaps: [{ source: "coverage", reason: "unsupported identity" }],
+        }}
+      />,
+    );
+    expect(screen.getByText("exact 1")).toBeInTheDocument();
+    expect(screen.getByText("candidate 1")).toBeInTheDocument();
+    expect(screen.getByText("ambiguous 1")).toBeInTheDocument();
+    expect(screen.getByText("coverage gaps 1")).toBeInTheDocument();
+  });
 });

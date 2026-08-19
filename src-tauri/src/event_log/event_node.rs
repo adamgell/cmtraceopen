@@ -153,6 +153,8 @@ pub struct SystemFields {
     pub thread_id: Option<u32>,
     pub user_sid: Option<String>,
     pub keywords: Option<String>,
+    pub activity_id: Option<String>,
+    pub related_activity_id: Option<String>,
 }
 
 /// Reads the `System` block of a parsed event.
@@ -187,14 +189,9 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
     };
 
     SystemFields {
-        // Manifest providers write Name; classic sources write only EventSourceName, for example
-        // <Provider EventSourceName="Application Error" />. Reading just Name left every classic
-        // event with provider "Unknown", which meant no map could match it and no description
-        // could be rendered for it.
+        // Manifest providers write Name; classic sources write only EventSourceName.
         provider: attribute_of("Provider", "Name")
             .or_else(|| attribute_of("Provider", "EventSourceName")),
-        // Classic providers write `<EventID Qualifiers="49152">1000</EventID>`. The id is the
-        // element text in both shapes; the qualifier is separate and not part of the id.
         event_id: text_of("EventID").and_then(|value| value.parse().ok()),
         version: text_of("Version").and_then(|value| value.parse().ok()),
         level: text_of("Level").and_then(|value| value.parse().ok()),
@@ -208,6 +205,22 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
         thread_id: attribute_of("Execution", "ThreadID").and_then(|v| v.parse().ok()),
         user_sid: attribute_of("Security", "UserID"),
         keywords: text_of("Keywords").map(str::to_string),
+        activity_id: system
+            .children
+            .iter()
+            .find(|child| child.name == "Correlation")
+            .and_then(|child| child.attribute("ActivityID"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        related_activity_id: system
+            .children
+            .iter()
+            .find(|child| child.name == "Correlation")
+            .and_then(|child| child.attribute("RelatedActivityID"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -290,6 +303,63 @@ pub fn extract_event_data(root: &EventNode) -> EventFields {
     }
 
     EventFields { fields, insertions }
+}
+
+/// Explicit identity values promoted from provider event data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventIdentityFields {
+    pub activity_id: Option<String>,
+    pub related_activity_id: Option<String>,
+    pub session_id: Option<String>,
+    pub device_id: Option<String>,
+    pub user_id: Option<String>,
+    pub process_start_time: Option<String>,
+}
+
+fn normalized_field_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn first_named_value(fields: &[EvtxField], names: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        let name = normalized_field_name(&field.name);
+        names
+            .iter()
+            .any(|candidate| name == normalized_field_name(candidate))
+            .then(|| field.value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// Extracts only explicit identity fields; display text and timestamps are never promoted.
+pub fn extract_event_identity(fields: &[EvtxField]) -> EventIdentityFields {
+    EventIdentityFields {
+        activity_id: first_named_value(
+            fields,
+            &["ActivityId", "ActivityID", "CorrelationId", "CorrelationID", "TransactionId"],
+        ),
+        related_activity_id: first_named_value(
+            fields,
+            &["RelatedActivityId", "RelatedActivityID", "ParentActivityId"],
+        ),
+        session_id: first_named_value(fields, &["SessionId", "SessionID", "Session"]),
+        device_id: first_named_value(
+            fields,
+            &["DeviceId", "DeviceID", "AADDeviceId", "ManagedDeviceId"],
+        ),
+        user_id: first_named_value(
+            fields,
+            &["UserId", "UserID", "UserSid", "UserSID", "AccountSid"],
+        ),
+        process_start_time: first_named_value(
+            fields,
+            &["ProcessStartTime", "ProcessStartedAt", "StartTime"],
+        ),
+    }
 }
 
 #[cfg(test)]

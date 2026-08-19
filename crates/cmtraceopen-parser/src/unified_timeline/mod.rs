@@ -113,7 +113,23 @@ pub enum TimelineOrigin {
         /// Emitting process, when the event declares one.
         process_id: Option<u32>,
         /// Correlation ActivityID, when the event declares one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         activity_id: Option<String>,
+        /// Related ActivityID, when the event declares one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        related_activity_id: Option<String>,
+        /// Session identifier, when the event declares one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        /// Device identifier, when the event declares one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+        /// User identifier, when the event declares one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_id: Option<String>,
+        /// Process start evidence paired with `process_id`, when present in event data.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        process_start_time: Option<String>,
         /// Event ID, which identifies the event only in combination with the provider.
         event_id: u32,
         record_id: u64,
@@ -152,18 +168,119 @@ pub struct UnplacedItem {
 /// Why an item has no position on the timeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-// Growable: this build does not know every variant a newer schema will define.
-// Marking it now keeps adding one a minor change; after the first release that
-// exposes the type, adding the attribute is itself breaking.
 #[non_exhaustive]
 pub enum UnplacedReason {
     /// The source carried no timestamp, or one the parser could not read.
-    ///
-    /// Common in continuation lines and in text logs whose first line is a header.
     MissingTimestamp,
 }
 
-/// A merged timeline plus everything that could not be placed on it.
+/// Identity key that can be used to correlate two timeline origins.
+///
+/// Exact keys are explicit provider/event identities. `Secondary` is deliberately weaker and can
+/// only produce a candidate edge; it is never promoted to causal evidence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineCorrelationKeyKind {
+    ActivityId,
+    RelatedActivityId,
+    ProviderChannelEventRecord,
+    ProcessStart,
+    SessionId,
+    DeviceId,
+    UserId,
+    Secondary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCorrelationKey {
+    pub kind: TimelineCorrelationKeyKind,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCorrelationObservation {
+    pub origin_id: String,
+    pub machine: Option<String>,
+    pub exact_keys: Vec<TimelineCorrelationKey>,
+    #[serde(default)]
+    pub secondary_keys: Vec<TimelineCorrelationKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineCorrelationStrength {
+    Exact,
+    Candidate,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineCorrelationConfidence {
+    High,
+    Low,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCorrelationEvidence {
+    pub origin_id: String,
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCoverageGap {
+    pub source: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineCorrelationCoverageState {
+    Covered,
+    Gap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCorrelationCoverage {
+    pub state: TimelineCorrelationCoverageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<TimelineCoverageGap>,
+}
+
+impl TimelineCorrelationCoverage {
+    fn covered() -> Self {
+        Self {
+            state: TimelineCorrelationCoverageState::Covered,
+            gap: None,
+        }
+    }
+}
+
+/// An evidence-backed relationship between two stable timeline origins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineCorrelationEdge {
+    pub id: String,
+    pub from_id: String,
+    pub to_id: Option<String>,
+    pub key: TimelineCorrelationKey,
+    pub strength: TimelineCorrelationStrength,
+    pub confidence: TimelineCorrelationConfidence,
+    #[serde(default)]
+    pub candidate_ids: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<TimelineCorrelationEvidence>,
+    pub coverage: TimelineCorrelationCoverage,
+}
+
+/// A merged timeline plus everything that could not be placed on it or assessed for correlation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnifiedTimeline {
@@ -171,6 +288,12 @@ pub struct UnifiedTimeline {
     pub items: Vec<TimelineItem>,
     /// Items with no honest position, in input order.
     pub unplaced: Vec<UnplacedItem>,
+    /// Evidence-backed relationships between placed or unplaced origins.
+    #[serde(default)]
+    pub edges: Vec<TimelineCorrelationEdge>,
+    /// Missing/unsupported identity coverage that prevents a stronger conclusion.
+    #[serde(default)]
+    pub coverage_gaps: Vec<TimelineCoverageGap>,
 }
 
 impl UnifiedTimeline {
@@ -187,6 +310,392 @@ impl UnifiedTimeline {
             (low.min(stamp), high.max(stamp))
         }))
     }
+}
+
+fn normalized_identity(value: &str) -> Option<String> {
+    let value = value.trim().trim_end_matches('.');
+    if value.is_empty()
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "unknown" | "n/a" | "na" | "none" | "null" | "not available" | "not_applicable"
+        )
+    {
+        return None;
+    }
+    Some(value.to_ascii_lowercase())
+}
+
+fn usable_record_text(value: Option<&str>) -> Option<String> {
+    value
+        .and_then(normalized_identity)
+        .filter(|value| value.bytes().any(|byte| byte != b'0'))
+}
+
+/// Normalizes a machine name without ever treating an unknown sentinel as a concrete host.
+pub fn normalize_machine_identity(value: Option<&str>) -> Option<String> {
+    value.and_then(normalized_identity)
+}
+
+fn key_label(kind: &TimelineCorrelationKeyKind) -> &'static str {
+    match kind {
+        TimelineCorrelationKeyKind::ActivityId => "activityId",
+        TimelineCorrelationKeyKind::RelatedActivityId => "relatedActivityId",
+        TimelineCorrelationKeyKind::ProviderChannelEventRecord => "providerChannelEventRecord",
+        TimelineCorrelationKeyKind::ProcessStart => "processStart",
+        TimelineCorrelationKeyKind::SessionId => "sessionId",
+        TimelineCorrelationKeyKind::DeviceId => "deviceId",
+        TimelineCorrelationKeyKind::UserId => "userId",
+        TimelineCorrelationKeyKind::Secondary => "secondary",
+    }
+}
+
+
+fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObservation {
+    let (origin_id, machine, exact_keys, secondary_keys) = match origin {
+        TimelineOrigin::Log { .. } => {
+            let id = origin_id(origin);
+            (id, None, Vec::new(), Vec::new())
+        }
+        TimelineOrigin::Event {
+            stable_id,
+            machine,
+            provider,
+            channel,
+            process_id,
+            activity_id,
+            related_activity_id,
+            session_id,
+            device_id,
+            user_id,
+            process_start_time,
+            event_id,
+            record_id,
+            record_id_text,
+            ..
+        } => {
+            let mut exact_keys = Vec::new();
+            let mut secondary_keys = Vec::new();
+            let push_exact = |keys: &mut Vec<TimelineCorrelationKey>,
+                              kind: TimelineCorrelationKeyKind,
+                              value: Option<&str>| {
+                if let Some(value) = value.and_then(normalized_identity) {
+                    keys.push(TimelineCorrelationKey { kind, value });
+                }
+            };
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::ActivityId,
+                activity_id.as_deref(),
+            );
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::RelatedActivityId,
+                related_activity_id.as_deref(),
+            );
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::SessionId,
+                session_id.as_deref(),
+            );
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::DeviceId,
+                device_id.as_deref(),
+            );
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::UserId,
+                user_id.as_deref(),
+            );
+            let record = usable_record_text(record_id_text.as_deref())
+                .or_else(|| (*record_id != 0).then(|| record_id.to_string()));
+            if let (Some(provider), Some(channel), Some(record)) = (
+                normalized_identity(provider),
+                normalized_identity(channel),
+                record,
+            ) {
+                exact_keys.push(TimelineCorrelationKey {
+                    kind: TimelineCorrelationKeyKind::ProviderChannelEventRecord,
+                    value: format!(
+                        "{}|{}|{}|{}",
+                        key_part(&provider),
+                        key_part(&channel),
+                        event_id,
+                        key_part(&record)
+                    ),
+                });
+            }
+            if let (Some(process_id), Some(start)) = (
+                *process_id,
+                process_start_time.as_deref().and_then(normalized_identity),
+            ) {
+                if process_id != 0 {
+                    exact_keys.push(TimelineCorrelationKey {
+                        kind: TimelineCorrelationKeyKind::ProcessStart,
+                        value: format!("{process_id}|{start}"),
+                    });
+                }
+            }
+            if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
+                secondary_keys.push(TimelineCorrelationKey {
+                    kind: TimelineCorrelationKeyKind::Secondary,
+                    value: format!("process:{process_id}"),
+                });
+            }
+            (
+                stable_id.clone(),
+                normalize_machine_identity(machine.as_deref()),
+                exact_keys,
+                secondary_keys,
+            )
+        }
+    };
+    TimelineCorrelationObservation {
+        origin_id,
+        machine,
+        exact_keys,
+        secondary_keys,
+    }
+}
+
+/// Returns the stable ID used by correlation edges for an origin.
+pub fn origin_id(origin: &TimelineOrigin) -> String {
+    match origin {
+        TimelineOrigin::Log {
+            source,
+            file,
+            line,
+            record_id,
+            ..
+        } => format!(
+            "log|{}|{}|{line}|{record_id}",
+            key_part(source),
+            key_part(file)
+        ),
+        TimelineOrigin::Event { stable_id, .. } => stable_id.clone(),
+    }
+}
+
+/// Reduces explicit identity observations into deterministic, evidence-backed edges.
+///
+/// Exact groups are scoped by normalized machine identity and require a unique counterpart. A
+/// conflicting set of exact keys remains ambiguous with all candidate IDs. Secondary process-only
+/// identity can only produce a low-confidence candidate edge. No timestamp, channel proximity, or
+/// message/error text participates in this reducer.
+pub fn correlate_observations(
+    observations: &[TimelineCorrelationObservation],
+) -> (Vec<TimelineCorrelationEdge>, Vec<TimelineCoverageGap>) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut ordered: Vec<_> = observations.iter().collect();
+    ordered.sort_by(|left, right| left.origin_id.cmp(&right.origin_id));
+
+    let mut exact_groups: BTreeMap<
+        (String, TimelineCorrelationKeyKind, String),
+        BTreeSet<String>,
+    > = BTreeMap::new();
+    let mut secondary_groups: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let by_id: BTreeMap<_, _> = ordered
+        .iter()
+        .map(|observation| (observation.origin_id.clone(), *observation))
+        .collect();
+
+    for observation in &ordered {
+        let Some(machine) = normalize_machine_identity(observation.machine.as_deref()) else {
+            continue;
+        };
+        for key in &observation.exact_keys {
+            exact_groups
+                .entry((machine.clone(), key.kind.clone(), key.value.clone()))
+                .or_default()
+                .insert(observation.origin_id.clone());
+        }
+        for key in &observation.secondary_keys {
+            secondary_groups
+                .entry((machine.clone(), key.value.clone()))
+                .or_default()
+                .insert(observation.origin_id.clone());
+        }
+    }
+
+    type Relation = (String, String);
+    let mut exact_candidates: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut relation_keys: BTreeMap<Relation, BTreeSet<TimelineCorrelationKey>> = BTreeMap::new();
+    for ((_, kind, value), ids) in &exact_groups {
+        if ids.len() < 2 {
+            continue;
+        }
+        let ids: Vec<_> = ids.iter().cloned().collect();
+        for (left_index, left) in ids.iter().enumerate() {
+            for right in ids.iter().skip(left_index + 1) {
+                exact_candidates
+                    .entry(left.clone())
+                    .or_default()
+                    .insert(right.clone());
+                exact_candidates
+                    .entry(right.clone())
+                    .or_default()
+                    .insert(left.clone());
+                relation_keys
+                    .entry((left.clone(), right.clone()))
+                    .or_default()
+                    .insert(TimelineCorrelationKey {
+                        kind: kind.clone(),
+                        value: value.clone(),
+                    });
+            }
+        }
+    }
+
+    let mut candidate_relations: BTreeMap<Relation, BTreeSet<TimelineCorrelationKey>> =
+        BTreeMap::new();
+    for ((machine, value), ids) in &secondary_groups {
+        if ids.len() < 2 {
+            continue;
+        }
+        let ids: Vec<_> = ids.iter().cloned().collect();
+        for (left_index, left) in ids.iter().enumerate() {
+            if exact_candidates
+                .get(left)
+                .is_some_and(|candidates| !candidates.is_empty())
+            {
+                continue;
+            }
+            for right in ids.iter().skip(left_index + 1) {
+                if exact_candidates
+                    .get(right)
+                    .is_some_and(|candidates| !candidates.is_empty())
+                {
+                    continue;
+                }
+                candidate_relations
+                    .entry((left.clone(), right.clone()))
+                    .or_default()
+                    .insert(TimelineCorrelationKey {
+                        kind: TimelineCorrelationKeyKind::Secondary,
+                        value: format!("{machine}|{value}"),
+                    });
+            }
+        }
+    }
+
+    let mut edges = Vec::new();
+    for (relation, keys) in relation_keys
+        .into_iter()
+        .map(|(relation, keys)| (relation, (keys, true)))
+        .chain(candidate_relations.into_iter().map(|(relation, keys)| (relation, (keys, false))))
+    {
+        let (left, right) = relation;
+        let (keys, exact) = keys;
+        let mut candidates = BTreeSet::new();
+        if exact {
+            candidates.extend(exact_candidates.get(&left).into_iter().flatten().cloned());
+            candidates.extend(exact_candidates.get(&right).into_iter().flatten().cloned());
+        } else {
+            candidates.insert(right.clone());
+        }
+        let conflicting_candidates: BTreeSet<_> = candidates
+            .iter()
+            .filter(|candidate| *candidate != &left && *candidate != &right)
+            .cloned()
+            .collect();
+        let ambiguous = exact && !conflicting_candidates.is_empty();
+        let strength = if ambiguous {
+            TimelineCorrelationStrength::Ambiguous
+        } else if exact {
+            TimelineCorrelationStrength::Exact
+        } else {
+            TimelineCorrelationStrength::Candidate
+        };
+        let confidence = match strength {
+            TimelineCorrelationStrength::Exact => TimelineCorrelationConfidence::High,
+            TimelineCorrelationStrength::Candidate => TimelineCorrelationConfidence::Low,
+            TimelineCorrelationStrength::Ambiguous => TimelineCorrelationConfidence::Unknown,
+        };
+        let key = keys.into_iter().next().expect("relation has a key");
+        let mut evidence = Vec::new();
+        for endpoint in [&left, &right] {
+            if let Some(observation) = by_id.get(endpoint) {
+                let matching = observation
+                    .exact_keys
+                    .iter()
+                    .chain(observation.secondary_keys.iter())
+                    .find(|candidate| candidate.kind == key.kind && candidate.value == key.value)
+                    .cloned()
+                    .unwrap_or_else(|| key.clone());
+                evidence.push(TimelineCorrelationEvidence {
+                    origin_id: endpoint.clone(),
+                    field: key_label(&matching.kind).to_string(),
+                    value: matching.value,
+                });
+            }
+        }
+        let candidate_ids: Vec<_> = if ambiguous {
+            candidates
+                .iter()
+                .filter(|candidate| *candidate != &left)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let id = format!(
+            "edge|{}|{}|{}|{}",
+            key_part(&left),
+            key_part(&right),
+            key_label(&key.kind),
+            key_part(&key.value)
+        );
+        edges.push(TimelineCorrelationEdge {
+            id,
+            from_id: left,
+            to_id: Some(right),
+            key,
+            strength,
+            confidence,
+            candidate_ids,
+            evidence,
+            coverage: TimelineCorrelationCoverage::covered(),
+        });
+    }
+
+    let mut gaps = Vec::new();
+    for observation in ordered {
+        if normalize_machine_identity(observation.machine.as_deref()).is_none() {
+            gaps.push(TimelineCoverageGap {
+                source: observation.origin_id.clone(),
+                reason: "machine identity unavailable; exact correlation is restricted".to_string(),
+            });
+        } else if observation.exact_keys.is_empty() {
+            gaps.push(TimelineCoverageGap {
+                source: observation.origin_id.clone(),
+                reason: if observation.secondary_keys.is_empty() {
+                    "no explicit identity keys were present; timestamp-only correlation is not causal"
+                        .to_string()
+                } else {
+                    "only secondary identity was present; correlation remains low confidence".to_string()
+                },
+            });
+        }
+    }
+    (edges, gaps)
+}
+
+/// Correlates all placed and unplaced origins in a timeline.
+pub fn correlate_timeline(
+    items: &[TimelineItem],
+    unplaced: &[UnplacedItem],
+) -> (Vec<TimelineCorrelationEdge>, Vec<TimelineCoverageGap>) {
+    let observations = items
+        .iter()
+        .map(|item| observation_from_origin(&item.origin))
+        .chain(
+            unplaced
+                .iter()
+                .map(|item| observation_from_origin(&item.origin)),
+        )
+        .collect::<Vec<_>>();
+    correlate_observations(&observations)
 }
 
 fn bundle_from_source(source: &str) -> Option<String> {
@@ -285,11 +794,16 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             provider,
             process_id,
             activity_id,
+            related_activity_id,
+            session_id,
+            device_id,
+            user_id,
+            process_start_time,
             event_id,
             record_id,
             record_id_text,
         } => format!(
-            "event|{}|{}|{}|{}|{}|{}|{}|{}|{event_id:010}|{record_id:020}|{}",
+            "event|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{event_id:010}|{record_id:020}|{record_text}",
             key_part(stable_id),
             key_part(source),
             optional_text_key(machine.as_deref()),
@@ -298,7 +812,12 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             key_part(provider),
             optional_number_key(*process_id),
             optional_text_key(activity_id.as_deref()),
-            optional_text_key(record_id_text.as_deref()),
+            optional_text_key(related_activity_id.as_deref()),
+            optional_text_key(session_id.as_deref()),
+            optional_text_key(device_id.as_deref()),
+            optional_text_key(user_id.as_deref()),
+            optional_text_key(process_start_time.as_deref()),
+            record_text = optional_text_key(record_id_text.as_deref()),
         ),
     }
 }
@@ -330,7 +849,12 @@ pub fn merge(
     });
     let mut unplaced: Vec<UnplacedItem> = unplaced.into_iter().collect();
     unplaced.sort_by_cached_key(|item| origin_sort_key(&item.origin));
-    UnifiedTimeline { items, unplaced }
+    UnifiedTimeline {
+        items,
+        unplaced,
+        edges: Vec::new(),
+        coverage_gaps: Vec::new(),
+    }
 }
 
 /// Converts and merges a slice of log entries, collecting the ones that cannot be placed.
@@ -374,6 +898,11 @@ mod tests {
                     .to_string(),
                 process_id: None,
                 activity_id: None,
+                related_activity_id: None,
+                session_id: None,
+                device_id: None,
+                user_id: None,
+                process_start_time: None,
                 event_id: 76,
                 record_id: 1,
                 record_id_text: Some("1".to_string()),
@@ -544,6 +1073,11 @@ mod tests {
             provider: "ESENT".into(),
             process_id: Some(4321),
             activity_id: Some("{activity}".into()),
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             event_id: 326,
             record_id: 42,
             record_id_text: Some("42".into()),
@@ -688,5 +1222,124 @@ mod tests {
         assert_eq!(json["line"], 7);
         assert_eq!(json["source"], "cmt.log");
         assert_eq!(json["recordId"], 7);
+    }
+    fn observation(
+        id: &str,
+        machine: Option<&str>,
+        exact: &[(TimelineCorrelationKeyKind, &str)],
+        secondary: &[&str],
+    ) -> TimelineCorrelationObservation {
+        TimelineCorrelationObservation {
+            origin_id: id.into(),
+            machine: machine.map(str::to_string),
+            exact_keys: exact
+                .iter()
+                .map(|(kind, value)| TimelineCorrelationKey {
+                    kind: kind.clone(),
+                    value: (*value).into(),
+                })
+                .collect(),
+            secondary_keys: secondary
+                .iter()
+                .map(|value| TimelineCorrelationKey {
+                    kind: TimelineCorrelationKeyKind::Secondary,
+                    value: (*value).into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn exact_activity_identity_requires_same_machine() {
+        let observations = [
+            observation("a", Some("HOST-A"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+            observation("b", Some("host-a."), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+            observation("c", Some("HOST-B"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+        ];
+        let (edges, gaps) = correlate_observations(&observations);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].strength, TimelineCorrelationStrength::Exact);
+        assert_eq!(edges[0].confidence, TimelineCorrelationConfidence::High);
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn process_id_and_start_time_are_one_exact_key() {
+        let observations = [
+            observation(
+                "a",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ProcessStart, "123|2026-08-18t10:00:00z")],
+                &["process:123"],
+            ),
+            observation(
+                "b",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ProcessStart, "123|2026-08-18t10:00:00z")],
+                &["process:123"],
+            ),
+        ];
+        let (edges, _) = correlate_observations(&observations);
+        assert_eq!(edges[0].key.kind, TimelineCorrelationKeyKind::ProcessStart);
+        assert_eq!(edges[0].strength, TimelineCorrelationStrength::Exact);
+    }
+
+    #[test]
+    fn contradictory_exact_keys_remain_ambiguous_with_candidates() {
+        let observations = [
+            observation(
+                "a",
+                Some("HOST"),
+                &[
+                    (TimelineCorrelationKeyKind::ActivityId, "activity-a"),
+                    (TimelineCorrelationKeyKind::SessionId, "session-a"),
+                ],
+                &[],
+            ),
+            observation(
+                "b",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "activity-a")],
+                &[],
+            ),
+            observation(
+                "c",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::SessionId, "session-a")],
+                &[],
+            ),
+        ];
+        let (edges, _) = correlate_observations(&observations);
+        assert_eq!(edges.len(), 2);
+        assert!(edges
+            .iter()
+            .all(|edge| edge.strength == TimelineCorrelationStrength::Ambiguous));
+        assert!(edges
+            .iter()
+            .all(|edge| edge.candidate_ids.contains(&"b".to_string())
+                || edge.candidate_ids.contains(&"c".to_string())));
+    }
+
+    #[test]
+    fn timestamp_or_secondary_only_never_becomes_exact_causality() {
+        let observations = [
+            observation("a", Some("HOST"), &[], &["process:123"]),
+            observation("b", Some("HOST"), &[], &["process:123"]),
+        ];
+        let (edges, gaps) = correlate_observations(&observations);
+        assert_eq!(edges[0].strength, TimelineCorrelationStrength::Candidate);
+        assert_eq!(edges[0].confidence, TimelineCorrelationConfidence::Low);
+        assert!(gaps.iter().all(|gap| gap.reason.contains("secondary")));
+    }
+
+    #[test]
+    fn unknown_machine_is_a_coverage_gap_not_a_match() {
+        let observations = [
+            observation("a", Some("unknown"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+            observation("b", None, &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+        ];
+        let (edges, gaps) = correlate_observations(&observations);
+        assert!(edges.is_empty());
+        assert_eq!(gaps.len(), 2);
     }
 }

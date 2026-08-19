@@ -20,6 +20,16 @@ export interface EvtxRecord {
   opcode?: number | null;
   /** Emitting process. */
   processId?: number | null;
+  /** Provider-declared correlation ActivityID. */
+  activityId?: string | null;
+  /** Provider-declared related ActivityID. */
+  relatedActivityId?: string | null;
+  /** Explicit session/device/user identity values from event XML/data. */
+  sessionId?: string | null;
+  deviceId?: string | null;
+  userId?: string | null;
+  /** Explicit process start evidence, paired with processId. */
+  processStartTime?: string | null;
   /** Emitting thread. */
   threadId?: number | null;
   /** Raw security identifier; not resolved to an account name. */
