@@ -10,6 +10,7 @@ import type {
   MacosProfilesResult,
   MacosUnifiedLogResult,
 } from "./types";
+import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 vi.mock("../../lib/commands", () => ({
   macosScanEnvironment: vi.fn(),
@@ -24,18 +25,8 @@ vi.mock("../../lib/commands", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 28,
-        size: 28,
-      })),
-    getTotalSize: () => count * 28,
-    measureElement: vi.fn(),
-    scrollToIndex: vi.fn(),
-  }),
+  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
+    createTestVirtualizer(options),
 }));
 
 function environment(

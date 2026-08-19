@@ -273,15 +273,8 @@ const sanitizePersistedUiState = (
   delete sanitized.graphApiCapability;
   delete sanitized.graphApiLastAttempt;
 
-  if (sanitized.dismissedDnsBannerPaths !== undefined) {
-    sanitized.dismissedDnsBannerPaths = Array.isArray(
-      sanitized.dismissedDnsBannerPaths
-    )
-      ? sanitized.dismissedDnsBannerPaths.filter(
-          (path): path is string => typeof path === "string"
-        )
-      : [];
-  }
+  // Banner dismissals are session-local; discard any legacy persisted values.
+  delete sanitized.dismissedDnsBannerPaths;
 
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
@@ -683,7 +676,6 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         alwaysOnTop: state.alwaysOnTop,
-        dismissedDnsBannerPaths: state.dismissedDnsBannerPaths,
         graphApiEnabled: state.graphApiEnabled,
         recentSessions: state.recentSessions,
       }),

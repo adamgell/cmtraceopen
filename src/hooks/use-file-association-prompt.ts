@@ -4,7 +4,7 @@ import { useUiStore } from "../stores/ui-store";
 
 /**
  * Shows the classic startup prompt for standalone Windows use when the app is
- * not already associated with .log/.lo_ files.
+ * not already associated with .log, .log_, .lo_, and .cmtlog files.
  */
 export function useFileAssociationPrompt() {
   const setShowFileAssociationPrompt = useUiStore(

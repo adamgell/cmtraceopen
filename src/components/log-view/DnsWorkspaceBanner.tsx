@@ -37,7 +37,13 @@ export function DnsWorkspaceBanner() {
     useUiStore.getState().ensureWorkspaceVisible("dns-dhcp", "banner");
   }, []);
 
-  if (!label || dismissed || activeWorkspace !== "log" || !parser || !DNS_PARSER_KINDS.has(parser)) {
+  if (
+    !label ||
+    dismissed ||
+    activeWorkspace !== "log" ||
+    !parser ||
+    !DNS_PARSER_KINDS.has(parser)
+  ) {
     return null;
   }
 

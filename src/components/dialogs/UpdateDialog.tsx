@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
-import type { UpdateInfo } from "../../hooks/use-update-checker";
 import { useModalFocus } from "../../hooks/use-modal-focus";
+import type { UpdateInfo } from "../../hooks/use-update-checker";
 import { getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface UpdateDialogProps {
@@ -46,7 +46,7 @@ export function UpdateDialog({
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [isOpen, isDownloading, onClose]);
+  }, [isDownloading, isOpen, onClose]);
 
   // Trigger check when dialog opens via menu (no existing updateInfo)
   useEffect(() => {

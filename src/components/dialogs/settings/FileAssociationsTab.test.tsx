@@ -24,7 +24,9 @@ describe("FileAssociationsTab", () => {
       screen.getByText(/File associations are only available on Windows/),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
+      screen.queryByRole("button", {
+        name: /Associate \.log, \.log_, \.lo_, and \.cmtlog files with CMTrace Open/,
+      }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Re-register associations/ }),
@@ -35,7 +37,9 @@ describe("FileAssociationsTab", () => {
     useUiStore.setState({ currentPlatform: "windows" });
     render(<FileAssociationsTab />);
     expect(
-      await screen.findByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
+      await screen.findByRole("button", {
+        name: "Associate .log, .log_, .lo_, and .cmtlog files with CMTrace Open",
+      }),
     ).toBeInTheDocument();
   });
 });
@@ -54,6 +58,7 @@ describe("FileAssociationPromptDialog", () => {
   it("offers Associate, Don't Ask Again, and Ask Later", () => {
     render(<FileAssociationPromptDialog isOpen onClose={vi.fn()} />);
     expect(screen.getByText(/Associate log files with CMTrace Open/)).toBeInTheDocument();
+    expect(screen.getByText(/\.cmtlog/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Associate" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Don't Ask Again" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask Later" })).toBeInTheDocument();

@@ -11,6 +11,7 @@ const MENU_EVENT_APP_ACTION = "app-menu-action";
 
 let appMenuSyncQueue: Promise<void> = Promise.resolve();
 let appMenuSyncWarningShown = false;
+let alwaysOnTopToggleQueue: Promise<void> = Promise.resolve();
 
 interface AppMenuActionPayload {
   version: number;
@@ -216,9 +217,13 @@ export function useAppMenu() {
             toggleInfoPane();
             return;
           case "toggle_always_on_top": {
-            const next = !useUiStore.getState().alwaysOnTop;
-            useUiStore.getState().setAlwaysOnTop(next);
-            await invoke("set_always_on_top", { enabled: next });
+            const nextToggle = alwaysOnTopToggleQueue.then(async () => {
+              const next = !useUiStore.getState().alwaysOnTop;
+              await invoke("set_always_on_top", { enabled: next });
+              useUiStore.getState().setAlwaysOnTop(next);
+            });
+            alwaysOnTopToggleQueue = nextToggle.catch(() => undefined);
+            await nextToggle;
             return;
           }
           case "increase_text_size":

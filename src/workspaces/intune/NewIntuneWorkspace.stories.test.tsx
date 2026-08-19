@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NewIntuneWorkspace } from "./NewIntuneWorkspace";
 import { useIntuneStore } from "./intune-store";
 import type { IntuneResultMetadata } from "./types";
+import { createTestVirtualizer } from "../../test-utils/virtualizer";
 import {
   ANALYZED_PATH,
   APPWORKLOAD_PATH,
@@ -44,32 +45,8 @@ vi.mock("../../hooks/use-app-actions", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({
-    count,
-    estimateSize,
-    getItemKey,
-  }: {
-    count: number;
-    estimateSize: (index: number) => number;
-    getItemKey?: (index: number) => string | number;
-  }) => ({
-    getTotalSize: () => {
-      let total = 0;
-      for (let index = 0; index < count; index += 1) {
-        total += estimateSize(index);
-      }
-      return total;
-    },
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: getItemKey?.(index) ?? index,
-        size: estimateSize(index),
-        start: index * estimateSize(index),
-      })),
-    scrollToIndex: vi.fn(),
-    measureElement: vi.fn(),
-  }),
+  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
+    createTestVirtualizer(options),
 }));
 
 function seedReadyResults(metadata?: Partial<IntuneResultMetadata>) {

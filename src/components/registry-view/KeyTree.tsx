@@ -6,7 +6,10 @@ import {
   FolderOpenRegular,
   FolderRegular,
 } from "@fluentui/react-icons";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  defaultRangeExtractor,
+  useVirtualizer,
+} from "@tanstack/react-virtual";
 import { useRegistryStore } from "../../stores/registry-store";
 import { flattenVisibleTree } from "../../lib/registry-utils";
 
@@ -27,14 +30,7 @@ export function KeyTree() {
 
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const virtualizer = useVirtualizer({
-    count: flatRows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 20,
-  });
-
-  // Scroll selected row into view when search navigates
+  // Scroll selected row into view when search navigates.
   const selectedIndex = useMemo(
     () =>
       selectedKeyPath
@@ -43,15 +39,56 @@ export function KeyTree() {
     [flatRows, selectedKeyPath]
   );
 
+  const rangeExtractor = useCallback(
+    (range: Parameters<typeof defaultRangeExtractor>[0]) => {
+      const indexes = defaultRangeExtractor(range);
+      if (
+        selectedIndex < 0 ||
+        selectedIndex >= flatRows.length ||
+        indexes.includes(selectedIndex)
+      ) {
+        return indexes;
+      }
+      return [...indexes, selectedIndex].sort((a, b) => a - b);
+    },
+    [flatRows.length, selectedIndex]
+  );
+
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 20,
+    rangeExtractor,
+  });
+
   useEffect(() => {
     if (selectedIndex >= 0) {
       virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
     }
   }, [selectedIndex, virtualizer]);
+  const virtualItems = virtualizer.getVirtualItems();
+  const selectedItemMounted = virtualItems.some(
+    (virtualRow) => virtualRow.index === selectedIndex,
+  );
+
+  const handleFocus = useCallback(() => {
+    if (selectedIndex < 0 && flatRows.length > 0) {
+      setSelectedKeyPath(flatRows[0].node.fullPath);
+    }
+  }, [flatRows, selectedIndex, setSelectedKeyPath]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (selectedIndex < 0) return;
+      if (selectedIndex < 0) {
+        if (flatRows.length === 0) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const initialIndex = e.key === "ArrowUp" ? flatRows.length - 1 : 0;
+          setSelectedKeyPath(flatRows[initialIndex].node.fullPath);
+        }
+        return;
+      }
       const row = flatRows[selectedIndex];
       if (!row) return;
 
@@ -63,16 +100,27 @@ export function KeyTree() {
         setSelectedKeyPath(flatRows[selectedIndex - 1].node.fullPath);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        if (
-          row.node.children.length > 0 &&
-          !expandedPaths.has(row.node.fullPath)
-        ) {
-          toggleExpanded(row.node.fullPath);
+        if (row.node.children.length > 0) {
+          if (!expandedPaths.has(row.node.fullPath)) {
+            toggleExpanded(row.node.fullPath);
+          } else {
+            const child = flatRows[selectedIndex + 1];
+            if (child && child.depth > row.depth) {
+              setSelectedKeyPath(child.node.fullPath);
+            }
+          }
         }
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         if (expandedPaths.has(row.node.fullPath)) {
           toggleExpanded(row.node.fullPath);
+        } else if (row.depth > 0) {
+          for (let index = selectedIndex - 1; index >= 0; index--) {
+            if (flatRows[index].depth < row.depth) {
+              setSelectedKeyPath(flatRows[index].node.fullPath);
+              break;
+            }
+          }
         }
       }
     },
@@ -88,7 +136,15 @@ export function KeyTree() {
   return (
     <div
       ref={parentRef}
+      role="tree"
+      aria-label="Registry keys"
+      aria-activedescendant={
+        selectedItemMounted && selectedIndex >= 0
+          ? `registry-tree-item-${selectedIndex}`
+          : undefined
+      }
       tabIndex={0}
+      onFocus={handleFocus}
       onKeyDown={handleKeyDown}
       style={{
         height: "100%",
@@ -96,6 +152,7 @@ export function KeyTree() {
         outline: "none",
       }}
     >
+
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,
@@ -103,7 +160,7 @@ export function KeyTree() {
           position: "relative",
         }}
       >
-        {virtualizer.getVirtualItems().map((virtualRow) => {
+        {virtualItems.map((virtualRow) => {
           const row = flatRows[virtualRow.index];
           const isSelected = row.node.fullPath === selectedKeyPath;
           const hasChildren = row.node.children.length > 0;
@@ -112,6 +169,11 @@ export function KeyTree() {
           return (
             <div
               key={row.node.fullPath}
+              id={`registry-tree-item-${virtualRow.index}`}
+              role="treeitem"
+              aria-level={row.depth + 1}
+              aria-selected={isSelected}
+              aria-expanded={hasChildren ? isExpanded : undefined}
               style={{
                 position: "absolute",
                 top: 0,

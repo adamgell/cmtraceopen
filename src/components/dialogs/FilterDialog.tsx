@@ -76,12 +76,13 @@ export function FilterDialog({
       );
     }
   }, [isOpen, currentClauses]);
-
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isFiltering) onClose();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isFiltering) {
+        onClose();
+      }
     };
 
     window.addEventListener("keydown", handleKey);

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { tokens } from "@fluentui/react-components";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getUpdateChannel, getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface AboutDialogProps {
@@ -13,8 +14,11 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
   const [appVersion, setAppVersion] = useState("0.2.0");
   const [tauriVersion, setTauriVersion] = useState("-");
   const [identifier, setIdentifier] = useState("com.cmtrace.open");
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const updateChannel = getUpdateChannel(appVersion);
   const updateChannelLabel = getUpdateChannelLabel(updateChannel);
+
+  useModalFocus(isOpen, surfaceRef);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -78,6 +82,8 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
       }}
     >
       <div
+        ref={surfaceRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="About CMTrace Open"
