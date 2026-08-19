@@ -32,21 +32,22 @@ describe("FilterDialog", () => {
     );
     const dialog = screen.getByRole("dialog", { name: "Filter" });
     const input = dialog.querySelector("input");
-    const firstFocusable = dialog.querySelector("select");
+    const tabWrapTarget = dialog.querySelector("select");
     const close = screen.getByRole("button", { name: "Cancel" });
 
     expect(input).not.toBeNull();
+    expect(tabWrapTarget).not.toBeNull();
     expect(document.activeElement).toBe(input);
 
     close.focus();
     fireEvent.keyDown(window, { key: "Tab" });
-    expect(document.activeElement).toBe(firstFocusable);
+    expect(document.activeElement).toBe(tabWrapTarget);
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(close);
 
     opener.focus();
     fireEvent.keyDown(window, { key: "Tab" });
-    expect(document.activeElement).toBe(firstFocusable);
+    expect(document.activeElement).toBe(tabWrapTarget);
 
     rendered.rerender(
       <FilterDialog

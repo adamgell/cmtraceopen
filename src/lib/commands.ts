@@ -1275,13 +1275,6 @@ export interface GraphInteractiveOperationTicket {
   attemptId: string;
 }
 
-function isGraphRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
 
 function isStringArray(value: unknown): value is string[] {
   return (
@@ -1290,13 +1283,13 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isGraphAuthStatus(value: unknown): value is GraphAuthStatus {
-  if (!isGraphRecord(value) || !isGraphRecord(value.capabilities)) return false;
+  if (!isCommandRecord(value) || !isCommandRecord(value.capabilities)) return false;
   const capabilities = value.capabilities;
   return (
     typeof value.isAuthenticated === "boolean" &&
-    isNullableString(value.userPrincipalName) &&
-    isNullableString(value.objectId) &&
-    isNullableString(value.tenantId) &&
+    isNullableCommandString(value.userPrincipalName) &&
+    isNullableCommandString(value.objectId) &&
+    isNullableCommandString(value.tenantId) &&
     isStringArray(value.grantedScopes) &&
     isStringArray(value.missingScopes) &&
     (value.expiresAt === null ||
@@ -1338,20 +1331,17 @@ const GRAPH_PERMISSION_UPGRADE_OUTCOMES =
     "stale",
   ]);
 
-function invalidGraphResponse(commandName: string): never {
-  throw new Error(`Command '${commandName}' returned an invalid response.`);
-}
 
 function decodeGraphHostCapability(
   value: unknown,
   commandName: string,
 ): GraphHostCapability {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.kind !== "string" ||
     !GRAPH_HOST_CAPABILITY_KINDS.has(value.kind as GraphHostCapabilityKind)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphHostCapability;
 }
@@ -1360,7 +1350,7 @@ function decodeGraphAuthStatus(
   value: unknown,
   commandName: string,
 ): GraphAuthStatus {
-  if (!isGraphAuthStatus(value)) return invalidGraphResponse(commandName);
+  if (!isGraphAuthStatus(value)) return invalidCommandResponse(commandName);
   return value;
 }
 
@@ -1369,15 +1359,15 @@ function decodeGraphAuthAttemptResult(
   commandName: string,
 ): GraphAuthAttemptResult {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.outcome !== "string" ||
     !GRAPH_AUTH_ATTEMPT_OUTCOMES.has(
       value.outcome as GraphAuthAttemptOutcome,
     ) ||
     !isGraphAuthStatus(value.status) ||
-    !isNullableString(value.message)
+    !isNullableCommandString(value.message)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   decodeGraphHostCapability(value.capability, commandName);
   return value as unknown as GraphAuthAttemptResult;
@@ -1388,15 +1378,15 @@ function decodeGraphPermissionUpgradeResult(
   commandName: string,
 ): GraphPermissionUpgradeResult {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.outcome !== "string" ||
     !GRAPH_PERMISSION_UPGRADE_OUTCOMES.has(
       value.outcome as GraphPermissionUpgradeOutcome,
     ) ||
     !isGraphAuthStatus(value.status) ||
-    !isNullableString(value.message)
+    !isNullableCommandString(value.message)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphPermissionUpgradeResult;
 }
@@ -1406,13 +1396,13 @@ function decodeGraphInteractiveOperationTicket(
   commandName: string,
 ): GraphInteractiveOperationTicket {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.attemptId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value.attemptId,
     )
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphInteractiveOperationTicket;
 }

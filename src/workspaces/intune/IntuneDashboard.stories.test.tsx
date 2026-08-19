@@ -60,13 +60,20 @@ vi.mock("@tanstack/react-virtual", () => ({
       }
       return total;
     },
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: getItemKey?.(index) ?? index,
-        size: estimateSize(index),
-        start: index * estimateSize(index),
-      })),
+    getVirtualItems: () => {
+      let start = 0;
+      return Array.from({ length: count }, (_, index) => {
+        const size = estimateSize(index);
+        const item = {
+          index,
+          key: getItemKey?.(index) ?? index,
+          size,
+          start,
+        };
+        start += size;
+        return item;
+      });
+    },
     scrollToIndex: vi.fn(),
     measureElement: vi.fn(),
   }),
