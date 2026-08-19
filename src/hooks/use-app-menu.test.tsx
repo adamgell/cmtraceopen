@@ -472,6 +472,78 @@ describe("useAppMenu", () => {
     expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
   });
 
+  it("serializes rapid Always on Top toggles", async () => {
+    useUiStore.setState({ alwaysOnTop: false });
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    vi.mocked(invoke).mockClear();
+    let releaseFirstToggle: (() => void) | undefined;
+    let toggleCalls = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command !== "set_always_on_top") {
+        return undefined;
+      }
+
+      toggleCalls += 1;
+      if (toggleCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstToggle = resolve;
+        });
+      }
+      return undefined;
+    });
+
+    const callback = eventMocks.state.callback as
+      | ((event: { payload: TestMenuPayload }) => Promise<void>)
+      | null;
+    if (!callback) {
+      throw new Error("native menu listener was not registered");
+    }
+    const dispatchToggle = () =>
+      callback({
+        payload: {
+          version: 1,
+          menu_id: "test.toggle_always_on_top",
+          action: "toggle_always_on_top",
+          category: "test",
+          trigger: "menu",
+          source_id: null,
+          target_id: null,
+        },
+      });
+
+    const firstToggle = dispatchToggle();
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_always_on_top", {
+        enabled: true,
+      }),
+    );
+
+    const secondToggle = dispatchToggle();
+    await Promise.resolve();
+
+    expect(toggleCalls).toBe(1);
+    expect(useUiStore.getState().alwaysOnTop).toBe(false);
+
+    const release = releaseFirstToggle;
+    if (!release) {
+      throw new Error("first toggle was not awaiting native completion");
+    }
+    await act(async () => {
+      release();
+      await Promise.all([firstToggle, secondToggle]);
+    });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "set_always_on_top", {
+      enabled: true,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_always_on_top", {
+      enabled: false,
+    });
+    expect(useUiStore.getState().alwaysOnTop).toBe(false);
+  });
+
   it("opens the Collect Diagnostics dialog from the native menu", async () => {
     useUiStore.setState({ showCollectDiagnosticsDialog: false });
     renderHook(() => useAppMenu());
