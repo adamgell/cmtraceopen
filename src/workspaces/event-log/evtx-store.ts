@@ -450,7 +450,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadElapsedMs: performance.now() - startTime,
     });
   },
-  setLoadError: (error) => set({ isLoading: false, loadError: error }),
+  setLoadError: (error) =>
+    set(
+      error === null
+        ? { loadError: null }
+        : { isLoading: false, loadError: error },
+    ),
 
   setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
 
