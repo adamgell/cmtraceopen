@@ -188,7 +188,7 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
         </div>
       )}
 
-      {timeline.items.length === 0 ? (
+      {timeline.items.length === 0 && timeline.unplaced.length === 0 ? (
         <div
           style={{
             padding: "24px",
@@ -398,6 +398,26 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
               );
             })}
           </div>
+          {timeline.unplaced.length > 0 && (
+            <div
+              style={{
+                padding: "10px 12px",
+                borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+                color: tokens.colorPaletteMarigoldForeground1,
+                fontSize: `${smallFontSize}px`,
+              }}
+            >
+              {timeline.unplaced.map((unplaced, index) => (
+                <div
+                  key={`${originDetail(unplaced.origin)}-${index}`}
+                  title={originDetail(unplaced.origin)}
+                  style={{ padding: "4px 0" }}
+                >
+                  Unplaced event: no timestamp · {originContext(unplaced.origin)}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

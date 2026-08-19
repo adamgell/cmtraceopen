@@ -342,8 +342,17 @@ export function originDetail(origin: TimelineOrigin): string {
   ]
     .filter((part): part is string => part !== null)
     .join(" / ");
+  const textId = origin.recordIdText?.trim();
+  let exactId: string | null = null;
+  if (textId && /^\d+$/.test(textId)) {
+    try {
+      if (BigInt(textId) !== 0n) exactId = textId;
+    } catch {
+      exactId = null;
+    }
+  }
   const record =
-    origin.recordIdText ??
+    exactId ??
     (origin.recordId === 0
       ? "missing"
       : Number.isSafeInteger(origin.recordId)

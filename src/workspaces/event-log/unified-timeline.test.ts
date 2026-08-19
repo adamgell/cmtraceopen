@@ -102,6 +102,12 @@ describe("originDetail", () => {
     expect(detail).not.toContain("record 0");
   });
 
+  it("treats zero-equivalent lossless text as a missing record", () => {
+    const detail = originDetail({ ...eventOrigin, recordId: 0, recordIdText: "000" });
+    expect(detail).toContain("record missing");
+    expect(detail).not.toContain("record 000");
+  });
+
   it("does not display an unsafe numeric EventRecordID as a rounded decimal", () => {
     const detail = originDetail({
       ...eventOrigin,
