@@ -60,7 +60,7 @@ export function FilterDialog({
 
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
-  useModalFocus(isOpen, dialogRef, inputRef);
+  useModalFocus(isOpen, dialogRef, inputRef, clauses.length);
 
   useEffect(() => {
     if (isOpen) {

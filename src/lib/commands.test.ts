@@ -160,25 +160,42 @@ describe("parse and folder IPC response validation", () => {
     await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");
   });
 });
+function validIntuneAnalysis() {
+  return {
+    events: [],
+    downloads: [],
+    summary: {},
+    diagnostics: [],
+    sourceFile: "C:\\Logs\\IntuneManagementExtension.log",
+    sourceFiles: [],
+    diagnosticsCoverage: {},
+    diagnosticsConfidence: {},
+    repeatedFailures: [],
+    guidRegistry: {},
+  };
+}
+
 describe("Intune IPC response validation", () => {
   it("accepts structured diagnostics metadata", async () => {
-    const result = {
-      events: [],
-      downloads: [],
-      summary: {},
-      diagnostics: [],
-      sourceFile: "C:\\Logs\\IntuneManagementExtension.log",
-      sourceFiles: [],
-      diagnosticsCoverage: {},
-      diagnosticsConfidence: {},
-      repeatedFailures: [],
-      guidRegistry: {},
-    };
+    const result = validIntuneAnalysis();
     vi.mocked(invoke).mockResolvedValueOnce(result);
 
     await expect(
       analyzeIntuneLogs("C:\\Logs", "request-1"),
     ).resolves.toEqual(result);
+  });
+
+  it("rejects malformed diagnostics metadata", async () => {
+    const result = {
+      ...validIntuneAnalysis(),
+      diagnosticsCoverage: "complete",
+      diagnosticsConfidence: "high",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(
+      analyzeIntuneLogs("C:\\Logs", "request-1"),
+    ).rejects.toThrow("invalid response");
   });
 });
 

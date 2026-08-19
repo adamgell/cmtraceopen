@@ -6,6 +6,7 @@ const analyzeDsregcmdPath = vi.hoisted(() => vi.fn());
 const recordRecentPath = vi.hoisted(() => vi.fn());
 const inspectPathKind = vi.hoisted(() => vi.fn());
 const openEventLogSource = vi.hoisted(() => vi.fn());
+const setLoadError = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/dsregcmd-source", () => ({
   analyzeDsregcmdPath,
@@ -24,6 +25,11 @@ vi.mock("../lib/commands", () => ({
 
 vi.mock("../workspaces/event-log/open-event-log-source", () => ({
   openEventLogSource,
+}));
+vi.mock("../workspaces/event-log/evtx-store", () => ({
+  useEvtxStore: {
+    getState: () => ({ setLoadError }),
+  },
 }));
 
 import { useAppActions } from "./use-app-actions";
@@ -80,5 +86,6 @@ describe("openPathForActiveWorkspace event-log", () => {
       kind: "folder",
       path: "C:/Windows/System32/winevt/Logs",
     });
+    expect(setLoadError).toHaveBeenCalledWith("not a file");
   });
 });

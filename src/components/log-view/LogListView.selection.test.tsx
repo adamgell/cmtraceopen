@@ -97,7 +97,7 @@ describe("LogListView selection and jump fixtures", () => {
     );
   });
 
-  it("toggles additive selection with Ctrl/Cmd+click and ranges with Shift+click", () => {
+  it("toggles additive selection with Ctrl/Cmd+click", () => {
     render(<LogListView />);
     fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
     fireEvent.click(screen.getByText("Policy evaluation 3 completed"), { metaKey: true });
@@ -109,12 +109,24 @@ describe("LogListView selection and jump fixtures", () => {
     expect(screen.getByText("Policy evaluation 1 completed").closest("[role='option']")).toHaveStyle({
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
+  });
+
+  it("expands a Shift-click range and excludes rows outside the range", () => {
+    render(<LogListView />);
+    fireEvent.click(screen.getByText("Policy evaluation 1 completed"));
+    fireEvent.click(screen.getByText("Policy evaluation 3 completed"), { metaKey: true });
     fireEvent.click(screen.getByText("Policy evaluation 5 completed"), { shiftKey: true });
-    expect(screen.getByText("Policy evaluation 4 completed").closest("[role='option']")).toHaveStyle({
+
+    expect(screen.getByText("Policy evaluation 5 completed").closest("[role='option']")).toHaveStyle({
+      outline: "1px solid rgba(59, 130, 246, 0.5)",
+    });
+    expect(screen.getByText("Policy evaluation 3 completed").closest("[role='option']")).toHaveStyle({
+      outline: "1px solid rgba(59, 130, 246, 0.5)",
+    });
+    expect(screen.getByText("Policy evaluation 2 completed").closest("[role='option']")).not.toHaveStyle({
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
   });
-
   it("selects every displayed row on Ctrl/Cmd+A", () => {
     render(<LogListView />);
     const list = screen.getByRole("listbox", { name: "Log entries" });

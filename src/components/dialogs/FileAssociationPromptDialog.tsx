@@ -26,7 +26,12 @@ export function FileAssociationPromptDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalFocus(isOpen, dialogRef);
+  useModalFocus(
+    isOpen,
+    dialogRef,
+    undefined,
+    isSubmitting ? "submitting" : "idle",
+  );
 
   useEffect(() => {
     if (!isOpen) {

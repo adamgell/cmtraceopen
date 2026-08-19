@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 import { listLogFolder } from "../../lib/commands";
 import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
 import { useTimelineStore } from "../../stores/timeline-store";
@@ -15,22 +16,7 @@ vi.mock("../../lib/commands", () => ({
 vi.mock("../../components/timeline/hooks/useTimelineBundle", () => ({
   buildTimelineFromSources: vi.fn(async () => ({ sources: [] })),
 }));
-function deferred<T>() {
-  let resolvePromise: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((resolve) => {
-    resolvePromise = resolve;
-  });
 
-  return {
-    promise,
-    resolve(value: T) {
-      if (!resolvePromise) {
-        throw new Error("Deferred promise resolver was not initialized");
-      }
-      resolvePromise(value);
-    },
-  };
-}
 
 function bundleFor(paths: string[]): TimelineBundle {
   return {

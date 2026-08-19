@@ -448,6 +448,9 @@ async function recoverFromSelectedFileLoadFailure(
     error,
   });
 
+  if (!isCurrentTabSwitch(loadGeneration)) {
+    return null;
+  }
   await stopCurrentTailIfNeeded(null);
   if (!isCurrentTabSwitch(loadGeneration)) {
     return null;
@@ -578,9 +581,8 @@ export async function loadSelectedLogFile(
   source: LogSource,
   switchGeneration?: number,
 ): Promise<ParseResult | null> {
-  const operationGeneration =
-    switchGeneration ?? ++tabSwitchGeneration;
-  if (!isCurrentTabSwitch(operationGeneration)) return null;
+  const loadGeneration = switchGeneration ?? ++tabSwitchGeneration;
+  if (switchGeneration !== undefined && !isCurrentTabSwitch(switchGeneration)) return null;
   const state = useLogStore.getState();
   state.setFolderLoadProgress(null);
   // Check cache first — if the file was already parsed (e.g., during folder
@@ -592,15 +594,15 @@ export async function loadSelectedLogFile(
       console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });
 
       const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
-      if (!isCurrentTabSwitch(operationGeneration)) return null;
+      if (!isCurrentTabSwitch(loadGeneration)) return null;
 
       let regData = getCachedRegistry(filePath);
       if (!regData) {
         regData = await parseRegistryFile(filePath);
-        if (!isCurrentTabSwitch(operationGeneration)) return null;
+        if (!isCurrentTabSwitch(loadGeneration)) return null;
         setCachedRegistry(filePath, regData);
       }
-      if (!isCurrentTabSwitch(operationGeneration)) return null;
+      if (!isCurrentTabSwitch(loadGeneration)) return null;
 
       state.setSelectedSourceFilePath(filePath);
       state.setSourceOpenMode("single-file");
@@ -666,7 +668,7 @@ export async function loadSelectedLogFile(
     filePath,
   });
 
-  if (!isCurrentTabSwitch(operationGeneration)) return null;
+  if (!isCurrentTabSwitch(loadGeneration)) return null;
   state.setLoading(true);
   state.setSourceStatus({
     kind: "loading",
@@ -674,26 +676,27 @@ export async function loadSelectedLogFile(
   });
 
   try {
+    if (!isCurrentTabSwitch(loadGeneration)) return null;
     await stopCurrentTailIfNeeded(filePath);
-    if (!isCurrentTabSwitch(operationGeneration)) return null;
+    if (!isCurrentTabSwitch(loadGeneration)) return null;
 
     let result: ParseResult;
     try {
       result = await openLogFile(filePath);
     } catch (error) {
-      if (!isCurrentTabSwitch(operationGeneration)) return null;
+      if (!isCurrentTabSwitch(loadGeneration)) return null;
       throw error;
     }
-    if (!isCurrentTabSwitch(operationGeneration)) return null;
+    if (!isCurrentTabSwitch(loadGeneration)) return null;
     const applied = await applyParseResultToStore(
       source,
       result.filePath,
       result,
-      operationGeneration,
+      loadGeneration,
     );
     return applied ? result : null;
   } finally {
-    if (isCurrentTabSwitch(operationGeneration)) {
+    if (isCurrentTabSwitch(loadGeneration)) {
       state.setLoading(false);
     }
   }
@@ -896,6 +899,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
   state.setFolderLoadRequestId(loadGeneration);
 
   // Clean up current state before starting the parse
+  if (!isCurrentTabSwitch(loadGeneration)) return;
   await stopCurrentTailIfNeeded(null);
   if (!isCurrentTabSwitch(loadGeneration)) return;
   useFilterStore.getState().clearFilter();
@@ -1143,6 +1147,9 @@ export async function loadLogSource(
 
   try {
     if (source.kind === "file") {
+      if (!isCurrentTabSwitch(loadGeneration)) {
+        return null;
+      }
       await stopCurrentTailIfNeeded(source.path);
       if (!isCurrentTabSwitch(loadGeneration)) {
         return null;
@@ -1185,6 +1192,9 @@ export async function loadLogSource(
       state.setBundleMetadata(listing.bundleMetadata ?? null);
 
       if (!requestedFilePath) {
+        if (!isCurrentTabSwitch(loadGeneration)) {
+          return null;
+        }
         await stopCurrentTailIfNeeded(null);
         if (!isCurrentTabSwitch(loadGeneration)) {
           return null;
@@ -1225,6 +1235,9 @@ export async function loadLogSource(
     }
 
     if (source.pathKind === "file") {
+      if (!isCurrentTabSwitch(loadGeneration)) {
+        return null;
+      }
       await stopCurrentTailIfNeeded(source.defaultPath);
       if (!isCurrentTabSwitch(loadGeneration)) {
         return null;
@@ -1264,6 +1277,9 @@ export async function loadLogSource(
     state.setBundleMetadata(listing.bundleMetadata ?? null);
 
     if (!requestedFilePath) {
+      if (!isCurrentTabSwitch(loadGeneration)) {
+        return null;
+      }
       await stopCurrentTailIfNeeded(null);
       if (!isCurrentTabSwitch(loadGeneration)) {
         return null;

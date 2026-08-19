@@ -48,4 +48,34 @@ describe("FileAssociationPromptDialog", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+
+  it("keeps focus on the dialog surface while submission disables its controls", () => {
+    vi.mocked(associateLogFilesWithApp).mockReturnValue(
+      new Promise<void>(() => {}),
+    );
+
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const rendered = render(
+      <FileAssociationPromptDialog isOpen onClose={() => {}} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const associate = within(dialog).getByRole("button", { name: "Associate" });
+
+    associate.focus();
+    fireEvent.click(associate);
+
+    expect(associate).toBeDisabled();
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(dialog);
+
+    rendered.rerender(
+      <FileAssociationPromptDialog isOpen={false} onClose={() => {}} />,
+    );
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
 });

@@ -302,7 +302,7 @@ export const LogRow = memo(function LogRow({
   }
 
   // Multi-select visual: subtle blue background when no marker tint is present
-  const showMultiSelectHighlight = isMultiSelected && !isSelected && !marker;
+  const showMultiSelectHighlight = isMultiSelected && !marker;
 
   return (
     <div

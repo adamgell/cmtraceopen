@@ -60,4 +60,52 @@ describe("FilterDialog", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+
+  it("returns focus to the first clause when a focused remove control unmounts", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const rendered = render(
+      <FilterDialog
+        isOpen
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[
+          { field: "Message", op: "Contains", value: "first" },
+          { field: "Component", op: "Equals", value: "second" },
+        ]}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Filter" });
+    const input = dialog.querySelector("input");
+    const selects = dialog.querySelectorAll("select");
+    const removeButtons = screen.getAllByRole("button", {
+      name: "Remove clause",
+    });
+
+    expect(input).not.toBeNull();
+    expect(selects.length).toBe(4);
+    expect(removeButtons.length).toBe(2);
+
+    const focusedRemoveButton = removeButtons[1];
+    focusedRemoveButton.focus();
+    fireEvent.click(focusedRemoveButton);
+
+    expect(document.activeElement).toBe(input);
+    dialog.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(selects[0]);
+
+    rendered.rerender(
+      <FilterDialog
+        isOpen={false}
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[]}
+      />,
+    );
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
 });
