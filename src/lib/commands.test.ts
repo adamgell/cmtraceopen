@@ -128,7 +128,7 @@ describe("parse and folder IPC response validation", () => {
       .mockResolvedValueOnce([parseResult])
       .mockResolvedValueOnce(folderListing);
 
-    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7)).resolves.toEqual([
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).resolves.toEqual([
       parseResult,
     ]);
     await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
@@ -147,7 +147,7 @@ describe("parse and folder IPC response validation", () => {
     await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
       "invalid response",
     );
-    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7)).rejects.toThrow(
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).rejects.toThrow(
       "invalid response",
     );
     await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");

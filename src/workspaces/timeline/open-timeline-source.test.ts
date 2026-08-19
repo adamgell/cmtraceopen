@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listLogFolder } from "../../lib/commands";
 import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
 import { useTimelineStore } from "../../stores/timeline-store";
-import { openTimelineSource } from "./open-timeline-source";
+import { openTimelineSource, replaceTimelineSource } from "./open-timeline-source";
 
 vi.mock("../../lib/commands", () => ({
   listLogFolder: vi.fn(),
@@ -48,6 +48,55 @@ describe("openTimelineSource", () => {
       { path: "/tmp/AppEnforce.log" },
     ]);
   });
+  it("builds a timeline from a known file source", async () => {
+    const defaultPath = "/tmp/known.log";
+
+    await openTimelineSource({
+      kind: "known",
+      sourceId: "known-file",
+      defaultPath,
+      pathKind: "file",
+    });
+
+    expect(buildTimelineFromSources).toHaveBeenCalledWith([
+      { path: defaultPath },
+    ]);
+    expect(listLogFolder).not.toHaveBeenCalled();
+  });
+
+  it("expands a known folder source before building", async () => {
+    const defaultPath = "/tmp/known-logs";
+    vi.mocked(listLogFolder).mockResolvedValue({
+      sourceKind: "known",
+      source: {
+        kind: "known",
+        sourceId: "known-folder",
+        defaultPath,
+        pathKind: "folder",
+      },
+      entries: [
+        {
+          name: "known.log",
+          path: `${defaultPath}/known.log`,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+      ],
+    });
+
+    await openTimelineSource({
+      kind: "known",
+      sourceId: "known-folder",
+      defaultPath,
+      pathKind: "folder",
+    });
+
+    expect(listLogFolder).toHaveBeenCalledWith(defaultPath);
+    expect(buildTimelineFromSources).toHaveBeenCalledWith([
+      { path: `${defaultPath}/known.log` },
+    ]);
+  });
 
   it("unions folder files with an existing timeline", async () => {
     useTimelineStore.setState({
@@ -67,6 +116,44 @@ describe("openTimelineSource", () => {
       { path: "/tmp/existing.log" },
       { path: "/tmp/logs/a.log" },
     ]);
+  });
+  it("replaces pending timeline appends instead of merging stale sources", async () => {
+    useTimelineStore.setState({
+      bundle: { sources: [{ path: "/tmp/existing.log" }] },
+    } as never);
+    const firstBuild = deferred<TimelineBuildResult>();
+    const secondBuild = deferred<TimelineBuildResult>();
+    vi.mocked(buildTimelineFromSources)
+      .mockImplementationOnce(async () => {
+        const bundle = await firstBuild.promise;
+        useTimelineStore.getState().setBundle(bundle);
+        return bundle;
+      })
+      .mockImplementationOnce(async () => {
+        const bundle = await secondBuild.promise;
+        useTimelineStore.getState().setBundle(bundle);
+        return bundle;
+      });
+
+    const append = openTimelineSource({ kind: "file", path: "/tmp/old.log" });
+    await vi.waitFor(() => {
+      expect(buildTimelineFromSources).toHaveBeenCalledTimes(1);
+    });
+    const replacement = replaceTimelineSource({
+      kind: "file",
+      path: "/tmp/new.log",
+    });
+
+    firstBuild.resolve(bundleFor(["/tmp/existing.log", "/tmp/old.log"]));
+    await vi.waitFor(() => {
+      expect(buildTimelineFromSources).toHaveBeenCalledTimes(2);
+    });
+    expect(buildTimelineFromSources).toHaveBeenNthCalledWith(2, [
+      { path: "/tmp/new.log" },
+    ]);
+
+    secondBuild.resolve(bundleFor(["/tmp/new.log"]));
+    await Promise.all([append, replacement]);
   });
 
   it("adds the folder itself when IME logs are present", async () => {

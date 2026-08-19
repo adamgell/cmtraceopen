@@ -13,74 +13,107 @@ interface ParseProgressPayload {
   completed: number;
   /** Total files in the current batch. */
   total: number;
+  /** Files completed across all sequential batches for this source load. */
+  globalCompleted: number;
   entries: number;
   fileSize: number;
   parseMs: number;
 }
 
+function isParseProgressPayload(value: unknown): value is ParseProgressPayload {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const payload = value as Record<string, unknown>;
+  const isSafeNonNegativeInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0;
+
+  return (
+    isSafeNonNegativeInteger(payload.requestId) &&
+    typeof payload.filePath === "string" &&
+    typeof payload.fileName === "string" &&
+    isSafeNonNegativeInteger(payload.completed) &&
+    payload.completed >= 1 &&
+    isSafeNonNegativeInteger(payload.total) &&
+    payload.total >= 1 &&
+    payload.completed <= payload.total &&
+    isSafeNonNegativeInteger(payload.globalCompleted) &&
+    payload.globalCompleted >= payload.completed &&
+    isSafeNonNegativeInteger(payload.entries) &&
+    isSafeNonNegativeInteger(payload.fileSize) &&
+    isSafeNonNegativeInteger(payload.parseMs)
+  );
+}
+
 /**
  * Listens for `parse-progress` events emitted by the Rust backend as
- * individual files finish parsing inside `parse_files_batch`.  Updates
- * the log store's folder-load-progress so the UI can show real-time
- * per-file progress instead of only updating between batches.
+ * individual files finish parsing inside `parse_files_batch`. Updates the log
+ * store's folder-load-progress so the UI can show real-time per-file progress
+ * instead of only updating between batches.
  *
- * The Rust side emits per-batch counters, but the UI needs a global
- * count across all batches.  We maintain a running offset that is
- * reset by an effect each time a new folder load begins
- * (folderLoadProgress transitions from null → non-null), so progress
- * from a previous load can never bleed into the next one.
+ * Rust emits both a per-batch counter and a monotonic global counter. The
+ * global counter remains correct when Rayon delivers per-file events out of
+ * order, while the request ID prevents a superseded source load from writing
+ * into the active one.
  */
 export function useParseProgressListener() {
-  // Subscribe to a derived boolean so this hook re-renders only on the
-  // null ↔ non-null transition instead of on every progress tick during
-  // a large folder load.
-  const isFolderLoading = useLogStore((state) => state.folderLoadProgress !== null);
+  const isFolderLoading = useLogStore(
+    (state) => state.folderLoadProgress !== null,
+  );
+  const folderLoadRequestId = useLogStore(
+    (state) => state.folderLoadRequestId,
+  );
   const globalCompletedRef = useRef(0);
-  const prevBatchCompletedRef = useRef(0);
-  const wasLoadingRef = useRef(false);
+  const trackedRequestIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isFolderLoading && !wasLoadingRef.current) {
+    if (!isFolderLoading || folderLoadRequestId === null) {
       globalCompletedRef.current = 0;
-      prevBatchCompletedRef.current = 0;
+      trackedRequestIdRef.current = null;
+      return;
     }
 
-    wasLoadingRef.current = isFolderLoading;
-  }, [isFolderLoading]);
+    if (trackedRequestIdRef.current !== folderLoadRequestId) {
+      globalCompletedRef.current = 0;
+      trackedRequestIdRef.current = folderLoadRequestId;
+    }
+  }, [folderLoadRequestId, isFolderLoading]);
 
   useEffect(() => {
     const unlisten = listen<ParseProgressPayload>(
       PARSE_PROGRESS_EVENT,
       (event) => {
-        const p = event.payload;
-        const state = useLogStore.getState();
+        if (!isParseProgressPayload(event.payload)) {
+          return;
+        }
 
-        // Only update if a folder load is currently in progress. The reset
-        // for the next load is handled by the effect above on the
-        // null → non-null transition.
+        const state = useLogStore.getState();
         if (state.folderLoadProgress === null) {
           return;
         }
-        if (p.requestId !== state.folderLoadRequestId) {
+        if (event.payload.requestId !== state.folderLoadRequestId) {
           return;
         }
 
-        // Detect new batch: per-batch completed count resets to a lower value
-        if (p.completed < prevBatchCompletedRef.current) {
-          // New batch started — promote previous batch count to global offset
-          globalCompletedRef.current += prevBatchCompletedRef.current;
+        const globalTotal = state.folderLoadTotalFiles;
+        if (
+          globalTotal === null ||
+          event.payload.globalCompleted > globalTotal ||
+          event.payload.globalCompleted <= globalCompletedRef.current
+        ) {
+          return;
         }
-        prevBatchCompletedRef.current = p.completed;
 
-        const globalCompleted = globalCompletedRef.current + p.completed;
-        const globalTotal = state.folderLoadTotalFiles ?? p.total;
-
+        globalCompletedRef.current = event.payload.globalCompleted;
         state.setFolderLoadProgress({
-          current: globalCompleted,
+          current: event.payload.globalCompleted,
           total: globalTotal,
-          currentFile: p.fileName,
+          currentFile: event.payload.fileName,
         });
-      }
+      },
     );
 
     return () => {

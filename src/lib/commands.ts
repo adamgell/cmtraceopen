@@ -612,13 +612,19 @@ export async function openLogFile(path: string): Promise<ParseResult> {
 }
 
 /** Parse multiple files in parallel on the Rust side (Rayon thread pool).
- *  Returns all results in a single IPC response — eliminates N-1 round-trips.
- *  The request ID tags progress events so superseded batches are ignored. */
+ *  Returns all results in a single IPC response.  The request ID tags progress
+ *  events to the owning source load and the offset makes progress monotonic
+ *  across sequential batches. */
 export async function parseFilesBatch(
   paths: string[],
   requestId: number,
+  completedOffset: number,
 ): Promise<ParseResult[]> {
-  return invokeCommand("parse_files_batch", { paths, requestId });
+  return invokeCommand("parse_files_batch", {
+    paths,
+    requestId,
+    completedOffset,
+  });
 }
 
 export async function listLogFolder(

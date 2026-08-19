@@ -326,7 +326,7 @@ async function loadFolderProgressive(
     if (!isCurrentTabSwitch(loadGeneration)) return;
 
     const batchStart = performance.now();
-    const batchResults = await parseFilesBatch(batch, loadGeneration);
+    const batchResults = await parseFilesBatch(batch, loadGeneration, offset);
     if (!isCurrentTabSwitch(loadGeneration)) return;
     const batchMs = Math.round(performance.now() - batchStart);
 
@@ -916,7 +916,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
   const startTime = performance.now();
 
   try {
-    const results = await parseFilesBatch(paths, loadGeneration);
+    const results = await parseFilesBatch(paths, loadGeneration, 0);
     if (!isCurrentTabSwitch(loadGeneration)) return;
     const parseMs = Math.round(performance.now() - startTime);
 

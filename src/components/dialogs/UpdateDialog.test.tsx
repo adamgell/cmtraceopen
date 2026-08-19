@@ -89,6 +89,28 @@ describe("UpdateDialog", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+  it("restores focus when update content removes the focused control", () => {
+    const { props, rerender } = renderDialog({
+      updateInfo: availableUpdate(),
+    });
+    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
+    const download = screen.getByRole("button", {
+      name: "Download & install",
+    });
+    download.focus();
+
+    rerender(
+      <UpdateDialog
+        {...props}
+        updateInfo={availableUpdate()}
+        isDownloading
+        downloadProgress={0.5}
+      />,
+    );
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(dialog);
+  });
 
   it("shows Cancel while checking", () => {
     const { props } = renderDialog({ isChecking: true });

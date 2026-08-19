@@ -120,6 +120,7 @@ describe("Device Inventory known-source routing", () => {
     expect(commands.parseFilesBatch).toHaveBeenCalledWith(
       [folderEntries[0].path],
       expect.any(Number),
+      expect.any(Number),
     );
     expect(commands.openLogSourceFile).not.toHaveBeenCalled();
   });
@@ -898,6 +899,7 @@ describe("source loading progress ownership", () => {
     await vi.waitFor(() => {
       expect(commands.parseFilesBatch).toHaveBeenCalledWith(
         [sourceEntries[0].path],
+        expect.any(Number),
         expect.any(Number),
       );
     });

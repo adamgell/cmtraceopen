@@ -30,8 +30,15 @@ export function UpdateDialog({
   onSkipVersion,
 }: UpdateDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const focusKey = isChecking
+    ? "checking"
+    : isDownloading
+      ? "downloading"
+      : updateInfo?.available
+        ? "available"
+        : "idle";
 
-  useModalFocus(isOpen, dialogRef);
+  useModalFocus(isOpen, dialogRef, undefined, focusKey);
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {

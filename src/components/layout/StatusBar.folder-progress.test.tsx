@@ -7,6 +7,7 @@ type ProgressPayload = {
   fileName: string;
   completed: number;
   total: number;
+  globalCompleted: number;
   entries: number;
   fileSize: number;
   parseMs: number;
@@ -86,6 +87,7 @@ describe("StatusBar folder parse progress", () => {
           filePath: "stale.log",
           fileName: "stale.log",
           completed: 9,
+          globalCompleted: 9,
           total: 10,
           entries: 1,
           fileSize: 1,
@@ -103,6 +105,7 @@ describe("StatusBar folder parse progress", () => {
           filePath: "Accepted.log",
           fileName: "Accepted.log",
           completed: 4,
+          globalCompleted: 4,
           total: 10,
           entries: 1,
           fileSize: 1,

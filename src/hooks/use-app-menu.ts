@@ -363,18 +363,14 @@ export function useAppMenu() {
             if (!folder || Array.isArray(folder)) return;
             const folderPath = folder as string;
             try {
-              const { openTimelineSource } = await import(
+              const { replaceTimelineSource } = await import(
                 "../workspaces/timeline/open-timeline-source"
               );
-              const { useTimelineStore } = await import(
-                "../stores/timeline-store"
-              );
-              useTimelineStore.getState().setBundle(null);
               useUiStore.getState().ensureWorkspaceVisible(
                 "timeline",
                 "native-menu.timeline-new-from-folder",
               );
-              await openTimelineSource({ kind: "folder", path: folderPath });
+              await replaceTimelineSource({ kind: "folder", path: folderPath });
             } catch (error) {
               console.error("[app-menu] failed to build timeline from folder", {
                 folderPath,

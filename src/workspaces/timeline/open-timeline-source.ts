@@ -43,22 +43,42 @@ async function appendTimelineSources(incoming: string[]): Promise<void> {
   await buildTimelineFromSources(merged);
 }
 
+async function replaceTimelineSources(incoming: string[]): Promise<void> {
+  if (incoming.length === 0) {
+    return;
+  }
+
+  const sources = Array.from(new Set(incoming)).map((path) => ({ path }));
+  await buildTimelineFromSources(sources);
+}
+
+async function incomingFromSource(source: LogSource): Promise<string[]> {
+  if (source.kind === "file") {
+    return [source.path];
+  }
+
+  if (source.kind === "folder") {
+    const listing = await listLogFolder(source.path);
+    return incomingFromListing(source.path, listing.entries);
+  }
+
+  if (source.pathKind === "file") {
+    return [source.defaultPath];
+  }
+
+  const listing = await listLogFolder(source.defaultPath);
+  return incomingFromListing(source.defaultPath, listing.entries);
+}
+
 export function openTimelineSource(source: LogSource): Promise<void> {
   return enqueueTimelineOpen(async () => {
-    let incoming: string[] = [];
-    if (source.kind === "file") {
-      incoming = [source.path];
-    } else if (source.kind === "folder") {
-      const listing = await listLogFolder(source.path);
-      incoming = incomingFromListing(source.path, listing.entries);
-    } else if (source.pathKind === "file") {
-      incoming = [source.defaultPath];
-    } else {
-      const listing = await listLogFolder(source.defaultPath);
-      incoming = incomingFromListing(source.defaultPath, listing.entries);
-    }
+    await appendTimelineSources(await incomingFromSource(source));
+  });
+}
 
-    await appendTimelineSources(incoming);
+export function replaceTimelineSource(source: LogSource): Promise<void> {
+  return enqueueTimelineOpen(async () => {
+    await replaceTimelineSources(await incomingFromSource(source));
   });
 }
 
