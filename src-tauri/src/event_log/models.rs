@@ -18,6 +18,7 @@ pub enum EvtxCoverageGapKind {
     Chunk,
     Record,
     Xml,
+    Provider,
     Limit,
 }
 

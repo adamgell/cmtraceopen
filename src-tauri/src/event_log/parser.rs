@@ -1693,9 +1693,52 @@ where
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = describe_event(&providers, &provider, event_id, system.version, &insertions)
-            .or(payload)
-            .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields));
+        let message = match describe_event(
+            &providers,
+            &provider,
+            event_id,
+            system.version,
+            &insertions,
+        ) {
+            Ok(Some(DescriptionOutcome::Rendered(text))) => text,
+            Ok(Some(DescriptionOutcome::MissingInsertions(missing))) => {
+                let mut gap = EvtxCoverageGap::new(
+                    &source_path,
+                    EvtxCoverageGapKind::Provider,
+                    format!(
+                        "provider description for {provider} event {event_id} is missing \
+                         insertion(s): {}",
+                        missing
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+                gap.event_record_id = Some(event_record_id);
+                messages.push(format_coverage_gap(&gap));
+                coverage_gaps.push(gap);
+                payload
+                    .clone()
+                    .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields))
+            }
+            Ok(None) => payload
+                .clone()
+                .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields)),
+            Err(error) => {
+                let mut gap = EvtxCoverageGap::new(
+                    &source_path,
+                    EvtxCoverageGapKind::Provider,
+                    format!("provider metadata lookup failed for {provider} event {event_id}: {error}"),
+                );
+                gap.event_record_id = Some(event_record_id);
+                messages.push(format_coverage_gap(&gap));
+                coverage_gaps.push(gap);
+                payload
+                    .clone()
+                    .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields))
+            }
+        };
 
         let mapped = super::maps::apply_registered(&maps, &channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
@@ -1764,31 +1807,44 @@ where
     })
 }
 
+/// Outcome of attempting to render a provider description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DescriptionOutcome {
+    Rendered(String),
+    MissingInsertions(Vec<u32>),
+}
+
 /// Renders the provider's own description for this event, when metadata for it is loaded.
 ///
-/// Returns `None` when no database is loaded, the provider is absent from it, or the provider does
-/// not define this event. Falling back to a field summary is right in all three cases: an absent
-/// description is a coverage gap, not a reason to show nothing.
-///
-/// A partially rendered description is rejected rather than shown. If the template references
-/// insertions the event did not supply, the metadata and the event disagree, and a sentence with
-/// `%4` embedded in it is less honest than the field summary it would replace.
+/// Returns `Ok(None)` when no database is loaded, the provider is absent from it, or the provider
+/// does not define this event. Provider payload failures are returned as errors so callers can
+/// attach a coverage gap instead of presenting a normal metadata miss.
 fn describe_event(
     store: &ProviderStore,
     provider: &str,
     event_id: u32,
     version: Option<u32>,
     insertions: &[String],
-) -> Option<String> {
-    let metadata = store.provider(provider)?;
-    let event = metadata.event(event_id, version)?;
-    let template = event.description.as_deref()?;
+) -> Result<Option<DescriptionOutcome>, String> {
+    let Some(metadata) = store.provider_for_event(provider, event_id, version)? else {
+        return Ok(None);
+    };
+    let Some(event) = metadata.event(event_id, version) else {
+        return Ok(None);
+    };
+    let Some(template) = event.description.as_deref() else {
+        return Ok(None);
+    };
 
     let rendered = cmtraceopen_parser::provider::render_description(template, insertions);
     if rendered.is_complete() {
-        Some(super::sanitize_control_chars(&rendered.text))
+        Ok(Some(DescriptionOutcome::Rendered(
+            super::sanitize_control_chars(&rendered.text),
+        )))
     } else {
-        None
+        Ok(Some(DescriptionOutcome::MissingInsertions(
+            rendered.missing_insertions,
+        )))
     }
 }
 
@@ -2589,15 +2645,64 @@ mod description_tests {
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        assert!(describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, None, &data).is_none());
+        assert!(
+            describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, None, &data)
+                .expect("provider lookup succeeds")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unresolved_provider_insertions_return_structured_coverage() {
+        use cmtraceopen_parser::provider::{ProviderEvent, ProviderMetadata};
+        use super::super::provider_db::{
+            write_provider_database, CapturedProviderMetadata,
+        };
+        let directory = std::env::temp_dir().join("cmtraceopen-parser-provider-coverage");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("provider directory");
+        let database = directory.join("provider.db");
+        write_provider_database(
+            &database,
+            &[CapturedProviderMetadata {
+                metadata: ProviderMetadata {
+                    provider_name: "Coverage-Provider".to_string(),
+                    events: vec![ProviderEvent {
+                        id: 7,
+                        version: 0,
+                        description: Some("value %2".to_string()),
+                        ..ProviderEvent::default()
+                    }],
+                    ..ProviderMetadata::default()
+                },
+                version_key: "coverage-version".to_string(),
+            }],
+        )
+        .expect("write provider database");
+
+        let mut store = ProviderStore::default();
+        store.load_directory(&directory).expect("load provider database");
+        let outcome = describe_event(
+            &store,
+            "Coverage-Provider",
+            7,
+            Some(0),
+            &insertions(&[("value", "one")]),
+        )
+        .expect("provider lookup succeeds")
+        .expect("event description exists");
+
+        assert_eq!(
+            outcome,
+            DescriptionOutcome::MissingInsertions(vec![2]),
+            "missing insertion positions must remain structured coverage"
+        );
     }
 
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
-        // Needs a store that actually holds the provider. Against an empty one the lookup returns
-        // None on the provider itself and the event-id branch is never reached, so this only
-        // repeated the no-database case while claiming to cover something else.
+        // Needs a store that actually holds the provider.
         let store = loaded_store();
         let data = insertions(&[("X", "1")]);
         assert!(
@@ -2608,11 +2713,11 @@ mod description_tests {
                 None,
                 &data
             )
+            .expect("provider lookup succeeds")
             .is_none(),
             "a provider that is loaded but does not define this id must fall back"
         );
     }
-
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn a_loaded_database_renders_a_real_provider_description() {
@@ -2627,7 +2732,11 @@ mod description_tests {
             None,
             &data,
         )
+        .expect("the MDM provider lookup succeeds")
         .expect("the MDM provider defines event 2");
+        let DescriptionOutcome::Rendered(described) = described else {
+            panic!("provider description should render completely");
+        };
 
         println!("rendered: {described}");
         assert!(described.contains("0x80180005"), "{described}");
@@ -2644,13 +2753,16 @@ mod description_tests {
         let store = loaded_store();
 
         // A provider that genuinely is not in a Windows capture.
-        assert!(describe_event(
-            &store,
-            "Definitely-Not-A-Real-Provider",
-            1,
-            None,
-            &insertions(&[("a", "b")])
-        )
-        .is_none());
+        assert!(
+            describe_event(
+                &store,
+                "Definitely-Not-A-Real-Provider",
+                1,
+                None,
+                &insertions(&[("a", "b")]),
+            )
+            .expect("provider lookup succeeds")
+            .is_none()
+        );
     }
 }

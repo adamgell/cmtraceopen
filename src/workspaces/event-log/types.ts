@@ -71,6 +71,7 @@ export type EvtxCoverageGapKind =
   | "chunk"
   | "record"
   | "xml"
+  | "provider"
   | "limit";
 
 export interface EvtxCoverageGap {

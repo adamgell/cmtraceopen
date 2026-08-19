@@ -22,6 +22,7 @@ const COVERAGE_GAP_KINDS: Record<EvtxCoverageGapKind, true> = {
   chunk: true,
   record: true,
   xml: true,
+  provider: true,
   limit: true,
 };
 

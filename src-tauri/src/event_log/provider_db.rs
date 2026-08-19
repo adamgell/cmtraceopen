@@ -503,7 +503,9 @@ fn write_provider_database_inner(
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
-        let parameters = gzip_json(&metadata.messages)?;
+        let parameters = gzip_json(&serde_json::json!({
+            "unavailableCategories": metadata.unavailable_categories.clone()
+        }))?;
         transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
@@ -649,6 +651,19 @@ fn same_file(source: &Path, destination: &Path) -> bool {
 
 /// Relative location used by packaged builds for a curated provider database.
 pub const PACKAGED_PROVIDER_DATABASE_DIRECTORY: &str = "provider-db";
+/// Manifest beside the packaged database. It records whether provenance is available; an absent
+/// Windows capture must never be represented by an empty or synthetic database.
+pub const PACKAGED_PROVIDER_MANIFEST_FILE: &str = "provider-manifest.json";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackagedProviderManifest {
+    schema_version: u32,
+    status: String,
+    reason: String,
+    #[serde(default)]
+    provider_families: Vec<String>,
+}
 
 /// Finds the packaged provider directory without inventing coverage when no real capture was
 /// checked in.
@@ -659,6 +674,45 @@ pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, Strin
             "no curated provider database is packaged at {}; a real Windows-captured \
              EventLogExpert ProviderDetails database is required before packaging provider coverage",
             directory.display()
+        ));
+    }
+    let manifest_path = directory.join(PACKAGED_PROVIDER_MANIFEST_FILE);
+    let manifest_text = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "packaged provider manifest {} is unavailable: {error}; cannot claim \
+             EventLogExpert ProviderDetails coverage",
+            manifest_path.display()
+        )
+    })?;
+    let manifest: PackagedProviderManifest =
+        serde_json::from_str(&manifest_text).map_err(|error| {
+            format!(
+                "packaged provider manifest {} is invalid: {error}; cannot claim \
+                 EventLogExpert ProviderDetails coverage",
+                manifest_path.display()
+            )
+        })?;
+    if manifest.schema_version != 1 {
+        return Err(format!(
+            "packaged provider manifest {} has unsupported schemaVersion {}; cannot claim \
+             EventLogExpert ProviderDetails coverage",
+            manifest_path.display(),
+            manifest.schema_version
+        ));
+    }
+    if manifest.status != "available" {
+        let families = if manifest.provider_families.is_empty() {
+            "none declared".to_string()
+        } else {
+            manifest.provider_families.join(", ")
+        };
+        return Err(format!(
+            "packaged provider manifest {} reports status {}: {}; required provider families: \
+             {families}; a real Windows-captured EventLogExpert ProviderDetails database is \
+             required before packaging provider coverage",
+            manifest_path.display(),
+            manifest.status,
+            manifest.reason
         ));
     }
     let has_database = std::fs::read_dir(&directory)
@@ -674,8 +728,10 @@ pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, Strin
         });
     if !has_database {
         return Err(format!(
-            "packaged provider directory {} contains no database; a real Windows-captured \
-             EventLogExpert ProviderDetails database is required before packaging provider coverage",
+            "packaged provider manifest {} reports available but {} contains no database; a real \
+             Windows-captured EventLogExpert ProviderDetails database is required before \
+             packaging provider coverage",
+            manifest_path.display(),
             directory.display()
         ));
     }
@@ -702,6 +758,9 @@ pub struct ProviderStore {
     /// hold a write guard on the whole store for the length of a file, blocking every other reader
     /// just to populate a cache.
     cache: Mutex<HashMap<String, Option<Arc<ProviderMetadata>>>>,
+    /// Every captured version row for each provider. Event lookup uses this before applying its
+    /// exact-version-then-fallback rule; caching only one row loses definitions from other keys.
+    version_cache: Mutex<HashMap<String, Option<Arc<Vec<CapturedProviderMetadata>>>>>,
     /// The registered databases, opened once at registration and reused for every lookup.
     open_databases: Mutex<Vec<ProviderDb>>,
     info: Vec<ProviderDbInfo>,
@@ -771,10 +830,16 @@ impl ProviderStore {
             .cache
             .lock()
             .map_err(|_| "provider cache lock was poisoned".to_string())?;
+        let mut version_cache = self
+            .version_cache
+            .lock()
+            .map_err(|_| "provider version cache lock was poisoned".to_string())?;
         *open = databases;
         cache.clear();
+        version_cache.clear();
         drop(open);
         drop(cache);
+        drop(version_cache);
         self.info = info.clone();
 
         // Reported even when something loaded. Returning only valid files would leave an operator
@@ -794,35 +859,93 @@ impl ProviderStore {
 
     /// Metadata for `provider_name`, consulting registered databases in order and caching it.
     ///
-    /// The cache is behind its own lock, so this needs only `&self`; a lookup still populates it,
-    /// including the negative result, which is what stops a provider absent from every database
-    /// being searched again for every event that names it.
-    pub fn provider(&self, provider_name: &str) -> Option<Arc<ProviderMetadata>> {
+    /// Errors are returned rather than treated as an absent provider. A corrupt payload is a
+    /// coverage failure, not a metadata miss.
+    pub fn provider(&self, provider_name: &str) -> Result<Option<Arc<ProviderMetadata>>, String> {
         let key = provider_name.to_ascii_lowercase();
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.get(&key) {
-                return cached.clone();
-            }
+        if let Some(cached) = self
+            .cache
+            .lock()
+            .map_err(|_| "provider cache lock was poisoned".to_string())?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
         }
 
-        // Databases are opened once and held, not reopened per lookup. Opening also runs a schema
-        // probe, so a miss used to pay an open plus that probe for every registered database, for
-        // every distinct provider name in the file.
-        let mut found = None;
-        if let Ok(open) = self.open_databases.lock() {
-            for database in open.iter() {
-                if let Ok(Some(metadata)) = database.provider(provider_name) {
-                    found = Some(metadata);
-                    break;
-                }
-            }
+        let rows = self.provider_versions_cached(provider_name)?;
+        let found = rows
+            .as_ref()
+            .and_then(|rows| rows.first())
+            .map(|captured| Arc::new(captured.metadata.clone()));
+        self.cache
+            .lock()
+            .map_err(|_| "provider cache lock was poisoned".to_string())?
+            .insert(key, found.clone());
+        Ok(found)
+    }
+
+    /// Selects metadata for an event by searching every captured provider/version row.
+    ///
+    /// An exact event version wins even when it lives in an older row. If the requested version is
+    /// absent, the first row defining the event is the deterministic fallback.
+    pub fn provider_for_event(
+        &self,
+        provider_name: &str,
+        event_id: u32,
+        version: Option<u32>,
+    ) -> Result<Option<Arc<ProviderMetadata>>, String> {
+        let Some(rows) = self.provider_versions_cached(provider_name)? else {
+            return Ok(None);
+        };
+        let exact = version.and_then(|version| {
+            rows.iter().find(|row| {
+                row.metadata
+                    .events
+                    .iter()
+                    .any(|event| event.id == event_id && event.version == version)
+            })
+        });
+        let selected = exact.or_else(|| {
+            rows.iter().find(|row| {
+                row.metadata
+                    .events
+                    .iter()
+                    .any(|event| event.id == event_id)
+            })
+        });
+        Ok(selected.map(|row| Arc::new(row.metadata.clone())))
+    }
+
+    fn provider_versions_cached(
+        &self,
+        provider_name: &str,
+    ) -> Result<Option<Arc<Vec<CapturedProviderMetadata>>>, String> {
+        let key = provider_name.to_ascii_lowercase();
+        if let Some(cached) = self
+            .version_cache
+            .lock()
+            .map_err(|_| "provider version cache lock was poisoned".to_string())?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
         }
 
-        let found = found.map(Arc::new);
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(key, found.clone());
+        let open = self
+            .open_databases
+            .lock()
+            .map_err(|_| "provider store lock was poisoned".to_string())?;
+        let mut rows = Vec::new();
+        for database in open.iter() {
+            rows.extend(database.provider_versions(provider_name)?);
         }
-        found
+        let found = (!rows.is_empty()).then(|| Arc::new(rows));
+        self.version_cache
+            .lock()
+            .map_err(|_| "provider version cache lock was poisoned".to_string())?
+            .insert(key, found.clone());
+        Ok(found)
     }
 
     /// Summary of every registered database.
@@ -841,8 +964,13 @@ impl ProviderStore {
             .cache
             .lock()
             .map_err(|_| "provider cache lock was poisoned".to_string())?;
+        let mut version_cache = self
+            .version_cache
+            .lock()
+            .map_err(|_| "provider version cache lock was poisoned".to_string())?;
         *open = vec![database];
         cache.clear();
+        version_cache.clear();
         self.info = vec![info.clone()];
         Ok(ProviderDbLoadOutcome {
             loaded: vec![info],
@@ -1098,9 +1226,9 @@ mod tests {
         assert_eq!(outcome.loaded.len(), 2);
         assert_eq!(outcome.failures.len(), 1);
         assert!(outcome.failures[0].path.ends_with("bad.db"));
-        assert!(store.provider("A").is_some());
-        assert!(store.provider("B").is_some());
-        assert!(store.provider("Nobody").is_none());
+        assert!(store.provider("A").expect("query").is_some());
+        assert!(store.provider("B").expect("query").is_some());
+        assert!(store.provider("Nobody").expect("query").is_none());
         assert_eq!(store.registered().len(), 2);
     }
     #[test]
@@ -1292,6 +1420,95 @@ mod tests {
     }
 
     #[test]
+    fn provider_lookup_selects_exact_event_version_across_all_provider_rows() {
+        let dir = temp_dir("event-version-lookup");
+        let path = dir.join("capture.db");
+        build_db(
+            &path,
+            &[
+                (
+                    "Multi-Version",
+                    26200,
+                    r#"[{"Id":7,"Version":0,"Description":"old-row"}]"#,
+                ),
+                (
+                    "Multi-Version",
+                    26200,
+                    r#"[{"Id":8,"Version":0,"Description":"highest-row"}]"#,
+                ),
+            ],
+        );
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("loads");
+
+        let metadata = store
+            .provider_for_event("Multi-Version", 7, Some(0))
+            .expect("lookup succeeds")
+            .expect("matching event exists");
+        assert_eq!(
+            metadata.events[0].description.as_deref(),
+            Some("old-row"),
+            "an exact event/version match must beat the highest provider row"
+        );
+    }
+
+    #[test]
+    fn provider_lookup_surfaces_corrupt_payload_errors() {
+        let dir = temp_dir("corrupt-provider");
+        let path = dir.join("capture.db");
+        build_db(&path, &[("Broken", 26200, EVENTS)]);
+        let connection = Connection::open(&path).expect("open");
+        connection
+            .execute(
+                "UPDATE ProviderDetails SET Events = ?1 WHERE ProviderName = 'Broken'",
+                [b"not gzip".as_slice()],
+            )
+            .expect("corrupt payload");
+        drop(connection);
+
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("database opens");
+        let error = store
+            .provider("Broken")
+            .expect_err("corrupt provider payload must not become a normal miss");
+        assert!(error.contains("not valid gzip"), "{error}");
+    }
+
+    #[test]
+    fn generated_parameters_preserve_unavailable_category_coverage() {
+        let dir = temp_dir("parameters-coverage");
+        let path = dir.join("capture.db");
+        let metadata = ProviderMetadata {
+            provider_name: "Coverage".to_string(),
+            unavailable_categories: ["keywords".to_string()].into_iter().collect(),
+            ..ProviderMetadata::default()
+        };
+        write_provider_database(
+            &path,
+            &[CapturedProviderMetadata {
+                metadata,
+                version_key: "version".to_string(),
+            }],
+        )
+        .expect("write");
+        let database = ProviderDb::open(&path).expect("open");
+        let parameters_blob: Vec<u8> = database
+            .connection
+            .query_row(
+                "SELECT Parameters FROM ProviderDetails WHERE ProviderName = 'Coverage'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("parameters");
+        let parameters: serde_json::Value =
+            inflate_json(&parameters_blob).expect("parameters JSON");
+        assert_eq!(
+            parameters,
+            serde_json::json!({"unavailableCategories": ["keywords"]})
+        );
+    }
+
+    #[test]
     fn exporting_a_database_preserves_the_canonical_rows() {
         let dir = temp_dir("export");
         let source = dir.join("source.db");
@@ -1338,12 +1555,33 @@ mod tests {
             vec![Some("b"), Some("a")]
         );
     }
+
     #[test]
     fn packaged_discovery_reports_the_real_artifact_prerequisite() {
         let dir = temp_dir("packaged-missing");
+        std::fs::create_dir_all(dir.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY))
+            .expect("provider resource directory");
+        std::fs::write(
+            dir.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY)
+                .join(PACKAGED_PROVIDER_MANIFEST_FILE),
+            r#"{"schemaVersion":1,"status":"unavailable","reason":"Windows capture input is not available","providerFamilies":["MDM","Autopilot","ESP","AAD","ConfigMgr client","AppX","Windows Update"]}"#,
+        )
+        .expect("manifest");
         let error = packaged_provider_directory(&dir).expect_err("no packaged artifact");
-        assert!(error.contains("real Windows-captured"));
-        assert!(error.contains("ProviderDetails"));
+        assert!(error.contains("status unavailable"), "{error}");
+        assert!(error.contains("Windows capture input is not available"), "{error}");
+        assert!(error.contains("MDM"), "{error}");
+        assert!(error.contains("ProviderDetails"), "{error}");
+    }
+
+    #[test]
+    fn checked_in_packaged_manifest_reports_unavailable_provenance() {
+        let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let error = packaged_provider_directory(&resource_dir)
+            .expect_err("the repository has no truthful Windows provider capture");
+        assert!(error.contains("status unavailable"), "{error}");
+        assert!(error.contains("fabricate"), "{error}");
+        assert!(error.contains("MDM"), "{error}");
     }
 }
 

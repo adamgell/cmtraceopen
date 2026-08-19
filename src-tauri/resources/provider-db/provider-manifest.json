@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "unavailable",
+  "reason": "No Windows-captured EventLogExpert ProviderDetails database is available in this repository; generating one on macOS would fabricate provider provenance.",
+  "providerFamilies": [
+    "MDM",
+    "Autopilot",
+    "ESP",
+    "AAD",
+    "ConfigMgr client",
+    "AppX",
+    "Windows Update"
+  ]
+}
