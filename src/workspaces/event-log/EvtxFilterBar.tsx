@@ -198,8 +198,16 @@ export function EvtxFilterBar() {
   // differ from the view.
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
     const state = useEvtxStore.getState();
+    const visibleColumns = state.columnConfig.order;
+    const nowEpoch = Date.now();
     const records = sortRecords(
-      selectVisibleRecords(state),
+      selectVisibleRecords({
+        ...state,
+        timeWindow: state.timeWindow,
+        visibleColumns,
+        timeZoneMode: state.timeZoneMode,
+        nowEpoch,
+      }),
       state.sortField,
       state.sortDirection
     );
