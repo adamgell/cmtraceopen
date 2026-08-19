@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   associateLogFilesWithApp,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
 import { tokens } from "@fluentui/react-components";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
@@ -24,6 +25,13 @@ export function FileAssociationPromptDialog({
 }: FileAssociationPromptDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(
+    isOpen,
+    dialogRef,
+    undefined,
+    isSubmitting ? "submitting" : "idle",
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -95,6 +103,11 @@ export function FileAssociationPromptDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Associate log files with CMTrace Open?"
+        tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

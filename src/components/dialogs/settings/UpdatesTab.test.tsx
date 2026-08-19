@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getVersion } from "@tauri-apps/api/app";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getUpdatePolicy } from "../../../lib/commands";
@@ -69,5 +69,20 @@ describe("UpdatesTab", () => {
     expect(
       screen.getByText("Update checks are disabled by managed policy on this device.")
     ).toBeVisible();
+  });
+
+  it("shows the channel badge and clears a skipped version", async () => {
+    localStorage.setItem("cmtraceopen-skipped-update-version", "1.3.2");
+
+    render(<UpdatesTab />);
+
+    expect(await screen.findByText("Main channel")).toBeVisible();
+    expect(screen.getByText("v1.3.2 is being skipped")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+    expect(localStorage.getItem("cmtraceopen-skipped-update-version")).toBeNull();
+    expect(screen.queryByText("v1.3.2 is being skipped")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
   });
 });

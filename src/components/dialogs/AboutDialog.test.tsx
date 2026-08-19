@@ -24,6 +24,14 @@ describe("AboutDialog", () => {
     getVersionMock.mockResolvedValue("1.3.2");
   });
 
+  it("exposes a dialog landmark", async () => {
+    render(<AboutDialog isOpen onClose={() => {}} />);
+
+    const dialog = await screen.findByRole("dialog", { name: "About CMTrace Open" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(await screen.findByText("CMTrace Open")).toBeVisible();
+  });
+
   it("shows main channel app metadata", async () => {
     render(<AboutDialog isOpen onClose={() => {}} />);
 

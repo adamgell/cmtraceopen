@@ -180,6 +180,7 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
+  dismissedDnsBannerPaths: string[];
   recentSessions: string[];
   graphApiEnabled: boolean;
   graphApiStatus: GraphApiPhase;
@@ -249,6 +250,7 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
+  dismissDnsBannerPath: (path: string) => void;
   addRecentSession: (path: string) => void;
   clearRecentSessions: () => void;
   setGraphApiEnabled: (enabled: boolean) => void;
@@ -270,6 +272,16 @@ const sanitizePersistedUiState = (
   delete sanitized.graphApiStatus;
   delete sanitized.graphApiCapability;
   delete sanitized.graphApiLastAttempt;
+
+  if (sanitized.dismissedDnsBannerPaths !== undefined) {
+    sanitized.dismissedDnsBannerPaths = Array.isArray(
+      sanitized.dismissedDnsBannerPaths
+    )
+      ? sanitized.dismissedDnsBannerPaths.filter(
+          (path): path is string => typeof path === "string"
+        )
+      : [];
+  }
 
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
@@ -344,6 +356,7 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
+      dismissedDnsBannerPaths: [],
       recentSessions: [],
       graphApiEnabled: false,
       graphApiStatus: "disconnected",
@@ -639,6 +652,12 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+      dismissDnsBannerPath: (path) =>
+        set((state) => ({
+          dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)
+            ? state.dismissedDnsBannerPaths
+            : [...state.dismissedDnsBannerPaths, path],
+        })),
       addRecentSession: (path) =>
         set((state) => {
           const filtered = state.recentSessions.filter((p) => p !== path);
@@ -664,6 +683,7 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         alwaysOnTop: state.alwaysOnTop,
+        dismissedDnsBannerPaths: state.dismissedDnsBannerPaths,
         graphApiEnabled: state.graphApiEnabled,
         recentSessions: state.recentSessions,
       }),

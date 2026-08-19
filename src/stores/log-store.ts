@@ -596,6 +596,8 @@ interface LogState {
   activeColumns: ColumnId[];
   /** Folder loading progress (0–1) while progressive loading is active, null otherwise. */
   folderLoadProgress: number | null;
+  /** Request generation that owns parse-progress events for the active batch. */
+  folderLoadRequestId: number | null;
   /** Name of the file currently being parsed during folder loading. */
   folderLoadCurrentFile: string | null;
   /** Total file count in the current folder load. */
@@ -659,6 +661,7 @@ interface LogState {
   clearFind: () => void;
   clearActiveFile: () => void;
   clear: () => void;
+  setFolderLoadRequestId: (requestId: number | null) => void;
   setFolderLoadProgress: (progress: {
     current: number;
     total: number;
@@ -791,6 +794,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   findCurrentIndex: -1,
   byteOffset: 0,
   folderLoadProgress: null,
+  folderLoadRequestId: null,
   folderLoadCurrentFile: null,
   folderLoadTotalFiles: null,
   folderLoadCompletedFiles: null,
@@ -1178,6 +1182,11 @@ export const useLogStore = create<LogState>((set, get) => ({
         message: "Ready",
       },
       byteOffset: 0,
+      folderLoadProgress: null,
+      folderLoadRequestId: null,
+      folderLoadCurrentFile: null,
+      folderLoadTotalFiles: null,
+      folderLoadCompletedFiles: null,
       guidNameMap: {},
       mergedTabState: null,
       correlatedEntries: [],
@@ -1187,6 +1196,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       findRegexError: null,
       pendingScrollTarget: null,
     }),
+  setFolderLoadRequestId: (requestId) => set({ folderLoadRequestId: requestId }),
   setFolderLoadProgress: (progress) =>
     set(
       progress
@@ -1201,6 +1211,7 @@ export const useLogStore = create<LogState>((set, get) => ({
             folderLoadCurrentFile: null,
             folderLoadTotalFiles: null,
             folderLoadCompletedFiles: null,
+            folderLoadRequestId: null,
           }
     ),
   setPendingScrollTarget: (target) => set({ pendingScrollTarget: target }),
