@@ -54,6 +54,7 @@ import type {
   SccmAdvancedCaptureCapability,
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
+import type { Marker, MarkerCategory, MarkerFile } from "../types/markers";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -292,6 +293,113 @@ async function invokeCommand<T>(
     throw normalizeCommandInvokeError(commandName, error);
   }
 }
+function isMarkerObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isMarkerString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isMarkerTimestamp(value: unknown): value is string {
+  if (!isMarkerString(value)) return false;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      value
+    );
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day &&
+    calendar.getUTCHours() === hour &&
+    calendar.getUTCMinutes() === minute &&
+    calendar.getUTCSeconds() === second &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function decodeMarker(value: unknown): Marker {
+  if (
+    !isMarkerObject(value) ||
+    typeof value.lineId !== "number" ||
+    !Number.isSafeInteger(value.lineId) ||
+    value.lineId < 0 ||
+    !isMarkerString(value.category) ||
+    !isMarkerString(value.color) ||
+    !isMarkerTimestamp(value.added)
+  ) {
+    throw new Error("load_markers returned an invalid marker");
+  }
+  return {
+    lineId: value.lineId,
+    category: value.category,
+    color: value.color,
+    added: value.added,
+  };
+}
+
+function decodeMarkerCategory(value: unknown): MarkerCategory {
+  if (
+    !isMarkerObject(value) ||
+    !isMarkerString(value.id) ||
+    !isMarkerString(value.label) ||
+    !isMarkerString(value.color)
+  ) {
+    throw new Error("load_markers returned an invalid marker category");
+  }
+  return {
+    id: value.id,
+    label: value.label,
+    color: value.color,
+  };
+}
+
+function decodeMarkerFile(value: unknown): MarkerFile | null {
+  if (value === null) return null;
+  if (
+    !isMarkerObject(value) ||
+    typeof value.version !== "number" ||
+    !Number.isFinite(value.version) ||
+    !Number.isInteger(value.version) ||
+    !isMarkerString(value.sourcePath) ||
+    typeof value.sourceSize !== "number" ||
+    !Number.isSafeInteger(value.sourceSize) ||
+    value.sourceSize < 0 ||
+    !isMarkerTimestamp(value.created) ||
+    !isMarkerTimestamp(value.modified) ||
+    !Array.isArray(value.markers) ||
+    !Array.isArray(value.categories)
+  ) {
+    throw new Error("load_markers returned an invalid marker file");
+  }
+  const markers = value.markers.map(decodeMarker);
+  const categories = value.categories.map(decodeMarkerCategory);
+  return {
+    version: value.version,
+    sourcePath: value.sourcePath,
+    sourceSize: value.sourceSize,
+    created: value.created,
+    modified: value.modified,
+    markers,
+    categories,
+  };
+}
+
+export async function loadMarkerFile(filePath: string): Promise<MarkerFile | null> {
+  return decodeMarkerFile(await invokeCommand<unknown>("load_markers", { filePath }));
+}
+
 
 export async function openLogFile(path: string): Promise<ParseResult> {
   return invokeCommand<ParseResult>("open_log_file", { path });

@@ -89,10 +89,13 @@ export function SourcePicker() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
+    } finally {
+      finishOpening();
     }
   };
 
   const handleRemoteEnumerate = async () => {
+    if (!beginOpening()) return;
     setLocalError(null);
     try {
       await enumerateRemoteChannels(remoteTarget);
@@ -152,7 +155,12 @@ export function SourcePicker() {
           >
             Open .evtx files...
           </Button>
-          <Button appearance="secondary" disabled={isOpening} onClick={() => void handleOpenFolder()}>
+          <Button
+            appearance="secondary"
+            disabled={isOpening}
+            onClick={() => void handleOpenFolder()}
+            style={{ fontSize: `${secondaryFontSize}px` }}
+          >
             Open folder recursively...
           </Button>
           {isWindows && (
@@ -186,19 +194,21 @@ export function SourcePicker() {
                 setRemoteTarget(data.value);
               }}
               aria-label="Remote computer name"
+              input={{ style: { fontSize: `${secondaryFontSize}px` } }}
               style={{ flex: 1 }}
             />
             <Button
               appearance="secondary"
-              disabled={!remoteTarget.trim()}
+              disabled={isOpening || !remoteTarget.trim()}
               onClick={() => void handleRemoteEnumerate()}
+              style={{ fontSize: `${secondaryFontSize}px` }}
             >
               Remote computer
             </Button>
           </div>
           <div
             style={{
-              fontSize: "11px",
+              fontSize: `${secondaryFontSize}px`,
               color: tokens.colorNeutralForeground3,
               textAlign: "center",
             }}
@@ -225,7 +235,7 @@ export function SourcePicker() {
       {displayCoverage && (
         <div
           style={{
-            fontSize: "12px",
+            fontSize: `${secondaryFontSize}px`,
             color: tokens.colorPaletteYellowForeground1,
             maxWidth: "500px",
             textAlign: "center",

@@ -99,6 +99,10 @@ export interface EvtxTimelineRowProps {
   quickFilterMatch?: boolean;
   onTag?: (record: EvtxRecord) => void;
   onBookmark?: (record: EvtxRecord) => void;
+  grouped?: boolean;
+  depth?: number;
+  tabIndex?: number;
+  onFocus?: () => void;
 }
 
 export const EvtxTimelineRow = memo(
@@ -120,6 +124,10 @@ export const EvtxTimelineRow = memo(
       quickFilterMatch = false,
       onTag,
       onBookmark,
+      grouped = false,
+      depth = 0,
+      tabIndex = 0,
+      onFocus,
     },
     ref
   ) {
@@ -140,9 +148,7 @@ export const EvtxTimelineRow = memo(
       marker ? `Tagged ${marker.category}` : null,
       bookmark ? "Bookmarked" : null,
       highlightEnabled ? "Quick-filter match" : null,
-      `${record.level} severity`,
     ].filter(Boolean).join("; ");
-
     return (
       <div
         data-index={dataIndex}
@@ -151,10 +157,12 @@ export const EvtxTimelineRow = memo(
         data-marker-category={marker?.category}
         ref={ref}
         onClick={() => onSelect(isSelected ? null : record.id)}
-        role="option"
+        onFocus={onFocus}
+        role={grouped ? "treeitem" : "option"}
+        aria-level={grouped ? depth + 1 : undefined}
         aria-selected={isSelected}
         aria-description={ariaDescription}
-        tabIndex={0}
+        tabIndex={tabIndex}
         onKeyDown={(e) => {
           if (e.target instanceof HTMLButtonElement) return;
           if (e.key === "Enter" || e.key === " ") {
@@ -199,6 +207,7 @@ export const EvtxTimelineRow = memo(
         >
           <button
             type="button"
+            tabIndex={grouped ? -1 : undefined}
             aria-label={marker && !bookmark ? "Remove event tag" : "Tag event"}
             aria-pressed={Boolean(marker && !bookmark)}
             title={marker && !bookmark ? `Remove ${marker.category} tag` : "Tag event"}
@@ -221,6 +230,7 @@ export const EvtxTimelineRow = memo(
           </button>
           <button
             type="button"
+            tabIndex={grouped ? -1 : undefined}
             aria-label={bookmark ? "Remove bookmark" : "Bookmark event"}
             aria-pressed={bookmark}
             title={bookmark ? "Remove bookmark" : "Bookmark event"}

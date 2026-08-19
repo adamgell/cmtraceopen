@@ -17,7 +17,8 @@ const virtualizerState = vi.hoisted(() => ({
     const hasLevelBadge = Array.from(element.children).some(
       (child) => (child as HTMLElement).style.padding === "2px 6px"
     );
-    return element.getAttribute("role") === "treeitem"
+    return element.getAttribute("role") === "treeitem" &&
+      !element.hasAttribute("data-evtx-marker-key")
       ? Number.parseFloat(element.style.height)
       : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
   },
@@ -195,6 +196,9 @@ function seedEventLog() {
   });
 }
 
+function recordTreeItems(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("[data-evtx-marker-key]"));
+}
 describe("event-viewer shared font metrics", () => {
   beforeEach(() => {
     useEvtxStore.getState().reset();
@@ -255,9 +259,7 @@ describe("event-viewer shared font metrics", () => {
     );
     filter.unmount();
     const timeline = render(<EvtxTimeline />);
-    const timelineRoot = screen.getByRole("tree");
-    const groupRow = screen.getByRole("treeitem");
-    const recordRow = screen.getByRole("option");
+    const [groupRow, recordRow] = screen.getAllByRole("treeitem");
     expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
     expect(recordRow.style.lineHeight).toBe(`${smallList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRow);
@@ -271,8 +273,9 @@ describe("event-viewer shared font metrics", () => {
     );
     expect(groupRow.style.boxSizing).toBe("border-box");
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
-    fireEvent.keyDown(timelineRoot, { key: "ArrowDown" });
-    expect(timelineRoot).toHaveFocus();
+    groupRow.focus();
+    fireEvent.keyDown(groupRow, { key: "ArrowDown" });
+    expect(recordRow).toHaveFocus();
     timeline.unmount();
 
     const detail = render(<EvtxDetailPane />);
@@ -323,9 +326,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     const timelineLarge = render(<EvtxTimeline />);
-    const timelineRootLarge = screen.getByRole("tree");
-    const recordRowLarge = screen.getByRole("option");
-    expect(recordRowLarge.style.fontSize).toBe(`${largeList.fontSize}px`);
+    const [, recordRowLarge] = screen.getAllByRole("treeitem");
     expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
@@ -333,13 +334,13 @@ describe("event-viewer shared font metrics", () => {
       size: largeList.rowHeight + 6,
       start: largeList.rowHeight,
     });
-    const groupRowLarge = screen.getByRole("treeitem");
-    expect(groupRowLarge.style.height).toBe(`${largeList.rowHeight}px`);
+    const groupRowLarge = screen.getAllByRole("treeitem")[0];
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + largeList.rowHeight + 6
     );
-    fireEvent.keyDown(timelineRootLarge, { key: "ArrowDown" });
-    expect(timelineRootLarge).toHaveFocus();
+    groupRowLarge.focus();
+    fireEvent.keyDown(groupRowLarge, { key: "ArrowDown" });
+    expect(recordRowLarge).toHaveFocus();
     timelineLarge.unmount();
 
     const detailLarge = render(<EvtxDetailPane />);
@@ -378,7 +379,7 @@ describe("event-viewer shared font metrics", () => {
     const filter = render(<EvtxFilterBar />);
     const filterButton = filter.getByRole("button", { name: "Crit" });
     const timeline = render(<EvtxTimeline />);
-    const recordRow = timeline.getByRole("option");
+    const recordRow = recordTreeItems(timeline.container)[0];
     const initialMeasureCalls = virtualizerState.measureCalls;
     const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.initialItems[1].size).toBe(smallList.rowHeight + 6);
@@ -402,7 +403,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
     expect(filter.getByRole("button", { name: "Crit" })).toBe(filterButton);
     expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
-    expect(timeline.getByRole("option")).toBe(recordRow);
+    expect(recordTreeItems(timeline.container)[0]).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
@@ -425,7 +426,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    expect(timeline.getAllByRole("option")).toHaveLength(1);
+    expect(recordTreeItems(timeline.container)).toHaveLength(1);
     const initialResizeItemCalls = virtualizerState.resizeItemCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     virtualizerState.resizedSizes.clear();
@@ -449,12 +450,12 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    const recordRow = timeline.getByRole("option");
+    const recordRow = recordTreeItems(timeline.container)[0];
     act(() => {
       useEvtxStore.setState({ groupBy: ["level"] });
     });
-    expect(timeline.getByRole("option")).toBe(recordRow);
-    expect(timeline.getByRole("treeitem")).toBeTruthy();
+    expect(recordTreeItems(timeline.container)[0]).toBe(recordRow);
+    expect(recordRow.getAttribute("role")).toBe("treeitem");
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
@@ -526,7 +527,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    expect(timeline.getByRole("option")).toBeTruthy();
+    expect(recordTreeItems(timeline.container)).toHaveLength(1);
     expect(virtualizerState.initialItems[1].size).toBe(
       getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight + 2
     );

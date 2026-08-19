@@ -1242,6 +1242,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (state.sourceMode !== "live") return [];
     const channels = [...state.loadedChannels];
     if (channels.length === 0) return [];
+    set({ tailCoverageGaps: [] });
 
     const sourceRequestId = activeRequestId;
     const filterSnapshot = snapshotFilterInputs(
@@ -1304,12 +1305,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     );
     activeTailChannels = currentTailChannels;
     pendingTailStarts.delete(requestId);
-    set({
+    set((current) => ({
       tailMode: aggregateTailMode(modes),
       tailRequestId: requestId,
       tailChannels: new Set(currentTailChannels),
-      tailCoverageGaps: mergeCoverageGaps([], gaps),
-    });
+      tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, gaps),
+    }));
     return statuses;
   },
   stopLiveTail: async () => {

@@ -177,14 +177,27 @@ pub struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
-    /// Finds the definition for `event_id`, preferring an exact `version` match.
+    /// Finds the definition for `event_id`, preferring an exact `version` match and channel match.
     ///
-    /// Providers legitimately define several versions of one ID. Picking the wrong one renders a
-    /// description whose insertion points do not line up with the event's fields, which reads as
-    /// plausible but wrong text, so the exact version wins and the highest known version is only a
+    /// Providers legitimately define several versions of one ID and can reuse that ID on
+    /// different channels. Picking a definition from a sibling channel renders a description whose
+    /// insertion points do not line up with the event's fields, which reads as plausible but wrong
+    /// text, so channel and exact version matches win and the highest known version is only a
     /// fallback.
-    pub fn event(&self, event_id: u32, version: Option<u32>) -> Option<&ProviderEvent> {
-        let candidates = self.events.iter().filter(|event| event.id == event_id);
+    pub fn event(
+        &self,
+        event_id: u32,
+        version: Option<u32>,
+        log_name: Option<&str>,
+    ) -> Option<&ProviderEvent> {
+        let candidates = self.events.iter().filter(|event| {
+            event.id == event_id
+                && match (event.log_name.as_deref(), log_name) {
+                    (Some(expected), Some(actual)) => expected.eq_ignore_ascii_case(actual),
+                    (Some(_), None) => false,
+                    (None, _) => true,
+                }
+        });
         if let Some(version) = version {
             if let Some(exact) = candidates.clone().find(|event| event.version == version) {
                 return Some(exact);
@@ -200,9 +213,10 @@ impl ProviderMetadata {
         &self,
         event_id: u32,
         version: Option<u32>,
+        log_name: Option<&str>,
         insertions: &[String],
     ) -> Option<RenderedDescription> {
-        let template = self.event(event_id, version)?.description.as_deref()?;
+        let template = self.event(event_id, version, log_name)?.description.as_deref()?;
         Some(render_description(template, insertions))
     }
 
@@ -417,7 +431,7 @@ mod tests {
     #[test]
     fn captured_metadata_renders_the_requested_event_version_without_registry() {
         let rendered = metadata()
-            .render_event_description(100, Some(0), &insertions(&["portable"]))
+            .render_event_description(100, Some(0), None, &insertions(&["portable"]))
             .expect("event description");
         assert_eq!(rendered.text, "v0 portable");
         assert!(rendered.is_complete());
@@ -427,7 +441,7 @@ mod tests {
     fn an_exact_version_match_wins() {
         let meta = metadata();
         assert_eq!(
-            meta.event(100, Some(0))
+            meta.event(100, Some(0), None)
                 .and_then(|e| e.description.as_deref()),
             Some("v0 %1")
         );
@@ -439,19 +453,56 @@ mod tests {
         // the exact version is available.
         let meta = metadata();
         assert_eq!(
-            meta.event(100, Some(7))
+            meta.event(100, Some(7), None)
                 .and_then(|e| e.description.as_deref()),
             Some("v1 %1")
         );
         assert_eq!(
-            meta.event(100, None).and_then(|e| e.description.as_deref()),
+            meta.event(100, None, None)
+                .and_then(|e| e.description.as_deref()),
             Some("v1 %1")
         );
     }
 
     #[test]
     fn an_unknown_event_id_resolves_to_nothing() {
-        assert!(metadata().event(999, None).is_none());
+        assert!(metadata().event(999, None, None).is_none());
+    }
+
+    #[test]
+    fn event_lookup_requires_the_captured_channel() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 42,
+                    version: 0,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 42,
+                    version: 0,
+                    log_name: Some("Provider/Operational".into()),
+                    description: Some("operational".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(42, Some(0), Some("Provider/Admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin")
+        );
+        assert_eq!(
+            metadata
+                .event(42, Some(0), Some("Provider/Operational"))
+                .and_then(|event| event.description.as_deref()),
+            Some("operational")
+        );
+        assert!(metadata.event(42, Some(0), Some("Provider/Debug")).is_none());
     }
 
     #[test]

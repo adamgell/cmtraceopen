@@ -486,8 +486,10 @@ fn quick_filter_matches(
     visible_columns: Option<&[String]>,
 ) -> bool {
     let query = quick_filter.query.trim();
+    // GUI quick-filter controls are always serialized, including their inactive empty default.
+    // An empty query must leave the record set unchanged rather than becoming a no-match filter.
     if query.is_empty() {
-        return false;
+        return true;
     }
     if quick_filter.mode == "eventIds" {
         let selectors = parse_event_id_selectors(query).unwrap_or_default();

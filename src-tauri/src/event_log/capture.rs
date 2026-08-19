@@ -16,13 +16,15 @@ static CAPTURE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(())
 use super::models::ProviderCaptureFailure;
 #[cfg(any(target_os = "windows", test))]
 fn is_unavailable_message_error(code: u32) -> bool {
-    matches!(code, 15027 | 15028 | 15029 | 15030 | 15033)
+    matches!(code, 15007 | 15027 | 15028 | 15029 | 15030 | 15033)
 }
 #[cfg(any(target_os = "windows", test))]
 fn is_unavailable_provider_error(message: &str) -> bool {
     message.contains("0x80070002")
         || message.contains("0x80070715")
+        || message.contains("0x80073AAF")
         || message.contains("0x80073B01")
+        || message.contains("code 15007")
         || message.contains("code 1813")
 }
 
@@ -272,6 +274,12 @@ mod windows_capture {
     fn write_i64(output: &mut Vec<u8>, value: i64) {
         output.extend_from_slice(&value.to_le_bytes());
     }
+    fn write_optional_i64(output: &mut Vec<u8>, value: Option<u32>) {
+        match value {
+            Some(value) => write_i64(output, i64::from(value)),
+            None => write_i64(output, -1),
+        }
+    }
     fn write_levels_map(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
         if map.is_empty() {
             write_i32(output, 0);
@@ -498,6 +506,14 @@ mod windows_capture {
         // ProviderName and source provenance identify the database row, not rendered content.
         // The current parser model has no owning-publisher field, so it is the canonical null.
         write_string(&mut encoded, None);
+        write_optional_i64(&mut encoded, metadata.source_os_build);
+        write_i32(
+            &mut encoded,
+            i32::try_from(metadata.unavailable_categories.len()).unwrap_or(i32::MAX),
+        );
+        for category in &metadata.unavailable_categories {
+            write_string(&mut encoded, Some(category));
+        }
         write_sorted_blobs(
             &mut encoded,
             metadata.events.iter().map(encode_event).collect(),
@@ -535,8 +551,6 @@ mod windows_capture {
         map.entry(key.to_string()).or_insert(value);
     }
     fn keyword_bits(mask: u64) -> Vec<u64> {
-        const RESERVED_BITS: u64 = 0xFFFF_0000_0000_0000;
-        let mut mask = mask & !RESERVED_BITS;
         let mut bits = Vec::new();
         while mask != 0 {
             let bit = 1u64 << (u64::BITS - 1 - mask.leading_zeros());
@@ -1257,9 +1271,31 @@ mod windows_tests {
     }
 
     #[test]
-    fn event_keyword_masks_ignore_reserved_upper_sixteen_bits() {
-        assert_eq!(keyword_bits(0xFFFF_0000_0000_0005), vec![4, 1]);
-        assert!(keyword_bits(0xFFFF_0000_0000_0000).is_empty());
+    fn event_keyword_masks_preserve_all_captured_bits() {
+        assert_eq!(
+            keyword_bits(0xFFFF_0000_0000_0005),
+            vec![
+                0x8000_0000_0000_0000,
+                0x4000_0000_0000_0000,
+                0x2000_0000_0000_0000,
+                0x1000_0000_0000_0000,
+                0x0800_0000_0000_0000,
+                0x0400_0000_0000_0000,
+                0x0200_0000_0000_0000,
+                0x0100_0000_0000_0000,
+                0x0080_0000_0000_0000,
+                0x0040_0000_0000_0000,
+                0x0020_0000_0000_0000,
+                0x0010_0000_0000_0000,
+                0x0008_0000_0000_0000,
+                0x0004_0000_0000_0000,
+                0x0002_0000_0000_0000,
+                0x0001_0000_0000_0000,
+                4,
+                1,
+            ]
+        );
+        assert_eq!(keyword_bits(0xFFFF_0000_0000_0000).len(), 16);
     }
 
     #[test]
@@ -1304,14 +1340,28 @@ mod windows_tests {
         reordered.provider_name = "provider-b".to_string();
         reordered.events.reverse();
         reordered.events[1].keywords.reverse();
-        let mut changed = reordered.clone();
-        changed.events[0].description = Some("changed".to_string());
         assert_eq!(canonical_version_key(&first), canonical_version_key(&reordered));
+        let mut changed = first.clone();
+        changed.events[0].description = Some("different".to_string());
         assert_ne!(canonical_version_key(&first), canonical_version_key(&changed));
+        let mut changed_build = first.clone();
+        changed_build.source_os_build = Some(26200);
+        assert_ne!(canonical_version_key(&first), canonical_version_key(&changed_build));
+        let mut changed_categories = first.clone();
+        changed_categories
+            .unavailable_categories
+            .insert("keywords".to_string());
+        assert_ne!(
+            canonical_version_key(&first),
+            canonical_version_key(&changed_categories)
+        );
     }
     #[test]
     fn event_keyword_masks_expand_to_declared_bits() {
-        assert_eq!(keyword_bits(0xFFFF_0000_0000_0005), vec![4, 1]);
+        assert_eq!(
+            keyword_bits(0x8001_0000_0000_0005),
+            vec![0x8000_0000_0000_0000, 0x0001_0000_0000_0000, 4, 1]
+        );
         assert!(keyword_bits(0).is_empty());
     }
 
@@ -1414,7 +1464,7 @@ mod tests {
 
     #[test]
     fn unresolved_message_errors_are_unavailable_but_resource_errors_are_not() {
-        for code in [15027, 15028, 15029, 15030, 15033] {
+        for code in [15007, 15027, 15028, 15029, 15030, 15033] {
             assert!(is_unavailable_message_error(code), "code {code}");
         }
         for code in [2, 1813, 15031, 15032] {
@@ -1429,6 +1479,9 @@ mod tests {
         ));
         assert!(is_unavailable_provider_error(
             "property 5 query failed (code 1813): resource type is unavailable"
+        ));
+        assert!(is_unavailable_provider_error(
+            "publisher metadata unavailable (0x80073AAF)"
         ));
         assert!(is_unavailable_provider_error(
             "message query failed: MUI entry is missing (0x80073B01)"

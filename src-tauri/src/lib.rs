@@ -200,6 +200,66 @@ pub fn run() {
                     &commands::app_config::get_available_workspaces(),
                 ));
             }
+            #[cfg(feature = "event-log")]
+            {
+                use tauri::Manager as _;
+
+                // Packaged provider coverage is optional: the manifest is allowed to explain that
+                // no real Windows capture was available. Never replace the active empty store
+                // unless a validated, real database directory loads successfully.
+                match app
+                    .path()
+                    .resource_dir()
+                    .map_err(|error| format!("cannot locate packaged resources: {error}"))
+                    .and_then(|resource_dir| {
+                        event_log::provider_db::packaged_provider_directory(&resource_dir)
+                    }) {
+                    Ok(directory) => {
+                        let mut loaded = event_log::provider_db::ProviderStore::default();
+                        match loaded.load_directory(&directory) {
+                            Ok(outcome) if !outcome.loaded.is_empty() => {
+                                {
+                                    let state = app.state::<AppState>();
+                                    let write_result = state.provider_store.write();
+                                    match write_result {
+                                        Ok(mut store) => {
+                                            *store = loaded;
+                                            log::info!(
+                                                "event=packaged_provider_databases_loaded count={}",
+                                                outcome.loaded.len()
+                                            );
+                                        }
+                                        Err(_) => {
+                                            log::warn!(
+                                                "event=packaged_provider_databases_unavailable \
+                                                 reason=\"provider store lock was poisoned during startup\""
+                                            );
+                                        }
+                                    }
+                                };
+                            }
+                            Ok(outcome) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable \
+                                     reason=\"packaged directory contained no valid provider databases \
+                                     ({} failures)\"",
+                                    outcome.failures.len()
+                                );
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable directory=\"{}\" error=\"{}\"",
+                                    directory.display(),
+                                    error
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::info!("event=packaged_provider_databases_skipped reason=\"{}\"", error);
+                    }
+                }
+            }
 
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;

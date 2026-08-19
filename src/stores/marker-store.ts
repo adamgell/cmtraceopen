@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { loadMarkerFile } from "../lib/commands";
 import {
   type Marker,
   type MarkerCategory,
@@ -18,6 +19,8 @@ interface MarkerState {
   activeCategory: string;
   /** File paths currently being loaded from the backend. */
   loadingFiles: Set<string>;
+  /** Per-file tombstones prevent in-flight loads from resurrecting a cleared file. */
+  clearRevisions: Map<string, number>;
   /** Preserved `created` timestamps per file path (from loaded marker files). */
   createdTimestamps: Map<string, string>;
 
@@ -39,6 +42,32 @@ interface MarkerState {
   getMarkersForFile: (filePath: string) => Map<number, Marker>;
   getMarkedLineIds: (filePath: string, category?: string) => number[];
 }
+function markersEqual(left: Marker | undefined, right: Marker | undefined): boolean {
+  return (
+    left?.lineId === right?.lineId &&
+    left?.category === right?.category &&
+    left?.color === right?.color &&
+    left?.added === right?.added
+  );
+}
+
+
+export function mergeLoadedFileMarkers(
+  loaded: Map<number, Marker>,
+  initial: ReadonlyMap<number, Marker>,
+  current: ReadonlyMap<number, Marker> | undefined
+): Map<number, Marker> {
+  const merged = new Map(loaded);
+  const ids = new Set([...initial.keys(), ...(current?.keys() ?? [])]);
+  for (const lineId of ids) {
+    const before = initial.get(lineId);
+    const after = current?.get(lineId);
+    if (markersEqual(before, after)) continue;
+    if (after) merged.set(lineId, after);
+    else merged.delete(lineId);
+  }
+  return merged;
+}
 
 // ── Store implementation ──────────────────────────────────────────────────────
 
@@ -47,63 +76,73 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
   categories: [...DEFAULT_CATEGORIES],
   activeCategory: "bug",
   loadingFiles: new Set(),
+  clearRevisions: new Map(),
   createdTimestamps: new Map(),
 
   // ── loadMarkers ─────────────────────────────────────────────────────────
-
   loadMarkers: async (filePath) => {
-    const { loadingFiles, markersByFile } = get();
+    const { loadingFiles, markersByFile, clearRevisions, categories } = get();
 
     // Guard against duplicate in-flight loads.
     if (loadingFiles.has(filePath)) {
       return;
     }
+    // Edits made after this snapshot but before the backend responds must win over stale disk
+    // state, including edits made when the file had no map yet.
+    const initialFileMap = new Map(markersByFile.get(filePath) ?? []);
+    const initialCategories = [...categories];
+    const clearRevision = clearRevisions.get(filePath) ?? 0;
 
     set((state) => ({
       loadingFiles: new Set([...state.loadingFiles, filePath]),
     }));
 
     try {
-      const result = await invoke<MarkerFile | null>("load_markers", { filePath });
-
+      const result = await loadMarkerFile(filePath);
+      const loadedFileMap = new Map<number, Marker>();
       if (result) {
-        const fileMap = new Map<number, Marker>();
         for (const marker of result.markers) {
-          fileMap.set(marker.lineId, marker);
-        }
-
-        set((state) => {
-          const next = new Map(state.markersByFile);
-          next.set(filePath, fileMap);
-
-          // Preserve the original created timestamp for later saves
-          const nextCreated = new Map(state.createdTimestamps);
-          if (result.created) {
-            nextCreated.set(filePath, result.created);
-          }
-
-          // Restore saved categories if the file provided them
-          const nextCategories =
-            result.categories && result.categories.length > 0
-              ? result.categories
-              : state.categories;
-
-          return {
-            markersByFile: next,
-            createdTimestamps: nextCreated,
-            categories: nextCategories,
-          };
-        });
-      } else {
-        // Ensure the file has an empty map so callers can safely query it.
-        if (!markersByFile.has(filePath)) {
-          set((state) => {
-            const next = new Map(state.markersByFile);
-            next.set(filePath, new Map());
-            return { markersByFile: next };
-          });
+          loadedFileMap.set(marker.lineId, marker);
         }
       }
+
+      set((state) => {
+        if ((state.clearRevisions.get(filePath) ?? 0) !== clearRevision) {
+          return {};
+        }
+        const next = new Map(state.markersByFile);
+        next.set(
+          filePath,
+          mergeLoadedFileMarkers(
+            loadedFileMap,
+            initialFileMap,
+            state.markersByFile.get(filePath)
+          )
+        );
+
+        // Preserve the original created timestamp for later saves.
+        const nextCreated = new Map(state.createdTimestamps);
+        if (result?.created) {
+          nextCreated.set(filePath, result.created);
+        }
+        // Restore saved categories while preserving categories added during the load.
+        const nextCategories = (() => {
+          if (!result?.categories || result.categories.length === 0) return state.categories;
+          const loadedIds = new Set(result.categories.map((category) => category.id));
+          const addedDuringLoad = state.categories.filter(
+            (category) =>
+              !initialCategories.some((initial) => initial.id === category.id) &&
+              !loadedIds.has(category.id)
+          );
+          return [...result.categories, ...addedDuringLoad];
+        })();
+
+        return {
+          markersByFile: next,
+          createdTimestamps: nextCreated,
+          categories: nextCategories,
+        };
+      });
     } catch (err) {
       console.error("[marker-store] loadMarkers failed", { filePath, err });
     } finally {
@@ -219,7 +258,9 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
     set((state) => {
       const next = new Map(state.markersByFile);
       next.delete(filePath);
-      return { markersByFile: next };
+      const clearRevisions = new Map(state.clearRevisions);
+      clearRevisions.set(filePath, (clearRevisions.get(filePath) ?? 0) + 1);
+      return { markersByFile: next, clearRevisions };
     });
   },
 

@@ -19,6 +19,11 @@ const MAX_DETAIL_RATIO = 0.7;
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -41,6 +46,7 @@ export function EventLogWorkspace() {
         records,
         selectedChannels,
         filterLevels,
+        nowEpoch,
         filterEventIds,
         filterSearch,
         quickFilter,
@@ -58,6 +64,7 @@ export function EventLogWorkspace() {
       columnOrder,
       timeZoneMode,
       timeWindow,
+      nowEpoch,
     ]
   );
   const channels = useEvtxStore((s) => s.channels);
@@ -207,7 +214,7 @@ export function EventLogWorkspace() {
             <UnifiedTimelineView timeline={visibleTimeline} />
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <EvtxTimeline />
+            <EvtxTimeline nowEpoch={nowEpoch} />
           </div>
 
           {/* Resize handle + detail pane */}

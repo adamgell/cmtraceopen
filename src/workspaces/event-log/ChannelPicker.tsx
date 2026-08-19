@@ -268,13 +268,14 @@ export function ChannelPicker() {
                   onClick={() => {
                     void (tailMode ? stopLiveTail() : startLiveTail());
                   }}
+                  style={{ fontSize: `${metrics.fontSize}px` }}
                 >
                   {tailMode ? "Stop live tail" : "Start live tail"}
                 </Button>
                 {tailMode && (
                   <span
                     aria-label={`Live tail mode: ${tailMode}`}
-                    style={{ fontSize: "10px", color: tokens.colorNeutralForeground3 }}
+                    style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground3 }}
                   >
                     {tailMode}
                   </span>
@@ -285,7 +286,7 @@ export function ChannelPicker() {
                   aria-label="Channel to clear"
                   value={clearTarget ?? ""}
                   onChange={(event) => setClearTarget(event.target.value || null)}
-                  style={{ flex: 1, minWidth: 0, fontSize: "11px" }}
+                  style={{ flex: 1, minWidth: 0, fontSize: `${metrics.fontSize}px` }}
                 >
                   <option value="">Select channel to clear…</option>
                   {[...loadedChannels].sort().map((channel) => (
@@ -298,6 +299,7 @@ export function ChannelPicker() {
                   onClick={() => {
                     if (clearTarget) setConfirmClear(true);
                   }}
+                  style={{ fontSize: `${metrics.fontSize}px` }}
                 >
                   Clear
                 </Button>

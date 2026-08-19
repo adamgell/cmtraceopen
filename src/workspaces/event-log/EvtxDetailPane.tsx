@@ -119,6 +119,7 @@ export function EvtxDetailPane() {
               cursor: "pointer",
               background: "transparent",
               color: tokens.colorNeutralForeground1,
+              fontSize: `${fontSize}px`,
             }}
           >
             {marker && marker.category !== "bookmark" ? `Tagged: ${marker.category}` : "Tag"}
@@ -135,6 +136,7 @@ export function EvtxDetailPane() {
               cursor: "pointer",
               background: "transparent",
               color: marker?.category === "bookmark" ? "#8b5cf6" : tokens.colorNeutralForeground1,
+              fontSize: `${fontSize}px`,
             }}
           >
             {marker?.category === "bookmark" ? "Bookmarked" : "Bookmark"}

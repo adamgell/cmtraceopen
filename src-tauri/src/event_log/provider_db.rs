@@ -935,23 +935,32 @@ impl ProviderStore {
 
     /// Selects metadata for an event by searching every captured provider/version row.
     ///
-    /// An exact event version wins even when it lives in an older row. If the requested version is
-    /// absent, the first row defining the event is the deterministic fallback.
+    /// An exact event version and captured channel win even when they live in an older row. If the
+    /// requested version is absent, the first row defining the event on that channel is the
+    /// deterministic fallback.
     pub fn provider_for_event(
         &self,
         provider_name: &str,
+        channel: &str,
         event_id: u32,
         version: Option<u32>,
     ) -> Result<Option<Arc<ProviderMetadata>>, String> {
         let Some(rows) = self.provider_versions_cached(provider_name)? else {
             return Ok(None);
         };
+        let channel_matches = |event: &cmtraceopen_parser::provider::ProviderEvent| {
+            match event.log_name.as_deref() {
+                Some(expected) => expected.eq_ignore_ascii_case(channel),
+                None => true,
+            }
+        };
         let exact = version.and_then(|version| {
             rows.iter().find(|row| {
-                row.metadata
-                    .events
-                    .iter()
-                    .any(|event| event.id == event_id && event.version == version)
+                row.metadata.events.iter().any(|event| {
+                    event.id == event_id
+                        && event.version == version
+                        && channel_matches(event)
+                })
             })
         });
         let selected = exact.or_else(|| {
@@ -959,7 +968,7 @@ impl ProviderStore {
                 row.metadata
                     .events
                     .iter()
-                    .any(|event| event.id == event_id)
+                    .any(|event| event.id == event_id && channel_matches(event))
             })
         });
         Ok(selected.map(|row| Arc::new(row.metadata.clone())))
@@ -988,6 +997,13 @@ impl ProviderStore {
         for database in open.iter() {
             rows.extend(database.provider_versions(provider_name)?);
         }
+        rows.sort_by(|left, right| {
+            right
+                .metadata
+                .source_os_build
+                .cmp(&left.metadata.source_os_build)
+                .then_with(|| left.version_key.cmp(&right.version_key))
+        });
         let found = (!rows.is_empty()).then(|| Arc::new(rows));
         self.version_cache
             .lock()
@@ -1174,6 +1190,36 @@ mod tests {
             Some("new"),
             "the newest captured build should win"
         );
+    }
+    #[test]
+    fn provider_store_sorts_newest_builds_across_database_files() {
+        let dir = temp_dir("cross-file-versions");
+        // Directory order is intentionally opposite to build order. Appending files would select
+        // the lower build from a-old.db; global ordering must select the higher build in z-new.db.
+        build_db(
+            &dir.join("a-old-name-low-build.db"),
+            &[(
+                "Cross-File",
+                22000,
+                r#"[{"Id":1,"Version":0,"Description":"oldest"}]"#,
+            )],
+        );
+        build_db(
+            &dir.join("z-new-name-high-build.db"),
+            &[(
+                "Cross-File",
+                26200,
+                r#"[{"Id":1,"Version":0,"Description":"newest"}]"#,
+            )],
+        );
+
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("loads");
+        let metadata = store
+            .provider("Cross-File")
+            .expect("query")
+            .expect("provider present");
+        assert_eq!(metadata.events[0].description.as_deref(), Some("newest"));
     }
 
     #[test]
@@ -1579,7 +1625,7 @@ mod tests {
         store.load_directory(&dir).expect("loads");
 
         let metadata = store
-            .provider_for_event("Multi-Version", 7, Some(0))
+            .provider_for_event("Multi-Version", "Some-Channel", 7, Some(0))
             .expect("lookup succeeds")
             .expect("matching event exists");
         assert_eq!(
@@ -1793,7 +1839,7 @@ mod real_database_tests {
         );
 
         let event = metadata
-            .event(4, Some(0))
+            .event(4, Some(0), None)
             .expect("event id 4 is defined");
         let template = event
             .description

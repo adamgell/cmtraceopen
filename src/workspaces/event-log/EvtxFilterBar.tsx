@@ -537,6 +537,7 @@ export function EvtxFilterBar() {
         style={{ width: "180px" }}
       />
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         value={QUICK_FILTER_MODE_LABELS[quickFilter.mode]}
         selectedOptions={[quickFilter.mode]}
@@ -551,12 +552,17 @@ export function EvtxFilterBar() {
         }}
       >
         {QUICK_FILTER_MODES.map((mode) => (
-          <Option key={mode} value={mode}>
+          <Option
+            key={mode}
+            value={mode}
+            style={{ fontSize: controlFontSize }}
+          >
             {QUICK_FILTER_MODE_LABELS[mode]}
           </Option>
         ))}
       </Dropdown>
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         value={QUICK_FILTER_SCOPE_LABELS[quickFilter.scope]}
         selectedOptions={[quickFilter.scope]}
@@ -570,13 +576,18 @@ export function EvtxFilterBar() {
           }
         }}
       >
-        {(Object.keys(QUICK_FILTER_SCOPE_LABELS) as EvtxQuickFilterScope[]).map((scope) => (
-          <Option key={scope} value={scope}>
-            {QUICK_FILTER_SCOPE_LABELS[scope]}
-          </Option>
-        ))}
+          {(Object.keys(QUICK_FILTER_SCOPE_LABELS) as EvtxQuickFilterScope[]).map((scope) => (
+            <Option
+              key={scope}
+              value={scope}
+              style={{ fontSize: controlFontSize }}
+            >
+              {QUICK_FILTER_SCOPE_LABELS[scope]}
+            </Option>
+          ))}
       </Dropdown>
       <Dropdown
+        button={{ style: { fontSize: controlFontSize } }}
         size="small"
         value={QUICK_FILTER_ACTION_LABELS[quickFilter.action]}
         selectedOptions={[quickFilter.action]}
@@ -590,24 +601,30 @@ export function EvtxFilterBar() {
           }
         }}
       >
-        {(Object.keys(QUICK_FILTER_ACTION_LABELS) as EvtxQuickFilterAction[]).map((action) => (
-          <Option key={action} value={action}>
-            {QUICK_FILTER_ACTION_LABELS[action]}
-          </Option>
-        ))}
+          {(Object.keys(QUICK_FILTER_ACTION_LABELS) as EvtxQuickFilterAction[]).map((action) => (
+            <Option
+              key={action}
+              value={action}
+              style={{ fontSize: controlFontSize }}
+            >
+              {QUICK_FILTER_ACTION_LABELS[action]}
+            </Option>
+          ))}
       </Dropdown>
       <Checkbox
         checked={quickFilter.caseSensitive}
-        label="Case"
+        label={<span style={{ fontSize: controlFontSize }}>Case</span>}
         title="Case-sensitive quick filter"
+        style={{ fontSize: controlFontSize }}
         onChange={(_, data) =>
           setQuickFilter({ ...quickFilter, caseSensitive: data.checked === true })
         }
       />
       <Checkbox
         checked={quickFilter.highlight}
-        label="Highlight"
+        label={<span style={{ fontSize: controlFontSize }}>Highlight</span>}
         title="Highlight quick-filter matches"
+        style={{ fontSize: controlFontSize }}
         onChange={(_, data) =>
           setQuickFilter({ ...quickFilter, highlight: data.checked === true })
         }

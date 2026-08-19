@@ -225,12 +225,21 @@ pub fn build_source_manifest_for_selections(
 fn deduplicate_coverage(coverage: &mut Vec<SourceCoverage>) {
     let mut seen = std::collections::HashSet::new();
     coverage.retain(|item| {
-        let key = (
-            coverage_kind(item),
-            normalize_source_path(Path::new(coverage_path(item))).to_ascii_lowercase(),
-        );
+        let key = (coverage_kind(item), coverage_identity_path(coverage_path(item)));
         seen.insert(key)
     });
+}
+
+fn coverage_identity_path(path: &str) -> String {
+    let normalized = normalize_source_path(Path::new(path));
+    #[cfg(target_os = "windows")]
+    {
+        normalized.to_ascii_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        normalized
+    }
 }
 
 fn coverage_kind(coverage: &SourceCoverage) -> u8 {
@@ -1813,6 +1822,7 @@ where
         let message = match describe_event(
             &providers,
             &provider,
+            &channel,
             event_id,
             system.version,
             &insertions,
@@ -1934,19 +1944,20 @@ enum DescriptionOutcome {
 /// Renders the provider's own description for this event, when metadata for it is loaded.
 ///
 /// Returns `Ok(None)` when no database is loaded, the provider is absent from it, or the provider
-/// does not define this event. Provider payload failures are returned as errors so callers can
-/// attach a coverage gap instead of presenting a normal metadata miss.
+/// does not define this event on the captured channel. Provider payload failures are returned as
+/// errors so callers can attach a coverage gap instead of presenting a normal metadata miss.
 fn describe_event(
     store: &ProviderStore,
     provider: &str,
+    channel: &str,
     event_id: u32,
     version: Option<u32>,
     insertions: &[String],
 ) -> Result<Option<DescriptionOutcome>, String> {
-    let Some(metadata) = store.provider_for_event(provider, event_id, version)? else {
+    let Some(metadata) = store.provider_for_event(provider, channel, event_id, version)? else {
         return Ok(None);
     };
-    let Some(event) = metadata.event(event_id, version) else {
+    let Some(event) = metadata.event(event_id, version, Some(channel)) else {
         return Ok(None);
     };
     let Some(template) = event.description.as_deref() else {
@@ -1970,6 +1981,22 @@ mod tests {
     use super::*;
 
 
+    #[cfg(not(windows))]
+    #[test]
+    fn coverage_deduplication_preserves_case_sensitive_paths() {
+        let mut coverage = vec![
+            SourceCoverage::Missing {
+                path: "Logs/App.evtx".to_string(),
+                reason: "missing".to_string(),
+            },
+            SourceCoverage::Missing {
+                path: "logs/App.evtx".to_string(),
+                reason: "missing".to_string(),
+            },
+        ];
+        deduplicate_coverage(&mut coverage);
+        assert_eq!(coverage.len(), 2);
+    }
     #[test]
     fn source_prefixed_message_does_not_duplicate_member_source() {
         let source = "bundle.zip::logs/app.log";
@@ -3051,9 +3078,16 @@ mod description_tests {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
         assert!(
-            describe_event(&empty_store(), "Nobody-Has-This-Provider", 1, None, &data)
-                .expect("provider lookup succeeds")
-                .is_none()
+            describe_event(
+                &empty_store(),
+                "Nobody-Has-This-Provider",
+                "Some-Channel",
+                1,
+                None,
+                &data
+            )
+            .expect("provider lookup succeeds")
+            .is_none()
         );
     }
 
@@ -3090,6 +3124,7 @@ mod description_tests {
         let outcome = describe_event(
             &store,
             "Coverage-Provider",
+            "Some-Channel",
             7,
             Some(0),
             &insertions(&[("value", "one")]),
@@ -3114,6 +3149,7 @@ mod description_tests {
             describe_event(
                 &store,
                 "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+                "Admin",
                 999_999,
                 None,
                 &data
@@ -3133,6 +3169,7 @@ mod description_tests {
         let described = describe_event(
             &store,
             "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+            "Admin",
             2,
             None,
             &data,
@@ -3162,6 +3199,7 @@ mod description_tests {
             describe_event(
                 &store,
                 "Definitely-Not-A-Real-Provider",
+                "Admin",
                 1,
                 None,
                 &insertions(&[("a", "b")]),
