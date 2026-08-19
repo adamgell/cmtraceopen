@@ -13,6 +13,7 @@ vi.mock("../../lib/commands", () => ({
 const { listLogFolder } = await import("../../lib/commands");
 const { openEventLogSource } = await import("./open-event-log-source");
 const { useEvtxStore } = await import("./evtx-store");
+const actualParseFiles = useEvtxStore.getState().parseFiles;
 
 describe("openEventLogSource", () => {
   beforeEach(() => {
@@ -28,6 +29,19 @@ describe("openEventLogSource", () => {
     expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([
       "/tmp/Application.evtx",
     ]);
+  });
+  it("propagates file parse failures to the caller", async () => {
+    const parseFiles = actualParseFiles;
+    useEvtxStore.setState({
+      parseFiles,
+      setLoadError: vi.fn(),
+    } as never);
+    invoke.mockRejectedValueOnce(new Error("not a file"));
+
+    await expect(
+      openEventLogSource({ kind: "file", path: "/tmp/not-a-file" }),
+    ).rejects.toThrow("not a file");
+    expect(useEvtxStore.getState().loadError).toBe("not a file");
   });
   it("parses a known file source using its default path", async () => {
     const defaultPath = "/tmp/Application.evtx";

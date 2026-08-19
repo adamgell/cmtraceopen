@@ -159,6 +159,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
+      throw error;
     }
   },
 
