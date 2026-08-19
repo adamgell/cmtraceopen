@@ -11,6 +11,7 @@ import type {
   DsregcmdWhfbPolicyEvidence,
 } from "./types";
 import type { EventLogAnalysis, EventLogEntry } from "../../types/event-log";
+import { useUiStore } from "../../stores/ui-store";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -341,6 +342,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  useUiStore.setState({ currentPlatform: "windows" });
   useDsregcmdStore.getState().clear();
 });
 
