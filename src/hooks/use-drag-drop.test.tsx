@@ -49,7 +49,7 @@ describe("useDragDrop", () => {
     vi.clearAllMocks();
     onDragDropEventMock.mockResolvedValue(() => undefined);
     openPathForActiveWorkspaceMock.mockResolvedValue(undefined);
-    loadFilesAsLogSourceMock.mockResolvedValue(undefined);
+    loadFilesAsLogSourceMock.mockResolvedValue(true);
     useUiStore.setState({
       activeWorkspace: "log",
       activeView: "log",

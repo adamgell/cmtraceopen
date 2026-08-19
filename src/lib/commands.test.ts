@@ -18,6 +18,7 @@ import {
   openLogFile,
   parseFilesBatch,
   revealInFileManager,
+  inspectEvidenceArtifact,
 } from "./commands";
 import { readAccessDenied } from "./source-error";
 
@@ -214,9 +215,17 @@ function validTimelineBundle() {
         color: "#2563eb",
         entryCount: 1,
       },
+      {
+        idx: 1,
+        kind: { logFile: { parserKind: "ccm" } },
+        path: "C:\\Logs\\App.log",
+        displayName: "App.log",
+        color: "#16a34a",
+        entryCount: 1,
+      },
     ],
     timeRangeMs: [100, 200],
-    totalEntries: 1,
+    totalEntries: 2,
     incidents: [
       {
         id: 0,
@@ -269,6 +278,60 @@ describe("timeline IPC response validation", () => {
 
     await expect(buildTimeline([{ path: "C:\\Logs" }])).rejects.toThrow(
       "Command 'build_timeline_cmd' returned an invalid response.",
+    );
+  });
+});
+
+function validEvidenceArtifactPreview() {
+  return {
+    path: "C:\\Logs\\snapshot.reg",
+    intakeKind: "registrySnapshot",
+    summary: "Parsed registry snapshot.",
+    registrySnapshot: {
+      keyCount: 1,
+      valueCount: 1,
+      keys: [
+        {
+          path: "HKLM\\Software\\Contoso",
+          valueCount: 1,
+          values: [
+            {
+              name: "Enabled",
+              valueType: "dword",
+              value: "0x00000001 (1)",
+            },
+          ],
+        },
+      ],
+    },
+    eventLogExport: null,
+  };
+}
+
+describe("evidence artifact IPC response validation", () => {
+  it("preserves validated nested preview metadata", async () => {
+    const preview = validEvidenceArtifactPreview();
+    vi.mocked(invoke).mockResolvedValue(preview);
+
+    await expect(
+      inspectEvidenceArtifact("C:\\Logs\\snapshot.reg", "registrySnapshot"),
+    ).resolves.toEqual(preview);
+  });
+
+  it("rejects malformed nested preview metadata", async () => {
+    const preview = validEvidenceArtifactPreview();
+    vi.mocked(invoke).mockResolvedValue({
+      ...preview,
+      registrySnapshot: {
+        ...preview.registrySnapshot,
+        keys: [{ path: "HKLM\\Software\\Contoso", valueCount: 1 }],
+      },
+    });
+
+    await expect(
+      inspectEvidenceArtifact("C:\\Logs\\snapshot.reg", "registrySnapshot"),
+    ).rejects.toThrow(
+      "Command 'inspect_evidence_artifact' returned an invalid response.",
     );
   });
 });

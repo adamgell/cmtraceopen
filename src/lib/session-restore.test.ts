@@ -9,7 +9,7 @@ import { useFilterStore } from "../stores/filter-store";
 // filter clauses end up in the filter store (issue #193).
 vi.mock("./log-source", () => ({
   loadPathAsLogSource: vi.fn().mockResolvedValue({}),
-  loadFilesAsLogSource: vi.fn().mockResolvedValue(undefined),
+  loadFilesAsLogSource: vi.fn().mockResolvedValue(true),
 }));
 
 const restoredLoadResult = {
@@ -56,7 +56,7 @@ describe("restoreSession filter restore (issue #193)", () => {
     vi.mocked(loadPathAsLogSource)
       .mockReset()
       .mockResolvedValue(restoredLoadResult);
-    vi.mocked(loadFilesAsLogSource).mockReset().mockResolvedValue(undefined);
+    vi.mocked(loadFilesAsLogSource).mockReset().mockResolvedValue(true);
     // compute_file_hash returns a matching hash so the tab is considered valid.
     vi.mocked(invoke).mockResolvedValue({ hash: "abc", sizeBytes: 100 });
     useFilterStore.getState().clearFilter();
@@ -83,6 +83,18 @@ describe("restoreSession filter restore (issue #193)", () => {
     expect(loadPathAsLogSource).toHaveBeenCalledTimes(1);
     expect(loadFilesAsLogSource).not.toHaveBeenCalled();
   });
+  it("aborts when aggregate restore is superseded", async () => {
+    vi.mocked(readTextFile).mockResolvedValue(sessionJson([], 2));
+    vi.mocked(loadPathAsLogSource).mockRejectedValue(new Error("load failed"));
+    vi.mocked(loadFilesAsLogSource).mockResolvedValue(false);
+
+    await expect(restoreSession("/tmp/session.cmtrace")).resolves.toBeNull();
+    expect(loadFilesAsLogSource).toHaveBeenCalledWith([
+      "/tmp/app.log",
+      "/tmp/app-1.log",
+    ]);
+  });
+
 
   it("leaves the filter cleared when the session had no clauses", async () => {
     vi.mocked(readTextFile).mockResolvedValue(sessionJson([]));

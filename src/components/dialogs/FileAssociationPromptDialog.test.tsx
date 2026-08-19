@@ -15,6 +15,7 @@ describe("FileAssociationPromptDialog", () => {
   let opener: HTMLButtonElement;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     opener = document.createElement("button");
     document.body.appendChild(opener);
     opener.focus();

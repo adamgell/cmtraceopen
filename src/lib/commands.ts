@@ -685,6 +685,73 @@ function isCommandRecordArray(value: unknown): boolean {
 function isNullableCommandRecord(value: unknown): boolean {
   return value === null || isCommandRecord(value);
 }
+const EVIDENCE_ARTIFACT_INTAKE_KIND_MEMBERS = {
+  log: true,
+  registrySnapshot: true,
+  eventLogExport: true,
+  commandOutput: true,
+  screenshot: true,
+  export: true,
+  unknown: true,
+} satisfies Record<EvidenceArtifactIntakeKind, true>;
+
+function isEvidenceArtifactIntakeKind(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(
+      EVIDENCE_ARTIFACT_INTAKE_KIND_MEMBERS,
+      value,
+    )
+  );
+}
+
+function isRegistrySnapshotValuePreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.valueType === "string" &&
+    typeof value.value === "string"
+  );
+}
+
+function isRegistrySnapshotKeyPreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    isFiniteCommandNumber(value.valueCount) &&
+    Array.isArray(value.values) &&
+    value.values.every(isRegistrySnapshotValuePreview)
+  );
+}
+
+function isRegistrySnapshotSummary(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.keyCount) &&
+    isFiniteCommandNumber(value.valueCount) &&
+    Array.isArray(value.keys) &&
+    value.keys.every(isRegistrySnapshotKeyPreview)
+  );
+}
+
+function isEvidenceEventLogExportPreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isNullableCommandString(value.channel) &&
+    isNullableCommandNumber(value.fileSizeBytes) &&
+    isNullableCommandNumber(value.modifiedUnixMs) &&
+    typeof value.exportFormat === "string"
+  );
+}
+
+function isNullableRegistrySnapshotSummary(value: unknown): boolean {
+  return value === null || isRegistrySnapshotSummary(value);
+}
+
+function isNullableEvidenceEventLogExportPreview(value: unknown): boolean {
+  return value === null || isEvidenceEventLogExportPreview(value);
+}
+
 
 function decodeParseResults(
   value: unknown,
@@ -1615,8 +1682,10 @@ const COMMAND_DECODERS = {
   inspect_evidence_artifact: (value, commandName) =>
     decodeRecordResponse<EvidenceArtifactPreview>(value, commandName, {
       path: (field) => typeof field === "string",
-      intakeKind: (field) => typeof field === "string",
+      intakeKind: isEvidenceArtifactIntakeKind,
       summary: (field) => typeof field === "string",
+      registrySnapshot: isNullableRegistrySnapshotSummary,
+      eventLogExport: isNullableEvidenceEventLogExportPreview,
     }),
   parse_registry_file: (value, commandName) =>
     decodeRecordResponse<RegistryParseResult>(value, commandName, {

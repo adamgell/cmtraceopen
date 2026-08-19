@@ -992,4 +992,26 @@ describe("source loading progress ownership", () => {
     stopTailRequest.resolve();
     await pendingLoad;
   });
+  it("returns false when a multi-file load is superseded", async () => {
+    const pendingBatch = deferred<ParseResult[]>();
+    const currentPath = "C:/Windows/CCM/Logs/Current.log";
+    commands.parseFilesBatch.mockReturnValueOnce(pendingBatch.promise);
+
+    const staleLoad = loadFilesAsLogSource([
+      "C:/Windows/CCM/Logs/AppEnforce.log",
+      "C:/Windows/CCM/Logs/CIAgent.log",
+    ]);
+    await vi.waitFor(() => {
+      expect(commands.parseFilesBatch).toHaveBeenCalled();
+    });
+
+    commands.openLogSourceFile.mockResolvedValueOnce({
+      ...parseResult,
+      filePath: currentPath,
+    });
+    await loadLogSource({ kind: "file", path: currentPath });
+
+    pendingBatch.resolve([]);
+    await expect(staleLoad).resolves.toBe(false);
+  });
 });

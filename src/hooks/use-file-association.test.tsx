@@ -91,7 +91,7 @@ describe("useFileAssociation startup routing", () => {
       selectedFilePath: null,
       parseResult: null,
     }));
-    loadFilesAsLogSourceMock.mockResolvedValue(undefined);
+    loadFilesAsLogSourceMock.mockResolvedValue(true);
   });
 
   it("opens ESP Diagnostics when the elevated launch requests its workspace", async () => {

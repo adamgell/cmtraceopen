@@ -129,7 +129,11 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   if (loadedTabsByPath.size === 0 && filePaths.length > 0) {
     try {
-      await loadFilesAsLogSource(filePaths);
+      const aggregateLoadCompleted = await loadFilesAsLogSource(filePaths);
+      if (!aggregateLoadCompleted) {
+        console.info("[session] aggregate restore superseded by a newer source load");
+        return null;
+      }
       // Aggregate load opens one tab per file in the same order.
       for (const tab of validTabs) loadedTabsByPath.set(tab.filePath, tab);
     } catch (fallbackError) {

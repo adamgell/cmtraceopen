@@ -884,13 +884,15 @@ async function restoreFolderContext(
  * Load multiple files as a merged aggregate view.
  * Reuses the same batch-parse + merge logic as folder loading.
  */
-export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
-  if (paths.length === 0) return;
+export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
+  if (paths.length === 0) return true;
 
   // Single file — use normal single-file flow
   if (paths.length === 1) {
-    await loadPathAsLogSource(paths[0], { fallbackToFolder: false });
-    return;
+    const result = await loadPathAsLogSource(paths[0], {
+      fallbackToFolder: false,
+    });
+    return result !== null;
   }
   const loadGeneration = ++tabSwitchGeneration;
 
@@ -899,9 +901,9 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
   state.setFolderLoadRequestId(loadGeneration);
 
   // Clean up current state before starting the parse
-  if (!isCurrentTabSwitch(loadGeneration)) return;
+  if (!isCurrentTabSwitch(loadGeneration)) return false;
   await stopCurrentTailIfNeeded(null);
-  if (!isCurrentTabSwitch(loadGeneration)) return;
+  if (!isCurrentTabSwitch(loadGeneration)) return false;
   useFilterStore.getState().clearFilter();
 
   state.setLoading(true);
@@ -916,7 +918,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
 
   try {
     const results = await parseFilesBatch(paths, loadGeneration, 0);
-    if (!isCurrentTabSwitch(loadGeneration)) return;
+    if (!isCurrentTabSwitch(loadGeneration)) return false;
     const parseMs = Math.round(performance.now() - startTime);
 
     // Cache each file for instant tab switching
@@ -975,7 +977,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
       modifiedUnixMs: 0,
     }));
 
-    if (!isCurrentTabSwitch(loadGeneration)) return;
+    if (!isCurrentTabSwitch(loadGeneration)) return false;
     state.setActiveSource(source);
     state.setSourceEntries(folderEntries);
     state.setSelectedSourceFilePath(null);
@@ -1002,6 +1004,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<void> {
       message: `Loaded ${aggregateFiles.length} files.`,
       detail: `Parsed in ${parseMs} ms (parallel).`,
     });
+    return true;
   } finally {
     if (isCurrentTabSwitch(loadGeneration)) {
       state.setLoading(false);
