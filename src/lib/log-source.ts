@@ -677,7 +677,13 @@ export async function loadSelectedLogFile(
     await stopCurrentTailIfNeeded(filePath);
     if (!isCurrentTabSwitch(operationGeneration)) return null;
 
-    const result = await openLogFile(filePath);
+    let result: ParseResult;
+    try {
+      result = await openLogFile(filePath);
+    } catch (error) {
+      if (!isCurrentTabSwitch(operationGeneration)) return null;
+      throw error;
+    }
     if (!isCurrentTabSwitch(operationGeneration)) return null;
     const applied = await applyParseResultToStore(
       source,
@@ -726,7 +732,6 @@ export async function switchToTab(
       if (sourceContext && sourceContext.sourceKind !== "file") {
         if (
           !(await restoreFolderContext(
-            useLogStore.getState(),
             sourceContext,
             generation,
           ))
@@ -792,7 +797,6 @@ export async function switchToTab(
     if (sourceContext && sourceContext.sourceKind !== "file") {
       try {
         const restored = await restoreFolderContext(
-          useLogStore.getState(),
           sourceContext,
           generation,
         );
@@ -832,7 +836,6 @@ export async function switchToTab(
   // Folder or known-source tab — restore sidebar then load the file
   if (
     !(await restoreFolderContext(
-      useLogStore.getState(),
       sourceContext,
       generation,
     ))
@@ -844,11 +847,11 @@ export async function switchToTab(
 
 /** Restore the sidebar folder listing if the active source changed. */
 async function restoreFolderContext(
-  logState: ReturnType<typeof useLogStore.getState>,
   sourceContext: TabSourceContext,
   restoreGeneration: number,
 ): Promise<boolean> {
   if (!isCurrentTabSwitch(restoreGeneration)) return false;
+  const logState = useLogStore.getState();
 
   const { source } = sourceContext;
   const currentSource = logState.activeSource;

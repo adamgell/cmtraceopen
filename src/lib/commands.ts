@@ -6,6 +6,7 @@ import type {
   LogFormat,
   LogSource,
   ParseResult,
+  ParserKind,
   WorkspaceId,
 } from "../types/log";
 import type {
@@ -49,7 +50,7 @@ import type {
   SccmAdvancedCaptureCapability,
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
-import type { TimelineBundle } from "../types/timeline";
+import type { SignalKind, TimelineBundle } from "../types/timeline";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -407,36 +408,40 @@ function isFolderListingResponse(value: unknown): value is FolderListingResult {
       isCommandRecord(value.bundleMetadata))
   );
 }
-const TIMELINE_PARSER_KINDS = new Set([
-  "ccm",
-  "simple",
-  "timestamped",
-  "plain",
-  "iisW3c",
-  "panther",
-  "cbs",
-  "dism",
-  "reportingEvents",
-  "msi",
-  "psadtLegacy",
-  "intuneMacOs",
-  "intuneDeviceInventory",
-  "dhcp",
-  "burn",
-  "patchMyPcDetection",
-  "registry",
-  "secureBootLog",
-  "dnsDebug",
-  "dnsAudit",
-  "cmtLog",
-  "companyPortal",
-]);
+const TIMELINE_PARSER_KIND_MEMBERS = {
+  ccm: true,
+  simple: true,
+  timestamped: true,
+  plain: true,
+  iisW3c: true,
+  panther: true,
+  cbs: true,
+  dism: true,
+  reportingEvents: true,
+  msi: true,
+  psadtLegacy: true,
+  intuneMacOs: true,
+  intuneDeviceInventory: true,
+  dhcp: true,
+  burn: true,
+  patchMyPcDetection: true,
+  registry: true,
+  secureBootLog: true,
+  dnsDebug: true,
+  dnsAudit: true,
+  cmtLog: true,
+  companyPortal: true,
+} satisfies Record<ParserKind, true>;
 
-const TIMELINE_SIGNAL_KINDS = new Set([
-  "errorSeverity",
-  "knownErrorCode",
-  "imeFailed",
-]);
+const TIMELINE_PARSER_KINDS = new Set(Object.keys(TIMELINE_PARSER_KIND_MEMBERS));
+
+const TIMELINE_SIGNAL_KIND_MEMBERS = {
+  errorSeverity: true,
+  knownErrorCode: true,
+  imeFailed: true,
+} satisfies Record<SignalKind, true>;
+
+const TIMELINE_SIGNAL_KINDS = new Set(Object.keys(TIMELINE_SIGNAL_KIND_MEMBERS));
 
 function isTimelineSourceKind(value: unknown): boolean {
   if (value === "intuneEvents") return true;

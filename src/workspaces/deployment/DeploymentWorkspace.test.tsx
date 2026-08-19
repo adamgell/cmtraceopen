@@ -115,10 +115,10 @@ describe("DeploymentWorkspace fixtures", () => {
     expect(screen.getByText("Failed Deployments")).toBeInTheDocument();
     expect(screen.getByText("Broken App")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open in Log Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "1 errors" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 error" })).toBeInTheDocument();
     expect(screen.getByText("Installation failed with 1603")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "1 errors" }));
+    fireEvent.click(screen.getByRole("button", { name: "1 error" }));
     expect(screen.getByText(/L42/)).toBeInTheDocument();
     expect(screen.getByText("CustomAction failed")).toBeInTheDocument();
 

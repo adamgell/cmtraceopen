@@ -4,10 +4,10 @@ import { buildTimelineFromSources } from "../../components/timeline/hooks/useTim
 import { useTimelineStore } from "../../stores/timeline-store";
 import type { TimelineBundle } from "../../types/timeline";
 import {
+  openTimelineFiles,
   openTimelineSource,
   replaceTimelineSource,
 } from "./open-timeline-source";
-
 vi.mock("../../lib/commands", () => ({
   listLogFolder: vi.fn(),
 }));
@@ -117,6 +117,34 @@ describe("openTimelineSource", () => {
     expect(buildTimelineFromSources).toHaveBeenCalledWith([
       { path: `${defaultPath}/known.log` },
     ]);
+  });
+
+  it("appends raw dropped paths and deduplicates existing sources", async () => {
+    useTimelineStore.setState({
+      bundle: bundleFor(["/tmp/existing.log", "/tmp/other.log"]),
+    });
+
+    await openTimelineFiles([
+      "/tmp/dropped.log",
+      "/tmp/other.log",
+      "/tmp/dropped.log",
+    ]);
+
+    expect(buildTimelineFromSources).toHaveBeenCalledWith([
+      { path: "/tmp/existing.log" },
+      { path: "/tmp/other.log" },
+      { path: "/tmp/dropped.log" },
+    ]);
+  });
+
+  it("does not build a timeline for an empty raw path array", async () => {
+    useTimelineStore.setState({
+      bundle: bundleFor(["/tmp/existing.log"]),
+    });
+
+    await openTimelineFiles([]);
+
+    expect(buildTimelineFromSources).not.toHaveBeenCalled();
   });
 
   it("unions folder files with an existing timeline", async () => {

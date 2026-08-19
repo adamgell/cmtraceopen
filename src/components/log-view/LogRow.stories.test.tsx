@@ -91,7 +91,7 @@ describe("LogRow error codes and markers", () => {
     const { onClick, onToggleMarker, onSetMarkerCategory } = renderRow({
       marker: { lineId: 4, category: "bug", color: "#ef4444", added: "2026-07-26T12:00:00Z" },
     });
-    const gutter = screen.getByRole("option").firstElementChild as HTMLElement;
+    const gutter = screen.getByTestId("log-row-marker-gutter");
     fireEvent.click(gutter);
     expect(onToggleMarker).toHaveBeenCalledWith("C:/Windows/CCM/Logs/AppEnforce.log", 4);
     expect(onClick).not.toHaveBeenCalled();

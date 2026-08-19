@@ -207,8 +207,10 @@ function evidenceBundleMetadata(): EvidenceBundleMetadata {
 
 function deferred<T>() {
   let resolvePromise: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((resolve) => {
+  let rejectPromise: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolve, reject) => {
     resolvePromise = resolve;
+    rejectPromise = reject;
   });
 
   return {
@@ -218,6 +220,12 @@ function deferred<T>() {
         throw new Error("Deferred promise resolver was not initialized");
       }
       resolvePromise(value);
+    },
+    reject(reason: unknown) {
+      if (!rejectPromise) {
+        throw new Error("Deferred promise rejecter was not initialized");
+      }
+      rejectPromise(reason);
     },
   };
 }
@@ -273,13 +281,10 @@ describe("switchToTab", () => {
       },
     };
     const parseError = new Error("registry fixture is unreadable");
-    let rejectRegistry!: (error: Error) => void;
-    const pendingRegistry = new Promise<RegistryParseResult>((_, reject) => {
-      rejectRegistry = reject;
-    });
+    const pendingRegistry = deferred<RegistryParseResult>();
     setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
     commands.openLogFile.mockResolvedValueOnce(registryResult);
-    commands.parseRegistryFile.mockReturnValueOnce(pendingRegistry);
+    commands.parseRegistryFile.mockReturnValueOnce(pendingRegistry.promise);
 
     const pendingLoad = loadSelectedLogFile(fileA, fileSourceA);
     await vi.waitFor(() => {
@@ -291,7 +296,7 @@ describe("switchToTab", () => {
       sourcePath: fileB,
       source: fileSourceB,
     });
-    rejectRegistry(parseError);
+    pendingRegistry.reject(parseError);
 
     await expect(pendingLoad).resolves.toBeNull();
   });
@@ -651,6 +656,31 @@ describe("switchToTab", () => {
     expect(useLogStore.getState().openFilePath).toBe(fileB);
     expect(useLogStore.getState().activeSource).toEqual(fileSourceB);
   });
+  it("returns null when a stale selected-file load rejects", async () => {
+    const fileSourceA: LogSource = { kind: "file", path: fileA };
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+
+    const staleResult = deferred<ParseResult>();
+    commands.openLogFile.mockReturnValueOnce(staleResult.promise);
+
+    const pendingLoad = loadSelectedLogFile(fileA, fileSourceA);
+    await vi.waitFor(() => {
+      expect(commands.openLogFile).toHaveBeenCalledWith(fileA);
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+
+    staleResult.reject(new Error("selected file failed"));
+
+    await expect(pendingLoad).resolves.toBeNull();
+    expect(useLogStore.getState().openFilePath).toBe(fileB);
+    expect(useLogStore.getState().activeSource).toEqual(fileSourceB);
+  });
   it("invalidates a pending switch when reselecting the displayed tab", async () => {
     const fileSourceA: LogSource = { kind: "file", path: fileA };
     const fileSourceB: LogSource = { kind: "file", path: fileB };
@@ -871,11 +901,8 @@ describe("source loading progress ownership", () => {
   it("returns null when selected-file recovery becomes stale", async () => {
     const selectedPath = sourceEntries[0].path;
     const currentPath = "C:/Windows/CCM/Logs/Current.log";
-    let rejectOpenLogFile: (error: unknown) => void = () => undefined;
-    const pendingOpenLogFile = new Promise<ParseResult>((_, reject) => {
-      rejectOpenLogFile = reject;
-    });
-    commands.openLogFile.mockReturnValueOnce(pendingOpenLogFile);
+    const pendingOpenLogFile = deferred<ParseResult>();
+    commands.openLogFile.mockReturnValueOnce(pendingOpenLogFile.promise);
     const staleLoad = loadLogSource(folderSource, {
       selectedFilePath: selectedPath,
     });
@@ -888,7 +915,7 @@ describe("source loading progress ownership", () => {
       filePath: currentPath,
     });
     await loadLogSource({ kind: "file", path: currentPath });
-    rejectOpenLogFile(new Error("selected file failed"));
+    pendingOpenLogFile.reject(new Error("selected file failed"));
 
     await expect(staleLoad).resolves.toBeNull();
   });

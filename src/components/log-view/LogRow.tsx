@@ -351,6 +351,7 @@ export const LogRow = memo(function LogRow({
     >
       {/* Marker gutter */}
       <div
+        data-testid="log-row-marker-gutter"
         style={{
           display: "flex",
           alignItems: "center",
