@@ -29,7 +29,9 @@ describe("FileAssociationsTab", () => {
     useUiStore.setState({ currentPlatform: "windows" });
     render(<FileAssociationsTab />);
     expect(
-      screen.getByRole("button", { name: /Associate \.log files with CMTrace Open/ }),
+      screen.getByRole("button", {
+        name: "Associate .log, .log_, .lo_, and .cmtlog files with CMTrace Open",
+      }),
     ).toBeInTheDocument();
   });
 });

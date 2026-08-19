@@ -253,6 +253,7 @@ export const LIVE_EMPTY_EVENT_LOG_ANALYSIS: EventLogAnalysis = {
   totalEntryCount: 0,
   errorEntryCount: 0,
   parsedFileCount: 0,
+  timestampBounds: null,
   liveQuery: {
     attemptedChannelCount: 2,
     successfulChannelCount: 1,

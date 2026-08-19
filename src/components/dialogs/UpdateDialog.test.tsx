@@ -30,8 +30,8 @@ function renderDialog(
     onSkipVersion: vi.fn(),
     ...overrides,
   };
-  render(<UpdateDialog {...props} />);
-  return { props };
+  const view = render(<UpdateDialog {...props} />);
+  return { props, view };
 }
 
 const availableUpdate = (overrides: Partial<UpdateInfo> = {}): UpdateInfo => ({
@@ -49,6 +49,27 @@ describe("UpdateDialog", () => {
     renderDialog({ isChecking: true });
     const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
+  it("traps focus and restores focus to the opener", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+
+    const { view } = renderDialog({ isChecking: true });
+    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    cancel.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancel);
+
+    view.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("shows Cancel while checking", () => {

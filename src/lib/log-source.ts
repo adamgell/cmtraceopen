@@ -678,8 +678,11 @@ export async function switchToTab(
 
       // Restore sidebar context
       if (sourceContext && sourceContext.sourceKind !== "file") {
-        await restoreFolderContext(logState, sourceContext);
-      } else if (sourceContext?.sourceKind === "file") {
+        if (
+          !(await restoreFolderContext(logState, sourceContext, filePath))
+        ) {
+          return;
+        }
         logState.setActiveSource(sourceContext.source);
         logState.setSourceEntries([]);
         logState.setBundleMetadata(null);
@@ -728,7 +731,15 @@ export async function switchToTab(
 
     if (sourceContext && sourceContext.sourceKind !== "file") {
       try {
-        await restoreFolderContext(useLogStore.getState(), sourceContext);
+        if (
+          !(await restoreFolderContext(
+            useLogStore.getState(),
+            sourceContext,
+            filePath,
+          ))
+        ) {
+          return;
+        }
       } catch (error) {
         console.warn("[log-source] folder context restore failed after tab switch", {
           filePath,
@@ -757,15 +768,22 @@ export async function switchToTab(
   }
 
   // Folder or known-source tab — restore sidebar then load the file
-  await restoreFolderContext(logState, sourceContext);
+  if (!(await restoreFolderContext(logState, sourceContext, filePath))) {
+    return;
+  }
+  if (useLogStore.getState().openFilePath !== filePath) return;
   await loadSelectedLogFile(filePath, source);
 }
 
 /** Restore the sidebar folder listing if the active source changed. */
 async function restoreFolderContext(
   logState: ReturnType<typeof useLogStore.getState>,
-  sourceContext: TabSourceContext
-): Promise<void> {
+  sourceContext: TabSourceContext,
+  expectedFilePath: string,
+): Promise<boolean> {
+  if (useLogStore.getState().openFilePath !== expectedFilePath) {
+    return false;
+  }
   const { source } = sourceContext;
   const currentSource = logState.activeSource;
   const sourceChanged =
@@ -780,10 +798,14 @@ async function restoreFolderContext(
     });
 
     const listing = await listLogSourceFolder(source);
+    if (useLogStore.getState().openFilePath !== expectedFilePath) {
+      return false;
+    }
     logState.setActiveSource(source);
     logState.setSourceEntries(listing.entries);
     logState.setBundleMetadata(listing.bundleMetadata ?? null);
   }
+  return true;
 }
 
 /**

@@ -57,14 +57,16 @@ describe("MergeLegendBar", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "None" }));
-    expect(
-      Object.values(useLogStore.getState().mergedTabState?.fileVisibility ?? {}).every((visible) => !visible),
-    ).toBe(true);
+    expect(useLogStore.getState().mergedTabState?.fileVisibility).toEqual({
+      "C:/Windows/CCM/Logs/AppEnforce.log": false,
+      "C:/Windows/CCM/Logs/CIAgent.log": false,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "All" }));
-    expect(
-      Object.values(useLogStore.getState().mergedTabState?.fileVisibility ?? {}).every(Boolean),
-    ).toBe(true);
+    expect(useLogStore.getState().mergedTabState?.fileVisibility).toEqual({
+      "C:/Windows/CCM/Logs/AppEnforce.log": true,
+      "C:/Windows/CCM/Logs/CIAgent.log": true,
+    });
 
     fireEvent.change(screen.getByDisplayValue("1s"), { target: { value: "500" } });
     expect(useLogStore.getState().correlationWindowMs).toBe(500);

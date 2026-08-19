@@ -43,6 +43,16 @@ const OPS: { label: string; value: FilterOp }[] = [
   { label: "is after", value: "After" },
 ];
 
+/** Everything the browser would let Tab reach inside the modal. */
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
 export function emptyClause(): FilterClause {
   return { field: "Message", op: "Contains", value: "" };
 }
@@ -55,6 +65,7 @@ export function FilterDialog({
 }: FilterDialogProps) {
   const [clauses, setClauses] = useState<FilterClause[]>([emptyClause()]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
 
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
@@ -66,15 +77,70 @@ export function FilterDialog({
           ? [...currentClauses]
           : [emptyClause()]
       );
-      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen, currentClauses]);
 
   useEffect(() => {
     if (!isOpen) return;
 
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const surface = surfaceRef.current;
+    const target =
+      inputRef.current ??
+      surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
+      surface;
+    target?.focus();
+
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isFiltering) onClose();
+      if (e.key === "Escape") {
+        if (!isFiltering) onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const surface = surfaceRef.current;
+      if (!surface) return;
+
+      const focusable = Array.from(
+        surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+
+      if (!active || !surface.contains(active)) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+        return;
+      }
+      if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
 
     window.addEventListener("keydown", handleKey);
@@ -168,9 +234,11 @@ export function FilterDialog({
       }}
     >
       <div
+        ref={surfaceRef}
         role="dialog"
         aria-modal="true"
         aria-label="Filter"
+        tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

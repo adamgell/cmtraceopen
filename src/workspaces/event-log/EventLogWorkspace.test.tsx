@@ -5,6 +5,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
+import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -14,18 +15,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 28,
-        size: 28,
-      })),
-    getTotalSize: () => count * 28,
-    measureElement: vi.fn(),
-    scrollToIndex: vi.fn(),
-  }),
+  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
+    createTestVirtualizer(options),
 }));
 
 const { EventLogWorkspace } = await import("./EventLogWorkspace");

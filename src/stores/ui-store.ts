@@ -185,6 +185,8 @@ interface UiState {
   graphApiStatus: GraphApiPhase;
   graphApiCapability: GraphHostCapability | null;
   graphApiLastAttempt: GraphApiLastAttempt | null;
+  /** DNS/DHCP banner dismissals for the current app session, keyed by source path. */
+  dismissedDnsBannerPaths: string[];
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -255,6 +257,7 @@ interface UiState {
   setGraphApiStatus: (status: GraphApiPhase) => void;
   setGraphApiCapability: (capability: GraphHostCapability | null) => void;
   setGraphApiLastAttempt: (attempt: GraphApiLastAttempt | null) => void;
+  dismissDnsBanner: (path: string) => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -349,6 +352,7 @@ export const useUiStore = create<UiState>()(
       graphApiStatus: "disconnected",
       graphApiCapability: null,
       graphApiLastAttempt: null,
+      dismissedDnsBannerPaths: [],
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setAlwaysOnTop: (alwaysOnTop) => set({ alwaysOnTop }),
@@ -649,6 +653,12 @@ export const useUiStore = create<UiState>()(
       setGraphApiStatus: (status) => set({ graphApiStatus: status }),
       setGraphApiCapability: (capability) => set({ graphApiCapability: capability }),
       setGraphApiLastAttempt: (attempt) => set({ graphApiLastAttempt: attempt }),
+      dismissDnsBanner: (path) =>
+        set((state) => ({
+          dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)
+            ? state.dismissedDnsBannerPaths
+            : [...state.dismissedDnsBannerPaths, path],
+        })),
     }),
     {
       name: "cmtraceopen-ui-preferences",

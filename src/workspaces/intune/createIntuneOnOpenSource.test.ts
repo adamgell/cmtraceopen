@@ -31,6 +31,7 @@ const analyzeIntuneLogsMock = vi.mocked(analyzeIntuneLogs);
 
 beforeEach(() => {
   useIntuneStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
   analyzeIntuneLogsMock.mockReset();
   analyzeIntuneLogsMock.mockResolvedValue({
     events: STORY_EVENTS,

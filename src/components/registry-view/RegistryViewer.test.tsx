@@ -5,18 +5,45 @@ import { useRegistryStore } from "../../stores/registry-store";
 import { useLogStore } from "../../stores/log-store";
 import type { RegistryParseResult } from "../../types/registry";
 
+type VirtualRange = {
+  startIndex: number;
+  endIndex: number;
+  overscan: number;
+};
+let capturedRangeExtractor:
+  | ((range: VirtualRange) => number[])
+  | undefined;
+
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 26,
-        size: 26,
-      })),
-    getTotalSize: () => count * 26,
-    scrollToIndex: vi.fn(),
-  }),
+  defaultRangeExtractor: ({
+    startIndex,
+    endIndex,
+    overscan,
+  }: VirtualRange) =>
+    Array.from(
+      { length: endIndex - startIndex + 1 + overscan * 2 },
+      (_, index) => Math.max(0, startIndex - overscan) + index,
+    ),
+  useVirtualizer: ({
+    count,
+    rangeExtractor,
+  }: {
+    count: number;
+    rangeExtractor?: (range: VirtualRange) => number[];
+  }) => {
+    capturedRangeExtractor = rangeExtractor;
+    return {
+      getVirtualItems: () =>
+        Array.from({ length: count }, (_, index) => ({
+          index,
+          key: index,
+          start: index * 26,
+          size: 26,
+        })),
+      getTotalSize: () => count * 26,
+      scrollToIndex: vi.fn(),
+    };
+  },
 }));
 
 const fixture: RegistryParseResult = {
@@ -47,12 +74,12 @@ const fixture: RegistryParseResult = {
 
 describe("RegistryViewer", () => {
   beforeEach(() => {
+    capturedRangeExtractor = undefined;
     useRegistryStore.getState().clear();
     useLogStore.getState().clear();
     useLogStore.setState({ openFilePath: fixture.filePath });
     useRegistryStore.getState().setRegistryData(fixture);
   });
-
   afterEach(() => {
     cleanup();
   });
@@ -79,5 +106,16 @@ describe("RegistryViewer", () => {
 
     fireEvent.click(treeItems[0]);
     expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+  });
+  it("keeps a selected registry row in the virtualized range", () => {
+    const selectedPath = fixture.keys[1].path;
+    useRegistryStore.getState().setSelectedKeyPath(selectedPath);
+
+    render(<RegistryViewer />);
+
+    expect(capturedRangeExtractor).toBeDefined();
+    expect(
+      capturedRangeExtractor!({ startIndex: 0, endIndex: 0, overscan: 0 }),
+    ).toEqual(expect.arrayContaining([0, 5]));
   });
 });

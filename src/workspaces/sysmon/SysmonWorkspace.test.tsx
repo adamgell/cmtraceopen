@@ -2,7 +2,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SysmonWorkspace } from "./SysmonWorkspace";
 import { useSysmonStore } from "./sysmon-store";
+import { useUiStore } from "../../stores/ui-store";
 import type { SysmonAnalysisResult, SysmonEvent } from "./types";
+import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -14,20 +16,9 @@ vi.mock("../../hooks/use-app-actions", () => ({
 vi.mock("../../lib/commands", () => ({
   analyzeSysmonLogs: vi.fn(),
 }));
-
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 28,
-        size: 28,
-      })),
-    getTotalSize: () => count * 28,
-    measureElement: vi.fn(),
-    scrollToIndex: vi.fn(),
-  }),
+  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
+    createTestVirtualizer(options),
 }));
 
 function event(): SysmonEvent {
@@ -96,6 +87,8 @@ afterEach(() => {
 
 beforeEach(() => {
   useSysmonStore.getState().clear();
+  useUiStore.setState(useUiStore.getInitialState(), true);
+  useUiStore.setState({ currentPlatform: "windows" });
 });
 
 describe("SysmonWorkspace fixtures", () => {

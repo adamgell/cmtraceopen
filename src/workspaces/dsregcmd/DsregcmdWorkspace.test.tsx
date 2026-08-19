@@ -11,6 +11,7 @@ import type {
   DsregcmdWhfbPolicyEvidence,
 } from "./types";
 import type { EventLogAnalysis, EventLogEntry } from "../../types/event-log";
+import { createTestVirtualizer } from "../../test-utils/virtualizer";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -24,18 +25,8 @@ vi.mock("../../hooks/use-app-actions", () => ({
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 28,
-        size: 28,
-      })),
-    getTotalSize: () => count * 28,
-    measureElement: vi.fn(),
-    scrollToIndex: vi.fn(),
-  }),
+  useVirtualizer: (options: Parameters<typeof createTestVirtualizer>[0]) =>
+    createTestVirtualizer(options),
 }));
 
 function policyValue(

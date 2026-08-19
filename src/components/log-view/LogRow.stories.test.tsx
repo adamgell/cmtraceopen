@@ -6,7 +6,12 @@ import { themeSeverityPalettes } from "../../lib/themes/palettes";
 import { DEFAULT_CATEGORIES } from "../../types/markers";
 import type { LogEntry } from "../../types/log";
 
-const visibleColumns = [getColumnDef("severity")!, getColumnDef("message")!];
+const severityColumn = getColumnDef("severity");
+const messageColumn = getColumnDef("message");
+if (!severityColumn || !messageColumn) {
+  throw new Error("LogRow story requires severity and message column definitions");
+}
+const visibleColumns = [severityColumn, messageColumn];
 
 function makeEntry(overrides: Partial<LogEntry> = {}): LogEntry {
   return {

@@ -79,5 +79,8 @@ describe("DnsWorkspaceBanner", () => {
     render(<DnsWorkspaceBanner />);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText(/This looks like a DNS debug log/)).toBeNull();
+    cleanup();
+    render(<DnsWorkspaceBanner />);
+    expect(screen.queryByText(/This looks like a DNS debug log/)).toBeNull();
   });
 });

@@ -163,6 +163,7 @@ function snapshotFor(filePath: string, message: string) {
 describe("switchToTab", () => {
   const fileA = "C:/Windows/CCM/Logs/AppEnforce.log";
   const fileB = "C:/Windows/CCM/Logs/CIAgent.log";
+  const fileC = "C:/Windows/CCM/Logs/ExecMgr.log";
   const folderSource: LogSource = { kind: "folder", path: "C:/Windows/CCM/Logs" };
 
   beforeEach(() => {
@@ -188,12 +189,12 @@ describe("switchToTab", () => {
       activeSource: { kind: "file", path: fileA },
     });
 
-    let resolveListing!: (value: {
+    let resolveListing: (value: {
       sourceKind: "folder";
       source: LogSource;
       entries: FolderEntry[];
       bundleMetadata: null;
-    }) => void;
+    }) => void = () => undefined;
     const listing = new Promise<{
       sourceKind: "folder";
       source: LogSource;
@@ -216,6 +217,7 @@ describe("switchToTab", () => {
         "CIAgent line",
       ]);
     });
+    expect(useLogStore.getState().selectedSourceFilePath).toBe(fileB);
 
     resolveListing({
       sourceKind: "folder",
@@ -249,5 +251,72 @@ describe("switchToTab", () => {
     await switchToTab(fileA, ctx);
     expect(useLogStore.getState().openFilePath).toBe(fileA);
     expect(useLogStore.getState().entries[0]?.message).toBe("AppEnforce line");
+  });
+
+  it("discards folder restoration from an inactive tab", async () => {
+    setCachedTabSnapshot(fileA, snapshotFor(fileA, "AppEnforce line"));
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    setCachedTabSnapshot(fileC, snapshotFor(fileC, "ExecMgr line"));
+    useLogStore.setState({
+      openFilePath: fileA,
+      selectedSourceFilePath: fileA,
+      entries: snapshotFor(fileA, "AppEnforce line").entries,
+      activeSource: { kind: "file", path: fileA },
+    });
+
+    const folderListing = (name: string, path: string) => ({
+      sourceKind: "folder" as const,
+      source: folderSource,
+      entries: [
+        {
+          name,
+          path,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: 0,
+        },
+      ],
+      bundleMetadata: null,
+    });
+    type Listing = ReturnType<typeof folderListing>;
+    let resolveB: (value: Listing) => void = () => undefined;
+    let resolveC: (value: Listing) => void = () => undefined;
+    const listingB = new Promise<Listing>((resolve) => {
+      resolveB = resolve;
+    });
+    const listingC = new Promise<Listing>((resolve) => {
+      resolveC = resolve;
+    });
+    commands.listLogSourceFolder
+      .mockReturnValueOnce(listingB)
+      .mockReturnValueOnce(listingC);
+
+    const ctx = {
+      sourceKind: "folder" as const,
+      sourcePath: folderSource.path,
+      source: folderSource,
+    };
+    const pendingB = switchToTab(fileB, ctx);
+    await vi.waitFor(() => {
+      expect(useLogStore.getState().openFilePath).toBe(fileB);
+    });
+
+    const pendingC = switchToTab(fileC, ctx);
+    await vi.waitFor(() => {
+      expect(useLogStore.getState().openFilePath).toBe(fileC);
+    });
+
+    resolveC(folderListing("ExecMgr.log", fileC));
+    await pendingC;
+    expect(useLogStore.getState().sourceEntries).toEqual([
+      expect.objectContaining({ path: fileC }),
+    ]);
+
+    resolveB(folderListing("CIAgent.log", fileB));
+    await pendingB;
+    expect(useLogStore.getState().openFilePath).toBe(fileC);
+    expect(useLogStore.getState().sourceEntries).toEqual([
+      expect.objectContaining({ path: fileC }),
+    ]);
   });
 });

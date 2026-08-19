@@ -6,7 +6,10 @@ import {
   FolderOpenRegular,
   FolderRegular,
 } from "@fluentui/react-icons";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  defaultRangeExtractor,
+  useVirtualizer,
+} from "@tanstack/react-virtual";
 import { useRegistryStore } from "../../stores/registry-store";
 import { flattenVisibleTree } from "../../lib/registry-utils";
 
@@ -27,14 +30,7 @@ export function KeyTree() {
 
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const virtualizer = useVirtualizer({
-    count: flatRows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 20,
-  });
-
-  // Scroll selected row into view when search navigates
+  // Scroll selected row into view when search navigates.
   const selectedIndex = useMemo(
     () =>
       selectedKeyPath
@@ -43,11 +39,38 @@ export function KeyTree() {
     [flatRows, selectedKeyPath]
   );
 
+  const rangeExtractor = useCallback(
+    (range: Parameters<typeof defaultRangeExtractor>[0]) => {
+      const indexes = defaultRangeExtractor(range);
+      if (
+        selectedIndex < 0 ||
+        selectedIndex >= flatRows.length ||
+        indexes.includes(selectedIndex)
+      ) {
+        return indexes;
+      }
+      return [...indexes, selectedIndex].sort((a, b) => a - b);
+    },
+    [flatRows.length, selectedIndex]
+  );
+
+  const virtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 20,
+    rangeExtractor,
+  });
+
   useEffect(() => {
     if (selectedIndex >= 0) {
       virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
     }
   }, [selectedIndex, virtualizer]);
+  const virtualItems = virtualizer.getVirtualItems();
+  const selectedItemMounted = virtualItems.some(
+    (virtualRow) => virtualRow.index === selectedIndex,
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -91,7 +114,9 @@ export function KeyTree() {
       role="tree"
       aria-label="Registry keys"
       aria-activedescendant={
-        selectedIndex >= 0 ? `registry-tree-item-${selectedIndex}` : undefined
+        selectedItemMounted && selectedIndex >= 0
+          ? `registry-tree-item-${selectedIndex}`
+          : undefined
       }
       tabIndex={0}
       onKeyDown={handleKeyDown}
@@ -108,7 +133,7 @@ export function KeyTree() {
           position: "relative",
         }}
       >
-        {virtualizer.getVirtualItems().map((virtualRow) => {
+        {virtualItems.map((virtualRow) => {
           const row = flatRows[virtualRow.index];
           const isSelected = row.node.fullPath === selectedKeyPath;
           const hasChildren = row.node.children.length > 0;

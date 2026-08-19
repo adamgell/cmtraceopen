@@ -86,7 +86,7 @@ export function FileAssociationsTab() {
               fontWeight: 600,
             }}
           >
-            CMTrace Open is currently registered as the handler for .log files.
+            CMTrace Open is currently registered as the handler for .log, .log_, .lo_, and .cmtlog files.
           </div>
           <button
             type="button"
@@ -119,7 +119,7 @@ export function FileAssociationsTab() {
             fontWeight: 600,
           }}
         >
-          Associate .log files with CMTrace Open
+          Associate .log, .log_, .lo_, and .cmtlog files with CMTrace Open
         </button>
       )}
 
