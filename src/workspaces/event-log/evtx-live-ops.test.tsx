@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
@@ -63,7 +64,7 @@ describe("event-log live operations", () => {
       return undefined;
     });
   });
-  function tailRecord(eventRecordId: number) {
+  function tailRecord(eventRecordId: number): EvtxRecord {
     return {
       id: 0,
       eventRecordId,
