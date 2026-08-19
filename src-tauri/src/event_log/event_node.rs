@@ -314,6 +314,7 @@ pub struct EventIdentityFields {
     pub device_id: Option<String>,
     pub user_id: Option<String>,
     pub process_start_time: Option<String>,
+    pub conflicts: Vec<String>,
 }
 
 fn normalized_field_name(value: &str) -> String {
@@ -324,41 +325,75 @@ fn normalized_field_name(value: &str) -> String {
         .collect()
 }
 
-fn first_named_value(fields: &[EvtxField], names: &[&str]) -> Option<String> {
-    fields.iter().find_map(|field| {
-        let name = normalized_field_name(&field.name);
-        names
-            .iter()
-            .any(|candidate| name == normalized_field_name(candidate))
-            .then(|| field.value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+fn unique_named_value(
+    fields: &[EvtxField],
+    names: &[&str],
+    label: &str,
+    conflicts: &mut Vec<String>,
+) -> Option<String> {
+    let matches = fields
+        .iter()
+        .filter(|field| {
+            let name = normalized_field_name(&field.name);
+            names
+                .iter()
+                .any(|candidate| name == normalized_field_name(candidate))
+        })
+        .collect::<Vec<_>>();
+    let first = matches.first()?;
+    let canonical = first.value.trim().to_ascii_lowercase();
+    if matches
+        .iter()
+        .skip(1)
+        .any(|field| field.value.trim().to_ascii_lowercase() != canonical)
+    {
+        conflicts.push(label.to_string());
+        return None;
+    }
+    Some(first.value.trim().to_string()).filter(|value| !value.is_empty())
 }
 
 /// Extracts only explicit identity fields; display text and timestamps are never promoted.
 pub fn extract_event_identity(fields: &[EvtxField]) -> EventIdentityFields {
+    let mut conflicts = Vec::new();
     EventIdentityFields {
-        activity_id: first_named_value(
+        activity_id: unique_named_value(
             fields,
             &["ActivityId", "ActivityID", "CorrelationId", "CorrelationID", "TransactionId"],
+            "activityId",
+            &mut conflicts,
         ),
-        related_activity_id: first_named_value(
+        related_activity_id: unique_named_value(
             fields,
             &["RelatedActivityId", "RelatedActivityID", "ParentActivityId"],
+            "relatedActivityId",
+            &mut conflicts,
         ),
-        session_id: first_named_value(fields, &["SessionId", "SessionID", "Session"]),
-        device_id: first_named_value(
+        session_id: unique_named_value(
+            fields,
+            &["SessionId", "SessionID", "Session"],
+            "sessionId",
+            &mut conflicts,
+        ),
+        device_id: unique_named_value(
             fields,
             &["DeviceId", "DeviceID", "AADDeviceId", "ManagedDeviceId"],
+            "deviceId",
+            &mut conflicts,
         ),
-        user_id: first_named_value(
+        user_id: unique_named_value(
             fields,
             &["UserId", "UserID", "UserSid", "UserSID", "AccountSid"],
+            "userId",
+            &mut conflicts,
         ),
-        process_start_time: first_named_value(
+        process_start_time: unique_named_value(
             fields,
             &["ProcessStartTime", "ProcessStartedAt", "StartTime"],
+            "processStartTime",
+            &mut conflicts,
         ),
+        conflicts,
     }
 }
 
@@ -579,5 +614,21 @@ mod tests {
             fields.provider.as_deref(),
             Some("Microsoft-Windows-Kernel-General")
         );
+    }
+
+    #[test]
+    fn conflicting_identity_aliases_are_not_order_dependent() {
+        let root = parse_event_xml(
+            r#"<Event><EventData>
+                <Data Name="ActivityId">activity-a</Data>
+                <Data Name="CorrelationID">activity-b</Data>
+            </EventData></Event>"#,
+        )
+        .expect("parses");
+        let fields = extract_event_data(&root);
+        let identity = extract_event_identity(&fields.fields);
+
+        assert_eq!(identity.activity_id, None);
+        assert_eq!(identity.conflicts, vec!["activityId"]);
     }
 }

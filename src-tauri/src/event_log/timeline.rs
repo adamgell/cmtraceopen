@@ -12,7 +12,7 @@ use cmtraceopen_parser::unified_timeline::{
     TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
-use super::event_node::parse_event_xml;
+use super::event_node::{extract_event_identity, extract_system_fields, parse_event_xml};
 use super::models::{EvtxLevel, EvtxRecord};
 ///
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
@@ -123,6 +123,36 @@ fn raw_correlation_ids(xml: &str) -> (Option<String>, Option<String>) {
     (value("ActivityID"), value("RelatedActivityID"))
 }
 
+fn identity_conflicts_for(record: &EvtxRecord) -> Vec<String> {
+    let identity = extract_event_identity(&record.event_data);
+    let mut conflicts = identity.conflicts;
+    let Ok(root) = parse_event_xml(&record.raw_xml) else {
+        return conflicts;
+    };
+    let system = extract_system_fields(&root);
+    for (label, system_value, data_value) in [
+        (
+            "activityId",
+            system.activity_id.as_deref(),
+            identity.activity_id.as_deref(),
+        ),
+        (
+            "relatedActivityId",
+            system.related_activity_id.as_deref(),
+            identity.related_activity_id.as_deref(),
+        ),
+    ] {
+        if let (Some(system_value), Some(data_value)) = (system_value, data_value) {
+            if !system_value.trim().eq_ignore_ascii_case(data_value.trim())
+                && !conflicts.iter().any(|existing| existing == label)
+            {
+                conflicts.push(label.to_string());
+            }
+        }
+    }
+    conflicts
+}
+
 
 fn machine_of(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -153,6 +183,7 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         device_id: record.device_id.clone(),
         user_id: record.user_id.clone().or_else(|| record.user_sid.clone()),
         process_start_time: record.process_start_time.clone(),
+        identity_conflicts: identity_conflicts_for(record),
         event_id: record.event_id,
         record_id: record.event_record_id,
         record_id_text: record_id_text(record),

@@ -65,6 +65,7 @@ export type TimelineOrigin =
       deviceId?: string | null;
       userId?: string | null;
       processStartTime?: string | null;
+      identityConflicts?: string[];
       eventId: number;
       /** Lossless decimal EventRecordID, when supplied by the backend. */
       recordIdText?: string | null;

@@ -13,6 +13,7 @@ import {
   originLabel,
   timelineCounts,
   unplacedSummary,
+  type TimelineCorrelationEdge,
   type TimelineSeverity,
   type UnifiedTimeline,
 } from "./unified-timeline";
@@ -26,6 +27,10 @@ const SEVERITY_COLORS: Record<TimelineSeverity, string> = {
   info: tokens.colorBrandForeground1,
   verbose: tokens.colorNeutralForeground4,
 };
+
+function correlationEdgeLabel(edge: TimelineCorrelationEdge): string {
+  return `${edge.strength} · ${edge.confidence} · ${edge.key.kind}: ${edge.key.value}`;
+}
 
 export interface UnifiedTimelineViewProps {
   timeline: UnifiedTimeline;
@@ -52,12 +57,14 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
   });
 
   const counts = useMemo(() => timelineCounts(timeline), [timeline]);
+  const correlationEdges = timeline.edges ?? [];
+  const coverageGaps = timeline.coverageGaps ?? [];
   const correlationCounts = useMemo(() => {
     const result = { exact: 0, candidate: 0, ambiguous: 0 };
-    for (const edge of timeline.edges ?? []) result[edge.strength] += 1;
+    for (const edge of correlationEdges) result[edge.strength] += 1;
     return result;
-  }, [timeline]);
-  const coverageGapCount = timeline.coverageGaps?.length ?? 0;
+  }, [correlationEdges]);
+  const coverageGapCount = coverageGaps.length;
   const dropped = useMemo(() => unplacedSummary(timeline), [timeline]);
 
   const fontSize = metrics.fontSize;
@@ -122,6 +129,64 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
           </span>
         )}
       </div>
+      {(correlationEdges.length > 0 || coverageGaps.length > 0) && (
+        <div
+          role="region"
+          aria-label="Correlation details"
+          style={{
+            display: "grid",
+            gap: "4px",
+            padding: "6px 12px",
+            borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+            backgroundColor: tokens.colorNeutralBackground2,
+            fontSize: `${smallFontSize}px`,
+            fontFamily: LOG_UI_FONT_FAMILY,
+            flexShrink: 0,
+          }}
+        >
+          {correlationEdges.map((edge) => (
+            <div
+              key={edge.id}
+              data-testid="correlation-edge"
+              style={{
+                display: "grid",
+                gap: "2px",
+                padding: "4px 6px",
+                borderLeft: `3px solid ${
+                  edge.strength === "ambiguous"
+                    ? tokens.colorPaletteMarigoldForeground1
+                    : tokens.colorNeutralStroke2
+                }`,
+              }}
+            >
+              <span>
+                {correlationEdgeLabel(edge)}
+              </span>
+              <span>
+                from: {edge.fromId} → {edge.toId ?? "unresolved"}
+              </span>
+              {edge.candidateIds.length > 0 && (
+                <span>candidate IDs: {edge.candidateIds.join(", ")}</span>
+              )}
+              {edge.evidence.map((evidence) => (
+                <span key={`${edge.id}-${evidence.originId}-${evidence.field}`}>
+                  {evidence.field}: {evidence.value} ({evidence.originId})
+                </span>
+              ))}
+              {edge.coverage.gap && (
+                <span>
+                  coverage reason: {edge.coverage.gap.reason} ({edge.coverage.gap.source})
+                </span>
+              )}
+            </div>
+          ))}
+          {coverageGaps.map((gap) => (
+            <div key={`${gap.source}-${gap.reason}`} data-testid="correlation-gap">
+              coverage: {gap.reason} ({gap.source})
+            </div>
+          ))}
+        </div>
+      )}
 
       {timeline.items.length === 0 ? (
         <div

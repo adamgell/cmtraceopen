@@ -94,7 +94,13 @@ describe("UnifiedTimelineView", () => {
               strength: "exact",
               confidence: "high",
               candidateIds: [],
-              evidence: [],
+              evidence: [
+                {
+                  originId: "source12:capture.evtx|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
+                  field: "activityId",
+                  value: "{activity}",
+                },
+              ],
               coverage: { state: "covered" },
             },
             {
@@ -128,5 +134,9 @@ describe("UnifiedTimelineView", () => {
     expect(screen.getByText("candidate 1")).toBeInTheDocument();
     expect(screen.getByText("ambiguous 1")).toBeInTheDocument();
     expect(screen.getByText("coverage gaps 1")).toBeInTheDocument();
+    expect(screen.getByText(/exact · high · activityId: \{activity\}/)).toBeInTheDocument();
+    expect(screen.getByText("candidate IDs: ambiguous-target, other-target")).toBeInTheDocument();
+    expect(screen.getByText(/coverage reason: duplicate/)).toBeInTheDocument();
+    expect(screen.getByText(/coverage: unsupported identity/)).toBeInTheDocument();
   });
 });

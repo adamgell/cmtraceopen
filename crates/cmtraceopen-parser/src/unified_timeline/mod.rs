@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::esp::{process_start_instant, EspTimestamp, EspTimestampKind};
 use crate::models::log_entry::{LogEntry, Severity};
 
 /// Severity normalized across both sides of the merge.
@@ -130,6 +131,9 @@ pub enum TimelineOrigin {
         /// Process start evidence paired with `process_id`, when present in event data.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         process_start_time: Option<String>,
+        /// Explicit identity aliases that disagreed in the source event.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        identity_conflicts: Vec<String>,
         /// Event ID, which identifies the event only in combination with the provider.
         event_id: u32,
         record_id: u64,
@@ -206,6 +210,8 @@ pub struct TimelineCorrelationObservation {
     pub exact_keys: Vec<TimelineCorrelationKey>,
     #[serde(default)]
     pub secondary_keys: Vec<TimelineCorrelationKey>,
+    #[serde(default)]
+    pub coverage_gaps: Vec<TimelineCoverageGap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,15 +355,55 @@ fn key_label(kind: &TimelineCorrelationKeyKind) -> &'static str {
     }
 }
 
+fn correlation_kind(kind: &TimelineCorrelationKeyKind) -> TimelineCorrelationKeyKind {
+    match kind {
+        TimelineCorrelationKeyKind::ActivityId | TimelineCorrelationKeyKind::RelatedActivityId => {
+            TimelineCorrelationKeyKind::ActivityId
+        }
+        other => other.clone(),
+    }
+}
+
+fn keys_match(left: &TimelineCorrelationKey, right: &TimelineCorrelationKey) -> bool {
+    correlation_kind(&left.kind) == correlation_kind(&right.kind) && left.value == right.value
+}
+
+fn validated_process_start(value: Option<&str>) -> Option<String> {
+    let raw = value?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let kind = if raw.len() == 25 && raw.as_bytes().get(14) == Some(&b'.') {
+        EspTimestampKind::Offset
+    } else if chrono::DateTime::parse_from_rfc3339(raw).is_ok() {
+        if raw.ends_with('Z') || raw.ends_with('z') || raw.ends_with("+00:00") {
+            EspTimestampKind::Utc
+        } else if !raw.ends_with("-00:00") {
+            EspTimestampKind::Offset
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    let timestamp = EspTimestamp {
+        raw_text: raw.to_string(),
+        original_offset: None,
+        normalized_utc: None,
+        kind,
+    };
+    process_start_instant(&timestamp).map(|_| raw.to_ascii_lowercase())
+}
 
 fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObservation {
-    let (origin_id, machine, exact_keys, secondary_keys) = match origin {
+    let (origin_id, machine, exact_keys, secondary_keys, coverage_gaps) = match origin {
         TimelineOrigin::Log { .. } => {
             let id = origin_id(origin);
-            (id, None, Vec::new(), Vec::new())
+            (id, None, Vec::new(), Vec::new(), Vec::new())
         }
         TimelineOrigin::Event {
             stable_id,
+            source,
             machine,
             provider,
             channel,
@@ -368,6 +414,7 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
             device_id,
             user_id,
             process_start_time,
+            identity_conflicts,
             event_id,
             record_id,
             record_id_text,
@@ -375,6 +422,13 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
         } => {
             let mut exact_keys = Vec::new();
             let mut secondary_keys = Vec::new();
+            let mut coverage_gaps = identity_conflicts
+                .iter()
+                .map(|field| TimelineCoverageGap {
+                    source: stable_id.clone(),
+                    reason: format!("conflicting explicit identity aliases for {field}"),
+                })
+                .collect::<Vec<_>>();
             let push_exact = |keys: &mut Vec<TimelineCorrelationKey>,
                               kind: TimelineCorrelationKeyKind,
                               value: Option<&str>| {
@@ -409,7 +463,8 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
             );
             let record = usable_record_text(record_id_text.as_deref())
                 .or_else(|| (*record_id != 0).then(|| record_id.to_string()));
-            if let (Some(provider), Some(channel), Some(record)) = (
+            if let (Some(source), Some(provider), Some(channel), Some(record)) = (
+                normalized_identity(source),
                 normalized_identity(provider),
                 normalized_identity(channel),
                 record,
@@ -417,7 +472,8 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                 exact_keys.push(TimelineCorrelationKey {
                     kind: TimelineCorrelationKeyKind::ProviderChannelEventRecord,
                     value: format!(
-                        "{}|{}|{}|{}",
+                        "{}|{}|{}|{}|{}",
+                        key_part(&source),
                         key_part(&provider),
                         key_part(&channel),
                         event_id,
@@ -425,16 +481,24 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                     ),
                 });
             }
-            if let (Some(process_id), Some(start)) = (
-                *process_id,
-                process_start_time.as_deref().and_then(normalized_identity),
-            ) {
-                if process_id != 0 {
+            if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
+                if let Some(start) = validated_process_start(process_start_time.as_deref()) {
                     exact_keys.push(TimelineCorrelationKey {
                         kind: TimelineCorrelationKeyKind::ProcessStart,
                         value: format!("{process_id}|{start}"),
                     });
+                } else if process_start_time.is_some() {
+                    coverage_gaps.push(TimelineCoverageGap {
+                        source: stable_id.clone(),
+                        reason: "process start identity was present but its timestamp was invalid"
+                            .to_string(),
+                    });
                 }
+            } else if process_start_time.is_some() {
+                coverage_gaps.push(TimelineCoverageGap {
+                    source: stable_id.clone(),
+                    reason: "process start identity requires a nonzero process id".to_string(),
+                });
             }
             if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
                 secondary_keys.push(TimelineCorrelationKey {
@@ -447,6 +511,7 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                 normalize_machine_identity(machine.as_deref()),
                 exact_keys,
                 secondary_keys,
+                coverage_gaps,
             )
         }
     };
@@ -455,6 +520,7 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
         machine,
         exact_keys,
         secondary_keys,
+        coverage_gaps,
     }
 }
 
@@ -506,7 +572,11 @@ pub fn correlate_observations(
         };
         for key in &observation.exact_keys {
             exact_groups
-                .entry((machine.clone(), key.kind.clone(), key.value.clone()))
+                .entry((
+                    machine.clone(),
+                    correlation_kind(&key.kind),
+                    key.value.clone(),
+                ))
                 .or_default()
                 .insert(observation.origin_id.clone());
         }
@@ -536,13 +606,23 @@ pub fn correlate_observations(
                     .entry(right.clone())
                     .or_default()
                     .insert(left.clone());
-                relation_keys
-                    .entry((left.clone(), right.clone()))
-                    .or_default()
-                    .insert(TimelineCorrelationKey {
-                        kind: kind.clone(),
-                        value: value.clone(),
-                    });
+                let relation = (left.clone(), right.clone());
+                for endpoint in [left, right] {
+                    if let Some(observation) = by_id.get(endpoint) {
+                        relation_keys
+                            .entry(relation.clone())
+                            .or_default()
+                            .extend(
+                                observation
+                                    .exact_keys
+                                    .iter()
+                                    .filter(|key| {
+                                        correlation_kind(&key.kind) == *kind && key.value == *value
+                                    })
+                                    .cloned(),
+                            );
+                    }
+                }
             }
         }
     }
@@ -583,7 +663,11 @@ pub fn correlate_observations(
     for (relation, keys) in relation_keys
         .into_iter()
         .map(|(relation, keys)| (relation, (keys, true)))
-        .chain(candidate_relations.into_iter().map(|(relation, keys)| (relation, (keys, false))))
+        .chain(
+            candidate_relations
+                .into_iter()
+                .map(|(relation, keys)| (relation, (keys, false))),
+        )
     {
         let (left, right) = relation;
         let (keys, exact) = keys;
@@ -620,7 +704,7 @@ pub fn correlate_observations(
                     .exact_keys
                     .iter()
                     .chain(observation.secondary_keys.iter())
-                    .find(|candidate| candidate.kind == key.kind && candidate.value == key.value)
+                    .find(|candidate| keys_match(candidate, &key))
                     .cloned()
                     .unwrap_or_else(|| key.clone());
                 evidence.push(TimelineCorrelationEvidence {
@@ -659,25 +743,40 @@ pub fn correlate_observations(
         });
     }
 
-    let mut gaps = Vec::new();
+    let mut gap_set = BTreeSet::new();
     for observation in ordered {
+        gap_set.extend(
+            observation
+                .coverage_gaps
+                .iter()
+                .cloned()
+                .map(|gap| (gap.source, gap.reason)),
+        );
+        let has_specific_gap = observation
+            .coverage_gaps
+            .iter()
+            .any(|gap| gap.source == observation.origin_id);
         if normalize_machine_identity(observation.machine.as_deref()).is_none() {
-            gaps.push(TimelineCoverageGap {
-                source: observation.origin_id.clone(),
-                reason: "machine identity unavailable; exact correlation is restricted".to_string(),
-            });
-        } else if observation.exact_keys.is_empty() {
-            gaps.push(TimelineCoverageGap {
-                source: observation.origin_id.clone(),
-                reason: if observation.secondary_keys.is_empty() {
+            gap_set.insert((
+                observation.origin_id.clone(),
+                "machine identity unavailable; exact correlation is restricted".to_string(),
+            ));
+        } else if observation.exact_keys.is_empty() && !has_specific_gap {
+            gap_set.insert((
+                observation.origin_id.clone(),
+                if observation.secondary_keys.is_empty() {
                     "no explicit identity keys were present; timestamp-only correlation is not causal"
                         .to_string()
                 } else {
                     "only secondary identity was present; correlation remains low confidence".to_string()
                 },
-            });
+            ));
         }
     }
+    let gaps = gap_set
+        .into_iter()
+        .map(|(source, reason)| TimelineCoverageGap { source, reason })
+        .collect();
     (edges, gaps)
 }
 
@@ -799,11 +898,12 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             device_id,
             user_id,
             process_start_time,
+            identity_conflicts,
             event_id,
             record_id,
             record_id_text,
         } => format!(
-            "event|{stable}|{source}|{machine}|{bundle}|{channel}|{provider}|{process}|{activity}|{related}|{session}|{device}|{user}|{process_start}|{event_id:010}|{record_id:020}|{record_text}",
+            "event|{stable}|{source}|{machine}|{bundle}|{channel}|{provider}|{process}|{activity}|{related}|{session}|{device}|{user}|{process_start}|{conflicts}|{event_id:010}|{record_id:020}|{record_text}",
             stable = key_part(stable_id),
             source = key_part(source),
             machine = optional_text_key(machine.as_deref()),
@@ -817,6 +917,11 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             device = optional_text_key(device_id.as_deref()),
             user = optional_text_key(user_id.as_deref()),
             process_start = optional_text_key(process_start_time.as_deref()),
+            conflicts = identity_conflicts
+                .iter()
+                .map(|conflict| key_part(conflict))
+                .collect::<Vec<_>>()
+                .join(","),
             event_id = event_id,
             record_id = record_id,
             record_text = optional_text_key(record_id_text.as_deref()),
@@ -905,6 +1010,7 @@ mod tests {
                 device_id: None,
                 user_id: None,
                 process_start_time: None,
+                identity_conflicts: Vec::new(),
                 event_id: 76,
                 record_id: 1,
                 record_id_text: Some("1".to_string()),
@@ -1080,6 +1186,7 @@ mod tests {
             device_id: None,
             user_id: None,
             process_start_time: None,
+            identity_conflicts: Vec::new(),
             event_id: 326,
             record_id: 42,
             record_id_text: Some("42".into()),
@@ -1248,7 +1355,130 @@ mod tests {
                     value: (*value).into(),
                 })
                 .collect(),
+            coverage_gaps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn related_activity_identity_matches_an_activity_identity_with_directional_evidence() {
+        let observations = [
+            observation(
+                "producer",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "activity-1")],
+                &[],
+            ),
+            observation(
+                "child",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::RelatedActivityId, "activity-1")],
+                &[],
+            ),
+        ];
+
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].strength, TimelineCorrelationStrength::Exact);
+        assert!(gaps.is_empty());
+        assert_eq!(
+            edges[0]
+                .evidence
+                .iter()
+                .find(|evidence| evidence.origin_id == "child")
+                .map(|evidence| evidence.field.as_str()),
+            Some("relatedActivityId")
+        );
+    }
+
+    #[test]
+    fn provider_record_identity_is_scoped_to_source() {
+        let mut first = event(1_000, "first", TimelineSeverity::Info);
+        let mut second = event(2_000, "second", TimelineSeverity::Info);
+        for (item, source) in [(&mut first, "capture-a.evtx"), (&mut second, "capture-b.evtx")] {
+            if let TimelineOrigin::Event {
+                stable_id,
+                source: origin_source,
+                ..
+            } = &mut item.origin
+            {
+                *origin_source = source.to_string();
+                *stable_id = format!("{source}/Application#1");
+            }
+        }
+
+        let observations = [
+            observation_from_origin(&first.origin),
+            observation_from_origin(&second.origin),
+        ];
+        let (edges, _) = correlate_observations(&observations);
+
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn malformed_process_start_is_rejected_with_a_coverage_gap() {
+        let mut first = event(1_000, "first", TimelineSeverity::Info);
+        let mut second = event(2_000, "second", TimelineSeverity::Info);
+        for (index, item) in [&mut first, &mut second].into_iter().enumerate() {
+            if let TimelineOrigin::Event {
+                stable_id,
+                process_id,
+                process_start_time,
+                record_id,
+                record_id_text,
+                ..
+            } = &mut item.origin
+            {
+                *stable_id = format!("process-{index}");
+                *process_id = Some(123);
+                *process_start_time = Some("not-a-timestamp".to_string());
+                *record_id = 0;
+                *record_id_text = None;
+            }
+        }
+
+        let observations = [
+            observation_from_origin(&first.origin),
+            observation_from_origin(&second.origin),
+        ];
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert!(edges.iter().all(|edge| edge.strength != TimelineCorrelationStrength::Exact));
+        assert!(gaps.iter().any(|gap| gap.reason.contains("process start")));
+    }
+
+    #[test]
+    fn valid_process_start_is_an_exact_pid_identity() {
+        let mut first = event(1_000, "first", TimelineSeverity::Info);
+        let mut second = event(2_000, "second", TimelineSeverity::Info);
+        for (index, item) in [&mut first, &mut second].into_iter().enumerate() {
+            if let TimelineOrigin::Event {
+                stable_id,
+                process_id,
+                process_start_time,
+                record_id,
+                record_id_text,
+                ..
+            } = &mut item.origin
+            {
+                *stable_id = format!("valid-process-{index}");
+                *process_id = Some(123);
+                *process_start_time = Some("2026-08-18T10:00:00Z".to_string());
+                *record_id = 0;
+                *record_id_text = None;
+            }
+        }
+
+        let observations = [
+            observation_from_origin(&first.origin),
+            observation_from_origin(&second.origin),
+        ];
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].key.kind, TimelineCorrelationKeyKind::ProcessStart);
+        assert!(gaps.is_empty());
     }
 
     #[test]
