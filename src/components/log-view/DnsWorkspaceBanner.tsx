@@ -18,12 +18,13 @@ export function DnsWorkspaceBanner() {
   const parserSelection = useLogStore((s) => s.parserSelection);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
-  const dismissedDnsBannerPath = useUiStore((s) => s.dismissedDnsBannerPath);
-  const setDismissedDnsBannerPath = useUiStore((s) => s.setDismissedDnsBannerPath);
+  const dismissedDnsBannerPaths = useUiStore((s) => s.dismissedDnsBannerPaths);
+  const dismissDnsBannerPath = useUiStore((s) => s.dismissDnsBannerPath);
 
   const parser = parserSelection?.parser;
   const label = parser ? PARSER_LABELS[parser] : undefined;
-  const dismissed = openFilePath !== null && dismissedDnsBannerPath === openFilePath;
+  const dismissed =
+    openFilePath !== null && dismissedDnsBannerPaths.includes(openFilePath);
 
   const handleOpenInWorkspace = useCallback(() => {
     const logState = useLogStore.getState();
@@ -65,7 +66,7 @@ export function DnsWorkspaceBanner() {
         appearance="subtle"
         icon={<DismissRegular />}
         onClick={() => {
-          if (openFilePath) setDismissedDnsBannerPath(openFilePath);
+          if (openFilePath) dismissDnsBannerPath(openFilePath);
         }}
         aria-label="Dismiss"
       />

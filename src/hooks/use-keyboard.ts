@@ -19,6 +19,17 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+function isNativeTextEditingShortcut(
+  event: KeyboardEvent,
+  isInput: boolean,
+): boolean {
+  if (!isInput || !(event.ctrlKey || event.metaKey)) {
+    return false;
+  }
+
+  return /^[acvxyz]$/i.test(event.key);
+}
+
 function isLogListFocused(): boolean {
   const active = document.activeElement;
 
@@ -27,6 +38,9 @@ function isLogListFocused(): boolean {
   }
 
   return active.closest("[data-log-list='true']") !== null;
+}
+function hasModalSurface(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
 }
 
 function getDisplayEntryIds(): number[] {
@@ -106,24 +120,37 @@ function navigateSelection(key: string): boolean {
  */
 export function useKeyboard() {
   const showFindBarOpen = useUiStore((state) => state.showFindBar);
-  // A boolean, not the prompt itself: only openness matters here, and selecting
-  // the object would re-register the listener on every identity change.
   const elevationPromptOpen = useUiStore(
     (state) => state.elevationPrompt !== null,
   );
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
-    (state) => state.showErrorLookupDialog
+    (state) => state.showErrorLookupDialog,
   );
   const showAboutDialogOpen = useUiStore((state) => state.showAboutDialog);
   const showSettingsDialogOpen = useUiStore(
-    (state) => state.showSettingsDialog
+    (state) => state.showSettingsDialog,
   );
   const showEvidenceBundleDialogOpen = useUiStore(
-    (state) => state.showEvidenceBundleDialog
+    (state) => state.showEvidenceBundleDialog,
+  );
+  const showGuidRegistryDialogOpen = useUiStore(
+    (state) => state.showGuidRegistryDialog,
+  );
+  const showMergeTabsDialogOpen = useUiStore(
+    (state) => state.showMergeTabsDialog,
+  );
+  const showDiffConfigDialogOpen = useUiStore(
+    (state) => state.showDiffConfigDialog,
   );
   const showFileAssociationPromptOpen = useUiStore(
-    (state) => state.showFileAssociationPrompt
+    (state) => state.showFileAssociationPrompt,
+  );
+  const showCollectDiagnosticsDialogOpen = useUiStore(
+    (state) => state.showCollectDiagnosticsDialog,
+  );
+  const collectionResultOpen = useUiStore(
+    (state) => state.collectionResult !== null,
   );
   const showUpdateDialogOpen = useUiStore(
     (state) => state.showUpdateDialog,
@@ -148,36 +175,36 @@ export function useKeyboard() {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
-      // The elevation prompt is a true modal: it traps focus and dims the app
-      // behind it. Unlike the find bar or the filter dialog, which deliberately
-      // leave the surrounding shortcuts live, nothing here may act on content
-      // the user cannot see or reach.
-      if (elevationPromptOpen) {
-        // Cancel the WebView's own Ctrl/Cmd handling too, not just the app's.
-        // Returning without this would suppress our handlers while still
-        // letting find-in-page or zoom fire behind the modal.
-        if (event.ctrlKey || event.metaKey) event.preventDefault();
-        // Plain keys are deliberately left alone: the dialog's focus trap owns
-        // Tab and its own listener owns Escape, and preventDefault here would
-        // break both.
-        return;
-      }
-      if (showUpdateDialogOpen) {
-        if (event.ctrlKey || event.metaKey) event.preventDefault();
-        return;
-      }
-
-      const ctrl = event.ctrlKey || event.metaKey;
+      const suppressibleShortcut =
+        event.ctrlKey || event.metaKey || /^F\d{1,2}$/.test(event.key);
       const isInput = isTypingTarget(event.target);
-      const isDialogOpen =
-        showFindBarOpen ||
+
+      // Modal surfaces own Escape/Tab handling, but global app and browser
+      // shortcuts must not operate on content hidden behind them.
+      const modalSurfaceOpen =
+        elevationPromptOpen ||
         showFilterDialogOpen ||
         showErrorLookupDialogOpen ||
         showAboutDialogOpen ||
         showSettingsDialogOpen ||
         showEvidenceBundleDialogOpen ||
+        showGuidRegistryDialogOpen ||
+        showMergeTabsDialogOpen ||
+        showDiffConfigDialogOpen ||
+        showFileAssociationPromptOpen ||
+        showCollectDiagnosticsDialogOpen ||
+        collectionResultOpen ||
         showUpdateDialogOpen ||
-        showFileAssociationPromptOpen;
+        hasModalSurface();
+      if (modalSurfaceOpen) {
+        if (suppressibleShortcut && !isNativeTextEditingShortcut(event, isInput)) {
+          event.preventDefault();
+        }
+        return;
+      }
+
+      const ctrl = event.ctrlKey || event.metaKey;
+      const isDialogOpen = showFindBarOpen || modalSurfaceOpen;
 
       if (ctrl && !isInput && commandState.canAdjustTextSize) {
         const normalizedKey = event.key.toLowerCase();
@@ -348,6 +375,7 @@ export function useKeyboard() {
     commandState.canAdjustTextSize,
     decreaseLogListTextSize,
     dismissTransientDialogs,
+    collectionResultOpen,
     elevationPromptOpen,
     findNext,
     findPrevious,
@@ -363,6 +391,10 @@ export function useKeyboard() {
     showFilterDialog,
     showFilterDialogOpen,
     showFileAssociationPromptOpen,
+    showCollectDiagnosticsDialogOpen,
+    showDiffConfigDialogOpen,
+    showGuidRegistryDialogOpen,
+    showMergeTabsDialogOpen,
     showUpdateDialogOpen,
     showFindBar,
     showFindBarOpen,

@@ -180,7 +180,7 @@ interface UiState {
   defaultShowInfoPane: boolean;
   confirmTabClose: boolean;
   showUpdateDialog: boolean;
-  dismissedDnsBannerPath: string | null;
+  dismissedDnsBannerPaths: string[];
   recentSessions: string[];
   graphApiEnabled: boolean;
   graphApiStatus: GraphApiPhase;
@@ -250,7 +250,7 @@ interface UiState {
   setCollectionResult: (result: CollectionResult | null) => void;
   setShowCollectDiagnosticsDialog: (show: boolean) => void;
   setShowUpdateDialog: (show: boolean) => void;
-  setDismissedDnsBannerPath: (path: string | null) => void;
+  dismissDnsBannerPath: (path: string) => void;
   addRecentSession: (path: string) => void;
   clearRecentSessions: () => void;
   setGraphApiEnabled: (enabled: boolean) => void;
@@ -346,7 +346,7 @@ export const useUiStore = create<UiState>()(
       collectionResult: null,
       showCollectDiagnosticsDialog: false,
       showUpdateDialog: false,
-      dismissedDnsBannerPath: null,
+      dismissedDnsBannerPaths: [],
       recentSessions: [],
       graphApiEnabled: false,
       graphApiStatus: "disconnected",
@@ -642,7 +642,12 @@ export const useUiStore = create<UiState>()(
       setCollectionResult: (result) => set({ collectionResult: result }),
       setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
       setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
-      setDismissedDnsBannerPath: (path) => set({ dismissedDnsBannerPath: path }),
+      dismissDnsBannerPath: (path) =>
+        set((state) => ({
+          dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)
+            ? state.dismissedDnsBannerPaths
+            : [...state.dismissedDnsBannerPaths, path],
+        })),
       addRecentSession: (path) =>
         set((state) => {
           const filtered = state.recentSessions.filter((p) => p !== path);

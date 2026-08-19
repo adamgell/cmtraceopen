@@ -25,6 +25,7 @@ import type {
   LogSource,
   ParseResult,
 } from "../types/log";
+import type { RegistryParseResult } from "../types/registry";
 
 function buildTabSourceContext(source: LogSource): TabSourceContext {
   return {
@@ -60,6 +61,11 @@ const KNOWN_SOURCE_BY_PRESET_MENU_ID: Record<string, string> = {
 };
 
 const KNOWN_SOURCE_BY_MENU_ID: Record<string, string> = {};
+let tabSwitchGeneration = 0;
+
+function isCurrentTabSwitch(generation?: number): boolean {
+  return generation === undefined || generation === tabSwitchGeneration;
+}
 
 export interface KnownSourceCatalogActionIds {
   sourceId?: string | null;
@@ -159,12 +165,23 @@ async function stopCurrentTailIfNeeded(nextFilePath: string | null): Promise<voi
 async function applyParseResultToStore(
   source: LogSource,
   selectedFilePath: string,
-  result: ParseResult
+  result: ParseResult,
+  switchGeneration?: number,
 ): Promise<void> {
+  if (!isCurrentTabSwitch(switchGeneration)) return;
   const state = useLogStore.getState();
-
   // Registry files use a dedicated viewer — load structured data instead of log entries
   if (result.parserSelection?.parser === "registry") {
+    let registryData: RegistryParseResult;
+    try {
+      registryData = await parseRegistryFile(selectedFilePath);
+    } catch (err) {
+      console.error("[log-source] failed to load registry file", err);
+      throw err;
+    }
+    const { setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
+    if (!isCurrentTabSwitch(switchGeneration)) return;
+
     state.setActiveSource(source);
     state.setSelectedSourceFilePath(selectedFilePath);
     state.setSourceOpenMode("single-file");
@@ -177,7 +194,6 @@ async function applyParseResultToStore(
       message: `Loaded ${getBaseName(selectedFilePath)}.`,
     });
 
-    // Cache a minimal snapshot so tab switching works
     setCachedTabSnapshot(selectedFilePath, {
       entries: [],
       formatDetected: result.formatDetected,
@@ -191,17 +207,8 @@ async function applyParseResultToStore(
 
     const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
     useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source), "registry");
-
-    // Load registry data asynchronously — the RegistryViewer component will pick it up
-    try {
-      const { setCachedRegistry } = await import("../stores/registry-store");
-      const regData = await parseRegistryFile(selectedFilePath);
-      setCachedRegistry(selectedFilePath, regData);
-      const { useRegistryStore } = await import("../stores/registry-store");
-      useRegistryStore.getState().setRegistryData(regData);
-    } catch (err) {
-      console.error("[log-source] failed to load registry file", err);
-    }
+    setCachedRegistry(selectedFilePath, registryData);
+    useRegistryStore.getState().setRegistryData(registryData);
     return;
   }
 
@@ -550,12 +557,22 @@ export async function getKnownSourceMetadataById(
 
   return knownSources.find((source) => source.id === sourceId) ?? null;
 }
+export function loadSelectedLogFile(
+  filePath: string,
+  source: LogSource,
+): Promise<ParseResult>;
+export function loadSelectedLogFile(
+  filePath: string,
+  source: LogSource,
+  switchGeneration: number,
+): Promise<ParseResult | null>;
 export async function loadSelectedLogFile(
   filePath: string,
-  source: LogSource
-): Promise<ParseResult> {
+  source: LogSource,
+  switchGeneration?: number,
+): Promise<ParseResult | null> {
+  if (!isCurrentTabSwitch(switchGeneration)) return null;
   const state = useLogStore.getState();
-
   // Check cache first — if the file was already parsed (e.g., during folder
   // batch load), skip the IPC call entirely and apply from cache.
   const cached = getCachedTabSnapshot(filePath);
@@ -563,6 +580,18 @@ export async function loadSelectedLogFile(
     // Registry files from cache — load via the registry pipeline
     if (cached.parserSelection?.parser === "registry") {
       console.info("[log-source] loadSelectedLogFile registry from cache", { filePath });
+
+      const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
+      if (!isCurrentTabSwitch(switchGeneration)) return null;
+
+      let regData = getCachedRegistry(filePath);
+      if (!regData) {
+        regData = await parseRegistryFile(filePath);
+        if (!isCurrentTabSwitch(switchGeneration)) return null;
+        setCachedRegistry(filePath, regData);
+      }
+      if (!isCurrentTabSwitch(switchGeneration)) return null;
+
       state.setSelectedSourceFilePath(filePath);
       state.setSourceOpenMode("single-file");
       state.setEntries([]);
@@ -574,14 +603,6 @@ export async function loadSelectedLogFile(
       });
       const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
       useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source), "registry");
-
-      // Load registry data
-      const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
-      let regData = getCachedRegistry(filePath);
-      if (!regData) {
-        regData = await parseRegistryFile(filePath);
-        setCachedRegistry(filePath, regData);
-      }
       useRegistryStore.getState().setRegistryData(regData);
 
       return {
@@ -635,19 +656,30 @@ export async function loadSelectedLogFile(
     filePath,
   });
 
+  if (!isCurrentTabSwitch(switchGeneration)) return null;
   state.setLoading(true);
   state.setSourceStatus({
     kind: "loading",
     message: `Loading ${getBaseName(filePath)}...`,
   });
-  await stopCurrentTailIfNeeded(filePath);
 
   try {
+    await stopCurrentTailIfNeeded(filePath);
+    if (!isCurrentTabSwitch(switchGeneration)) return null;
+
     const result = await openLogFile(filePath);
-    await applyParseResultToStore(source, result.filePath, result);
+    if (!isCurrentTabSwitch(switchGeneration)) return result;
+    await applyParseResultToStore(
+      source,
+      result.filePath,
+      result,
+      switchGeneration,
+    );
     return result;
   } finally {
-    state.setLoading(false);
+    if (isCurrentTabSwitch(switchGeneration)) {
+      state.setLoading(false);
+    }
   }
 }
 
@@ -662,10 +694,12 @@ export async function switchToTab(
 ): Promise<void> {
   const logState = useLogStore.getState();
   const currentPath = logState.openFilePath;
+  const generation = ++tabSwitchGeneration;
+  logState.setLoading(false);
 
-  // Already showing this file — nothing to do
+  // Already showing this file — invalidate any older pending switch and stop
+  // its loading indicator.
   if (currentPath === filePath) return;
-  folderRestoreGeneration += 1;
 
   // ── Registry tab: restore from registry cache ──────────────────────
   {
@@ -679,7 +713,9 @@ export async function switchToTab(
 
       // Restore sidebar context
       if (sourceContext && sourceContext.sourceKind !== "file") {
-        await restoreFolderContext(logState, sourceContext);
+        if (!(await restoreFolderContext(logState, sourceContext, generation))) {
+          return;
+        }
       } else if (sourceContext?.sourceKind === "file") {
         logState.setActiveSource(sourceContext.source);
         logState.setSourceEntries([]);
@@ -688,11 +724,13 @@ export async function switchToTab(
 
       // Restore registry data from cache (or reload)
       const { getCachedRegistry, setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
+      if (!isCurrentTabSwitch(generation)) return;
       const cachedReg = getCachedRegistry(filePath);
       if (cachedReg) {
         useRegistryStore.getState().setRegistryData(cachedReg);
       } else {
         const regData = await parseRegistryFile(filePath);
+        if (!isCurrentTabSwitch(generation)) return;
         setCachedRegistry(filePath, regData);
         useRegistryStore.getState().setRegistryData(regData);
       }
@@ -705,8 +743,14 @@ export async function switchToTab(
   if (cached) {
     console.info("[log-source] tab switch from cache (instant)", { filePath });
 
-    if (sourceContext?.sourceKind === "file") {
-      logState.setActiveSource(sourceContext.source);
+    const standaloneSource =
+      sourceContext?.sourceKind === "file"
+        ? sourceContext.source
+        : sourceContext === null
+          ? { kind: "file" as const, path: filePath }
+          : null;
+    if (standaloneSource) {
+      logState.setActiveSource(standaloneSource);
       logState.setSourceEntries([]);
       logState.setBundleMetadata(null);
     }
@@ -730,7 +774,12 @@ export async function switchToTab(
 
     if (sourceContext && sourceContext.sourceKind !== "file") {
       try {
-        await restoreFolderContext(useLogStore.getState(), sourceContext);
+        const restored = await restoreFolderContext(
+          useLogStore.getState(),
+          sourceContext,
+          generation,
+        );
+        if (!restored) return;
       } catch (error) {
         console.warn("[log-source] folder context restore failed after tab switch", {
           filePath,
@@ -740,13 +789,15 @@ export async function switchToTab(
     }
     return;
   }
-
-  // ── Cache miss — fall back to IPC load ─────────────────────────────
-  console.info("[log-source] tab switch cache miss, loading from disk", { filePath });
-
-  // No source context (legacy tab) — fall back to the old path
+  // Migrated tabs retain a file path but no source context. Resolve the path
+  // through the same lane selector, then use the generation-aware file loader.
   if (!sourceContext) {
-    await loadPathAsLogSource(filePath);
+    const legacySource = await resolveSourceForPath(filePath, false, false);
+    if (!isCurrentTabSwitch(generation)) return;
+    await loadSelectedLogFile(filePath, legacySource, generation);
+    if (!isCurrentTabSwitch(generation)) return;
+    logState.setSourceEntries([]);
+    logState.setBundleMetadata(null);
     return;
   }
 
@@ -754,22 +805,28 @@ export async function switchToTab(
 
   if (sourceContext.sourceKind === "file") {
     // Standalone file — load directly
-    await loadLogSource(source);
+    await loadSelectedLogFile(filePath, source, generation);
+    if (!isCurrentTabSwitch(generation)) return;
+    logState.setSourceEntries([]);
+    logState.setBundleMetadata(null);
     return;
   }
 
   // Folder or known-source tab — restore sidebar then load the file
-  await restoreFolderContext(logState, sourceContext);
-  await loadSelectedLogFile(filePath, source);
+  if (!(await restoreFolderContext(logState, sourceContext, generation))) {
+    return;
+  }
+  await loadSelectedLogFile(filePath, source, generation);
 }
-
-let folderRestoreGeneration = 0;
 
 /** Restore the sidebar folder listing if the active source changed. */
 async function restoreFolderContext(
   logState: ReturnType<typeof useLogStore.getState>,
-  sourceContext: TabSourceContext
-): Promise<void> {
+  sourceContext: TabSourceContext,
+  restoreGeneration: number,
+): Promise<boolean> {
+  if (!isCurrentTabSwitch(restoreGeneration)) return false;
+
   const { source } = sourceContext;
   const currentSource = logState.activeSource;
   const sourceChanged =
@@ -778,22 +835,20 @@ async function restoreFolderContext(
     getLogSourcePath(currentSource) !== getLogSourcePath(source);
 
   if (!sourceChanged) {
-    return;
+    return true;
   }
 
-  const generation = ++folderRestoreGeneration;
   console.info("[log-source] restoring folder context", {
     sourceKind: source.kind,
     sourcePath: getLogSourcePath(source),
   });
 
   const listing = await listLogSourceFolder(source);
-  if (generation !== folderRestoreGeneration) {
-    return;
-  }
+  if (!isCurrentTabSwitch(restoreGeneration)) return false;
   logState.setActiveSource(source);
   logState.setSourceEntries(listing.entries);
   logState.setBundleMetadata(listing.bundleMetadata ?? null);
+  return true;
 }
 
 /**
@@ -1028,6 +1083,8 @@ export async function loadLogSource(
   source: LogSource,
   options: LoadLogSourceOptions = {}
 ): Promise<LoadLogSourceResult> {
+  // A new source load supersedes any pending tab restoration.
+  ++tabSwitchGeneration;
   const state = useLogStore.getState();
 
   console.info("[log-source] loading source container", {

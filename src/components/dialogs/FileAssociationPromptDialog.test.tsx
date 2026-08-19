@@ -39,6 +39,9 @@ describe("FileAssociationPromptDialog", () => {
     fireEvent.keyDown(window, { key: "Tab" });
     expect(document.activeElement).toBe(first);
 
+    opener.focus();
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
     rendered.rerender(
       <FileAssociationPromptDialog isOpen={false} onClose={() => {}} />,
     );

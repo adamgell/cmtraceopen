@@ -465,7 +465,12 @@ describe("useKeyboard native menu parity", () => {
       showAboutDialog: false,
       showSettingsDialog: false,
       showEvidenceBundleDialog: false,
+      showGuidRegistryDialog: false,
+      showMergeTabsDialog: false,
+      showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
+      showCollectDiagnosticsDialog: false,
+      collectionResult: null,
     });
   });
 
@@ -518,6 +523,55 @@ describe("useKeyboard native menu parity", () => {
     useUiStore.setState({ elevationPrompt: null });
   });
 
+  it("suppresses shortcuts for collection overlays and DOM modal surfaces", () => {
+    useUiStore.setState({
+      currentPlatform: "windows",
+      showCollectDiagnosticsDialog: true,
+    });
+    renderHook(() => useKeyboard());
+
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+    expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
+
+    cleanup();
+    useUiStore.setState({
+      showCollectDiagnosticsDialog: false,
+      collectionResult: {
+        bundlePath: "C:/Evidence",
+        bundleId: "bundle-fixture",
+        artifactCounts: { collected: 1, missing: 0, failed: 0, total: 1 },
+        durationMs: 1,
+        gaps: [],
+      },
+    });
+    renderHook(() => useKeyboard());
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+
+    cleanup();
+    useUiStore.setState({ collectionResult: null });
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+    const input = document.createElement("input");
+    modal.appendChild(input);
+    renderHook(() => useKeyboard());
+    expect(
+      fireEvent.keyDown(window, { key: "h", ctrlKey: true }),
+    ).toBe(false);
+    input.focus();
+    expect(
+      fireEvent.keyDown(input, { key: "v", ctrlKey: true }),
+    ).toBe(true);
+    expect(
+      fireEvent.keyDown(input, { key: "o", ctrlKey: true }),
+    ).toBe(false);
+    modal.remove();
+  });
   it("restarts a non-log workspace without dragging a stale source along", async () => {
     useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
     // activeSource survives a workspace switch, so it is still set here even

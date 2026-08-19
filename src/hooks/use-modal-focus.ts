@@ -62,7 +62,7 @@ export function useModalFocus(
 
       if (!active || !surface.contains(active)) {
         event.preventDefault();
-        first.focus();
+        (event.shiftKey ? last : first).focus();
         return;
       }
       if (event.shiftKey && active === first) {
