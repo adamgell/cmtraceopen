@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn captured_metadata_renders_the_requested_event_version_without_registry() {
         let rendered = metadata()
-            .render_event_description(100, Some(0), &insertions(&["portable".into()]))
+            .render_event_description(100, Some(0), &insertions(&["portable"]))
             .expect("event description");
         assert_eq!(rendered.text, "v0 portable");
         assert!(rendered.is_complete());
