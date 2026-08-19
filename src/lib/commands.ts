@@ -512,27 +512,27 @@ function decodePathKindResponse(
   return value;
 }
 
-const WORKSPACE_IDS: readonly WorkspaceId[] = [
-  "log",
-  "intune",
-  "new-intune",
-  "dsregcmd",
-  "macos-diag",
-  "macos-jamf",
-  "deployment",
-  "event-log",
-  "esp-diagnostics",
-  "sccm",
-  "secureboot",
-  "sysmon",
-  "timeline",
-  "dns-dhcp",
-];
+const WORKSPACE_IDS: Record<WorkspaceId, true> = {
+  log: true,
+  intune: true,
+  "new-intune": true,
+  dsregcmd: true,
+  "macos-diag": true,
+  "macos-jamf": true,
+  deployment: true,
+  "event-log": true,
+  "esp-diagnostics": true,
+  sccm: true,
+  secureboot: true,
+  sysmon: true,
+  timeline: true,
+  "dns-dhcp": true,
+};
 
 function isWorkspaceIdValue(value: unknown): value is WorkspaceId {
   return (
     typeof value === "string" &&
-    WORKSPACE_IDS.some((workspaceId) => workspaceId === value)
+    Object.prototype.hasOwnProperty.call(WORKSPACE_IDS, value)
   );
 }
 
