@@ -30,7 +30,14 @@ export function useDragDrop() {
 
         if (activeWorkspace === "timeline") {
           for (const path of paths) {
-            await openPathForActiveWorkspace(path);
+            try {
+              await openPathForActiveWorkspace(path);
+            } catch (error) {
+              console.error("[drag-drop] failed to open dropped path", {
+                path,
+                error,
+              });
+            }
           }
           return;
         }

@@ -741,7 +741,13 @@ export async function switchToTab(
 
       // Restore sidebar context
       if (sourceContext && sourceContext.sourceKind !== "file") {
-        if (!(await restoreFolderContext(logState, sourceContext, generation))) {
+        if (
+          !(await restoreFolderContext(
+            useLogStore.getState(),
+            sourceContext,
+            generation,
+          ))
+        ) {
           return;
         }
       } else if (sourceContext?.sourceKind === "file") {
@@ -841,7 +847,13 @@ export async function switchToTab(
   }
 
   // Folder or known-source tab — restore sidebar then load the file
-  if (!(await restoreFolderContext(logState, sourceContext, generation))) {
+  if (
+    !(await restoreFolderContext(
+      useLogStore.getState(),
+      sourceContext,
+      generation,
+    ))
+  ) {
     return;
   }
   await loadSelectedLogFile(filePath, source, generation);

@@ -127,6 +127,32 @@ describe("useDragDrop", () => {
     expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2);
     expect(loadFilesAsLogSourceMock).not.toHaveBeenCalled();
   });
+  it("continues opening timeline drops after one path fails", async () => {
+    useUiStore.setState({
+      activeWorkspace: "timeline",
+      activeView: "timeline",
+    });
+    openPathForActiveWorkspaceMock
+      .mockRejectedValueOnce(new Error("unreadable"))
+      .mockResolvedValue(undefined);
+    renderHook(() => useDragDrop());
+
+    await latestHandler()({
+      payload: {
+        type: "drop",
+        paths: ["/tmp/unreadable.log", "/tmp/readable.log"],
+      },
+    });
+
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      1,
+      "/tmp/unreadable.log",
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/readable.log",
+    );
+  });
 
   it("ignores non-drop drag events and empty path lists", async () => {
     renderHook(() => useDragDrop());
