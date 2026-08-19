@@ -132,7 +132,9 @@ function beginRequest(): string {
     }
   }
   activeRequestId = `event-log-${++requestGeneration}`;
-  pendingBatches.clear();
+  // A superseded load can be waiting for a terminal event that will never arrive. Resolve those
+  // waiters before dropping the map so stale callers can observe the new request and return.
+  cancelAllPendingStreams();
   tailSequences.clear();
   return activeRequestId;
 }
@@ -473,9 +475,35 @@ preservedSelectedRecordKey = null;
   },
 
   parseManifest: async (manifest) => {
-    set({ isLoading: true, loadError: null, sourceManifest: manifest });
+    const previousTimeWindow = get().timeWindow;
+    const generation = get().loadGeneration + 1;
+    const requestId = beginRequest();
+    preservedSelectedRecordKey = null;
+    invalidateAllStreamedRecords(requestId);
+    refreshRequested = false;
+    set({
+      loadGeneration: generation,
+      records: [],
+      channels: [],
+      sourceMode: null,
+      sourcePaths: [],
+      remoteMachine: null,
+      loadedChannels: new Set<string>(),
+      selectedRecordId: null,
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceManifest: manifest,
+      tailMode: null,
+      tailRequestId: null,
+      tailChannels: new Set<string>(),
+      tailCoverageGaps: [],
+      timeWindow: "all",
+      isLoading: true,
+      loadError: null,
+    });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_manifest", { manifest });
+      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const checked = assertParseResultShape(result);
       set({
         ...applyParseResult(
@@ -489,10 +517,17 @@ preservedSelectedRecordKey = null;
           manifest.coverage,
         ),
         sourceManifest: manifest,
+        loadGeneration: generation,
       });
     } catch (error) {
+      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message, sourceManifest: manifest });
+      set({
+        isLoading: false,
+        loadError: message,
+        sourceManifest: manifest,
+        timeWindow: previousTimeWindow,
+      });
     }
   },
 
@@ -550,18 +585,14 @@ preservedSelectedRecordKey = null;
       });
       // Live query records arrive through the batch event. This path invokes the backend directly
       // rather than through queryChannels, so it must drain the same stream before merging.
-      const mergeResult = (
-        ch: string,
-        result: EvtxParseResult,
-        gaps: string[],
-        structuredGaps: readonly EvtxCoverageGap[]
-      ) => {
+      const mergeResult = (ch: string, reconciliation: StreamReconciliation) => {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const state = get();
+        const { checked, result, records, gaps } = reconciliation;
         const merged = mergeRecordsPreservingSelection(
           state.records,
           state.selectedRecordId,
-          result.records
+          records
         );
 
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
@@ -570,12 +601,10 @@ preservedSelectedRecordKey = null;
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
         const newLoaded = new Set(state.loadedChannels);
-        const hasHardFailure = result.parseErrors > 0 && result.records.length === 0;
         const channelHasUsableData =
-          !hasHardFailure &&
-          (gaps.length === 0 ||
-            result.records.length > 0 ||
-            (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0);
+          gaps.length === 0 ||
+          records.length > 0 ||
+          (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
         if (channelHasUsableData) newLoaded.add(ch);
 
         set({
@@ -587,7 +616,10 @@ preservedSelectedRecordKey = null;
           // rather than replace. Deduplicated because re-querying a channel would otherwise
           // repeat the same line.
           coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
-          coverageDetails: mergeStructuredCoverageGaps(state.coverageDetails, structuredGaps),
+          coverageDetails: mergeStructuredCoverageGaps(
+            state.coverageDetails,
+            checked.coverageGaps
+          ),
         });
       };
       const promises = availableCore.map(async (ch) => {
@@ -608,30 +640,17 @@ preservedSelectedRecordKey = null;
           observeStreamReply(ch, requestId, { kind: "success" });
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           await waitForStreamReconciliation(ch, requestId);
-          const checked = assertParseResultShape(result);
-          const streamed = drainStreamedRecords(ch, requestId);
-          const arrived = [...streamed.records, ...result.records];
-          const streamedGaps =
-            streamed.missingSequences.length > 0
-              ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
-              : [];
-          const shortfallGaps =
-            typeof checked.totalRecords === "number" && arrived.length < checked.totalRecords
-              ? [
-                  `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
-                ]
-              : [];
-          mergeResult(
-            ch,
-            { ...result, records: arrived },
-            [...checked.errorMessages, ...streamedGaps, ...shortfallGaps],
-            checked.coverageGaps
-          );
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+          const reconciliation = reconcileStreamedResult(ch, requestId, result, context);
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+          mergeResult(ch, reconciliation);
           acknowledgeStreamedRecords(ch, requestId);
         } catch (e) {
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           const msg = e instanceof Error ? e.message : String(e);
           observeStreamReply(ch, requestId, { kind: "error", message: msg });
+          await waitForStreamReconciliation(ch, requestId);
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           console.warn(`[evtx] Failed to query ${context}: ${msg}`);
           if (!loadError) loadError = `${context}: ${msg}`;
           drainStreamedRecords(ch, requestId);
@@ -787,18 +806,16 @@ loadGeneration: generation,
         }
       })
     );
-    if (!isCurrentRequest(requestId)) return;
+    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
     for (const { channel, result, error } of results) {
-      if (get().loadGeneration !== generation) return;
+      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
         if (!result) {
           await waitForStreamReconciliation(channel, requestId);
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           drainStreamedRecords(channel, requestId);
           acknowledgeStreamedRecords(channel, requestId);
-          // A channel that could not be read is recorded as a gap, not merely as an error banner
-          // that the next successful load replaces. The events it would have contributed are absent
-          // from the view for as long as the view is on screen.
           set((s) => ({
             coverageGaps: mergeCoverageGaps(s.coverageGaps, [
               `${context}: not read (${error ?? "unknown error"})`,
@@ -806,55 +823,35 @@ loadGeneration: generation,
           }));
           continue;
         }
-
-        // Both the invoke reply and stream terminal are required before coverage is measured. The
-        // terminal may arrive on either side of the reply.
         await waitForStreamReconciliation(channel, requestId);
-        const checked = assertParseResultShape(result);
-        const streamed = drainStreamedRecords(channel, requestId);
-        const arrived = [...streamed.records, ...result.records];
-
-        const gapsFound: string[] = [];
-        if (streamed.missingSequences.length > 0) {
-          gapsFound.push(
-            `${context}: ${streamed.missingSequences.length} batches of events were not received`
-          );
-        }
-        const expected = checked.totalRecords;
-        if (typeof expected === "number" && arrived.length < expected) {
-          gapsFound.push(
-            `${context}: ${expected - arrived.length} of ${expected} events did not reach the view`
-          );
-        }
-
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const { checked, records } = reconciliation;
         const state = get();
         const merged = mergeRecordsPreservingSelection(
           state.records,
           state.selectedRecordId,
-          arrived
+          records
         );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const updatedChannels = state.channels.map((c) => ({
           ...c,
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
-
-        const reportedGaps = [...checked.errorMessages, ...gapsFound];
+        const reportedGaps = reconciliation.gaps;
         const newLoaded = new Set(state.loadedChannels);
         const channelHasUsableData =
           reportedGaps.length === 0 ||
-          arrived.length > 0 ||
+          records.length > 0 ||
           (result.channels.find((c) => c.name === channel)?.eventCount ?? 0) > 0;
         if (channelHasUsableData) newLoaded.add(channel);
-
         const channelGaps = `${context}:`;
         const priorGaps = state.coverageGaps.filter((gap) => !gap.startsWith(channelGaps));
         set({
           ...merged,
           channels: updatedChannels,
           loadedChannels: newLoaded,
-          // Replace this channel's prior coverage with the current attempt while retaining gaps for
-          // unrelated channels.
           coverageGaps: mergeCoverageGaps(priorGaps, reportedGaps),
           coverageDetails: mergeStructuredCoverageGaps(
             state.coverageDetails,
@@ -863,10 +860,9 @@ loadGeneration: generation,
         });
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         drainStreamedRecords(channel, requestId);
         acknowledgeStreamedRecords(channel, requestId);
-        // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
-        // reply is not a reason to leave the workspace stuck on a spinner with no message.
         const message =
           processingError instanceof Error ? processingError.message : String(processingError);
         console.warn(`[evtx] Failed to process ${context}: ${message}`);
@@ -946,36 +942,26 @@ loadGeneration: generation,
         observeStreamReply(ch, requestId, { kind: "success" });
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         await waitForStreamReconciliation(ch, requestId);
-        const checked = assertParseResultShape(result);
-        const streamed = drainStreamedRecords(ch, requestId);
-        const arrived = [...streamed.records, ...result.records];
-        const streamedGaps =
-          streamed.missingSequences.length > 0
-            ? [`${context}: ${streamed.missingSequences.length} batches of events were not received`]
-            : [];
-        const shortfallGaps =
-          typeof checked.totalRecords === "number" && arrived.length < checked.totalRecords
-            ? [
-                `${context}: ${checked.totalRecords - arrived.length} of ${checked.totalRecords} events did not reach the view`,
-              ]
-            : [];
-
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const reconciliation = reconcileStreamedResult(ch, requestId, result, context);
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const { checked, records } = reconciliation;
         const s = get();
         const merged = mergeRecordsPreservingSelection(
           s.records,
           s.selectedRecordId,
-          arrived
+          records
         );
         const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
         const newChannels = s.channels.map((c) => ({
           ...c,
           eventCount: countMap.get(c.name) ?? c.eventCount,
         }));
-        const reportedGaps = [...checked.errorMessages, ...streamedGaps, ...shortfallGaps];
+        const reportedGaps = reconciliation.gaps;
         const newLoaded = new Set(s.loadedChannels);
         const channelHasUsableData =
           reportedGaps.length === 0 ||
-          arrived.length > 0 ||
+          records.length > 0 ||
           (result.channels.find((c) => c.name === ch)?.eventCount ?? 0) > 0;
         if (channelHasUsableData) newLoaded.add(ch);
 
@@ -987,7 +973,6 @@ loadGeneration: generation,
           coverageGaps: mergeCoverageGaps(s.coverageGaps, reportedGaps),
           coverageDetails: mergeStructuredCoverageGaps(s.coverageDetails, checked.coverageGaps),
         });
-        acknowledgeStreamedRecords(ch, requestId);
       } catch (e) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         observeStreamReply(
@@ -995,6 +980,8 @@ loadGeneration: generation,
           requestId,
           { kind: "error", message: e instanceof Error ? e.message : String(e) }
         );
+        await waitForStreamReconciliation(ch, requestId);
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         drainStreamedRecords(ch, requestId);
         acknowledgeStreamedRecords(ch, requestId);
         const message = e instanceof Error ? e.message : String(e);
@@ -1002,7 +989,6 @@ loadGeneration: generation,
         console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
         // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
         // here presents a view that is missing a whole channel as complete.
-        if (get().loadGeneration !== generation) return;
         set((s) => ({
           coverageGaps: mergeCoverageGaps(s.coverageGaps, [
             `${context}: not read (${message})`,
@@ -1011,7 +997,6 @@ loadGeneration: generation,
         }));
       }
     });
-    await Promise.all(promises);
     if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
     const finalState = get();
     const remoteRefreshFailed =
@@ -1302,7 +1287,9 @@ interface PendingStream {
   consumerAcknowledged: boolean;
   settled: boolean;
   settling: boolean;
+  terminalGraceDeadline?: number;
   terminalGraceTimer?: ReturnType<typeof setTimeout>;
+  acknowledgementTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
 }
 
@@ -1348,28 +1335,58 @@ function sequenceNumbers(pending: PendingStream): number[] {
 
 const TERMINAL_BATCH_GRACE_MS = 25;
 
-function settlePendingStream(pending: PendingStream, allowMissing = false): void {
-  if (pending.settled || pending.settling || !pending.reply || !pending.terminal) return;
-  if (!allowMissing && sequenceNumbers(pending).length > 0) {
-    if (pending.terminalGraceTimer === undefined) {
-      pending.terminalGraceTimer = setTimeout(() => {
-        pending.terminalGraceTimer = undefined;
-        settlePendingStream(pending, true);
-      }, TERMINAL_BATCH_GRACE_MS);
-    }
-    return;
-  }
+function resolvePendingWaiters(pending: PendingStream): void {
+  const waiters = pending.waiters.splice(0);
+  for (const resolve of waiters) resolve();
+}
+
+function cancelPendingStream(pending: PendingStream): void {
   if (pending.terminalGraceTimer !== undefined) {
     clearTimeout(pending.terminalGraceTimer);
     pending.terminalGraceTimer = undefined;
+  }
+  if (pending.acknowledgementTimer !== undefined) {
+    clearTimeout(pending.acknowledgementTimer);
+    pending.acknowledgementTimer = undefined;
+  }
+  pending.settling = false;
+  pending.settled = true;
+  resolvePendingWaiters(pending);
+}
+
+function cancelAllPendingStreams(): void {
+  for (const pending of pendingBatches.values()) cancelPendingStream(pending);
+  pendingBatches.clear();
+}
+
+function settlePendingStream(pending: PendingStream): void {
+  if (pending.settled || pending.settling || !pending.reply || !pending.terminal) return;
+  // Keep the stream available for a bounded grace period even when the terminal claims every
+  // sequence arrived. The backend can publish the invoke reply and terminal before the final event
+  // callback is dispatched; resolving immediately lets the consumer acknowledge and delete that
+  // state before the callback gets a chance to append its records.
+  if (!pending.terminalSynthetic) {
+    const now = Date.now();
+    const deadline =
+      pending.terminalGraceDeadline ??
+      (pending.terminalGraceDeadline = now + TERMINAL_BATCH_GRACE_MS);
+    const remaining = deadline - now;
+    if (remaining > 0) {
+      if (pending.terminalGraceTimer === undefined) {
+        pending.terminalGraceTimer = setTimeout(() => {
+          pending.terminalGraceTimer = undefined;
+          settlePendingStream(pending);
+        }, remaining);
+      }
+      return;
+    }
   }
   pending.settling = true;
   queueMicrotask(() => {
     pending.settling = false;
     if (pending.settled || !pending.reply || !pending.terminal) return;
     pending.settled = true;
-    const waiters = pending.waiters.splice(0);
-    for (const resolve of waiters) resolve();
+    resolvePendingWaiters(pending);
   });
 }
 
@@ -1394,6 +1411,47 @@ function waitForStreamReconciliation(channel: string, requestId: string): Promis
   const pending = pendingFor(channel, requestId);
   if (!pending || pending.requestId !== requestId || pending.settled) return Promise.resolve();
   return new Promise<void>((resolve) => pending.waiters.push(resolve));
+}
+
+type StreamReconciliation = {
+  checked: ReturnType<typeof assertParseResultShape>;
+  result: EvtxParseResult;
+  records: EvtxRecord[];
+  missingSequences: number[];
+  gaps: string[];
+};
+
+function reconcileStreamedResult(
+  channel: string,
+  requestId: string,
+  result: EvtxParseResult,
+  context: string
+): StreamReconciliation {
+  const checked = assertParseResultShape(result);
+  const streamed = drainStreamedRecords(channel, requestId);
+  const records = appendUniqueRecords(streamed.records, result.records);
+  const gaps = [...checked.errorMessages, ...checked.coverageGaps.map(formatCoverageGap)];
+  if (streamed.missingSequences.length > 0) {
+    gaps.push(
+      `${context}: ${streamed.missingSequences.length} batches of events were not received`
+    );
+  }
+  const pending = pendingFor(channel, requestId);
+  const expected =
+    checked.totalRecords ??
+    (pending?.terminal && pending.terminal.totalRecords > 0
+      ? pending.terminal.totalRecords
+      : null);
+  if (expected !== null && records.length < expected) {
+    gaps.push(`${context}: ${expected - records.length} of ${expected} events did not reach the view`);
+  }
+  return {
+    checked,
+    result,
+    records,
+    missingSequences: streamed.missingSequences,
+    gaps,
+  };
 }
 
 function invalidateAllStreamedRecords(requestId: string): void {
@@ -1515,6 +1573,21 @@ export function drainStreamedRecords(channel: string, requestId: string): {
 export function acknowledgeStreamedRecords(channel: string, requestId: string): void {
   const pending = pendingFor(channel, requestId);
   if (!pending) return;
+  const remaining =
+    pending.terminalGraceDeadline === undefined
+      ? 0
+      : pending.terminalGraceDeadline - Date.now();
+  if (remaining > 0) {
+    if (pending.acknowledgementTimer === undefined) {
+      pending.acknowledgementTimer = setTimeout(() => {
+        pending.acknowledgementTimer = undefined;
+        if (pendingBatches.get(streamKey(channel, requestId)) === pending) {
+          acknowledgeStreamedRecords(channel, requestId);
+        }
+      }, remaining);
+    }
+    return;
+  }
   pending.consumerAcknowledged = true;
   clearTimeout(pending.terminalGraceTimer);
   pending.terminalGraceTimer = undefined;
@@ -1528,6 +1601,8 @@ export function resetStreamedRecords(channels: string[], requestId: string): voi
   for (const channel of channels) {
     const activeRequestId = activeRequestIds.get(channel);
     if (activeRequestId !== undefined) {
+      const activePending = pendingFor(channel, activeRequestId);
+      if (activePending) cancelPendingStream(activePending);
       pendingBatches.delete(streamKey(channel, activeRequestId));
     }
     activeRequestIds.set(channel, requestId);

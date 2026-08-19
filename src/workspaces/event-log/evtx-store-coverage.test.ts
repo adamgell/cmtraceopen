@@ -278,6 +278,41 @@ describe("coverage gaps through the store", () => {
 
     expect(useEvtxStore.getState().records).toEqual([]);
   });
+  it("resolves a superseded query waiting for stream reconciliation", async () => {
+    let resolveOld!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        })
+    );
+    const oldQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    await Promise.resolve();
+    resolveOld({
+      records: [],
+      channels: [{ name: "Application", eventCount: 0, sourceType: "live" as const }],
+      totalRecords: 0,
+      parseErrors: 0,
+      errorMessages: [],
+    });
+    await Promise.resolve();
+
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("System", 0, 0);
+      return {
+        records: [],
+        channels: [{ name: "System", eventCount: 0, sourceType: "live" as const }],
+        totalRecords: 0,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+    });
+    const freshQuery = useEvtxStore.getState().queryChannels(["System"]);
+    await freshQuery;
+    await oldQuery;
+
+    expect(useEvtxStore.getState().records).toEqual([]);
+  });
 
   it("clears stale data and rejects late batches on an invalid source switch", async () => {
     let oldRequestId: string | undefined;
@@ -362,6 +397,50 @@ it("preserves source manifest provenance and coverage through manifest loading",
   expect(state.coverageGaps).toContain("/logs/second/System.evtx: source path does not exist");
   expect(state.records[0].sourceLabel).toBe("/logs/first/Application.evtx");
 });
+it("isolates stale manifest replies from a newer manifest request", async () => {
+  invoke.mockReset();
+  let resolveOld!: (value: unknown) => void;
+  invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      })
+  );
+  const oldManifest = {
+    entries: [{ sourceId: "old", path: "/logs/old.evtx", kind: "file" as const }],
+    coverage: [],
+  };
+  const freshManifest = {
+    entries: [{ sourceId: "fresh", path: "/logs/fresh.evtx", kind: "file" as const }],
+    coverage: [],
+  };
+  const oldLoad = useEvtxStore.getState().parseManifest(oldManifest);
+  await Promise.resolve();
+
+  const freshRecord = streamedRecord("Fresh");
+  invoke.mockResolvedValueOnce({
+    records: [freshRecord],
+    channels: [{ name: "Fresh", eventCount: 1, sourceType: { file: "/logs/fresh.evtx" } }],
+    totalRecords: 1,
+    parseErrors: 0,
+    errorMessages: [],
+  });
+  const freshLoad = useEvtxStore.getState().parseManifest(freshManifest);
+  await freshLoad;
+  resolveOld({
+    records: [{ ...streamedRecord("Old"), sourceLabel: "/logs/old.evtx" }],
+    channels: [{ name: "Old", eventCount: 1, sourceType: { file: "/logs/old.evtx" } }],
+    totalRecords: 1,
+    parseErrors: 0,
+    errorMessages: [],
+  });
+  await oldLoad;
+
+  const state = useEvtxStore.getState();
+  expect(state.sourceManifest).toEqual(freshManifest);
+  expect(state.records.map((record) => record.channel)).toEqual(["Fresh"]);
+  expect(state.loadError).toBeNull();
+});
 
 describe("live batch delivery through initial and refresh loads", () => {
   beforeEach(() => {
@@ -421,6 +500,29 @@ describe("live batch delivery through initial and refresh loads", () => {
     expect(useEvtxStore.getState().coverageGaps).toContain(
       "Application: 1 of 2 events did not reach the view"
     );
+  });
+  it("keeps streamed records while reporting enumeration parse gaps", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 1, sourceType: "live" }];
+      }
+      emitBatch("Application", 0, [streamedRecord("Application")]);
+      emitTerminal("Application", 1, 1);
+      return {
+        records: [],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 1,
+        errorMessages: ["Application: one record was unreadable"],
+      };
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(1);
+    expect(state.coverageGaps).toContain("Application: one record was unreadable");
+    expect(state.loadedChannels.has("Application")).toBe(true);
   });
 
   it("clears batches left by a failed initial query before retrying", async () => {
@@ -1113,6 +1215,26 @@ describe("records that arrive in batches while the query runs", () => {
     emitBatch("Race", 0, [record("Race", 1)]);
     await query;
 
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+  });
+  it("retains a batch delivered during the terminal grace window", async () => {
+    let resolveReply!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReply = resolve;
+        })
+    );
+
+    const query = useEvtxStore.getState().queryChannels(["Delayed"]);
+    await Promise.resolve();
+    emitTerminal("Delayed", 1, 1);
+    resolveReply(streamedReply("Delayed", 1));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    emitBatch("Delayed", 0, [record("Delayed", 1)]);
+    await query;
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1]);
     expect(useEvtxStore.getState().coverageGaps).toEqual([]);
   });
 
