@@ -428,6 +428,11 @@ describe("event-viewer shared font metrics", () => {
     expect(timeline.getAllByRole("option")).toHaveLength(1);
     const initialResizeItemCalls = virtualizerState.resizeItemCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
+    virtualizerState.resizedSizes.clear();
+    virtualizerState.measuredSizes.clear();
+    virtualizerState.items.length = 0;
+    virtualizerState.totalSize = 0;
+    virtualizerState.notifyResize();
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
 
     expect(virtualizerState.resizeItemCalls).toBeGreaterThan(initialResizeItemCalls);

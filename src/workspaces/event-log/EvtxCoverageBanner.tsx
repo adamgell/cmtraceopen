@@ -4,6 +4,7 @@ import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
+const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
 /**
  * Shows what is missing from the loaded events.
  *
@@ -19,21 +20,33 @@ export function EvtxCoverageBanner() {
   const legacyGaps = useEvtxStore((s) => s.coverageGaps);
   const structuredGaps = useEvtxStore((s) => s.coverageDetails);
   const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const archiveMembers = useEvtxStore((s) => s.archiveMembers);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
   const gaps = [
     ...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)]),
   ];
+  const displayedArchiveMembers = archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS);
+  const omittedArchiveMembers = archiveMembers.length - displayedArchiveMembers.length;
+  const archiveMemberMessages = [
+    ...displayedArchiveMembers.map(
+      ({ path, kind, outcome, sha256 }) =>
+        `${path}: ${kind} ${outcome}${sha256 ? ` (sha256:${sha256})` : ""}`
+    ),
+    ...(omittedArchiveMembers > 0
+      ? [`<archive member metadata: ${omittedArchiveMembers} omitted by display limit>`]
+      : []),
+  ];
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
-  const summary = summarizeCoverageGaps(gaps);
+  const summary =
+    gaps.length > 0
+      ? summarizeCoverageGaps(gaps)
+      : `${archiveMemberMessages.length} archive members in this view`;
 
-  // The live region is always rendered, and the banner content appears inside it. A screen reader
-  // announces changes within a region it was already tracking, so a region that arrives already
-  // populated is read as ordinary page content and the first gaps go unannounced. It must also
-  // stay in the accessibility tree while empty, which display:none would prevent, so an empty
-  // region is simply an unstyled element with no children.
-  const empty = gaps.length === 0;
+  // The live region remains mounted so screen readers announce newly loaded gaps and member
+  // provenance. An empty region stays unstyled and carries no children.
+  const empty = gaps.length === 0 && archiveMemberMessages.length === 0;
 
   return (
     <div
@@ -59,28 +72,43 @@ export function EvtxCoverageBanner() {
     >
       {empty ? null : (
         <>
-      <div
-        style={{ display: "flex", alignItems: "center", gap: "8px" }}
-      >
-        <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
-        <Button
-          size="small"
-          appearance="transparent"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
-        >
-          {collapsed ? "Show" : "Hide"}
-        </Button>
-      </div>
-      {!collapsed && (
-        <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-          {gaps.map((gap) => (
-            <li key={gap} style={{ wordBreak: "break-word" }}>
-              {gap}
-            </li>
-          ))}
-        </ul>
-      )}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
+            <Button
+              size="small"
+              appearance="transparent"
+              aria-expanded={!collapsed}
+              onClick={() => setCollapsed((value) => !value)}
+            >
+              {collapsed ? "Show" : "Hide"}
+            </Button>
+          </div>
+          {!collapsed && (
+            <>
+              <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                {gaps.map((gap, index) => (
+                  <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
+                    {gap}
+                  </li>
+                ))}
+              </ul>
+              {archiveMemberMessages.length > 0 && (
+                <details>
+                  <summary>Archive member provenance ({archiveMemberMessages.length})</summary>
+                  <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                    {archiveMemberMessages.map((member, index) => (
+                      <li
+                        key={`archive-member-${index}:${member}`}
+                        style={{ wordBreak: "break-word" }}
+                      >
+                        {member}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
         </>
       )}
     </div>

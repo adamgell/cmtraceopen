@@ -1,7 +1,8 @@
 use super::models::{
-    EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxParseResult,
-    EvtxTailStatus,
+    EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxParseResult, EvtxTailStatus,
 };
+#[cfg(target_os = "windows")]
+use super::models::{EvtxCoverageGap, EvtxCoverageGapKind};
 use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
 #[cfg(target_os = "windows")]
@@ -46,6 +47,34 @@ struct EvtxRecordStreamComplete {
     request_id: String,
     sequence_count: usize,
     total_records: usize,
+}
+
+const MAX_QUERY_CHANNELS: usize = 256;
+const MAX_QUERY_CHANNEL_NAME_CHARS: usize = 32_767;
+
+fn validate_query_channels(channels: &[String]) -> Result<(), String> {
+    if channels.is_empty() {
+        return Err("at least one event log channel is required".to_string());
+    }
+    if channels.len() > MAX_QUERY_CHANNELS {
+        return Err(format!(
+            "event log queries support at most {MAX_QUERY_CHANNELS} channels"
+        ));
+    }
+    for channel in channels {
+        if channel.trim().is_empty() {
+            return Err("event log channel names must not be empty".to_string());
+        }
+        if channel.chars().count() > MAX_QUERY_CHANNEL_NAME_CHARS {
+            return Err(format!(
+                "event log channel names must be at most {MAX_QUERY_CHANNEL_NAME_CHARS} characters"
+            ));
+        }
+        if channel.chars().any(char::is_control) {
+            return Err("event log channel names must not contain control characters".to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Expands folder, wildcard, archive, and VSS selections before parsing.
@@ -154,6 +183,7 @@ async fn query_channels_impl(
     remote_machine: Option<String>,
     request_id: String,
 ) -> Result<EvtxParseResult, String> {
+    validate_query_channels(&channels)?;
     #[cfg(target_os = "windows")]
     {
         let registry = state.event_maps.clone();
@@ -255,9 +285,14 @@ async fn query_channels_impl(
             let mut channel_infos = Vec::new();
             let mut parse_errors = 0u32;
             let mut error_messages = Vec::new();
+            let mut coverage_gaps = Vec::new();
             let mut streamed = 0usize;
 
             for (channel, outcome) in per_channel {
+                let coverage_source = remote_machine
+                    .as_deref()
+                    .map(|machine| format!("{machine}/{channel}"))
+                    .unwrap_or_else(|| channel.clone());
                 match outcome {
                     Ok(scan) => {
                         channel_infos.push(EvtxChannelInfo {
@@ -268,7 +303,18 @@ async fn query_channels_impl(
                         streamed += scan.delivered;
                         if !scan.gaps.is_empty() {
                             parse_errors += scan.gaps.len() as u32;
-                            error_messages.extend(scan.gaps);
+                            error_messages.extend(scan.gaps.iter().cloned());
+                            coverage_gaps.extend(scan.gaps.into_iter().map(|gap| {
+                                let reason = gap
+                                    .strip_prefix(&format!("{coverage_source}: "))
+                                    .unwrap_or(&gap)
+                                    .to_string();
+                                EvtxCoverageGap::new(
+                                    coverage_source.clone(),
+                                    EvtxCoverageGapKind::Record,
+                                    reason,
+                                )
+                            }));
                         }
                         all_records.extend(scan.records);
                     }
@@ -278,7 +324,12 @@ async fn query_channels_impl(
                             channel,
                             error
                         );
-                        error_messages.push(format!("{channel}: {error}"));
+                        error_messages.push(format!("{coverage_source}: {error}"));
+                        coverage_gaps.push(EvtxCoverageGap::new(
+                            coverage_source,
+                            EvtxCoverageGapKind::File,
+                            error,
+                        ));
                         channel_infos.push(EvtxChannelInfo {
                             name: channel,
                             event_count: 0,
@@ -297,12 +348,13 @@ async fn query_channels_impl(
                 total_records,
                 parse_errors,
                 error_messages,
-                coverage_gaps: Vec::new(),
+                coverage_gaps,
                 coverage: Vec::new(),
+                archive_members: Vec::new(),
             })
         })
         .await
-        .map_err(|error| format!("Task join error: {error}"))?;
+        .map_err(|error| format!("Task join error: {error}"))?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -409,16 +461,7 @@ pub async fn evtx_stop_tail(request_id: String, channel: String) -> Result<EvtxT
         let request_for_task = request_id.clone();
         let channel_for_task = channel.clone();
         tokio::task::spawn_blocking(move || {
-            super::live::stop_channel_tail(&request_for_task, &channel_for_task).unwrap_or(
-                EvtxTailStatus {
-                    request_id: request_for_task,
-                    channel: channel_for_task,
-                    mode: EvtxLiveMode::Unsupported,
-                    active: false,
-                    next_sequence: 0,
-                    coverage_gaps: Vec::new(),
-                },
-            )
+            super::live::stop_channel_tail(&request_for_task, &channel_for_task)
         })
         .await
         .map_err(|error| format!("Task join error: {error}"))?
@@ -456,11 +499,11 @@ pub async fn evtx_clear_channel(
             .as_deref()
             .map(super::live::normalize_remote_machine_name)
             .transpose()?;
-        tokio::task::spawn_blocking(move || {
+        Ok(tokio::task::spawn_blocking(move || {
             super::live::clear_channel(&channel, confirmed, remote_machine.as_deref())
         })
         .await
-        .map_err(|error| format!("Task join error: {error}"))?
+        .map_err(|error| format!("Task join error: {error}"))?)
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -739,5 +782,28 @@ mod tests {
             result.result,
             super::super::models::EvtxClearStatus::Cancelled
         ));
+    }
+
+    #[test]
+    fn query_boundary_rejects_empty_or_controlled_channels() {
+        let empty = vec!["   ".to_string()];
+        assert!(super::validate_query_channels(&empty)
+            .expect_err("blank channel names must be rejected")
+            .contains("must not be empty"));
+
+        let controlled = vec!["Application\n".to_string()];
+        assert!(super::validate_query_channels(&controlled)
+            .expect_err("control characters must be rejected")
+            .contains("control characters"));
+    }
+
+    #[test]
+    fn query_boundary_rejects_excessive_channel_fanout() {
+        let channels = (0..=super::MAX_QUERY_CHANNELS)
+            .map(|index| format!("Channel-{index}"))
+            .collect::<Vec<_>>();
+        assert!(super::validate_query_channels(&channels)
+            .expect_err("excessive channel fanout must be rejected")
+            .contains("at most"));
     }
 }

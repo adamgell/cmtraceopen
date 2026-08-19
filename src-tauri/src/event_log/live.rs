@@ -234,7 +234,7 @@ pub fn query_channel(
     maps: &MapRegistry,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_with_progress(channel, maps, max_events, |_, _| Ok(()))
+    query_channel_with_progress(channel, maps, max_events, |_, _| {})
 }
 
 /// Queries a channel with server-side filtering.
@@ -255,7 +255,7 @@ pub fn query_channel_filtered(
         max_events,
         None,
         "Live",
-        |_, _| Ok(()),
+        |_, _| {},
         |_| Ok(()),
     )
 }
@@ -618,7 +618,8 @@ struct TailContext {
     source_label: String,
     session: Option<EVT_HANDLE>,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
-    sequence: AtomicU64,
+    sequence: Arc<AtomicU64>,
+    coverage_gaps: Arc<Mutex<Vec<String>>>,
     publisher_metadata: Mutex<HashMap<String, PublisherMetadata>>,
 }
 
@@ -629,6 +630,7 @@ struct ActiveTail {
     mode: EvtxLiveMode,
     stop: Arc<AtomicBool>,
     sequence: Arc<AtomicU64>,
+    coverage_gaps: Arc<Mutex<Vec<String>>>,
     subscription: Option<OwnedEvtHandle>,
     context: Option<Box<TailContext>>,
     session: Option<OwnedEvtHandle>,
@@ -657,12 +659,71 @@ static ACTIVE_TAILS: LazyLock<Mutex<HashMap<String, ActiveTail>>> =
 fn active_tails() -> &'static Mutex<HashMap<String, ActiveTail>> {
     &ACTIVE_TAILS
 }
+#[cfg(target_os = "windows")]
+fn merge_tail_coverage_gaps(stored: &Mutex<Vec<String>>, gaps: &mut Vec<String>) {
+    let pending = stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for gap in pending.iter() {
+        if !gaps.iter().any(|existing| existing == gap) {
+            gaps.push(gap.clone());
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
-fn emit_tail_batch(context: &TailContext, mode: EvtxLiveMode, records: Vec<EvtxRecord>, gaps: Vec<String>) {
+fn remember_tail_coverage_gaps(stored: &Mutex<Vec<String>>, gaps: &[String]) {
+    let mut pending = stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for gap in gaps {
+        if !pending.iter().any(|existing| existing == gap) {
+            pending.push(gap.clone());
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn clear_tail_coverage_gaps(stored: &Mutex<Vec<String>>) {
+    stored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+}
+
+#[cfg(target_os = "windows")]
+fn emit_tail_event(app: &AppHandle, stored_gaps: &Mutex<Vec<String>>, mut batch: EvtxTailBatch) {
+    merge_tail_coverage_gaps(stored_gaps, &mut batch.coverage_gaps);
+    let sequence = batch.sequence;
+    let channel = batch.channel.clone();
+    let delivered_gaps = batch.coverage_gaps.clone();
+    if let Err(error) = app.emit("evtx-tail-batch", batch) {
+        remember_tail_coverage_gaps(stored_gaps, &delivered_gaps);
+        let delivery_gap =
+            format!("{channel}: live tail batch {sequence} was not delivered ({error})");
+        remember_tail_coverage_gaps(stored_gaps, &[delivery_gap]);
+        log::warn!(
+            "event=evtx_tail_batch_dropped channel=\"{}\" sequence={} error=\"{}\"",
+            channel,
+            sequence,
+            error
+        );
+    } else {
+        clear_tail_coverage_gaps(stored_gaps);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn emit_tail_batch(
+    context: &TailContext,
+    mode: EvtxLiveMode,
+    records: Vec<EvtxRecord>,
+    gaps: Vec<String>,
+) {
     let sequence = context.sequence.fetch_add(1, Ordering::AcqRel);
-    if let Err(error) = context.app.emit(
-        "evtx-tail-batch",
+    emit_tail_event(
+        &context.app,
+        context.coverage_gaps.as_ref(),
         EvtxTailBatch {
             request_id: context.request_id.clone(),
             channel: context.channel.clone(),
@@ -671,16 +732,7 @@ fn emit_tail_batch(context: &TailContext, mode: EvtxLiveMode, records: Vec<EvtxR
             records,
             coverage_gaps: gaps,
         },
-    ) {
-        // The next sequence exposes this dropped batch to the frontend; logging is still useful
-        // when the subscription has no later event to make the gap visible.
-        log::warn!(
-            "event=evtx_tail_batch_dropped channel=\"{}\" sequence={} error=\"{}\"",
-            context.channel,
-            sequence,
-            error
-        );
-    }
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -859,8 +911,10 @@ fn start_polling_tail(
 ) -> Result<EvtxTailStatus, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let sequence = Arc::new(AtomicU64::new(0));
+    let coverage_gaps = Arc::new(Mutex::new(Vec::new()));
     let worker_stop = Arc::clone(&stop);
     let worker_sequence = Arc::clone(&sequence);
+    let worker_coverage_gaps = Arc::clone(&coverage_gaps);
     let worker_request = request_id.clone();
     let worker_channel = channel.clone();
     let worker_fallback_gap = fallback_gap.clone();
@@ -875,7 +929,7 @@ fn start_polling_tail(
                     &filter,
                     &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
                     Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| Ok(()),
+                    |_, _| {},
                     |_| Ok(()),
                 )
             } else {
@@ -884,7 +938,7 @@ fn start_polling_tail(
                     &filter,
                     &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
                     Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| Ok(()),
+                    |_, _| {},
                     |_| Ok(()),
                 )
             };
@@ -904,11 +958,13 @@ fn start_polling_tail(
                     if first_poll && !worker_fallback_gap.is_empty() {
                         gaps.push(worker_fallback_gap.clone());
                     }
+                    merge_tail_coverage_gaps(worker_coverage_gaps.as_ref(), &mut gaps);
                     first_poll = false;
                     if !records.is_empty() || !gaps.is_empty() {
                         let sequence_number = worker_sequence.fetch_add(1, Ordering::AcqRel);
-                        let _ = app.emit(
-                            "evtx-tail-batch",
+                        emit_tail_event(
+                            &app,
+                            worker_coverage_gaps.as_ref(),
                             EvtxTailBatch {
                                 request_id: worker_request.clone(),
                                 channel: worker_channel.clone(),
@@ -922,8 +978,9 @@ fn start_polling_tail(
                 }
                 Err(error) => {
                     let sequence_number = worker_sequence.fetch_add(1, Ordering::AcqRel);
-                    let _ = app.emit(
-                        "evtx-tail-batch",
+                    emit_tail_event(
+                        &app,
+                        worker_coverage_gaps.as_ref(),
                         EvtxTailBatch {
                             request_id: worker_request.clone(),
                             channel: worker_channel.clone(),
@@ -967,6 +1024,7 @@ fn start_polling_tail(
                 mode: EvtxLiveMode::Polling,
                 stop,
                 sequence,
+                coverage_gaps,
                 subscription: None,
                 context: None,
                 session: None,
@@ -1003,6 +1061,8 @@ pub fn start_channel_tail(
         .map_err(|error| format!("cannot compile event query for {channel}: {error}"))?;
     let channel_hstring = HSTRING::from(channel.as_str());
     let query_hstring = HSTRING::from(compiled.as_str());
+    let sequence = Arc::new(AtomicU64::new(0));
+    let coverage_gaps = Arc::new(Mutex::new(Vec::new()));
     let context = Box::new(TailContext {
         app,
         request_id: request_id.clone(),
@@ -1010,7 +1070,8 @@ pub fn start_channel_tail(
         source_label,
         session: session_handle,
         maps,
-        sequence: AtomicU64::new(0),
+        sequence: Arc::clone(&sequence),
+        coverage_gaps: Arc::clone(&coverage_gaps),
         publisher_metadata: Mutex::new(HashMap::new()),
     });
     let context_ptr = (&*context) as *const TailContext as *const c_void;
@@ -1047,10 +1108,11 @@ pub fn start_channel_tail(
                         channel,
                         mode: EvtxLiveMode::Subscription,
                         stop: Arc::new(AtomicBool::new(false)),
-                        sequence: Arc::new(AtomicU64::new(0)),
+                        sequence,
+                        coverage_gaps,
                         subscription: Some(OwnedEvtHandle::new(handle)),
                         context: Some(context),
-                        session: remote_session,
+                        session: remote_session.map(|(session, _)| session),
                         worker: None,
                     },
                 );
@@ -1083,17 +1145,31 @@ pub fn start_channel_tail(
 #[cfg(target_os = "windows")]
 /// Stop a tail and synchronously release its subscription/session resources.
 #[cfg(target_os = "windows")]
-pub fn stop_channel_tail(request_id: &str, channel: &str) -> Option<EvtxTailStatus> {
+pub fn stop_channel_tail(request_id: &str, channel: &str) -> Result<EvtxTailStatus, String> {
     let key = tail_key(request_id, channel);
-    let tail = active_tails().lock().ok()?.remove(&key)?;
-    let next_sequence = tail.sequence.load(Ordering::Acquire);
-    Some(EvtxTailStatus {
-        request_id: tail.request_id.clone(),
-        channel: tail.channel.clone(),
-        mode: tail.mode,
+    let tail = active_tails()
+        .lock()
+        .map_err(|_| "live tail state lock was poisoned".to_string())?
+        .remove(&key)
+        .ok_or_else(|| format!("live tail {channel} for request {request_id} was not found"))?;
+    let status_request_id = tail.request_id.clone();
+    let status_channel = tail.channel.clone();
+    let status_mode = tail.mode;
+    let sequence = Arc::clone(&tail.sequence);
+    let stored_gaps = Arc::clone(&tail.coverage_gaps);
+    drop(tail);
+    let next_sequence = sequence.load(Ordering::Acquire);
+    let coverage_gaps = stored_gaps
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    Ok(EvtxTailStatus {
+        request_id: status_request_id,
+        channel: status_channel,
+        mode: status_mode,
         active: false,
         next_sequence,
-        coverage_gaps: Vec::new(),
+        coverage_gaps,
     })
 }
 fn tail_key(request_id: &str, channel: &str) -> String {
@@ -1497,6 +1573,37 @@ mod tests {
             .expect_err("cached metadata failure must remain an error");
         assert_eq!(win32_code(&error), 5);
         assert_eq!(cache.len(), 1);
+    }
+    #[test]
+    fn stopping_an_unknown_tail_returns_an_error() {
+        let error = stop_channel_tail("missing-request", "Application")
+            .expect_err("missing tails must not report a clean stop");
+        assert!(error.contains("was not found"));
+    }
+    #[test]
+    fn tail_delivery_gaps_are_replayed_and_cleared() {
+        let stored = Mutex::new(vec!["previous gap".to_string()]);
+        let mut gaps = vec!["current gap".to_string()];
+        merge_tail_coverage_gaps(&stored, &mut gaps);
+        assert_eq!(gaps, vec!["current gap", "previous gap"]);
+
+        remember_tail_coverage_gaps(
+            &stored,
+            &["current gap".to_string(), "delivery failed".to_string()],
+        );
+        let mut replay = Vec::new();
+        merge_tail_coverage_gaps(&stored, &mut replay);
+        assert_eq!(
+            replay,
+            vec![
+                "previous gap".to_string(),
+                "current gap".to_string(),
+                "delivery failed".to_string(),
+            ]
+        );
+
+        clear_tail_coverage_gaps(&stored);
+        assert!(stored.lock().expect("gap state").is_empty());
     }
 
     #[test]

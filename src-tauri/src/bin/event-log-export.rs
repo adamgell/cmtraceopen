@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+#[cfg(test)]
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
@@ -5,7 +7,9 @@ use std::sync::RwLock;
 
 use app_lib::event_log::export::ExportFormat;
 use app_lib::event_log::models::{EvtxLevel, EvtxRecord};
-use app_lib::event_log::parser::parse_evtx_files;
+use app_lib::event_log::parser::{
+    parse_evtx_files, parse_evtx_manifest, EventLogSource, EventLogSourceManifest, SourceCoverage,
+};
 use app_lib::event_log::provider_db::ProviderStore;
 use cmtraceopen_parser::eventmap::MapRegistry;
 use serde::Deserialize;
@@ -16,6 +20,18 @@ struct Filter {
     levels: Option<Vec<EvtxLevel>>,
     event_ids: String,
     search: Option<String>,
+    quick_filter: Option<QuickFilter>,
+    visible_columns: Option<Vec<String>>,
+    time_window: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuickFilter {
+    mode: String,
+    query: String,
+    scope: String,
+    action: String,
+    case_sensitive: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,6 +44,7 @@ struct Coverage {
 #[derive(Debug, Clone)]
 struct Cli {
     sources: Vec<String>,
+    source_manifest: Option<EventLogSourceManifest>,
     manifest: Option<String>,
     records: Vec<EvtxRecord>,
     format: ExportFormat,
@@ -39,12 +56,31 @@ struct Cli {
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct ManifestFilter {
+    #[serde(alias = "channels")]
     selected_channels: Option<Vec<String>>,
+    #[serde(alias = "levels")]
     filter_levels: Option<Vec<EvtxLevel>>,
-    #[serde(default)]
+    #[serde(default, alias = "eventIds")]
     filter_event_ids: String,
-    #[serde(default)]
+    #[serde(default, alias = "search")]
     filter_search: String,
+    #[serde(default)]
+    time_window: Option<String>,
+    #[serde(default)]
+    quick_filter: Option<ManifestQuickFilter>,
+    #[serde(default)]
+    visible_columns: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestQuickFilter {
+    mode: String,
+    query: String,
+    scope: String,
+    action: String,
+    #[serde(default)]
+    case_sensitive: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -52,6 +88,12 @@ struct ManifestFilter {
 struct Manifest {
     #[serde(default)]
     sources: Vec<String>,
+    #[serde(default)]
+    entries: Vec<EventLogSource>,
+    #[serde(default)]
+    coverage: Vec<SourceCoverage>,
+    #[serde(default)]
+    source_manifest: Option<EventLogSourceManifest>,
     records: Option<Vec<EvtxRecord>>,
     #[serde(default)]
     total_records: u64,
@@ -61,36 +103,125 @@ struct Manifest {
     error_messages: Vec<String>,
     #[serde(default)]
     filter: ManifestFilter,
+    #[serde(default)]
+    before_load: Option<ManifestFilter>,
+    #[serde(default)]
+    on_load: Option<ManifestFilter>,
 }
 
 impl Cli {
     fn from_manifest_json(input: &str) -> Result<Self, String> {
         let manifest: Manifest =
             serde_json::from_str(input).map_err(|error| format!("invalid source manifest: {error}"))?;
-        if !manifest.sources.is_empty() && manifest.records.is_some() {
+        let Manifest {
+            sources,
+            entries,
+            coverage,
+            source_manifest,
+            records,
+            total_records,
+            parse_errors,
+            error_messages,
+            filter,
+            before_load,
+            on_load,
+        } = manifest;
+        let (entries, coverage) = source_manifest
+            .map(|manifest| (manifest.entries, manifest.coverage))
+            .unwrap_or((entries, coverage));
+        let has_source_manifest = !entries.is_empty() || !coverage.is_empty();
+        if has_source_manifest && !sources.is_empty() {
+            return Err("source manifest cannot contain both entries and sources".to_owned());
+        }
+        if !sources.is_empty() && records.is_some() {
             return Err("source manifest cannot contain both sources and records".to_owned());
         }
-        let records = manifest.records.unwrap_or_default();
-        let filter = Filter {
-            channels: manifest.filter.selected_channels,
-            levels: manifest.filter.filter_levels,
-            event_ids: manifest.filter.filter_event_ids,
-            search: (!manifest.filter.filter_search.trim().is_empty())
-                .then_some(manifest.filter.filter_search),
+        let source_manifest = has_source_manifest.then_some(EventLogSourceManifest {
+            entries: entries.clone(),
+            coverage: coverage.clone(),
+        });
+        let before = before_load.unwrap_or_default();
+        let on = on_load.unwrap_or_default();
+        let search = if on.filter_search.trim().is_empty() {
+            filter.filter_search.clone()
+        } else {
+            on.filter_search.clone()
         };
+        let filter = Filter {
+            channels: before
+                .selected_channels
+                .or(filter.selected_channels),
+            levels: before.filter_levels.or(filter.filter_levels),
+            event_ids: if before.filter_event_ids.trim().is_empty() {
+                filter.filter_event_ids
+            } else {
+                before.filter_event_ids
+            },
+            search: (!search.trim().is_empty()).then_some(search),
+            quick_filter: on
+                .quick_filter
+                .or(filter.quick_filter)
+                .map(quick_filter_from_manifest),
+            visible_columns: on.visible_columns.or(filter.visible_columns),
+            time_window: before.time_window.or(filter.time_window),
+        };
+        if let Some(time_window) = filter.time_window.as_deref() {
+            parse_time_window(time_window)?;
+        }
+        let mut error_messages = error_messages;
+        append_unique_messages(
+            &mut error_messages,
+            coverage.iter().map(source_coverage_message),
+        );
         Ok(Self {
-            sources: manifest.sources,
+            sources: source_manifest
+                .as_ref()
+                .map(|value| value.entries.iter().map(|entry| entry.path.clone()).collect())
+                .unwrap_or(sources),
+            source_manifest,
             manifest: None,
-            records,
+            records: records.unwrap_or_default(),
             format: ExportFormat::Json,
             output: None,
             filter,
             coverage: Coverage {
-                total_records: manifest.total_records,
-                parse_errors: manifest.parse_errors,
-                error_messages: manifest.error_messages,
+                total_records,
+                parse_errors,
+                error_messages,
             },
         })
+    }
+}
+
+fn quick_filter_from_manifest(value: ManifestQuickFilter) -> QuickFilter {
+    QuickFilter {
+        mode: value.mode,
+        query: value.query,
+        scope: value.scope,
+        action: value.action,
+        case_sensitive: value.case_sensitive,
+    }
+}
+
+fn source_coverage_message(coverage: &SourceCoverage) -> String {
+    match coverage {
+        SourceCoverage::Unsupported { path, reason }
+        | SourceCoverage::AccessDenied { path, reason }
+        | SourceCoverage::Missing { path, reason }
+        | SourceCoverage::Empty { path, reason }
+        | SourceCoverage::InvalidPattern { path, reason }
+        | SourceCoverage::LimitReached { path, reason } => format!("{path}: {reason}"),
+    }
+}
+
+fn append_unique_messages<I>(target: &mut Vec<String>, messages: I)
+where
+    I: IntoIterator<Item = String>,
+{
+    for message in messages {
+        if !target.iter().any(|existing| existing == &message) {
+            target.push(message);
+        }
     }
 }
 
@@ -117,6 +248,7 @@ where
     let _program = args.next();
     let mut cli = Cli {
         sources: Vec::new(),
+        source_manifest: None,
         manifest: None,
         records: Vec::new(),
         format: ExportFormat::Json,
@@ -194,38 +326,70 @@ where
     Ok(cli)
 }
 
-const MAX_EVENT_ID: u32 = 65_535;
+const MAX_EVENT_ID: u32 = u32::MAX;
+#[cfg(test)]
 const MAX_EVENT_ID_FILTER_VALUES: usize = 65_536;
 
-fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
-    let mut event_ids = BTreeSet::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventIdSelector {
+    Single(u32),
+    Range(u32, u32),
+}
+
+fn parse_event_id_selectors(input: &str) -> Result<Vec<EventIdSelector>, String> {
+    let mut selectors = Vec::new();
     for part in input.split([',', ' ', '\t', '\r', '\n']).filter(|part| !part.is_empty()) {
-        if let Some((low, high)) = part.split_once('-') {
+        let selector = if let Some((low, high)) = part.split_once('-') {
             if low.is_empty()
                 || high.is_empty()
                 || !low.bytes().all(|byte| byte.is_ascii_digit())
                 || !high.bytes().all(|byte| byte.is_ascii_digit())
             {
-                continue;
+                return Ok(Vec::new());
             }
-            let low = low.parse::<u64>().unwrap_or(u64::MAX);
-            let high = high.parse::<u64>().unwrap_or(u64::MAX);
-            let from = low.min(high);
-            let to = high.max(low).min(MAX_EVENT_ID as u64);
-            if from <= to {
-                for value in (from as u32)..=(to as u32) {
-                    if event_ids.len() >= MAX_EVENT_ID_FILTER_VALUES {
-                        break;
-                    }
-                    event_ids.insert(value);
-                }
+            let low = match low.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => return Ok(Vec::new()),
+            };
+            let high = match high.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => return Ok(Vec::new()),
+            };
+            if low > MAX_EVENT_ID as u64 || high > MAX_EVENT_ID as u64 {
+                return Ok(Vec::new());
             }
-        } else if event_ids.len() < MAX_EVENT_ID_FILTER_VALUES
-            && part.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            if let Ok(value) = part.parse::<u64>() {
-                if value <= u32::MAX as u64 {
-                    event_ids.insert(value as u32);
+            EventIdSelector::Range(low.min(high) as u32, low.max(high) as u32)
+        } else {
+            if !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Ok(Vec::new());
+            }
+            let value = match part.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => return Ok(Vec::new()),
+            };
+            if value > MAX_EVENT_ID as u64 {
+                return Ok(Vec::new());
+            }
+            EventIdSelector::Single(value as u32)
+        };
+        selectors.push(selector);
+    }
+    Ok(selectors)
+}
+
+#[cfg(test)]
+fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
+    let selectors = parse_event_id_selectors(input)?;
+    let mut event_ids = BTreeSet::new();
+    for selector in selectors {
+        match selector {
+            EventIdSelector::Single(value) => {
+                event_ids.insert(value);
+            }
+            EventIdSelector::Range(from, to) => {
+                let bounded_to = to.min((MAX_EVENT_ID_FILTER_VALUES - 1) as u32);
+                if from <= bounded_to {
+                    event_ids.extend(from..=bounded_to);
                 }
             }
         }
@@ -233,33 +397,249 @@ fn parse_event_ids(input: &str) -> Result<Vec<u32>, String> {
     Ok(event_ids.into_iter().collect())
 }
 
-fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
-    let event_id_filter_active = !filter.event_ids.trim().is_empty();
-    let event_ids = parse_event_ids(&filter.event_ids)?;
-    if event_id_filter_active && event_ids.is_empty() {
-        return Ok(Vec::new());
+fn event_id_matches(value: u32, selectors: &[EventIdSelector]) -> bool {
+    selectors.iter().any(|selector| match selector {
+        EventIdSelector::Single(expected) => value == *expected,
+        EventIdSelector::Range(from, to) => (*from..=*to).contains(&value),
+    })
+}
+fn record_values(
+    record: &EvtxRecord,
+    visible_columns: Option<&[String]>,
+    include_event_data: bool,
+) -> Vec<String> {
+    let mut values = Vec::new();
+    let include = |name: &str| {
+        visible_columns.is_none_or(|columns| {
+            columns.iter().any(|column| {
+                column == name
+                    || (column == "timestamp" && name == "time")
+                    || (column == "description" && name == "message")
+                    || (column == "eventRecordId" && name == "recordId")
+            })
+        })
+    };
+    let include_mapped = |property: &str| {
+        visible_columns.is_none_or(|columns| {
+            let id = format!("mapped:{property}");
+            columns.iter().any(|column| column == &id)
+        })
+    };
+    let fixed = [
+        ("time", record.timestamp.clone()),
+        (
+            "recordId",
+            record
+                .event_record_id_text
+                .clone()
+                .unwrap_or_else(|| record.event_record_id.to_string()),
+        ),
+        ("eventId", record.event_id.to_string()),
+        ("level", format!("{:?}", record.level)),
+        ("provider", record.provider.clone()),
+        ("channel", record.channel.clone()),
+        ("computer", record.computer.clone()),
+        ("task", record.task.map(|value| value.to_string()).unwrap_or_default()),
+        (
+            "opcode",
+            record.opcode.map(|value| value.to_string()).unwrap_or_default(),
+        ),
+        (
+            "processId",
+            record
+                .process_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "threadId",
+            record
+                .thread_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
+        ("keywords", record.keywords.clone().unwrap_or_default()),
+        ("message", record.message.clone()),
+    ];
+    values.extend(
+        fixed
+            .into_iter()
+            .filter(|(name, _)| include(name))
+            .map(|(_, value)| value),
+    );
+    values.extend(
+        record
+            .mapped
+            .iter()
+            .filter(|column| column.complete && include_mapped(&column.property))
+            .map(|column| column.text.clone()),
+    );
+    if include_event_data {
+        values.extend(record.event_data.iter().map(|field| field.value.clone()));
     }
-    let search = filter.search
-        .as_deref()
-        .map(str::trim)
-        .filter(|search| !search.is_empty())
-        .map(str::to_lowercase);
-    Ok(records
-        .into_iter()
-        .filter(|record| {
-            filter.channels.as_ref().is_none_or(|channels| {
+    values
+}
+
+fn quick_filter_matches(
+    record: &EvtxRecord,
+    quick_filter: &QuickFilter,
+    visible_columns: Option<&[String]>,
+) -> bool {
+    let query = quick_filter.query.trim();
+    if query.is_empty() {
+        return false;
+    }
+    if quick_filter.mode == "eventIds" {
+        let selectors = parse_event_id_selectors(query).unwrap_or_default();
+        if selectors.is_empty() {
+            return false;
+        }
+        let matched = event_id_matches(record.event_id, &selectors);
+        return if quick_filter.action == "hide" { !matched } else { matched };
+    }
+    let values = record_values(
+        record,
+        if quick_filter.scope == "visibleColumns" {
+            visible_columns
+        } else {
+            None
+        },
+        quick_filter.scope == "allColumns",
+    );
+    let normalize = |value: &str| {
+        if quick_filter.case_sensitive {
+            value.to_owned()
+        } else {
+            value.to_lowercase()
+        }
+    };
+    let values = values.iter().map(|value| normalize(value)).collect::<Vec<_>>();
+    let query = normalize(query);
+    let contains = |term: &str| values.iter().any(|value| value.contains(term));
+    let terms = match quick_filter.mode.as_str() {
+        "multipleStrings" | "allStrings" => query
+            .split([',', ';', '\n'])
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>(),
+        "multipleWords" | "allWords" => query
+            .split_whitespace()
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>(),
+        _ => vec![query.as_str()],
+    };
+    let matched = match quick_filter.mode.as_str() {
+        "multipleWords" | "multipleStrings" => terms.iter().any(|term| contains(term)),
+        "allWords" | "allStrings" => !terms.is_empty() && terms.iter().all(|term| contains(term)),
+        _ => contains(query.as_str()),
+    };
+    if quick_filter.action == "hide" { !matched } else { matched }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedFilter {
+    filter: Filter,
+    event_id_filter_active: bool,
+    event_ids: Vec<EventIdSelector>,
+    invalid_event_id_filter: bool,
+    search: Option<String>,
+    time_window: Option<(i64, i64)>,
+}
+
+impl PreparedFilter {
+    fn new(filter: &Filter) -> Result<Self, String> {
+        let event_id_filter_active = !filter.event_ids.trim().is_empty();
+        let event_ids = parse_event_id_selectors(&filter.event_ids)?;
+        let invalid_event_id_filter = event_id_filter_active && event_ids.is_empty();
+        let search = filter
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|search| !search.is_empty())
+            .map(str::to_lowercase);
+        let time_window = match filter.time_window.as_deref() {
+            Some(value) => parse_time_window(value)?,
+            None => None,
+        };
+        Ok(Self {
+            filter: filter.clone(),
+            event_id_filter_active,
+            event_ids,
+            invalid_event_id_filter,
+            search,
+            time_window,
+        })
+    }
+
+    fn matches(&self, record: &EvtxRecord) -> bool {
+        !self.invalid_event_id_filter
+            && self.filter.channels.as_ref().is_none_or(|channels| {
                 channels.iter().any(|channel| channel == &record.channel)
-            }) && filter
+            })
+            && self
+                .filter
                 .levels
                 .as_ref()
                 .is_none_or(|levels| levels.contains(&record.level))
-                && (!event_id_filter_active || event_ids.contains(&record.event_id))
-                && search.as_deref().is_none_or(|search| {
-                    record.message.to_lowercase().contains(search)
-                        || record.provider.to_lowercase().contains(search)
-                })
-        })
-        .collect())
+            && (!self.event_id_filter_active || event_id_matches(record.event_id, &self.event_ids))
+            && self.search.as_deref().is_none_or(|search| {
+                [record.message.as_str(), record.provider.as_str()]
+                    .iter()
+                    .any(|value| value.to_lowercase().contains(search))
+            })
+            && self.time_window.is_none_or(|(start, _end)| record.timestamp_epoch >= start)
+            && self.filter.quick_filter.as_ref().is_none_or(|quick| {
+                quick_filter_matches(record, quick, self.filter.visible_columns.as_deref())
+            })
+    }
+}
+
+fn filter_with<'a, I, R>(
+    records: I,
+    filter: &'a PreparedFilter,
+) -> impl Iterator<Item = R> + 'a
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord> + 'a,
+    <I as IntoIterator>::IntoIter: 'a,
+{
+    records
+        .into_iter()
+        .filter(move |record| filter.matches(record.borrow()))
+}
+
+fn filtered_record_iter<I, R>(
+    records: I,
+    filter: &Filter,
+) -> Result<impl Iterator<Item = R>, String>
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    let prepared = PreparedFilter::new(filter)?;
+    Ok(records
+        .into_iter()
+        .filter(move |record| prepared.matches(record.borrow())))
+}
+
+#[cfg(test)]
+fn filtered_records(records: Vec<EvtxRecord>, filter: &Filter) -> Result<Vec<EvtxRecord>, String> {
+    Ok(filtered_record_iter(records, filter)?.collect())
+}
+
+fn parse_time_window(value: &str) -> Result<Option<(i64, i64)>, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let milliseconds = match value {
+        "1h" => 60 * 60 * 1000,
+        "24h" => 24 * 60 * 60 * 1000,
+        "7d" => 7 * 24 * 60 * 60 * 1000,
+        "30d" => 30 * 24 * 60 * 60 * 1000,
+        "all" => return Ok(None),
+        other => return Err(format!(
+            "unsupported time window {other:?}; expected 1h, 24h, 7d, 30d, or all"
+        )),
+    };
+    Ok(Some((now.saturating_sub(milliseconds), now)))
 }
 
 fn load_manifest(path: &str) -> Result<Cli, String> {
@@ -272,6 +652,7 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     if let Some(path) = cli.manifest.take() {
         let manifest = load_manifest(&path)?;
         cli.sources = manifest.sources;
+        cli.source_manifest = manifest.source_manifest;
         cli.records = manifest.records;
         cli.filter = manifest.filter;
         cli.coverage = manifest.coverage;
@@ -280,19 +661,22 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     if cli.records.is_empty() && !cli.sources.is_empty() {
         let maps = RwLock::new(MapRegistry::default());
         let providers = RwLock::new(ProviderStore::default());
-        let result = parse_evtx_files(&cli.sources, &maps, &providers)?;
-        cli.coverage = Coverage {
-            total_records: result.total_records,
-            parse_errors: result.parse_errors,
-            error_messages: result.error_messages,
+        let mut coverage = cli.coverage.clone();
+        let result = if let Some(source_manifest) = cli.source_manifest.as_ref() {
+            parse_evtx_manifest(source_manifest, &maps, &providers)?
+        } else {
+            parse_evtx_files(&cli.sources, &maps, &providers)?
         };
+        coverage.total_records = coverage.total_records.max(result.total_records);
+        coverage.parse_errors = coverage.parse_errors.max(result.parse_errors);
+        append_unique_messages(&mut coverage.error_messages, result.error_messages);
+        cli.coverage = coverage;
         cli.records = result.records;
     } else if cli.coverage.total_records == 0 {
         cli.coverage.total_records = cli.records.len() as u64;
     }
     Ok(cli)
 }
-
 fn reject_source_destination(sources: &[String], output: Option<&str>) -> Result<(), String> {
     app_lib::event_log::writer::reject_source_destination(
         sources,
@@ -323,24 +707,50 @@ where
     let manifest_path = parsed.manifest.clone();
     let cli = load_cli(parsed)?;
     let mut protected_sources = cli.sources.clone();
+    protected_sources.extend(
+        cli.records
+            .iter()
+            .map(|record| record.source_label.clone())
+            .filter(|source| !source.is_empty()),
+    );
     if let Some(manifest_path) = manifest_path {
         protected_sources.push(manifest_path);
     }
     reject_source_destination(&protected_sources, cli.output.as_deref())?;
-    let records = filtered_records(cli.records, &cli.filter)?;
+    let prepared_filter = PreparedFilter::new(&cli.filter)?;
+    app_lib::event_log::writer::validate_raw_xml_iter(
+        filter_with(cli.records.iter(), &prepared_filter),
+        cli.format,
+    )
+    .map_err(|error| {
+        format!(
+            "{}\nexport failed: {error}",
+            coverage_report(&cli.coverage, "unknown")
+        )
+    })?;
+    let mapped_columns = app_lib::event_log::export::mapped_columns_iter(filter_with(
+        cli.records.iter(),
+        &prepared_filter,
+    ));
+    let records = filter_with(cli.records.into_iter(), &prepared_filter);
     let stats = match cli
         .output
         .as_deref()
         .filter(|output| *output != "-")
         .map(Path::new)
     {
-        Some(path) => app_lib::event_log::writer::write_records_to_destination(
-            &records,
+        Some(path) => app_lib::event_log::writer::write_record_stream_to_destination(
+            records,
             cli.format,
             Some(path),
+            &mapped_columns,
         ),
-        None => app_lib::event_log::writer::write_records(stdout, cli.format, &records)
-            .map_err(|error| error.to_string()),
+        None => app_lib::event_log::writer::write_record_stream_to_writer(
+            stdout,
+            records,
+            cli.format,
+            &mapped_columns,
+        ),
     }
     .map_err(|error| {
         format!(
@@ -369,9 +779,10 @@ fn main() {
 mod tests {
     use super::{
         filtered_records, parse_args, parse_event_ids, reject_source_destination, run_with_args, Cli,
-        Filter,
+        Filter, QuickFilter,
     };
-    use app_lib::event_log::models::{EvtxLevel, EvtxRecord};
+    use app_lib::event_log::maps::MappedColumn;
+    use app_lib::event_log::models::{EvtxField, EvtxLevel, EvtxRecord};
 
     fn make_record() -> EvtxRecord {
         EvtxRecord {
@@ -500,6 +911,7 @@ mod tests {
                 levels: Some(vec![EvtxLevel::Error]),
                 event_ids: "326".into(),
                 search: Some("boot".into()),
+                ..Filter::default()
             },
         )
         .expect("filter succeeds");
@@ -566,11 +978,10 @@ mod tests {
 
     #[test]
     fn clamps_event_id_ranges_like_the_frontend_filter() {
-        assert_eq!(
+        assert!(
             parse_event_ids("1-999999999999999999999999")
-                .expect("saturating range")
-                .len(),
-            65_535
+                .expect("invalid oversized range")
+                .is_empty()
         );
         assert_eq!(parse_event_ids("1-65535").expect("range").len(), 65_535);
         assert_eq!(parse_event_ids("1-65536").expect("clamped range").len(), 65_535);
@@ -590,9 +1001,9 @@ mod tests {
                 .len(),
             65_535
         );
-        assert_eq!(parse_event_ids("326,abc").expect("mixed tokens"), vec![326]);
-        assert_eq!(parse_event_ids("1.0,326").expect("decimal token"), vec![326]);
-        assert_eq!(parse_event_ids("-1,326").expect("negative token"), vec![326]);
+        assert!(parse_event_ids("326,abc").expect("invalid mixed tokens").is_empty());
+        assert!(parse_event_ids("1.0,326").expect("invalid decimal token").is_empty());
+        assert!(parse_event_ids("-1,326").expect("invalid negative token").is_empty());
     }
 
     #[test]
@@ -607,6 +1018,127 @@ mod tests {
             )
             .expect("filter succeeds");
             assert!(selected.is_empty(), "invalid selector {event_ids:?} must match no records");
+        }
+    }
+
+    #[test]
+    fn quick_filter_all_columns_includes_event_data_and_mapped_values() {
+        let mut record = make_record();
+        record.event_data = vec![EvtxField {
+            name: "Target".into(),
+            value: "event-data-token".into(),
+        }];
+        record.mapped = vec![MappedColumn {
+            property: "RemoteHost".into(),
+            text: "mapped-host".into(),
+            complete: true,
+        }];
+
+        let all_columns = filtered_records(
+            vec![record.clone()],
+            &Filter {
+                quick_filter: Some(QuickFilter {
+                    mode: "oneString".into(),
+                    query: "event-data-token".into(),
+                    scope: "allColumns".into(),
+                    action: "show".into(),
+                    case_sensitive: false,
+                }),
+                ..Filter::default()
+            },
+        )
+        .expect("all-column filter succeeds");
+        assert_eq!(all_columns.len(), 1);
+
+        let visible_default = filtered_records(
+            vec![record.clone()],
+            &Filter {
+                quick_filter: Some(QuickFilter {
+                    mode: "oneString".into(),
+                    query: "mapped-host".into(),
+                    scope: "visibleColumns".into(),
+                    action: "show".into(),
+                    case_sensitive: false,
+                }),
+                ..Filter::default()
+            },
+        )
+        .expect("visible default-column filter succeeds");
+        assert_eq!(visible_default.len(), 1);
+
+        let visible_event_data = filtered_records(
+            vec![record.clone()],
+            &Filter {
+                quick_filter: Some(QuickFilter {
+                    mode: "oneString".into(),
+                    query: "event-data-token".into(),
+                    scope: "visibleColumns".into(),
+                    action: "show".into(),
+                    case_sensitive: false,
+                }),
+                ..Filter::default()
+            },
+        )
+        .expect("visible event-data filter succeeds");
+        assert!(visible_event_data.is_empty());
+
+        let visible_mapped = filtered_records(
+            vec![record.clone()],
+            &Filter {
+                quick_filter: Some(QuickFilter {
+                    mode: "oneString".into(),
+                    query: "mapped-host".into(),
+                    scope: "visibleColumns".into(),
+                    action: "show".into(),
+                    case_sensitive: false,
+                }),
+                visible_columns: Some(vec!["mapped:RemoteHost".into()]),
+                ..Filter::default()
+            },
+        )
+        .expect("visible mapped-column filter succeeds");
+        assert_eq!(visible_mapped.len(), 1);
+
+        let mut incomplete = record;
+        incomplete.mapped[0].complete = false;
+        let incomplete_mapped = filtered_records(
+            vec![incomplete],
+            &Filter {
+                quick_filter: Some(QuickFilter {
+                    mode: "oneString".into(),
+                    query: "mapped-host".into(),
+                    scope: "allColumns".into(),
+                    action: "show".into(),
+                    case_sensitive: false,
+                }),
+                ..Filter::default()
+            },
+        )
+        .expect("incomplete mapped-column filter succeeds");
+        assert!(incomplete_mapped.is_empty());
+    }
+
+    #[test]
+    fn invalid_nonempty_event_id_quick_filter_matches_no_records_for_hide() {
+        for query in ["not-an-id", "1.0", "-1"] {
+            let selected = filtered_records(
+                vec![make_record()],
+                &Filter {
+                    quick_filter: Some(QuickFilter {
+                        mode: "eventIds".into(),
+                        query: query.into(),
+                        scope: "allColumns".into(),
+                        action: "hide".into(),
+                        case_sensitive: false,
+                    }),
+                    ..Filter::default()
+                },
+            )
+            .expect("quick filter succeeds");
+            assert!(
+                selected.is_empty(),
+                "invalid quick selector {query:?} must match no records"
+            );
         }
     }
 
@@ -736,4 +1268,122 @@ mod tests {
         .expect_err("missing raw XML fails");
         assert!(error.contains("raw XML"));
     }
+
+    #[test]
+    fn one_hour_window_uses_epoch_milliseconds_and_all_is_unbounded() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut recent = make_record();
+        recent.timestamp_epoch = now - 30 * 60 * 1000;
+        let mut old = make_record();
+        old.id = 2;
+        old.timestamp_epoch = now - 2 * 60 * 60 * 1000;
+        let mut future = make_record();
+        future.id = 3;
+        future.timestamp_epoch = now + 2 * 60 * 60 * 1000;
+
+        let selected = filtered_records(
+            vec![recent.clone(), old.clone(), future.clone()],
+            &Filter {
+                time_window: Some("1h".into()),
+                ..Filter::default()
+            },
+        )
+        .expect("one-hour filter succeeds");
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].id, recent.id);
+        assert_eq!(selected[1].id, future.id);
+
+        let all = filtered_records(
+            vec![recent, old, future],
+            &Filter {
+                time_window: Some("all".into()),
+                ..Filter::default()
+            },
+        )
+        .expect("all-time filter succeeds");
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn unsupported_time_windows_are_rejected_instead_of_becoming_unbounded() {
+        let error = filtered_records(
+            vec![make_record()],
+            &Filter {
+                time_window: Some("forever".into()),
+                ..Filter::default()
+            },
+        )
+        .expect_err("unsupported time window must fail");
+        assert!(error.contains("unsupported time window"));
+    }
+
+    #[test]
+    fn search_matches_only_visible_message_and_provider_fields_case_insensitively() {
+        let mut provider_match = make_record();
+        provider_match.provider = "Microsoft-Windows-FOO".into();
+        provider_match.message = "unrelated".into();
+        let mut hidden_field_match = make_record();
+        hidden_field_match.id = 2;
+        hidden_field_match.computer = "Microsoft-Windows-FOO".into();
+        hidden_field_match.message = "unrelated".into();
+        let selected = filtered_records(
+            vec![provider_match, hidden_field_match],
+            &Filter {
+                search: Some("mIcRoSoFt-wInDoWs-FoO".into()),
+                ..Filter::default()
+            },
+        )
+        .expect("search succeeds");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, 1);
+    }
+
+    #[test]
+    fn mapped_columns_are_derived_from_filtered_records() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        let mut keep = make_record();
+        keep.message = "keep".into();
+        keep.mapped = vec![app_lib::event_log::maps::MappedColumn {
+            property: "KeepColumn".into(),
+            text: "kept".into(),
+            complete: true,
+        }];
+        let mut drop = make_record();
+        drop.id = 2;
+        drop.message = "drop".into();
+        drop.mapped = vec![app_lib::event_log::maps::MappedColumn {
+            property: "DropColumn".into(),
+            text: "dropped".into(),
+            complete: true,
+        }];
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({
+                "records": [keep, drop],
+                "filter": {"filterSearch": "keep"}
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let mut stdout = Vec::new();
+        run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "csv",
+                "--output",
+                "-",
+            ],
+            &mut stdout,
+        )
+        .expect("filtered CSV succeeds");
+        let output = String::from_utf8(stdout).expect("CSV");
+        assert!(output.contains("KeepColumn"));
+        assert!(!output.contains("DropColumn"));
+    }
+
 }

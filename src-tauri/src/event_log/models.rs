@@ -174,6 +174,35 @@ pub enum ChannelSourceType {
     File { path: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvtxArchiveMemberKind {
+    Evtx,
+    Text,
+    Registry,
+    Binary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EvtxArchiveMemberOutcome {
+    Parsed,
+    Unsupported,
+    Malformed,
+    Duplicate,
+    Limit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvtxArchiveMember {
+    pub path: String,
+    pub kind: EvtxArchiveMemberKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub outcome: EvtxArchiveMemberOutcome,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvtxParseResult {
@@ -189,6 +218,8 @@ pub struct EvtxParseResult {
     pub coverage_gaps: Vec<EvtxCoverageGap>,
     #[serde(default)]
     pub coverage: Vec<super::parser::SourceCoverage>,
+    #[serde(default)]
+    pub archive_members: Vec<EvtxArchiveMember>,
 }
 
 /// A provider that could not be captured while scanning the Windows publisher registry.

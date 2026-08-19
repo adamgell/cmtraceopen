@@ -82,6 +82,19 @@ export interface EvtxCoverageGap {
   eventRecordId?: number;
 }
 
+export type EvtxArchiveMemberKind = "evtx" | "text" | "registry" | "binary";
+export type EvtxArchiveMemberOutcome =
+  | "parsed"
+  | "unsupported"
+  | "malformed"
+  | "duplicate"
+  | "limit";
+export interface EvtxArchiveMember {
+  path: string;
+  kind: EvtxArchiveMemberKind;
+  sha256?: string;
+  outcome: EvtxArchiveMemberOutcome;
+}
 export interface EvtxParseResult {
   records: EvtxRecord[];
   channels: EvtxChannelInfo[];
@@ -90,6 +103,7 @@ export interface EvtxParseResult {
   errorMessages: string[];
   coverageGaps?: EvtxCoverageGap[];
   coverage?: EventLogSourceCoverage[];
+  archiveMembers?: EvtxArchiveMember[];
 }
 
 export type EventLogSourceKind = "file" | "folder" | "wildcard" | "archive" | "vss";

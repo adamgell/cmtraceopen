@@ -12,15 +12,31 @@ use std::io::Cursor;
 #[cfg(test)]
 use super::models::EvtxLevel;
 
+#[cfg(not(target_os = "windows"))]
 fn replace_destination(temporary: &Path, destination: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    if destination.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "atomic replacement of an existing destination is unavailable on Windows",
-        ));
-    }
     fs::rename(temporary, destination)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_destination(temporary: &Path, destination: &Path) -> io::Result<()> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temporary_wide: Vec<u16> = temporary.as_os_str().encode_wide().chain(once(0)).collect();
+    let destination_wide: Vec<u16> =
+        destination.as_os_str().encode_wide().chain(once(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(temporary_wide.as_ptr()),
+            PCWSTR(destination_wide.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| io::Error::other(error.to_string()))
 }
 
 /// Counts bytes and records while forwarding writes to the selected sink.
@@ -312,6 +328,7 @@ where
             writer.write_all(b"[")?;
             let mut first = true;
             for item in records {
+                required_raw_xml(item.borrow())?;
                 if !first {
                     writer.write_all(b",")?;
                 }
@@ -374,15 +391,26 @@ where
         records: count,
     })
 }
-
-pub(crate) fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> io::Result<()> {
-    if matches!(format, ExportFormat::Json | ExportFormat::Xml | ExportFormat::RawXml) {
+pub fn validate_raw_xml_iter<I, R>(records: I, format: ExportFormat) -> io::Result<()>
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    if matches!(
+        format,
+        ExportFormat::Json | ExportFormat::Xml | ExportFormat::RawXml
+    ) {
         for record in records {
-            required_raw_xml(record)?;
+            required_raw_xml(record.borrow())?;
         }
     }
     Ok(())
 }
+
+pub fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> io::Result<()> {
+    validate_raw_xml_iter(records.iter(), format)
+}
+
 /// Rejects a destination that resolves to one of the opened inputs.
 ///
 /// A missing destination is normalized against the current directory so a relative
@@ -396,15 +424,29 @@ pub fn reject_source_destination(
         return Ok(());
     };
     let normalize = |path: &Path| {
-        fs::canonicalize(path).unwrap_or_else(|_| {
-            if path.is_absolute() {
-                path.to_path_buf()
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(path)
-            }
-        })
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(path)
+        };
+        let normalized = fs::canonicalize(&absolute).unwrap_or_else(|_| {
+            let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
+            let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+            absolute
+                .file_name()
+                .map(|name| parent.join(name))
+                .unwrap_or(parent)
+        });
+        #[cfg(target_os = "windows")]
+        {
+            std::path::PathBuf::from(normalized.to_string_lossy().to_lowercase())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            normalized
+        }
     };
     let destination = normalize(destination);
     if sources
@@ -463,6 +505,124 @@ pub fn write_records_to_destination(
     let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
     let mut file = file.expect("temporary file handle");
     let result = write_records(&mut file, format, records)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()));
+    drop(file);
+    match result {
+        Ok(stats) => match replace_destination(&temporary, path) {
+            Ok(()) => Ok(stats),
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                Err(format!("cannot replace {}: {error}", path.display()))
+            }
+        },
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+pub fn write_record_stream_to_writer<W, I, R>(
+    output: &mut W,
+    records: I,
+    format: ExportFormat,
+    mapped_columns: &[String],
+) -> Result<ExportStats, String>
+where
+    W: Write + ?Sized,
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    let temp_dir = std::env::temp_dir();
+    let mut temporary = None;
+    let mut file = None;
+    for attempt in 0..100u32 {
+        let candidate = temp_dir.join(format!(
+            "cmtraceopen-event-export-{}-{attempt}.tmp",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(handle) => {
+                temporary = Some(candidate);
+                file = Some(handle);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create temporary stdout output: {error}")),
+        }
+    }
+    let temporary =
+        temporary.ok_or_else(|| "cannot allocate temporary stdout output path".to_owned())?;
+    let mut file = file.expect("temporary stdout file handle");
+    let result = write_record_stream(&mut file, format, records, mapped_columns);
+    drop(file);
+    let result = match result {
+        Ok(stats) => {
+            let copy_result = (|| {
+                let mut staged = fs::File::open(&temporary)
+                    .map_err(|error| format!("cannot reopen temporary stdout output: {error}"))?;
+                let copied = io::copy(&mut staged, output)
+                    .map_err(|error| format!("cannot write stdout: {error}"))?;
+                output
+                    .flush()
+                    .map_err(|error| format!("cannot flush stdout: {error}"))?;
+                if copied != stats.bytes {
+                    return Err(format!(
+                        "stdout byte count mismatch: staged {} bytes, copied {copied}",
+                        stats.bytes
+                    ));
+                }
+                Ok(stats)
+            })();
+            copy_result
+        }
+        Err(error) => Err(error.to_string()),
+    };
+    let _ = fs::remove_file(&temporary);
+    result
+}
+
+/// Streams an iterator to a destination while retaining the same atomic replacement and
+/// stdout behavior as `write_records_to_destination`.
+pub fn write_record_stream_to_destination<I, R>(
+    records: I,
+    format: ExportFormat,
+    destination: Option<&Path>,
+    mapped_columns: &[String],
+) -> Result<ExportStats, String>
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    if destination.is_some_and(|path| path.as_os_str() == "-") || destination.is_none() {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        return write_record_stream_to_writer(&mut stdout, records, format, mapped_columns);
+    }
+
+    let path = destination.expect("destination checked above");
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("events");
+    let mut temporary = None;
+    let mut file = None;
+    for attempt in 0..100u32 {
+        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(handle) => {
+                temporary = Some(candidate);
+                file = Some(handle);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create temporary output: {error}")),
+        }
+    }
+    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
+    let mut file = file.expect("temporary file handle");
+    let result = write_record_stream(&mut file, format, records, mapped_columns)
         .map_err(|error| format!("cannot write {}: {error}", path.display()));
     drop(file);
     match result {
@@ -681,12 +841,12 @@ fn xml_redaction_preserves_markup_and_masks_named_event_data() {
 }
 
 #[test]
-fn xml_formats_reject_records_without_raw_xml() {
+fn export_formats_reject_records_without_raw_xml() {
     let event = EvtxRecord {
         raw_xml: String::new(),
         ..record("missing")
     };
-    for format in [ExportFormat::Xml, ExportFormat::RawXml] {
+    for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
         let mut output = Cursor::new(Vec::new());
         let error = write_record_stream(&mut output, format, [&event], &[])
             .expect_err("missing raw XML must not count as exported");
@@ -730,4 +890,34 @@ fn raw_xml_computer_and_subject_fields_are_redacted_without_consuming_tags() {
     {
         buffer.clear();
     }
+}
+
+#[test]
+fn replacement_helper_overwrites_existing_destination_atomically() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let temporary = directory.path().join("staged.tmp");
+    let destination = directory.path().join("events.csv");
+    std::fs::write(&temporary, "new").expect("staged output");
+    std::fs::write(&destination, "old").expect("existing output");
+
+    replace_destination(&temporary, &destination).expect("replacement succeeds");
+
+    assert_eq!(std::fs::read_to_string(&destination).expect("destination"), "new");
+    assert!(!temporary.exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn source_destination_collision_rejects_case_aliases_on_windows() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let source = directory.path().join("Events.evtx");
+    std::fs::write(&source, "evidence").expect("source");
+    let alias = directory.path().join("events.EVTX");
+
+    let error = reject_source_destination(
+        &[source.to_string_lossy().into_owned()],
+        Some(&alias),
+    )
+    .expect_err("case alias must be rejected");
+    assert!(error.contains("overwrite"));
 }

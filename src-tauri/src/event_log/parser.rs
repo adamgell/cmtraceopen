@@ -14,8 +14,9 @@ use super::event_node::{extract_event_data, EventFields};
 use super::provider_db::ProviderStore;
 
 use super::models::{
-    ChannelSourceType, EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxField, EvtxLevel,
-    EvtxParseResult, EvtxRecord,
+    ChannelSourceType, EvtxArchiveMember, EvtxArchiveMemberKind, EvtxArchiveMemberOutcome,
+    EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxField, EvtxLevel, EvtxParseResult,
+    EvtxRecord,
 };
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
@@ -41,6 +42,7 @@ pub const MAX_SOURCE_MANIFEST_ENTRIES: usize = 4_096;
 const MAX_COVERAGE_GAPS_PER_FILE: usize = 4_096;
 /// Bounds the combined diagnostics returned for a multi-file source selection.
 const MAX_COVERAGE_GAPS_RESULT: usize = MAX_SOURCE_MANIFEST_ENTRIES;
+const MAX_ARCHIVE_MEMBER_METADATA: usize = MAX_SOURCE_MANIFEST_ENTRIES;
 const MAX_SOURCE_MANIFEST_WORK: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -798,13 +800,19 @@ fn expand_path(
                 });
                 break;
             }
-            expand_path(
-                Path::new(&entry.path),
-                if matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss) {
+            let entry_path = Path::new(&entry.path);
+            let entry_kind =
+                if matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
+                {
                     requested_kind
+                } else if is_archive_candidate(entry_path) {
+                    EventLogSourceKind::Archive
                 } else {
                     EventLogSourceKind::Folder
-                },
+                };
+            expand_path(
+                entry_path,
+                entry_kind,
                 depth + 1,
                 inspected_work,
                 manifest,
@@ -1273,6 +1281,38 @@ fn empty_coverage_gap(source: &str) -> EvtxCoverageGap {
         "source produced no readable records",
     )
 }
+fn source_record_budget_gap(source: &str) -> EvtxCoverageGap {
+    EvtxCoverageGap::new(
+        source,
+        EvtxCoverageGapKind::Limit,
+        format!(
+            "source manifest record budget of {MAX_SOURCE_RECORDS} records was exhausted; \
+             later records/files were omitted"
+        ),
+    )
+}
+
+fn aggregate_budget_gap_reason(total_source_records: usize, total_source_bytes: u64) -> String {
+    match (
+        total_source_records >= MAX_SOURCE_RECORDS,
+        total_source_bytes >= MAX_SOURCE_BYTES,
+    ) {
+        (true, true) => format!(
+            "source manifest aggregate record budget of {MAX_SOURCE_RECORDS} records and byte \
+             budget of {MAX_SOURCE_BYTES} bytes were exhausted; later records/files were omitted"
+        ),
+        (true, false) => format!(
+            "source manifest aggregate record budget of {MAX_SOURCE_RECORDS} records was \
+             exhausted; later records/files were omitted"
+        ),
+        (false, true) => format!(
+            "source manifest aggregate byte budget of {MAX_SOURCE_BYTES} bytes was exhausted; \
+             later records/files were omitted"
+        ),
+        (false, false) => unreachable!("aggregate budget gap requires an exhausted budget"),
+    }
+}
+
 
 fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
     let location = match (gap.chunk_id, gap.event_record_id) {
@@ -1281,6 +1321,15 @@ fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
         _ => String::new(),
     };
     format!("{}{}: {}", gap.source, location, gap.reason)
+}
+
+fn source_prefixed_message(source_path: &str, message: String) -> String {
+    let prefix = format!("{source_path}:");
+    if message.starts_with(&prefix) {
+        message
+    } else {
+        format!("{source_path}: {message}")
+    }
 }
 fn bound_coverage_gaps(gaps: &mut Vec<EvtxCoverageGap>, source: &str) {
     if gaps.len() <= MAX_COVERAGE_GAPS_PER_FILE {
@@ -1359,8 +1408,11 @@ pub fn parse_evtx_manifest(
     let mut error_messages: Vec<String> = coverage_gaps.iter().map(format_coverage_gap).collect();
     let mut total_source_bytes = 0u64;
     let mut total_source_records = 0usize;
+    let mut archive_members = Vec::new();
+    let mut omitted_archive_members = 0usize;
 
     for (source_index, source) in manifest.entries.iter().enumerate() {
+        let mut record_budget_gap_added = false;
         let path = Path::new(&source.path);
         let source_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
         if total_source_bytes.saturating_add(source_bytes) > MAX_SOURCE_BYTES {
@@ -1369,14 +1421,41 @@ pub fn parse_evtx_manifest(
                 "{}: source manifest byte budget of {} bytes was exhausted; later files were not parsed",
                 source.path, MAX_SOURCE_BYTES
             ));
+            coverage_gaps.push(EvtxCoverageGap::new(
+                &source.path,
+                EvtxCoverageGapKind::Limit,
+                format!(
+                    "source manifest byte budget of {} bytes was exhausted; \
+                     later records/files were omitted",
+                    MAX_SOURCE_BYTES
+                ),
+            ));
             break;
         }
         total_source_bytes = total_source_bytes.saturating_add(source_bytes);
         if matches!(source.kind, EventLogSourceKind::Archive) {
-            match super::archive::parse_archive(path, maps, providers) {
+            match super::archive::parse_archive(
+                path,
+                maps,
+                providers,
+                MAX_SOURCE_RECORDS.saturating_sub(total_source_records),
+            ) {
                 Ok(archive) => {
                     parse_errors = parse_errors.saturating_add(archive.parse_errors);
                     coverage_gaps.extend(archive.coverage);
+                    let remaining_metadata =
+                        MAX_ARCHIVE_MEMBER_METADATA.saturating_sub(archive_members.len());
+                    if archive.metadata.len() > remaining_metadata {
+                        omitted_archive_members = omitted_archive_members.saturating_add(
+                            archive.metadata.len().saturating_sub(remaining_metadata),
+                        );
+                    }
+                    archive_members.extend(
+                        archive
+                            .metadata
+                            .into_iter()
+                            .take(remaining_metadata),
+                    );
                     error_messages.extend(archive.messages);
                     for member in archive.members {
                         append_parsed_file(
@@ -1388,6 +1467,7 @@ pub fn parse_evtx_manifest(
                             &mut coverage_gaps,
                             &mut error_messages,
                             &mut total_source_records,
+                            &mut record_budget_gap_added,
                         );
                     }
                 }
@@ -1413,6 +1493,7 @@ pub fn parse_evtx_manifest(
                     &mut coverage_gaps,
                     &mut error_messages,
                     &mut total_source_records,
+                    &mut record_budget_gap_added,
                 ),
                 Err(gap) => {
                     log::warn!(
@@ -1435,8 +1516,38 @@ pub fn parse_evtx_manifest(
                 "{}: source manifest aggregate budget was exhausted; later files were not parsed",
                 source.path
             ));
+            if !(record_budget_gap_added && total_source_records >= MAX_SOURCE_RECORDS) {
+                coverage_gaps.push(EvtxCoverageGap::new(
+                    &source.path,
+                    EvtxCoverageGapKind::Limit,
+                    aggregate_budget_gap_reason(total_source_records, total_source_bytes),
+                ));
+            }
             break;
         }
+    }
+    if omitted_archive_members > 0 {
+        if archive_members.len() >= MAX_ARCHIVE_MEMBER_METADATA {
+            archive_members.truncate(MAX_ARCHIVE_MEMBER_METADATA - 1);
+            omitted_archive_members = omitted_archive_members.saturating_add(1);
+        }
+        archive_members.push(EvtxArchiveMember {
+            path: format!("<archive member metadata: {omitted_archive_members} omitted>"),
+            kind: EvtxArchiveMemberKind::Binary,
+            sha256: None,
+            outcome: EvtxArchiveMemberOutcome::Limit,
+        });
+        let gap = EvtxCoverageGap::new(
+            "<archive metadata>",
+            EvtxCoverageGapKind::Limit,
+            format!(
+                "archive member metadata limit of {MAX_ARCHIVE_MEMBER_METADATA} rows omitted \
+                 {omitted_archive_members} member outcomes"
+            ),
+        );
+        parse_errors = parse_errors.saturating_add(1);
+        error_messages.push(format_coverage_gap(&gap));
+        coverage_gaps.push(gap);
     }
     bound_result_coverage(&mut coverage_gaps, &mut error_messages);
 
@@ -1453,6 +1564,7 @@ pub fn parse_evtx_manifest(
         error_messages,
         coverage_gaps,
         coverage: manifest.coverage,
+        archive_members,
     })
 }
 
@@ -1466,6 +1578,7 @@ fn append_parsed_file(
     coverage_gaps: &mut Vec<EvtxCoverageGap>,
     error_messages: &mut Vec<String>,
     total_source_records: &mut usize,
+    record_budget_gap_added: &mut bool,
 ) {
     let mut records = file.records;
     for record in &mut records {
@@ -1478,6 +1591,10 @@ fn append_parsed_file(
         error_messages.push(format!(
             "{source_path}: source manifest record budget of {MAX_SOURCE_RECORDS} records was exhausted; later files were not parsed"
         ));
+        if !*record_budget_gap_added {
+            coverage_gaps.push(source_record_budget_gap(source_path));
+            *record_budget_gap_added = true;
+        }
     }
     *total_source_records = (*total_source_records).saturating_add(records.len());
     *parse_errors = (*parse_errors).saturating_add(file.parse_errors);
@@ -1488,7 +1605,7 @@ fn append_parsed_file(
     error_messages.extend(
         file.messages
             .into_iter()
-            .map(|message| format!("{source_path}: {message}")),
+            .map(|message| source_prefixed_message(source_path, message)),
     );
     error_messages.extend(
         file.coverage_gaps
@@ -1762,8 +1879,8 @@ where
             thread_id: system.thread_id,
             user_sid: system.user_sid,
             keywords: system.keywords,
-            activity_id: system.activity_id,
-            related_activity_id: system.related_activity_id,
+            activity_id: system.activity_id.clone().or(identity.activity_id),
+            related_activity_id: system.related_activity_id.clone().or(identity.related_activity_id),
             session_id: identity.session_id,
             device_id: identity.device_id,
             user_id: identity.user_id,
@@ -1852,6 +1969,117 @@ fn describe_event(
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn source_prefixed_message_does_not_duplicate_member_source() {
+        let source = "bundle.zip::logs/app.log";
+
+        assert_eq!(
+            source_prefixed_message(source, format!("{source}: text member is empty")),
+            "bundle.zip::logs/app.log: text member is empty"
+        );
+        assert_eq!(
+            source_prefixed_message(source, "text member is empty".to_string()),
+            "bundle.zip::logs/app.log: text member is empty"
+        );
+    }
+
+    #[test]
+    fn append_parsed_file_keeps_source_qualified_text_diagnostic_once() {
+        let source = "bundle.zip::logs/app.log";
+        let mut records = Vec::new();
+        let mut channels = Vec::new();
+        let mut parse_errors = 0;
+        let mut coverage_gaps = Vec::new();
+        let mut error_messages = Vec::new();
+        let mut total_source_records = 0;
+        let mut record_budget_gap_added = false;
+
+        append_parsed_file(
+            source,
+            ParsedFile {
+                records: Vec::new(),
+                parse_errors: 1,
+                messages: vec![format!("{source}: text member is empty")],
+                coverage_gaps: Vec::new(),
+            },
+            &mut records,
+            &mut channels,
+            &mut parse_errors,
+            &mut coverage_gaps,
+            &mut error_messages,
+            &mut total_source_records,
+            &mut record_budget_gap_added,
+        );
+
+        assert_eq!(
+            error_messages,
+            vec!["bundle.zip::logs/app.log: text member is empty"]
+        );
+    }
+    #[test]
+    fn append_record_budget_adds_one_structured_gap_and_keeps_legacy_messages() {
+        let source = "first.evtx";
+        let mut records = Vec::new();
+        let mut channels = Vec::new();
+        let mut parse_errors = 0;
+        let mut coverage_gaps = Vec::new();
+        let mut error_messages = Vec::new();
+        let mut total_source_records = MAX_SOURCE_RECORDS - 1;
+        let mut record_budget_gap_added = false;
+
+        append_parsed_file(
+            source,
+            ParsedFile {
+                records: vec![budget_test_record(), budget_test_record()],
+                parse_errors: 0,
+                messages: Vec::new(),
+                coverage_gaps: Vec::new(),
+            },
+            &mut records,
+            &mut channels,
+            &mut parse_errors,
+            &mut coverage_gaps,
+            &mut error_messages,
+            &mut total_source_records,
+            &mut record_budget_gap_added,
+        );
+        append_parsed_file(
+            source,
+            ParsedFile {
+                records: vec![budget_test_record()],
+                parse_errors: 0,
+                messages: Vec::new(),
+                coverage_gaps: Vec::new(),
+            },
+            &mut records,
+            &mut channels,
+            &mut parse_errors,
+            &mut coverage_gaps,
+            &mut error_messages,
+            &mut total_source_records,
+            &mut record_budget_gap_added,
+        );
+
+        assert_eq!(
+            coverage_gaps
+                .iter()
+                .filter(|gap| gap.kind == EvtxCoverageGapKind::Limit)
+                .count(),
+            1
+        );
+        let gap = coverage_gaps
+            .iter()
+            .find(|gap| gap.kind == EvtxCoverageGapKind::Limit)
+            .expect("record budget gap");
+        assert_eq!(gap.source, source);
+        assert!(gap.reason.contains("record budget"));
+        assert!(gap.reason.contains("later records/files"));
+        assert_eq!(error_messages.len(), 2);
+        assert!(error_messages[0].contains("record budget"));
+        assert!(error_messages[1].contains("record budget"));
+    }
+
     #[test]
     fn test_evtx_level_from_level_value() {
         assert_eq!(EvtxLevel::from_level_value(1), EvtxLevel::Critical);
@@ -1886,6 +2114,46 @@ mod tests {
         extract_event_data(&parse(xml)).insertions
     }
 
+    fn budget_test_record() -> EvtxRecord {
+        EvtxRecord {
+            id: 0,
+            event_record_id: 1,
+            event_record_id_text: Some("1".to_string()),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            timestamp_epoch: 0,
+            provider: "test".to_string(),
+            channel: "test".to_string(),
+            event_id: 1,
+            level: EvtxLevel::Information,
+            computer: "test".to_string(),
+            message: "test".to_string(),
+            event_data: Vec::new(),
+            raw_xml: String::new(),
+            source_label: String::new(),
+            task: None,
+            opcode: None,
+            process_id: None,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
+            thread_id: None,
+            user_sid: None,
+            keywords: None,
+            mapped: Vec::new(),
+        }
+    }
+
+    fn budget_test_source(path: &Path) -> EventLogSource {
+        EventLogSource {
+            source_id: path.to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
+            kind: EventLogSourceKind::File,
+        }
+    }
+
     #[test]
     fn source_label_keeps_full_manifest_member_path_for_timeline_identity() {
         let path = Path::new("bundle\\server-a\\capture.evtx");
@@ -1894,6 +2162,90 @@ mod tests {
             "bundle\\server-a\\capture.evtx"
         );
     }
+    #[test]
+    fn byte_budget_before_a_source_has_a_structured_limit_gap() {
+        let first = std::env::temp_dir().join(format!(
+            "cmtrace-event-budget-before-first-{}.evtx",
+            std::process::id()
+        ));
+        let later = std::env::temp_dir().join(format!(
+            "cmtrace-event-budget-before-later-{}.evtx",
+            std::process::id()
+        ));
+        std::fs::write(&first, b"").expect("write first source");
+        std::fs::File::create(&later)
+            .and_then(|file| file.set_len(MAX_SOURCE_BYTES + 1))
+            .expect("create oversized later source");
+        let (maps, providers) = empty_state();
+        let result = parse_evtx_manifest(
+            &EventLogSourceManifest {
+                entries: vec![budget_test_source(&first), budget_test_source(&later)],
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+        )
+        .expect("budget exhaustion is a parse result");
+
+        let later_path = later.to_string_lossy().into_owned();
+        let gap = result
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.source == later_path.as_str() && gap.kind == EvtxCoverageGapKind::Limit)
+            .expect("byte budget gap before later source");
+        assert!(gap.reason.contains("byte budget"));
+        assert!(gap.reason.contains("later records/files"));
+        assert!(result
+            .error_messages
+            .iter()
+            .any(|message| message.contains("byte budget") && message.contains(&later_path)));
+
+        std::fs::remove_file(first).expect("remove first source");
+        std::fs::remove_file(later).expect("remove later source");
+    }
+
+    #[test]
+    fn byte_budget_after_a_source_has_a_structured_limit_gap() {
+        let first = std::env::temp_dir().join(format!(
+            "cmtrace-event-budget-after-first-{}.evtx",
+            std::process::id()
+        ));
+        let later = std::env::temp_dir().join(format!(
+            "cmtrace-event-budget-after-later-{}.evtx",
+            std::process::id()
+        ));
+        std::fs::File::create(&first)
+            .and_then(|file| file.set_len(MAX_SOURCE_BYTES))
+            .expect("create first source at byte budget");
+        std::fs::write(&later, b"").expect("write later source");
+        let (maps, providers) = empty_state();
+        let result = parse_evtx_manifest(
+            &EventLogSourceManifest {
+                entries: vec![budget_test_source(&first), budget_test_source(&later)],
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+        )
+        .expect("budget exhaustion is a parse result");
+
+        let first_path = first.to_string_lossy().into_owned();
+        let gap = result
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.source == first_path.as_str() && gap.kind == EvtxCoverageGapKind::Limit)
+            .expect("byte budget gap after first source");
+        assert!(gap.reason.contains("byte budget"));
+        assert!(gap.reason.contains("later records/files"));
+        assert!(result
+            .error_messages
+            .iter()
+            .any(|message| message.contains("aggregate budget") && message.contains(&first_path)));
+
+        std::fs::remove_file(first).expect("remove first source");
+        std::fs::remove_file(later).expect("remove later source");
+    }
+
     #[test]
     fn a_file_that_cannot_be_opened_is_named_in_the_result() {
         // A count with no file name and no reason leaves an operator with a number and no next
@@ -2071,6 +2423,8 @@ mod tests {
         std::fs::write(root.join("Application.EVTX"), b"not an evtx fixture").expect("write evtx");
         std::fs::write(root.join("Application.evtx.1"), b"rotated").expect("write rotated");
         std::fs::write(nested.join("System.evtx"), b"nested").expect("write nested");
+        std::fs::write(nested.join("MDMDiagReport.zip"), b"archive")
+            .expect("write nested diagnostic archive");
 
         let manifest = build_source_manifest(&[root.to_string_lossy().to_string()])
             .expect("build manifest");
@@ -2079,9 +2433,13 @@ mod tests {
             .iter()
             .map(|entry| entry.path.clone())
             .collect();
-        assert_eq!(paths.len(), 3);
+        assert_eq!(paths.len(), 4);
         assert!(paths.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(paths.iter().any(|path| path.ends_with("Application.evtx.1")));
+        assert!(manifest.entries.iter().any(|entry| {
+            entry.path.ends_with("MDMDiagReport.zip")
+                && entry.kind == EventLogSourceKind::Archive
+        }));
         assert!(manifest.coverage.is_empty());
 
         let duplicate = build_source_manifest(&[
@@ -2603,6 +2961,53 @@ mod tests {
         assert_eq!(
             parse_timestamp_to_epoch_ms(system.time_created.as_deref().unwrap_or_default()),
             1_786_276_800_000
+        );
+    }
+    #[test]
+    fn system_and_event_data_identity_merge_prefers_system_values() {
+        let root = parse(
+            r#"<Event>
+                <System>
+                    <Correlation ActivityID="{system}" RelatedActivityID="{related-system}" />
+                </System>
+                <EventData>
+                    <Data Name="ActivityId">{payload}</Data>
+                    <Data Name="RelatedActivityId">{related-payload}</Data>
+                    <Data Name="DeviceId">device-1</Data>
+                </EventData>
+            </Event>"#,
+        );
+        let system = super::super::event_node::extract_system_fields(&root);
+        let identity =
+            super::super::event_node::extract_event_identity(&extract_event_data(&root).fields);
+
+        assert_eq!(system.activity_id.as_deref(), Some("{system}"));
+        assert_eq!(system.related_activity_id.as_deref(), Some("{related-system}"));
+        assert_eq!(identity.activity_id.as_deref(), Some("{payload}"));
+        assert_eq!(identity.related_activity_id.as_deref(), Some("{related-payload}"));
+        assert_eq!(
+            system.activity_id.clone().or(identity.activity_id),
+            Some("{system}".to_string())
+        );
+        assert_eq!(
+            system
+                .related_activity_id
+                .clone()
+                .or(identity.related_activity_id),
+            Some("{related-system}".to_string())
+        );
+
+        let fallback_root = parse(
+            r#"<Event><EventData><Data Name="ActivityId">{payload-only}</Data></EventData></Event>"#,
+        );
+        let fallback_system = super::super::event_node::extract_system_fields(&fallback_root);
+        let fallback_identity = super::super::event_node::extract_event_identity(
+            &extract_event_data(&fallback_root).fields,
+        );
+
+        assert_eq!(
+            fallback_system.activity_id.clone().or(fallback_identity.activity_id),
+            Some("{payload-only}".to_string())
         );
     }
 }

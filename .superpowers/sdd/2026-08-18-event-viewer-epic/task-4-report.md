@@ -64,3 +64,11 @@ Result: no whitespace errors.
 ## Explicit blocker
 
 No truthful packaged `.db` can be generated from the current repository contents: the required Windows capture and its source-build/provider-version provenance are absent. The checked-in manifest reports this as unavailable instead of claiming coverage. Windows runtime evidence and real curated provider rows remain an external prerequisite for changing the manifest to `available`.
+
+## Interoperability and atomic-replacement follow-up
+
+- Provider writes now use the EventLogExpert canonical Maps dictionary (`levels: { Entries, IsBitMap: false }`) and an empty compressed message-model list for Parameters. Unavailable-category coverage remains in the keyed `ProviderCaptureState` table, with the legacy Parameters object retained only as a reader fallback.
+- Imported nullable VersionKey and payload BLOBs are normalized without dropping rows; row reads retain deterministic source-build/VersionKey/rowid ordering, and malformed required schema columns return precise errors.
+- Export validates the staged copy before publication, and write/export staging uses exclusive creation and cleanup. Same-directory replacement uses `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` on Windows and rename replacement elsewhere.
+
+Focused tests were added for canonical payload shapes, nullable imported rows, malformed schema errors, duplicate/failed writes, and deterministic replacement behavior. They were not run in this lane per the parent validation constraint. Direct Windows API/runtime behavior remains unverified on macOS; a Windows build/runtime with the existing `windows` dependency and a real EventLogExpert capture is required to verify replacement and packaged provider provenance.

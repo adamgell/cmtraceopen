@@ -61,7 +61,13 @@ fn short_id_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok
 }
 
 fn signed_as_short_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    Ok((i64::deserialize(deserializer)? as i16 as u16) as u32)
+    let value = i64::deserialize(deserializer)?;
+    if !(-32768..=32767).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "ShortId must be a signed Int16 value",
+        ));
+    }
+    Ok((value as i16 as u16) as u32)
 }
 
 /// One event definition from a provider's manifest.
@@ -498,6 +504,25 @@ mod tests {
         assert!(encoded.contains(r#""ShortId":-1"#));
         let decoded: ProviderMessage = serde_json::from_str(&encoded).expect("round-trips");
         assert_eq!(decoded.short_id, 0xffff);
+    }
+    #[test]
+    fn short_message_ids_accept_signed_int16_boundaries() {
+        for (wire_value, expected_short_id) in [(-32768, 0x8000), (32767, 0x7fff)] {
+            let json = format!(r#"{{"RawId":1,"ShortId":{wire_value},"Text":"x"}}"#);
+            let message: ProviderMessage = serde_json::from_str(&json).expect("deserializes");
+            assert_eq!(message.short_id, expected_short_id);
+        }
+    }
+
+    #[test]
+    fn short_message_ids_reject_values_outside_signed_int16() {
+        for wire_value in [32768, -32769] {
+            let json = format!(r#"{{"RawId":1,"ShortId":{wire_value},"Text":"x"}}"#);
+            assert!(
+                serde_json::from_str::<ProviderMessage>(&json).is_err(),
+                "out-of-range ShortId should be rejected: {wire_value}"
+            );
+        }
     }
 
     #[test]

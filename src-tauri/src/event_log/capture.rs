@@ -14,6 +14,17 @@ use std::sync::{LazyLock, Mutex};
 static CAPTURE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 use super::models::ProviderCaptureFailure;
+#[cfg(any(target_os = "windows", test))]
+fn is_unavailable_message_error(code: u32) -> bool {
+    matches!(code, 15027 | 15028 | 15029 | 15030 | 15033)
+}
+#[cfg(any(target_os = "windows", test))]
+fn is_unavailable_provider_error(message: &str) -> bool {
+    message.contains("0x80070002")
+        || message.contains("0x80070715")
+        || message.contains("0x80073B01")
+        || message.contains("code 1813")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +83,7 @@ pub fn capture_providers_to_db(_db_path: &Path) -> Result<(), CaptureError> {
     Err(CaptureError::unsupported())
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(test)]
 fn expand_windows_environment(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut remainder = value;
@@ -91,7 +102,7 @@ fn expand_windows_environment(value: &str) -> String {
     output
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(test)]
 fn provider_file_paths(value: &str) -> Vec<String> {
     value
         .split(';')
@@ -124,7 +135,7 @@ fn trim_provider_text(value: String) -> String {
 mod windows_capture {
     use super::*;
     use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage, ProviderMetadata};
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use sha2::{Digest, Sha256};
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{
@@ -137,8 +148,8 @@ mod windows_capture {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     const MAX_PUBLISHERS: usize = 100_000;
     const MAX_EVENTS_PER_PROVIDER: usize = 100_000;
-    const MAX_IDENTITY_FILE_BYTES: u64 = 64 * 1024 * 1024;
     const MAX_BUFFER_BYTES: usize = 16 * 1024 * 1024;
+    const MAX_CAPTURED_METADATA_ITEMS: usize = 4_000_000;
     const MAX_OBJECT_ARRAY_ITEMS: usize = 100_000;
     const BUFFER_RETRY: usize = 256;
     const LOCALE_NEUTRAL: u32 = 0;
@@ -169,6 +180,11 @@ mod windows_capture {
         Number(u64),
         Handle(EVT_HANDLE),
     }
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ChannelReference {
+        path: String,
+        message_id: Option<u32>,
+    }
     fn number(value: OwnedVariant) -> Option<u64> {
         match value {
             OwnedVariant::Number(value) => Some(value),
@@ -192,16 +208,27 @@ mod windows_capture {
         Ok(optional_number(value)?.filter(|value| *value != 0))
     }
     fn optional_message_id(value: OwnedVariant) -> Result<Option<u32>, String> {
-        Ok(optional_number(value)?.and_then(|value| {
-            let value = value as u32;
-            (value != u32::MAX).then_some(value)
-        }))
+        let Some(value) = optional_number(value)? else {
+            return Ok(None);
+        };
+        let value = u32::try_from(value)
+            .map_err(|_| format!("message id {value} exceeds the UInt32 range"))?;
+        Ok((value != u32::MAX).then_some(value))
     }
     fn short_message_id(raw_id: u32) -> u32 {
         u32::from((raw_id & 0xFFFF) as u16)
     }
+    fn opcode_metadata_key(raw_value: u64) -> u64 {
+        let opcode = (raw_value >> 16) & 0xFFFF;
+        let task = raw_value & 0xFFFF;
+        if task == 0 { opcode } else { raw_value }
+    }
     fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
-        if target == 1 { (raw_value >> 16) & 0xFFFF } else { raw_value }
+        if target == 1 {
+            opcode_metadata_key(raw_value)
+        } else {
+            raw_value
+        }
     }
     fn optional_string(value: OwnedVariant) -> Result<Option<String>, String> {
         match value {
@@ -236,37 +263,287 @@ mod windows_capture {
         }
         output
     }
-    fn canonical_version_key(identity: &[(&str, &str, &[u8])]) -> String {
-        let mut digest = Sha256::new();
-        for (label, _path, content) in identity {
-            digest.update(label.as_bytes());
-            digest.update((label.len() as u64).to_le_bytes());
-            digest.update(content);
-            digest.update((content.len() as u64).to_le_bytes());
+    fn write_byte(output: &mut Vec<u8>, value: u8) {
+        output.push(value);
+    }
+    fn write_i32(output: &mut Vec<u8>, value: i32) {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    fn write_i64(output: &mut Vec<u8>, value: i64) {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    fn write_levels_map(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
+        if map.is_empty() {
+            write_i32(output, 0);
+            return;
         }
-        format!("vk1:{}", base32(&digest.finalize()))
-    }
-    fn resolve_channel_name(channels: &BTreeMap<u32, String>, channel_id: u64) -> Option<String> {
-        channels.get(&(channel_id as u32)).cloned()
-    }
-    fn canonical_version_key_owned(identity: &[(String, String, Vec<u8>)]) -> String {
-        let parts: Vec<(&str, &str, &[u8])> = identity
+        write_i32(output, 1);
+        write_string(output, Some("levels"));
+        write_byte(output, 0);
+        let mut entries: Vec<(u32, &str)> = map
             .iter()
-            .map(|(label, path, content)| (label.as_str(), path.as_str(), content.as_slice()))
+            .filter_map(|(key, value)| key.parse().ok().map(|key| (key, value.as_str())))
             .collect();
-        canonical_version_key(&parts)
+        entries.sort_by_key(|(key, _)| *key);
+        write_i32(output, i32::try_from(entries.len()).unwrap_or(i32::MAX));
+        for (key, value) in entries {
+            output.extend_from_slice(&key.to_le_bytes());
+            write_string(output, Some(value));
+        }
+    }
+    fn write_u16(output: &mut Vec<u8>, value: u16) {
+        output.extend_from_slice(&value.to_le_bytes());
+    }
+    fn write_string(output: &mut Vec<u8>, value: Option<&str>) {
+        let Some(value) = value else {
+            write_i32(output, -1);
+            return;
+        };
+        let byte_count = value.encode_utf16().count().saturating_mul(2);
+        write_i32(output, i32::try_from(byte_count).unwrap_or(i32::MAX));
+        for unit in value.encode_utf16() {
+            write_u16(output, unit);
+        }
+    }
+    fn write_sorted_blobs(output: &mut Vec<u8>, mut blobs: Vec<Vec<u8>>) {
+        blobs.sort();
+        blobs.dedup();
+        write_i32(output, i32::try_from(blobs.len()).unwrap_or(i32::MAX));
+        for blob in blobs {
+            output.extend(blob);
+        }
+    }
+    enum TemplateNode {
+        Raw(String),
+        Parsed([String; 5]),
+    }
+    fn template_nodes(template: Option<&str>) -> Vec<TemplateNode> {
+        let Some(template) = template else {
+            return Vec::new();
+        };
+        let folded = template.to_ascii_lowercase();
+        let mut nodes = Vec::new();
+        let mut search = 0;
+        while search < template.len() {
+            let Some(relative) = folded[search..].find("<data") else {
+                break;
+            };
+            let start = search + relative;
+            let after_tag = start + 5;
+            if after_tag < template.len() {
+                let next = template[after_tag..].chars().next().unwrap_or_default();
+                if !matches!(next, ' ' | '\t' | '\r' | '\n' | '/' | '>') {
+                    search = after_tag;
+                    continue;
+                }
+            }
+            let from_data = &template[start..];
+            let Some(close) = from_data.char_indices().skip(5).find_map(|(index, ch)| {
+                (ch == '>').then_some(index)
+            }) else {
+                nodes.push(TemplateNode::Raw(from_data.to_string()));
+                break;
+            };
+            let element_end = if from_data[..close].ends_with('/') {
+                close - 1
+            } else {
+                close
+            };
+            let element = &from_data[..element_end];
+            let chars: Vec<char> = element.chars().collect();
+            let mut pos = 5;
+            let mut values = [String::new(), String::new(), String::new(), String::new(), String::new()];
+            let mut raw = false;
+            while pos < chars.len() {
+                while pos < chars.len() && matches!(chars[pos], ' ' | '\t' | '\r' | '\n' | '/') {
+                    pos += 1;
+                }
+                if pos >= chars.len() {
+                    break;
+                }
+                let name_start = pos;
+                while pos < chars.len() && !matches!(chars[pos], '=' | ' ' | '\t' | '\r' | '\n' | '/') {
+                    pos += 1;
+                }
+                let name: String = chars[name_start..pos].iter().collect();
+                let slot = match name.to_ascii_lowercase().as_str() {
+                    "name" => Some(0),
+                    "intype" => Some(1),
+                    "outtype" => Some(2),
+                    "length" => Some(3),
+                    "map" => Some(4),
+                    _ => None,
+                };
+                while pos < chars.len() && matches!(chars[pos], ' ' | '\t' | '\r' | '\n') {
+                    pos += 1;
+                }
+                if pos >= chars.len() || chars[pos] != '=' {
+                    raw |= slot.is_some();
+                    continue;
+                }
+                pos += 1;
+                while pos < chars.len() && matches!(chars[pos], ' ' | '\t' | '\r' | '\n') {
+                    pos += 1;
+                }
+                if pos >= chars.len() || chars[pos] != '"' {
+                    raw |= slot.is_some();
+                    while pos < chars.len() && !matches!(chars[pos], ' ' | '\t' | '\r' | '\n') {
+                        pos += 1;
+                    }
+                    continue;
+                }
+                pos += 1;
+                let value_start = pos;
+                while pos < chars.len() && chars[pos] != '"' {
+                    pos += 1;
+                }
+                if pos >= chars.len() {
+                    raw |= slot.is_some();
+                    break;
+                }
+                if let Some(slot) = slot {
+                    values[slot] = chars[value_start..pos].iter().collect();
+                }
+                pos += 1;
+            }
+            if raw || values.iter().all(String::is_empty) {
+                nodes.push(TemplateNode::Raw(element.to_string()));
+            } else {
+                nodes.push(TemplateNode::Parsed(values));
+            }
+            search = start + close + 1;
+        }
+        nodes
+    }
+    fn write_template_signature(output: &mut Vec<u8>, template: Option<&str>) {
+        let nodes = template_nodes(template);
+        write_i32(output, i32::try_from(nodes.len()).unwrap_or(i32::MAX));
+        for node in nodes {
+            match node {
+                TemplateNode::Raw(raw) => {
+                    write_byte(output, 1);
+                    write_string(output, Some(&raw));
+                }
+                TemplateNode::Parsed(values) => {
+                    write_byte(output, 0);
+                    for value in values {
+                        write_string(output, Some(&value));
+                    }
+                }
+            }
+        }
+    }
+    fn encode_event(event: &ProviderEvent) -> Vec<u8> {
+        let mut output = Vec::new();
+        write_i64(&mut output, i64::from(event.id));
+        write_byte(&mut output, event.version as u8);
+        write_i32(&mut output, event.level.unwrap_or_default() as i32);
+        write_i32(&mut output, event.opcode.unwrap_or_default() as i32);
+        write_i32(&mut output, event.task.unwrap_or_default() as i32);
+        let mut keywords = event.keywords.clone();
+        keywords.sort_unstable();
+        keywords.dedup();
+        write_i32(&mut output, i32::try_from(keywords.len()).unwrap_or(i32::MAX));
+        for keyword in keywords {
+            write_i64(&mut output, keyword as i64);
+        }
+        write_template_signature(&mut output, event.template.as_deref());
+        write_string(&mut output, event.description.as_deref());
+        write_string(&mut output, event.log_name.as_deref());
+        output
+    }
+    fn encode_message(message: &ProviderMessage) -> Vec<u8> {
+        let mut output = Vec::new();
+        write_u16(&mut output, message.short_id as u16);
+        write_i64(&mut output, message.raw_id as i64);
+        write_string(&mut output, message.log_link.as_deref());
+        write_string(&mut output, message.tag.as_deref());
+        write_string(&mut output, message.template.as_deref());
+        write_string(&mut output, message.text.as_deref());
+        output
+    }
+    fn write_i64_dictionary(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
+        let mut entries: Vec<(i64, &str)> = map
+            .iter()
+            .filter_map(|(key, value)| key.parse().ok().map(|key| (key, value.as_str())))
+            .collect();
+        entries.sort_by_key(|(key, _)| *key);
+        write_i32(output, i32::try_from(entries.len()).unwrap_or(i32::MAX));
+        for (key, value) in entries {
+            write_i64(output, key);
+            write_string(output, Some(value));
+        }
+    }
+    fn write_i32_dictionary(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
+        let mut entries: Vec<(i32, &str)> = map
+            .iter()
+            .filter_map(|(key, value)| {
+                key.parse::<u32>()
+                    .map(|key| key as i32)
+                    .or_else(|_| key.parse::<i32>())
+                    .ok()
+                    .map(|key| (key, value.as_str()))
+            })
+            .collect();
+        entries.sort_by_key(|(key, _)| *key);
+        write_i32(output, i32::try_from(entries.len()).unwrap_or(i32::MAX));
+        for (key, value) in entries {
+            write_i32(output, key);
+            write_string(output, Some(value));
+        }
+    }
+    fn canonical_version_key(metadata: &ProviderMetadata) -> String {
+        let mut encoded = Vec::new();
+        write_byte(&mut encoded, 1);
+        // ProviderName and source provenance identify the database row, not rendered content.
+        // The current parser model has no owning-publisher field, so it is the canonical null.
+        write_string(&mut encoded, None);
+        write_sorted_blobs(
+            &mut encoded,
+            metadata.events.iter().map(encode_event).collect(),
+        );
+        write_sorted_blobs(
+            &mut encoded,
+            metadata.messages.iter().map(encode_message).collect(),
+        );
+        // Parameters are not represented by ProviderMetadata yet.
+        write_i32(&mut encoded, 0);
+        write_i64_dictionary(&mut encoded, &metadata.keywords);
+        write_i32_dictionary(&mut encoded, &metadata.opcodes);
+        write_i32_dictionary(&mut encoded, &metadata.tasks);
+        write_levels_map(&mut encoded, &metadata.levels);
+        let digest = Sha256::digest(encoded);
+        format!("vk1:{}", base32(&digest))
+    }
+    fn metadata_item_count(metadata: &ProviderMetadata) -> usize {
+        metadata
+            .events
+            .len()
+            .saturating_add(metadata.messages.len())
+            .saturating_add(metadata.levels.len())
+            .saturating_add(metadata.tasks.len())
+            .saturating_add(metadata.opcodes.len())
+            .saturating_add(metadata.keywords.len())
+    }
+    fn resolve_channel_name(
+        channels: &BTreeMap<u32, ChannelReference>,
+        channel_id: u64,
+    ) -> Option<String> {
+        channels.get(&(channel_id as u32)).map(|channel| channel.path.clone())
     }
     fn insert_named_metadata(map: &mut BTreeMap<String, String>, key: u64, value: String) {
         map.entry(key.to_string()).or_insert(value);
     }
     fn keyword_bits(mask: u64) -> Vec<u64> {
-        (0..u64::BITS)
-            .rev()
-            .filter_map(|shift| {
-                let bit = 1u64 << shift;
-                (mask & bit != 0).then_some(bit)
-            })
-            .collect()
+        const RESERVED_BITS: u64 = 0xFFFF_0000_0000_0000;
+        let mut mask = mask & !RESERVED_BITS;
+        let mut bits = Vec::new();
+        while mask != 0 {
+            let bit = 1u64 << (u64::BITS - 1 - mask.leading_zeros());
+            bits.push(bit);
+            mask &= !bit;
+        }
+        bits
     }
     unsafe fn decode_variant(variant: &EVT_VARIANT) -> Option<OwnedVariant> {
         let kind = variant.Type & EVT_VARIANT_TYPE_MASK;
@@ -448,7 +725,7 @@ mod windows_capture {
         );
         if let Err(error) = initial {
             let code = win32_code(&error);
-            if code == ERROR_EVT_MESSAGE_NOT_FOUND.0 || code == ERROR_EVT_MESSAGE_ID_NOT_FOUND.0 {
+            if is_unavailable_message_error(code) {
                 return Ok(None);
             }
             if code != ERROR_INSUFFICIENT_BUFFER.0 {
@@ -471,7 +748,7 @@ mod windows_capture {
             &mut used,
         ) {
             let code = win32_code(&error);
-            if code == ERROR_EVT_MESSAGE_NOT_FOUND.0 || code == ERROR_EVT_MESSAGE_ID_NOT_FOUND.0 {
+            if is_unavailable_message_error(code) {
                 return Ok(None);
             }
             return Err(format!("message {message_id} read failed: {error}"));
@@ -514,7 +791,9 @@ mod windows_capture {
         Ok(())
     }
 
-    unsafe fn channel_names(metadata: EVT_HANDLE) -> Result<(BTreeMap<u32, String>, bool), String> {
+    unsafe fn channel_names(
+        metadata: EVT_HANDLE,
+    ) -> Result<(BTreeMap<u32, ChannelReference>, bool), String> {
         let (channel_value, unavailable) =
             optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?;
         let Some(channel_value) = channel_value else {
@@ -527,13 +806,15 @@ mod windows_capture {
         let mut count = 0u32;
         EvtGetObjectArraySize(array_handle.0.0, &mut count)
             .map_err(|error| format!("channel reference array size failed: {error}"))?;
-        let count = usize::try_from(count).map_err(|_| "channel reference size overflow".to_string())?;
+        let count = usize::try_from(count)
+            .map_err(|_| "channel reference size overflow".to_string())?;
         if count > MAX_OBJECT_ARRAY_ITEMS {
             return Err("channel reference array exceeds bound".to_string());
         }
         let mut names = BTreeMap::new();
         for index in 0..count {
-            let index = u32::try_from(index).map_err(|_| "channel reference index overflow".to_string())?;
+            let index = u32::try_from(index)
+                .map_err(|_| "channel reference index overflow".to_string())?;
             let channel_id = number(object_property(
                 array_handle.0.0,
                 index,
@@ -546,7 +827,15 @@ mod windows_capture {
                 EvtPublisherMetadataChannelReferencePath.0 as u32,
             )?)
             .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
-            names.insert(channel_id as u32, path);
+            let message_id = optional_message_id(object_property(
+                array_handle.0.0,
+                index,
+                EvtPublisherMetadataChannelReferenceMessageID.0 as u32,
+            )?)?;
+            names.insert(
+                channel_id as u32,
+                ChannelReference { path, message_id },
+            );
         }
         Ok((names, unavailable))
     }
@@ -567,6 +856,20 @@ mod windows_capture {
         }
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
+        for channel in channels.values() {
+            if let Some(message_id) = channel.message_id {
+                let text = format_message(metadata_handle, message_id)?;
+                messages.entry(message_id as u64).or_insert(ProviderMessage {
+                    raw_id: message_id as u64,
+                    short_id: short_message_id(message_id),
+                    provider_name: Some(publisher_name.to_string()),
+                    template: None,
+                    tag: None,
+                    log_link: None,
+                    text,
+                });
+            }
+        }
 
         for message in messages.values_mut() {
             message.provider_name = Some(publisher_name.to_string());
@@ -664,16 +967,22 @@ mod windows_capture {
                 .unwrap_or(0) as u32;
             let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
                 .unwrap_or(0);
-            let log_name = channels.get(&(channel_index as u32)).cloned();
-            let level = optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
-                .map(|value| value as u32)
-                .unwrap_or(0);
-            let task_metadata = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
-                .map(|value| value as u32);
-            let opcode_raw =
-                optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?;
-            let opcode = opcode_raw.map(|value| value as u32).unwrap_or(0);
-            let task = task_metadata.unwrap_or(0);
+            let log_name = resolve_channel_name(&channels, channel_index);
+            let level = optional_nonzero_number(get_event_variant(
+                event_handle.0,
+                EventMetadataEventLevel,
+            )?)?
+            .map(|value| value as u32);
+            let task = optional_nonzero_number(get_event_variant(
+                event_handle.0,
+                EventMetadataEventTask,
+            )?)?
+            .map(|value| value as u32);
+            let opcode = optional_nonzero_number(get_event_variant(
+                event_handle.0,
+                EventMetadataEventOpcode,
+            )?)?
+            .map(|value| value as u32);
             let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
                 .map(keyword_bits)
                 .unwrap_or_default();
@@ -700,9 +1009,9 @@ mod windows_capture {
                 id,
                 version,
                 log_name,
-                level: Some(level),
-                task: Some(task),
-                opcode: Some(opcode),
+                level,
+                task,
+                opcode,
                 keywords,
                 template,
             });
@@ -714,61 +1023,8 @@ mod windows_capture {
         Ok(metadata)
     }
 
-    unsafe fn provider_version_key(metadata: EVT_HANDLE) -> Result<String, String> {
-        let read = |property: EVT_PUBLISHER_METADATA_PROPERTY_ID| -> Result<Option<String>, String> {
-            match optional_publisher_variant(metadata, property) {
-                Ok((value, _unavailable)) => value
-                    .map(|variant| {
-                        string(variant)
-                            .ok_or_else(|| format!("publisher property {} has an invalid type", property.0))
-                    })
-                    .transpose(),
-                Err(error)
-                    if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
-                        || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
-                        || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
-                {
-                    Ok(None)
-                }
-                Err(error) => Err(error),
-            }
-        };
-        let guid = read(EvtPublisherMetadataPublisherGuid)?.unwrap_or_default();
-        let resource = read(EvtPublisherMetadataResourceFilePath)?.unwrap_or_default();
-        let parameter = read(EvtPublisherMetadataParameterFilePath)?.unwrap_or_default();
-        let message = read(EvtPublisherMetadataMessageFilePath)?.unwrap_or_default();
-        if guid.is_empty() && resource.is_empty() && parameter.is_empty() && message.is_empty() {
-            return Err("publisher metadata has no identity fields for VersionKey".to_string());
-        }
-        let mut identity = vec![("guid".to_string(), guid.clone(), guid.into_bytes())];
-        for (label, raw_paths) in [
-            ("resource", resource.as_str()),
-            ("parameter", parameter.as_str()),
-            ("message", message.as_str()),
-        ] {
-            for path in provider_file_paths(raw_paths) {
-                let canonical = std::fs::canonicalize(&path)
-                    .map_err(|error| format!("cannot canonicalize {label} identity file {path}: {error}"))?;
-                let canonical_path = canonical.to_string_lossy().into_owned();
-                let size = std::fs::metadata(&canonical)
-                    .map_err(|error| format!("cannot inspect {label} identity file {canonical_path}: {error}"))?
-                    .len();
-                if size > MAX_IDENTITY_FILE_BYTES {
-                    return Err(format!(
-                        "{label} identity file {canonical_path} exceeds {MAX_IDENTITY_FILE_BYTES} bytes"
-                    ));
-                }
-                let content = std::fs::read(&canonical)
-                    .map_err(|error| format!("cannot read {label} identity file {canonical_path}: {error}"))?;
-                if content.len() as u64 > MAX_IDENTITY_FILE_BYTES {
-                    return Err(format!(
-                        "{label} identity file {canonical_path} grew beyond {MAX_IDENTITY_FILE_BYTES} bytes"
-                    ));
-                }
-                identity.push((label.to_string(), String::new(), content));
-            }
-        }
-        Ok(canonical_version_key_owned(&identity))
+    fn provider_version_key(metadata: &ProviderMetadata) -> String {
+        canonical_version_key(metadata)
     }
 
     fn current_os_build() -> Option<u32> {
@@ -789,6 +1045,7 @@ mod windows_capture {
             .map_err(|error| CaptureError::traversal(format!("cannot open publisher enumeration: {error}")))?;
         let publisher_enum = EvtHandle(publisher_enum);
         let mut captured = Vec::new();
+        let mut captured_items = 0usize;
         let mut failures = Vec::new();
         let mut hit_safety_bound = true;
         let source_os_build = current_os_build();
@@ -830,25 +1087,70 @@ mod windows_capture {
                 break;
             }
             let publisher_wide = wide(&publisher_name);
-            match unsafe { EvtOpenPublisherMetadata(None, PCWSTR(publisher_wide.as_ptr()), PCWSTR::null(), LOCALE_NEUTRAL, 0) } {
+            match unsafe {
+                EvtOpenPublisherMetadata(
+                    None,
+                    PCWSTR(publisher_wide.as_ptr()),
+                    PCWSTR::null(),
+                    LOCALE_NEUTRAL,
+                    0,
+                )
+            } {
                 Ok(handle) => {
                     let handle = EvtHandle(handle);
                     match unsafe { capture_provider(&publisher_name, handle.0, source_os_build) } {
                         Ok(metadata) => {
-                            match unsafe { provider_version_key(handle.0) } {
-                                Ok(version_key) => {
-                                    captured.push(crate::event_log::provider_db::CapturedProviderMetadata {
-                                        metadata,
-                                        version_key,
-                                    });
-                                }
-                                Err(error) => failures.push(ProviderCaptureFailure { provider_name: publisher_name.clone(), error }),
+                            let item_count = metadata_item_count(&metadata);
+                            if item_count > MAX_CAPTURED_METADATA_ITEMS
+                                || captured_items
+                                    .checked_add(item_count)
+                                    .is_none_or(|total| total > MAX_CAPTURED_METADATA_ITEMS)
+                            {
+                                failures.push(ProviderCaptureFailure {
+                                    provider_name: publisher_name.clone(),
+                                    error: "captured provider metadata exceeds aggregate bound"
+                                        .to_string(),
+                                });
+                                continue;
+                            }
+                            captured_items += item_count;
+                            let version_key = provider_version_key(&metadata);
+                            captured.push(crate::event_log::provider_db::CapturedProviderMetadata {
+                                metadata,
+                                version_key,
+                            });
+                        }
+                        Err(error) => {
+                            if is_unavailable_provider_error(&error) {
+                                log::warn!(
+                                    "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
+                                    publisher_name,
+                                    error
+                                );
+                            } else {
+                                failures.push(ProviderCaptureFailure {
+                                    provider_name: publisher_name.clone(),
+                                    error,
+                                });
                             }
                         }
-                        Err(error) => failures.push(ProviderCaptureFailure { provider_name: publisher_name.clone(), error }),
                     }
                 }
-                Err(error) => failures.push(ProviderCaptureFailure { provider_name: publisher_name.clone(), error: format!("cannot open publisher metadata: {error}") }),
+                Err(error) => {
+                    let error = format!("cannot open publisher metadata: {error}");
+                    if is_unavailable_provider_error(&error) {
+                        log::warn!(
+                            "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
+                            publisher_name,
+                            error
+                        );
+                    } else {
+                        failures.push(ProviderCaptureFailure {
+                            provider_name: publisher_name.clone(),
+                            error,
+                        });
+                    }
+                }
             }
         }
         if captured.is_empty() {
@@ -888,21 +1190,46 @@ mod windows_tests {
     }
 
     #[test]
-    fn version_keys_are_canonical_base32_and_include_file_content() {
-        let first = canonical_version_key(&[("resource", "same.dll", b"one")]);
-        let second = canonical_version_key(&[("resource", "same.dll", b"two")]);
-        assert!(first.starts_with("vk1:"));
-        assert!(first[4..]
+    fn version_keys_are_canonical_base32() {
+        let key = canonical_version_key(&ProviderMetadata::default());
+        assert!(key.starts_with("vk1:"));
+        assert!(key[4..]
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || b"234567".contains(&byte)));
         assert_eq!(base32(&[0]), "aa");
-        assert_ne!(first, second, "same payload content change needs a new version");
-        assert_eq!(
-            first,
-            canonical_version_key(&[("resource", "different-machine-path.dll", b"one")])
-        );
-        let high_bytes = base32(&[0xff; 32]);
-        assert_eq!(high_bytes.len(), 52);
+        assert_eq!(base32(&[0xff; 32]).len(), 52);
+    }
+    #[test]
+    fn template_signature_uses_rendered_fields_not_attribute_order() {
+        let first = ProviderEvent {
+            template: Some(
+                r#"<template><data name="Name" inType="win:UnicodeString" length="4"/></template>"#
+                    .to_string(),
+            ),
+            ..ProviderEvent::default()
+        };
+        let second = ProviderEvent {
+            template: Some(
+                r#"<template><data length="4" inType="win:UnicodeString" name="Name"/></template>"#
+                    .to_string(),
+            ),
+            ..ProviderEvent::default()
+        };
+        assert_eq!(encode_event(&first), encode_event(&second));
+    }
+    #[test]
+    fn aggregate_metadata_item_count_is_bounded() {
+        let metadata = ProviderMetadata {
+            events: vec![ProviderEvent::default()],
+            messages: vec![ProviderMessage::default()],
+            levels: BTreeMap::from([("1".to_string(), "level".to_string())]),
+            tasks: BTreeMap::from([("2".to_string(), "task".to_string())]),
+            opcodes: BTreeMap::from([("3".to_string(), "opcode".to_string())]),
+            keywords: BTreeMap::from([("4".to_string(), "keyword".to_string())]),
+            ..ProviderMetadata::default()
+        };
+        assert_eq!(metadata_item_count(&metadata), 6);
+        assert!(metadata_item_count(&metadata) < MAX_CAPTURED_METADATA_ITEMS);
     }
     #[test]
     fn zero_event_values_are_preserved_but_message_sentinel_is_absent() {
@@ -919,17 +1246,79 @@ mod windows_tests {
             optional_message_id(OwnedVariant::Number(0x1_0001)).expect("message id is valid"),
             Some(0x1_0001)
         );
+        assert!(optional_message_id(OwnedVariant::Number(u32::MAX as u64 + 1)).is_err());
         assert_eq!(short_message_id(0x1_0001), 1);
     }
+
     #[test]
-    fn event_keyword_masks_expand_to_individual_bits() {
-        assert_eq!(keyword_bits(0x8000_0000_0000_0005), vec![0x8000_0000_0000_0000, 4, 1]);
+    fn zero_event_level_task_and_opcode_values_are_absent() {
+        assert_eq!(optional_nonzero_number(OwnedVariant::Number(0)).unwrap(), None);
+        assert_eq!(optional_nonzero_number(OwnedVariant::Number(9)).unwrap(), Some(9));
+    }
+
+    #[test]
+    fn event_keyword_masks_ignore_reserved_upper_sixteen_bits() {
+        assert_eq!(keyword_bits(0xFFFF_0000_0000_0005), vec![4, 1]);
+        assert!(keyword_bits(0xFFFF_0000_0000_0000).is_empty());
+    }
+
+    #[test]
+    fn opcode_metadata_lookup_preserves_task_specific_values() {
+        let mut names = BTreeMap::new();
+        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0000), "global".to_string());
+        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0002), "task two".to_string());
+        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0007), "task seven".to_string());
+        assert_eq!(names.get("11").map(String::as_str), Some("global"));
+        assert_eq!(names.get("720898").map(String::as_str), Some("task two"));
+        assert_eq!(names.get("720903").map(String::as_str), Some("task seven"));
+    }
+
+    #[test]
+    fn canonical_version_keys_ignore_order_but_change_with_content() {
+        let first = ProviderMetadata {
+            provider_name: "provider-a".to_string(),
+            events: vec![
+                ProviderEvent {
+                    id: 2,
+                    version: 1,
+                    description: Some("two".to_string()),
+                    keywords: vec![4, 1, 4],
+                    ..ProviderEvent::default()
+                },
+                ProviderEvent {
+                    id: 1,
+                    description: Some("one".to_string()),
+                    ..ProviderEvent::default()
+                },
+            ],
+            messages: vec![ProviderMessage {
+                raw_id: 7,
+                short_id: 7,
+                text: Some("message".to_string()),
+                ..ProviderMessage::default()
+            }],
+            keywords: BTreeMap::from([("1".to_string(), "one".to_string())]),
+            ..ProviderMetadata::default()
+        };
+        let mut reordered = first.clone();
+        reordered.provider_name = "provider-b".to_string();
+        reordered.events.reverse();
+        reordered.events[1].keywords.reverse();
+        let mut changed = reordered.clone();
+        changed.events[0].description = Some("changed".to_string());
+        assert_eq!(canonical_version_key(&first), canonical_version_key(&reordered));
+        assert_ne!(canonical_version_key(&first), canonical_version_key(&changed));
+    }
+    #[test]
+    fn event_keyword_masks_expand_to_declared_bits() {
+        assert_eq!(keyword_bits(0xFFFF_0000_0000_0005), vec![4, 1]);
         assert!(keyword_bits(0).is_empty());
     }
 
     #[test]
-    fn opcode_metadata_uses_high_word_while_task_keeps_low_word() {
-        assert_eq!(metadata_key_value(1, 0x000B_0002), 11);
+    fn opcode_metadata_key_keeps_task_specific_identity() {
+        assert_eq!(metadata_key_value(1, 0x000B_0000), 11);
+        assert_eq!(metadata_key_value(1, 0x000B_0002), 0x000B_0002);
         assert_eq!(metadata_key_value(0, 0x0000_0007), 7);
         assert_eq!(metadata_key_value(2, 0x8000_0000_0000_0001), 0x8000_0000_0000_0001);
     }
@@ -943,9 +1332,25 @@ mod windows_tests {
     }
     #[test]
     fn channel_resolution_uses_reference_id_not_array_position() {
-        let channels = BTreeMap::from([(7, "Admin".to_string()), (42, "Operational".to_string())]);
-        assert_eq!(resolve_channel_name(&channels, 0), None);
+        let channels = BTreeMap::from([
+            (
+                7,
+                ChannelReference {
+                    path: "Admin".to_string(),
+                    message_id: Some(100),
+                },
+            ),
+            (
+                42,
+                ChannelReference {
+                    path: "Operational".to_string(),
+                    message_id: None,
+                },
+            ),
+        ]);
+        assert_eq!(resolve_channel_name(&channels, 7).as_deref(), Some("Admin"));
         assert_eq!(resolve_channel_name(&channels, 1), None);
+        assert_eq!(channels.get(&7).and_then(|channel| channel.message_id), Some(100));
     }
 }
 
@@ -1005,6 +1410,30 @@ mod tests {
             trim_provider_text("InlineName\r\n\t \0".to_string()),
             "InlineName"
         );
+    }
+
+    #[test]
+    fn unresolved_message_errors_are_unavailable_but_resource_errors_are_not() {
+        for code in [15027, 15028, 15029, 15030, 15033] {
+            assert!(is_unavailable_message_error(code), "code {code}");
+        }
+        for code in [2, 1813, 15031, 15032] {
+            assert!(!is_unavailable_message_error(code), "code {code}");
+        }
+    }
+
+    #[test]
+    fn unavailable_provider_resources_are_skipped_but_unexpected_errors_fail() {
+        assert!(is_unavailable_provider_error(
+            "cannot open publisher metadata: The system cannot find the file specified. (0x80070002)"
+        ));
+        assert!(is_unavailable_provider_error(
+            "property 5 query failed (code 1813): resource type is unavailable"
+        ));
+        assert!(is_unavailable_provider_error(
+            "message query failed: MUI entry is missing (0x80073B01)"
+        ));
+        assert!(!is_unavailable_provider_error("metadata array 16 exceeds bound"));
     }
 
     #[cfg(not(target_os = "windows"))]

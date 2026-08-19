@@ -783,6 +783,47 @@ describe("the time window reaches the service", () => {
 
     expect(filterOf(0)?.levels).toEqual([2, 3]);
   });
+  it("uses one filter snapshot for every channel in a query generation", async () => {
+    useEvtxStore.setState({
+      sourceMode: "live",
+      timeWindow: "1h",
+      filterEventIds: "4624",
+      filterLevels: new Set(["Error"]),
+    });
+    const initialResolvers: Array<{
+      channel: string;
+      resolve: (value: unknown) => void;
+    }> = [];
+    invoke.mockImplementation((_name: string, args: { channels?: string[] }) => {
+      const channel = args.channels?.[0] ?? "";
+      if (initialResolvers.length < 2) {
+        return new Promise((resolve) => initialResolvers.push({ channel, resolve }));
+      }
+      return result(channel, []);
+    });
+
+    const query = useEvtxStore.getState().queryChannels(["Application", "System"]);
+    await Promise.resolve();
+    expect(initialResolvers).toHaveLength(2);
+    const firstGenerationFilters = invoke.mock.calls.slice(0, 2).map((call) => {
+      const filter = (call[1] as { filter?: unknown }).filter;
+      return JSON.stringify(filter);
+    });
+
+    useEvtxStore.getState().setTimeWindow("all");
+    useEvtxStore.getState().setFilterEventIds("4625");
+    useEvtxStore.getState().setFilterLevels(new Set(["Warning"]));
+    for (const { channel, resolve } of initialResolvers) resolve(result(channel, []));
+    await query;
+
+    expect(firstGenerationFilters).toEqual([
+      firstGenerationFilters[0],
+      firstGenerationFilters[0],
+    ]);
+    await vi.waitFor(() => expect(invoke.mock.calls.length).toBeGreaterThan(2));
+    const laterFilter = filterOf(2);
+    expect(laterFilter?.eventIds).toEqual([{ kind: "single", id: 4625 }]);
+  });
 
   it("keeps on-load quick-filter state when a time-window refresh refetches", async () => {
     const quickFilter = {
@@ -804,9 +845,9 @@ describe("the time window reaches the service", () => {
   });
 
 
-  it("drops a non-string gap the reader sent rather than rendering it", () => {
-    // The guard normalizes, but only if callers use what it returns. Ignoring the return value
-    // left the raw reply in place and stored 42 in coverageGaps.
+  it("reports a malformed gap payload instead of rendering it", async () => {
+    // The IPC boundary rejects malformed diagnostics. The store must expose that contract failure
+    // as a load gap rather than silently presenting the one valid string as complete coverage.
     invoke.mockImplementationOnce(async () => {
       emitTerminal("Application", 0, 0);
       return {
@@ -818,12 +859,12 @@ describe("the time window reaches the service", () => {
       };
     });
 
-    return useEvtxStore
-      .getState()
-      .queryChannels(["Application"])
-      .then(() => {
-        expect(useEvtxStore.getState().coverageGaps).toEqual(["real gap"]);
-      });
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toContain("invalid errorMessages at index 1");
+    expect(gaps[0]).not.toContain("real gap");
   });
 });
   it("refetches loaded live channels when before-load levels broaden", async () => {
@@ -1083,6 +1124,7 @@ describe("records that arrive in batches while the query runs", () => {
 
     const gaps = useEvtxStore.getState().coverageGaps;
     expect(gaps.some((g) => g.includes("System") && g.includes("batches"))).toBe(true);
+    expect(useEvtxStore.getState().loadedChannels.has("System")).toBe(false);
   });
 
   it("reports a shortfall against the count the reader sent", async () => {
@@ -1096,13 +1138,27 @@ describe("records that arrive in batches while the query runs", () => {
 
     const gaps = useEvtxStore.getState().coverageGaps;
     expect(gaps.some((g) => g.includes("8 of 9"))).toBe(true);
+    expect(useEvtxStore.getState().loadedChannels.has("System")).toBe(false);
   });
 
-  it("does not invent a shortfall when the reader gave no count", async () => {
+  it("leaves a channel unloaded when no streamed records arrive", async () => {
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("System", 1, 1);
+      return streamedReply("System", 1);
+    });
+
+    await useEvtxStore.getState().queryChannels(["System"]);
+
+    expect(useEvtxStore.getState().records).toHaveLength(0);
+    expect(useEvtxStore.getState().loadedChannels.has("System")).toBe(false);
+  });
+
+  it("does not invent a shortfall when the reader omitted its count", async () => {
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1)]);
       emitTerminal("System", 1, 0);
-      return { ...streamedReply("System", 0), totalRecords: "unknown" };
+      const { totalRecords: _ignored, ...reply } = streamedReply("System", 0);
+      return reply;
     });
 
     await useEvtxStore.getState().queryChannels(["System"]);

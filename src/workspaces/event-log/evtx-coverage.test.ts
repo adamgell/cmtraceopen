@@ -73,10 +73,169 @@ describe("assertParseResultShape", () => {
     });
     expect(shape.errorMessages).toEqual(["Application: 3 records unreadable"]);
   });
+  it("preserves an omitted or valid totalRecords count", () => {
+    expect(
+      assertParseResultShape({ records: [], channels: [], totalRecords: 0 }).totalRecords
+    ).toBe(0);
+    expect(assertParseResultShape({ records: [], channels: [] }).totalRecords).toBeNull();
+  });
 
-  it("treats absent errorMessages as no gaps rather than a malformed reply", () => {
-    // An older reader that reports nothing is not the same as one this build cannot read.
-    expect(assertParseResultShape({ records: [], channels: [] }).errorMessages).toEqual([]);
+  it("rejects a malformed totalRecords count", () => {
+    for (const totalRecords of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+      expect(() =>
+        assertParseResultShape({ records: [], channels: [], totalRecords })
+      ).toThrow(/totalRecords/);
+    }
+  });
+  it("preserves valid archive member provenance", () => {
+    const sha256 = "a".repeat(64);
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      archiveMembers: [
+        {
+          path: "bundle.zip::Application.evtx",
+          kind: "evtx",
+          sha256,
+          outcome: "parsed",
+        },
+        { path: "bundle.zip::readme.txt", kind: "text", outcome: "unsupported" },
+      ],
+    });
+
+    expect(shape.archiveMembers).toEqual([
+      {
+        path: "bundle.zip::Application.evtx",
+        kind: "evtx",
+        sha256,
+        outcome: "parsed",
+      },
+      { path: "bundle.zip::readme.txt", kind: "text", outcome: "unsupported" },
+    ]);
+  });
+
+  it("rejects malformed archive member provenance instead of dropping it", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        archiveMembers: [
+          {
+            path: "bundle.zip::Application.evtx",
+            kind: "evtx",
+            sha256: "abc123",
+            outcome: "parsed",
+          },
+        ],
+      })
+    ).toThrow(/invalid archive member at index 0/);
+  });
+
+  it("treats omitted optional collections as empty", () => {
+    const shape = assertParseResultShape({ records: [], channels: [] });
+    expect(shape.errorMessages).toEqual([]);
+    expect(shape.coverageGaps).toEqual([]);
+    expect(shape.coverage).toEqual([]);
+  });
+
+  it("rejects a non-array errorMessages field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], errorMessages: "not a list" })
+    ).toThrow(/errorMessages/);
+  });
+
+  it("rejects malformed errorMessages entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        errorMessages: ["real", 42, null],
+      })
+    ).toThrow(/errorMessages at index 1/);
+  });
+
+  it("rejects a non-array coverageGaps field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], coverageGaps: "not a list" })
+    ).toThrow(/coverageGaps/);
+  });
+
+  it("rejects malformed coverageGaps entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          { source: "real.evtx", kind: "file", reason: "unreadable" },
+          { source: "missing-kind", reason: "not a gap" },
+          "legacy text",
+        ],
+      })
+    ).toThrow(/coverageGaps at index 1/);
+  });
+
+  it("rejects coverageGaps locations outside the safe integer range", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "oversized.evtx",
+            kind: "chunk",
+            reason: "incomplete chunk",
+            chunkId: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("rejects a non-array coverage field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], coverage: "not a list" })
+    ).toThrow(/coverage/);
+  });
+
+  it("rejects malformed coverage entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverage: [
+          { kind: "missing", path: "missing.evtx", reason: "not found" },
+          { kind: "unknown", path: "unknown.evtx", reason: "invalid kind" },
+        ],
+      })
+    ).toThrow(/coverage at index 1/);
+  });
+
+  it("rejects coverageGaps eventRecordId outside the safe integer range", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "oversized.evtx",
+            kind: "record",
+            reason: "unreadable record",
+            eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("preserves valid coverage entries", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverage: [{ kind: "missing", path: "missing.evtx", reason: "not found" }],
+    });
+    expect(shape.coverage).toEqual([
+      { kind: "missing", path: "missing.evtx", reason: "not found" },
+    ]);
   });
 
   it("rejects a reply whose records are not a list", () => {
@@ -86,15 +245,6 @@ describe("assertParseResultShape", () => {
     );
     expect(() => assertParseResultShape({ channels: [] })).toThrow(/cannot read/);
     expect(() => assertParseResultShape(undefined)).toThrow(/cannot read/);
-  });
-
-  it("drops non-string gap entries rather than rendering them", () => {
-    const shape = assertParseResultShape({
-      records: [],
-      channels: [],
-      errorMessages: ["real", 42, null],
-    });
-    expect(shape.errorMessages).toEqual(["real"]);
   });
 });
 
@@ -135,18 +285,4 @@ describe("structured recovery gaps", () => {
     ]);
   });
 
-  it("drops malformed structured gap entries rather than rendering them", () => {
-    const shape = assertParseResultShape({
-      records: [],
-      channels: [],
-      coverageGaps: [
-        { source: "real.evtx", kind: "file", reason: "unreadable" },
-        { source: "missing-kind", reason: "not a gap" },
-        "legacy text",
-      ],
-    });
-    expect(shape.coverageGaps).toEqual([
-      { source: "real.evtx", kind: "file", reason: "unreadable" },
-    ]);
-  });
 });

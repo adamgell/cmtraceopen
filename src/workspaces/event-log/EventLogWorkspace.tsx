@@ -194,7 +194,16 @@ export function EventLogWorkspace() {
             overflow: "hidden",
           }}
         >
-          <div style={{ height: "240px", flexShrink: 0, overflow: "hidden" }}>
+          <div
+            style={{
+              height: "320px",
+              minHeight: "240px",
+              maxHeight: "50vh",
+              flexShrink: 0,
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
             <UnifiedTimelineView timeline={visibleTimeline} />
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>

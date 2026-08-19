@@ -122,3 +122,26 @@ fn binary_rejects_malformed_raw_xml_without_creating_an_artifact() {
     assert!(stderr.contains("raw XML is malformed"));
     assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown"));
 }
+
+#[test]
+fn binary_rejects_malformed_raw_xml_for_json_without_creating_an_artifact() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let manifest = manifest(&directory, "<Event><Message></Event>", "safe");
+    let destination = directory.path().join("malformed.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path"),
+            "--format",
+            "json",
+            "--output",
+            destination.to_str().expect("destination path"),
+        ])
+        .output()
+        .expect("run event-log-export");
+    assert!(!output.status.success());
+    assert!(!destination.exists());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(stderr.contains("raw XML is malformed"));
+    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown"));
+}

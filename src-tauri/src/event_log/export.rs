@@ -11,6 +11,7 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use std::borrow::Borrow;
 use cmtraceopen_parser::intune::apps::windows::common::redact_text;
 
 
@@ -71,7 +72,7 @@ pub(crate) const COLUMNS: [&str; 15] = [
     "Opcode",
     "Process ID",
     "Thread ID",
-    "User SID",
+"User SID",
     "Keywords",
     "Description",
     "Source Label",
@@ -82,16 +83,24 @@ pub(crate) const COLUMNS: [&str; 15] = [
 /// Appended after the fixed columns so a delimited export carries the same map values the grid
 /// renders. Discovered from the records rather than declared, because which properties exist
 /// depends on which maps matched.
-pub(crate) fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
+pub fn mapped_columns_iter<I, R>(records: I) -> Vec<String>
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
     let mut names: Vec<String> = Vec::new();
     for record in records {
-        for column in &record.mapped {
+        for column in &record.borrow().mapped {
             if !names.iter().any(|existing| existing == &column.property) {
                 names.push(column.property.clone());
             }
         }
     }
     names
+}
+
+pub fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
+    mapped_columns_iter(records.iter())
 }
 
 /// Neutralizes a value that a spreadsheet would otherwise execute as a formula.
@@ -149,7 +158,10 @@ fn optional(value: Option<impl ToString>) -> String {
 pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
     let mut row: Vec<String> = vec![
         record.timestamp.clone(),
-        record.event_record_id.to_string(),
+        record
+            .event_record_id_text
+            .clone()
+            .unwrap_or_else(|| record.event_record_id.to_string()),
         record.event_id.to_string(),
         format!("{:?}", record.level),
         record.provider.clone(),
@@ -186,6 +198,12 @@ pub(crate) fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
 /// XML can bypass the export boundary.
 pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
     let mut redacted = record.clone();
+    redacted.event_record_id_text = Some(
+        record
+            .event_record_id_text
+            .clone()
+            .unwrap_or_else(|| record.event_record_id.to_string()),
+    );
     redacted.timestamp = redact_text(&record.timestamp);
     redacted.provider = redact_text(&record.provider);
     redacted.channel = redact_text(&record.channel);
@@ -202,13 +220,45 @@ pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
         })
         .collect();
     redacted.user_sid = record.user_sid.as_deref().map(redact_text);
+    redacted.activity_id = record
+        .activity_id
+        .as_deref()
+        .map(|value| redact_labeled_value("ActivityID", value));
+    redacted.related_activity_id = record
+        .related_activity_id
+        .as_deref()
+        .map(|value| redact_labeled_value("RelatedActivityID", value));
+    redacted.session_id = record
+        .session_id
+        .as_deref()
+        .map(|value| redact_labeled_value("SessionID", value));
+    redacted.device_id = record
+        .device_id
+        .as_deref()
+        .map(|value| redact_labeled_value("DeviceId", value));
+    redacted.user_id = record
+        .user_id
+        .as_deref()
+        .map(|value| redact_labeled_value("UserId", value));
+    redacted.process_start_time = record
+        .process_start_time
+        .as_deref()
+        .map(|value| redact_labeled_value("ProcessStartTime", value));
     redacted.mapped = record
         .mapped
         .iter()
-        .map(|column| super::maps::MappedColumn {
-            property: column.property.clone(),
-            text: redact_labeled_value(&column.property, &column.text),
-            complete: column.complete,
+        .map(|column| {
+            let labeled = redact_labeled_value(&column.property, &column.text);
+            let text = if labeled == column.text {
+                redact_text(&column.text)
+            } else {
+                labeled
+            };
+            super::maps::MappedColumn {
+                property: column.property.clone(),
+                text,
+                complete: column.complete,
+            }
         })
         .collect();
     redacted
@@ -338,7 +388,7 @@ fn redact_xml_text(text: &str) -> String {
     if let Ok(decoded) = quick_xml::escape::unescape(text) {
         let redacted = redact_text(&decoded);
         if redacted != decoded {
-            return redacted;
+            return quick_xml::escape::escape(redacted).into_owned();
         }
     }
     redact_text(text)
@@ -770,6 +820,23 @@ mod tests {
             assert!(!output.contains("hunter2"));
             assert!(output.contains("<?provider"));
         }
+    }
+
+    #[test]
+    fn redacted_xml_text_reescapes_surviving_entities() {
+        let mut event = record("safe");
+        event.raw_xml =
+            r#"<Event><Message>hello &amp; PASSWORD=hunter2</Message></Event>"#.into();
+
+        let output = export_records(&[event], ExportFormat::RawXml).expect("raw XML export");
+        assert!(output.contains("hello &amp;"));
+        assert!(!output.contains("hunter2"));
+
+        let mut reader = quick_xml::Reader::from_str(output.trim());
+        while !matches!(
+            reader.read_event().expect("redacted XML remains well-formed"),
+            quick_xml::events::Event::Eof
+        ) {}
     }
     #[test]
     fn json_rejects_malformed_raw_xml_before_serializing_it() {

@@ -197,19 +197,25 @@ fn bundle_from_source(source: &str) -> Option<String> {
         .find(|part| part.eq_ignore_ascii_case("bundle"))
         .map(str::to_string)
 }
-fn timestamp_is_present(record: &EvtxRecord) -> bool {
+fn parsed_timestamp_epoch(record: &EvtxRecord) -> Option<i64> {
     if record.timestamp_epoch != 0 {
-        return true;
+        return Some(record.timestamp_epoch);
     }
-    if record.timestamp.trim().is_empty() {
-        return false;
+    let timestamp = record.timestamp.trim();
+    if timestamp.is_empty() {
+        return None;
     }
-    chrono::DateTime::parse_from_rfc3339(record.timestamp.trim()).is_ok()
-        || chrono::NaiveDateTime::parse_from_str(
-            record.timestamp.trim(),
-            "%Y-%m-%dT%H:%M:%S%.f",
-        )
-        .is_ok()
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|parsed| parsed.timestamp_millis())
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%S%.f")
+                .map(|parsed| parsed.and_utc().timestamp_millis())
+        })
+        .ok()
+}
+
+fn timestamp_is_present(record: &EvtxRecord) -> bool {
+    parsed_timestamp_epoch(record).is_some()
 }
 
 
@@ -237,7 +243,7 @@ fn from_event_with_origin(
     }
 
     Ok(TimelineItem {
-        timestamp_ms: record.timestamp_epoch,
+        timestamp_ms: parsed_timestamp_epoch(record).unwrap_or(0),
         severity: severity_of(record.level),
         message: record.message.clone(),
         origin,
@@ -268,7 +274,12 @@ fn ordered_records(records: &[EvtxRecord]) -> Vec<OrderedRecord<'_>> {
         .iter()
         .map(|record| {
             let origin = origin_of(record, 0);
-            let sort_key = timeline_sort_key(record.timestamp_epoch, &record.message, &origin);
+            let sort_key = timeline_sort_key(
+                parsed_timestamp_epoch(record).unwrap_or(0),
+                severity_of(record.level),
+                &record.message,
+                &origin,
+            );
             (record, origin, sort_key)
         })
         .collect();
@@ -456,6 +467,21 @@ mod tests {
         assert_eq!(timeline.items.len(), 1);
         assert!(timeline.unplaced.is_empty());
         assert_eq!(timeline.items[0].timestamp_ms, 0);
+    }
+
+    #[test]
+    fn epoch_zero_uses_non_epoch_text_timestamp_for_placement_and_order() {
+        let mut text_timestamp = record(0, "text timestamp", EvtxLevel::Information);
+        text_timestamp.timestamp = "2026-08-09T12:00:00.000Z".to_string();
+        let earlier = record(2_000, "earlier", EvtxLevel::Information);
+
+        let timeline = build(&[], &[text_timestamp, earlier]);
+
+        assert_eq!(
+            timeline.items.iter().map(|item| item.message.as_str()).collect::<Vec<_>>(),
+            vec!["earlier", "text timestamp"]
+        );
+        assert_eq!(timeline.items[1].timestamp_ms, 1_786_276_800_000);
     }
 
     #[test]

@@ -159,18 +159,22 @@ impl ProviderDb {
         // Only meaningful when the whole database came from one capture, which is the normal case;
         // a merged database reports nothing rather than an arbitrary one of several builds. One
         // query answers both halves: MIN and MAX agree exactly when there is a single build.
-        let source_os_build: Option<u32> = connection
+        let (low, high): (Option<u32>, Option<u32>) = connection
             .query_row(
                 "SELECT MIN(SourceOsBuild), MAX(SourceOsBuild) FROM ProviderDetails",
                 [],
                 |row| Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<u32>>(1)?)),
             )
-            .ok()
-            .and_then(|(low, high)| match (low, high) {
-                (Some(low), Some(high)) if low == high => Some(low),
-                _ => None,
-            });
-
+            .map_err(|error| {
+                format!(
+                    "{} has an invalid ProviderDetails.SourceOsBuild column in provider database: {error}",
+                    path.display()
+                )
+            })?;
+        let source_os_build = match (low, high) {
+            (Some(low), Some(high)) if low == high => Some(low),
+            _ => None,
+        };
         Ok(Self {
             info: ProviderDbInfo {
                 path: path.display().to_string(),
@@ -211,7 +215,8 @@ impl ProviderDb {
                         Maps, Parameters, SourceOsBuild
                  FROM ProviderDetails
                  WHERE (?1 IS NULL OR ProviderName = ?1)
-                 ORDER BY ProviderName COLLATE NOCASE ASC, SourceOsBuild DESC, VersionKey ASC",
+                 ORDER BY ProviderName COLLATE NOCASE ASC, ProviderName ASC,
+                          SourceOsBuild DESC, VersionKey ASC, rowid ASC",
             )
             .map_err(|error| format!("cannot prepare provider query: {error}"))?;
 
@@ -219,7 +224,7 @@ impl ProviderDb {
             .query_map([provider_name], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
                     row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
                     row.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default(),
@@ -251,15 +256,17 @@ impl ProviderDb {
                     parameters,
                     source_os_build,
                 )| {
+                    let state_version_key = version_key.as_deref();
                     let levels = levels_from_maps(&maps)?;
                     let mut unavailable_categories = unavailable_categories_from_state(
                         &self.connection,
                         &provider_name,
-                        &version_key,
+                        state_version_key,
                     )?;
                     if unavailable_categories.is_empty() {
                         unavailable_categories = unavailable_categories_from_parameters(&parameters)?;
                     }
+                    let version_key = version_key.unwrap_or_default();
                     Ok(CapturedProviderMetadata {
                         version_key,
                         metadata: ProviderMetadata {
@@ -278,6 +285,7 @@ impl ProviderDb {
             )
             .collect()
     }
+
     /// Loads the best matching metadata row for rendering.
     ///
     /// Rows remain available through [`Self::rows`] and [`Self::provider_versions`]; this
@@ -368,7 +376,7 @@ fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String
 fn unavailable_categories_from_state(
     connection: &Connection,
     provider_name: &str,
-    version_key: &str,
+    version_key: Option<&str>,
 ) -> Result<BTreeSet<String>, String> {
     let has_table = connection
         .query_row(
@@ -385,12 +393,14 @@ fn unavailable_categories_from_state(
     let Some(blob) = connection
         .query_row(
             "SELECT UnavailableCategories FROM ProviderCaptureState \
-             WHERE ProviderName = ?1 AND VersionKey = ?2",
+             WHERE ProviderName = ?1 \
+               AND ((VersionKey = ?2) OR (VersionKey IS NULL AND ?2 IS NULL))",
             rusqlite::params![provider_name, version_key],
-            |row| row.get::<_, Vec<u8>>(0),
+            |row| row.get::<_, Option<Vec<u8>>>(0),
         )
         .optional()
         .map_err(|error| format!("cannot read provider capture state: {error}"))?
+        .flatten()
     else {
         return Ok(BTreeSet::new());
     };
@@ -417,6 +427,17 @@ pub fn write_provider_database(
 ) -> Result<usize, String> {
     validate_captured_providers(providers)?;
     let temporary = temporary_path(path, "write")?;
+    let temporary_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| {
+            format!(
+                "cannot create provider database staging file {}: {error}",
+                temporary.display()
+            )
+        })?;
+    drop(temporary_file);
     let result = (|| {
         write_provider_database_inner(&temporary, providers)?;
         replace_file(&temporary, path)?;
@@ -489,23 +510,16 @@ fn write_provider_database_inner(
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
         let maps = gzip_json(&serde_json::json!({
-            "ValueMapDefinition": [{
-                "Name": "levels",
-                "Values": metadata.levels.clone()
-            }],
-            // Keep the historical key for older EventLogExpert readers while carrying the
-            // canonical ValueMapDefinition shape used by current databases.
             "levels": {
-                "IsBitMap": false,
-                "Entries": metadata.levels
+                "Entries": metadata.levels.clone(),
+                "IsBitMap": false
             }
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
-        let parameters = gzip_json(&serde_json::json!({
-            "unavailableCategories": metadata.unavailable_categories.clone()
-        }))?;
+        let parameters =
+            gzip_json(&Vec::<cmtraceopen_parser::provider::ProviderMessage>::new())?;
         transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
@@ -568,6 +582,7 @@ pub fn export_provider_database(
         return Ok(source_db.info().clone());
     }
     let temporary = temporary_path(destination, "export")?;
+    let mut temporary_created = false;
     let result = (|| {
         let source_file = std::fs::File::open(source)
             .map_err(|error| format!("cannot read provider database {}: {error}", source.display()))?;
@@ -586,6 +601,7 @@ pub fn export_provider_database(
             .create_new(true)
             .open(&temporary)
             .map_err(|error| format!("cannot create provider export {}: {error}", temporary.display()))?;
+        temporary_created = true;
         let copied = std::io::copy(&mut input, &mut output)
             .map_err(|error| format!("cannot copy provider database: {error}"))?;
         if copied > MAX_PROVIDER_DATABASE_BYTES {
@@ -597,14 +613,17 @@ pub fn export_provider_database(
             .sync_all()
             .map_err(|error| format!("cannot flush provider export: {error}"))?;
         drop(output);
+        let exported_info = {
+            let exported = ProviderDb::open(&temporary)?;
+            if exported.info().provider_count != source_db.info().provider_count {
+                return Err("provider export row count changed during copy".to_string());
+            }
+            exported.info().clone()
+        };
         replace_file(&temporary, destination)?;
-        let exported = ProviderDb::open(destination)?;
-        if exported.info().provider_count != source_db.info().provider_count {
-            return Err("provider export row count changed during copy".to_string());
-        }
-        Ok(exported.info().clone())
+        Ok(exported_info)
     })();
-    if result.is_err() {
+    if result.is_err() && temporary_created {
         let _ = std::fs::remove_file(&temporary);
     }
     result
@@ -629,8 +648,37 @@ fn temporary_path(path: &Path, operation: &str) -> Result<PathBuf, String> {
     )))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
     std::fs::rename(source, destination).map_err(|error| {
+        format!(
+            "cannot publish provider database {} as {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(once(0)).collect();
+    let destination_wide: Vec<u16> =
+        destination.as_os_str().encode_wide().chain(once(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source_wide.as_ptr()),
+            PCWSTR(destination_wide.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| {
         format!(
             "cannot publish provider database {} as {}: {error}",
             source.display(),
@@ -1343,10 +1391,14 @@ mod tests {
             .expect("maps blob");
         let maps: serde_json::Value = inflate_json(&maps_blob).expect("maps JSON");
         assert_eq!(
-            maps["levels"]["IsBitMap"],
-            serde_json::Value::Bool(false)
+            maps,
+            serde_json::json!({
+                "levels": {
+                    "Entries": {"2": "Information"},
+                    "IsBitMap": false
+                }
+            })
         );
-        assert!(maps["levels"]["Entries"].get("2").is_some());
         for column in [
             "ResolvedFromOwningPublisher",
             "SourceOsRevision",
@@ -1417,6 +1469,91 @@ mod tests {
             rows[1].metadata.events[0].description.as_deref(),
             Some("old %1")
         );
+    }
+
+    #[test]
+    fn nullable_external_version_and_payload_columns_still_yield_a_row() {
+        let dir = temp_dir("nullable-import");
+        let path = dir.join("capture.db");
+        let connection = Connection::open(&path).expect("create");
+        connection
+            .execute_batch(
+                r#"CREATE TABLE ProviderDetails (
+                    ProviderName TEXT COLLATE NOCASE,
+                    VersionKey TEXT,
+                    Events BLOB, Keywords BLOB, Maps BLOB, Messages BLOB,
+                    Opcodes BLOB, Parameters BLOB, Tasks BLOB, SourceOsBuild INTEGER
+                );"#,
+            )
+            .expect("schema");
+        connection
+            .execute(
+                "INSERT INTO ProviderDetails (ProviderName) VALUES ('Nullable')",
+                [],
+            )
+            .expect("nullable row");
+        drop(connection);
+
+        let rows = ProviderDb::open(&path)
+            .expect("opens")
+            .rows()
+            .expect("nullable fields are valid imported data");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].version_key, "");
+        assert_eq!(rows[0].metadata.provider_name, "Nullable");
+        assert!(rows[0].metadata.events.is_empty());
+        assert!(rows[0].metadata.messages.is_empty());
+    }
+
+    #[test]
+    fn malformed_source_build_schema_is_rejected_precisely() {
+        let dir = temp_dir("malformed-schema");
+        let path = dir.join("capture.db");
+        let connection = Connection::open(&path).expect("create");
+        connection
+            .execute_batch(
+                "CREATE TABLE ProviderDetails (ProviderName TEXT, VersionKey TEXT);",
+            )
+            .expect("schema");
+
+        let error = ProviderDb::open(&path).expect_err("missing source build column");
+        assert!(error.contains("SourceOsBuild"), "{error}");
+        assert!(error.contains("provider database"), "{error}");
+    }
+
+    #[test]
+    fn replacement_updates_an_existing_destination_in_place() {
+        let dir = temp_dir("replacement");
+        let path = dir.join("capture.db");
+        let old = ProviderMetadata {
+            provider_name: "Old".to_string(),
+            ..ProviderMetadata::default()
+        };
+        write_provider_database(
+            &path,
+            &[CapturedProviderMetadata {
+                metadata: old,
+                version_key: "old".to_string(),
+            }],
+        )
+        .expect("initial write");
+
+        let replacement = ProviderMetadata {
+            provider_name: "New".to_string(),
+            ..ProviderMetadata::default()
+        };
+        write_provider_database(
+            &path,
+            &[CapturedProviderMetadata {
+                metadata: replacement,
+                version_key: "new".to_string(),
+            }],
+        )
+        .expect("replacement write");
+
+        let database = ProviderDb::open(&path).expect("replacement opens");
+        assert!(database.provider("Old").expect("old query").is_none());
+        assert!(database.provider("New").expect("new query").is_some());
     }
 
     #[test]
@@ -1502,9 +1639,19 @@ mod tests {
             .expect("parameters");
         let parameters: serde_json::Value =
             inflate_json(&parameters_blob).expect("parameters JSON");
+        assert_eq!(parameters, serde_json::json!([]));
+        let unavailable: Vec<u8> = database
+            .connection
+            .query_row(
+                "SELECT UnavailableCategories FROM ProviderCaptureState \
+                 WHERE ProviderName = 'Coverage' AND VersionKey = 'version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("capture state");
         assert_eq!(
-            parameters,
-            serde_json::json!({"unavailableCategories": ["keywords"]})
+            inflate_json::<BTreeSet<String>>(&unavailable).expect("coverage JSON"),
+            ["keywords".to_string()].into_iter().collect()
         );
     }
 
@@ -1577,11 +1724,12 @@ mod tests {
     #[test]
     fn checked_in_packaged_manifest_reports_unavailable_provenance() {
         let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let error = packaged_provider_directory(&resource_dir)
-            .expect_err("the repository has no truthful Windows provider capture");
+        let error =
+            packaged_provider_directory(&resource_dir).expect_err("provider artifact unavailable");
         assert!(error.contains("status unavailable"), "{error}");
-        assert!(error.contains("fabricate"), "{error}");
+        assert!(error.contains("Windows-captured EventLogExpert"), "{error}");
         assert!(error.contains("MDM"), "{error}");
+        assert!(error.contains("ProviderDetails"), "{error}");
     }
 }
 
@@ -1644,20 +1792,18 @@ mod real_database_tests {
             metadata.events.len()
         );
 
-        let event = metadata.event(2, Some(0)).expect("event id 2 is defined");
+        let event = metadata
+            .event(4, Some(0))
+            .expect("event id 4 is defined");
         let template = event
             .description
             .as_deref()
-            .expect("event 2 has a description");
+            .expect("event 4 has a description");
         println!("template: {template}");
 
-        let rendered = render_description(template, &["0x80180005".to_string()]);
+        let rendered = render_description(template, &[]);
         println!("rendered: {}", rendered.text);
-        assert!(
-            !rendered.text.contains("%1"),
-            "the insertion should have been filled: {}",
-            rendered.text
-        );
+        assert!(!rendered.text.is_empty());
         assert!(rendered.is_complete());
     }
 

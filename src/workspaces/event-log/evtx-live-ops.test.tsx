@@ -95,6 +95,18 @@ describe("event-log live operations", () => {
     });
   });
 
+  it("removes cleared channel tail gaps without hiding other-channel gaps", async () => {
+    await useEvtxStore.getState().startLiveTail();
+    useEvtxStore.setState({
+      tailCoverageGaps: ["Application: stale gap", "System: keep gap"],
+    });
+
+    const result = await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(result).toEqual({ status: "cleared" });
+    expect(useEvtxStore.getState().tailCoverageGaps).toEqual(["System: keep gap"]);
+  });
+
 
   it("exposes subscription and polling transitions and stops both channels", async () => {
     const statuses = await useEvtxStore.getState().startLiveTail();
@@ -115,6 +127,260 @@ describe("event-log live operations", () => {
       expect.objectContaining({ channel: "System" })
     );
     expect(useEvtxStore.getState().tailMode).toBeNull();
+  });
+  it("preserves a coverage gap when stopping a live tail fails", async () => {
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        throw new Error("tail registry is unavailable");
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    await useEvtxStore.getState().stopLiveTail();
+
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (tail registry is unavailable)"
+    );
+  });
+
+  it("does not apply a stale stop rejection to a newer request", async () => {
+    useEvtxStore.setState({ loadedChannels: new Set(["Application"]) });
+    const rejectStops = new Map<string, (error: Error) => void>();
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        return new Promise<never>((_, reject) => {
+          rejectStops.set(String(args.requestId), reject);
+        });
+      }
+      if (name === "evtx_enumerate_channels") {
+        return [];
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    const staleRequestId = useEvtxStore.getState().tailRequestId!;
+    const staleStop = useEvtxStore.getState().stopLiveTail();
+    await Promise.resolve();
+    await Promise.resolve();
+    await useEvtxStore.getState().enumerateChannels();
+    rejectStops.get(staleRequestId)?.(new Error("stale tail registry failure"));
+    await staleStop;
+
+    expect(useEvtxStore.getState().tailCoverageGaps).toEqual([]);
+  });
+
+  it("retains a failed channel stop for retry", async () => {
+    useEvtxStore.setState({ loadedChannels: new Set(["Application"]) });
+    let failStop = true;
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail" && failStop) {
+        throw new Error("tail registry is unavailable");
+      }
+      if (name === "evtx_stop_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: false,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    const requestId = useEvtxStore.getState().tailRequestId;
+    await useEvtxStore.getState().stopLiveTail();
+
+    expect(useEvtxStore.getState().tailRequestId).toBe(requestId);
+    expect(useEvtxStore.getState().tailChannels).toEqual(new Set(["Application"]));
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (tail registry is unavailable)"
+    );
+
+    failStop = false;
+    await useEvtxStore.getState().stopLiveTail();
+    expect(useEvtxStore.getState().tailRequestId).toBeNull();
+  });
+
+  it("does not clear a channel when stopping its live tail fails", async () => {
+    useEvtxStore.setState({ loadedChannels: new Set(["Application"]) });
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        throw new Error("tail registry is unavailable");
+      }
+      if (name === "evtx_clear_channel") {
+        return { channel: args.channel, result: { status: "cleared" } };
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    const requestId = useEvtxStore.getState().tailRequestId;
+    const result = await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(result).toEqual({
+      status: "unavailable",
+      detail: "Application: live tail stop failed (tail registry is unavailable)",
+    });
+    expect(invoke).not.toHaveBeenCalledWith("evtx_clear_channel", expect.anything());
+    expect(useEvtxStore.getState().tailRequestId).toBe(requestId);
+    expect(useEvtxStore.getState().tailChannels).toEqual(new Set(["Application"]));
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (tail registry is unavailable)"
+    );
+  });
+  it("aborts a clear when its tail stop becomes stale", async () => {
+    useEvtxStore.setState({ loadedChannels: new Set(["Application"]) });
+    let resolveStop!: (status: unknown) => void;
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        return new Promise((resolve) => {
+          resolveStop = resolve;
+        });
+      }
+      if (name === "evtx_clear_channel") {
+        return { channel: args.channel, result: { status: "cleared" } };
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    const clear = useEvtxStore.getState().clearChannel("Application", true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolveStop).toBeDefined();
+
+    useEvtxStore.getState().reset();
+    resolveStop({
+      requestId: "stale",
+      channel: "Application",
+      mode: "subscription",
+      active: false,
+      nextSequence: 0,
+      coverageGaps: [],
+    });
+    const result = await clear;
+
+    expect(result.status).toBe("unavailable");
+    expect("detail" in result ? result.detail : "").toContain("clear cancelled");
+    expect(useEvtxStore.getState().sourceMode).toBeNull();
+  });
+  it("stops a tail whose pending startup is superseded by a newer start", async () => {
+    useEvtxStore.setState({ loadedChannels: new Set(["Application"]) });
+    const startResolvers = new Map<string, (status: unknown) => void>();
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        return new Promise((resolve) => {
+          startResolvers.set(String(args.requestId), resolve);
+        });
+      }
+      if (name === "evtx_stop_tail") {
+        return {
+          requestId: args.requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: false,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      return undefined;
+    });
+
+    const firstStart = useEvtxStore.getState().startLiveTail();
+    await Promise.resolve();
+    const firstRequestId = [...startResolvers.keys()][0];
+    expect(firstRequestId).toBeDefined();
+
+    const secondStart = useEvtxStore.getState().startLiveTail();
+    await Promise.resolve();
+    const secondRequestId = [...startResolvers.keys()].find((id) => id !== firstRequestId);
+    expect(secondRequestId).toBeDefined();
+    if (secondRequestId === undefined) throw new Error("second tail start did not invoke backend");
+
+    startResolvers.get(firstRequestId)!({
+      requestId: firstRequestId,
+      channel: "Application",
+      mode: "subscription",
+      active: true,
+      nextSequence: 0,
+      coverageGaps: [],
+    });
+    await firstStart;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const stopRequestIds = invoke.mock.calls
+      .filter(([name]) => name === "evtx_stop_tail")
+      .map(([, args]) => String((args as Record<string, unknown>).requestId));
+    expect(stopRequestIds).toContain(firstRequestId);
+    expect(stopRequestIds).not.toContain(secondRequestId);
+
+    startResolvers.get(secondRequestId)!({
+      requestId: secondRequestId,
+      channel: "Application",
+      mode: "subscription",
+      active: true,
+      nextSequence: 0,
+      coverageGaps: [],
+    });
+    const statuses = await secondStart;
+    expect(statuses).toHaveLength(1);
+    expect(useEvtxStore.getState().tailRequestId).toBe(secondRequestId);
   });
 
   it("accepts sequence zero after restarting the live tail with a fresh request", async () => {
@@ -169,7 +435,7 @@ describe("event-log live operations", () => {
           mode: "subscription",
           active: false,
           nextSequence: 2,
-          coverageGaps: [],
+          coverageGaps: ["Application: backend tail batch was not delivered"],
         };
       }
       return undefined;
@@ -192,6 +458,9 @@ describe("event-log live operations", () => {
 
     expect(useEvtxStore.getState().tailCoverageGaps).toContain(
       "Application: live tail batch 1 was not received"
+    );
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: backend tail batch was not delivered"
     );
   });
 

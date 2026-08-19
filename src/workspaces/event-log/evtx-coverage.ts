@@ -1,4 +1,3 @@
-import type { EventLogSourceCoverage } from "./types";
 
 /**
  * Accumulating the report of what is missing from a loaded set of events.
@@ -9,7 +8,12 @@ import type { EventLogSourceCoverage } from "./types";
  * re-queried.
  */
 
-import type { EvtxCoverageGap, EvtxCoverageGapKind } from "./types";
+import type {
+  EvtxArchiveMember,
+  EvtxCoverageGap,
+  EvtxCoverageGapKind,
+  EventLogSourceCoverage,
+} from "./types";
 
 const COVERAGE_GAP_KINDS: Record<EvtxCoverageGapKind, true> = {
   unsupported: true,
@@ -25,6 +29,63 @@ const COVERAGE_GAP_KINDS: Record<EvtxCoverageGapKind, true> = {
   provider: true,
   limit: true,
 };
+const ARCHIVE_MEMBER_KINDS = ["evtx", "text", "registry", "binary"] as const;
+const ARCHIVE_MEMBER_OUTCOMES = [
+  "parsed",
+  "unsupported",
+  "malformed",
+  "duplicate",
+  "limit",
+] as const;
+
+function isArchiveMember(value: unknown): value is EvtxArchiveMember {
+  if (typeof value !== "object" || value === null) return false;
+  const member = value as Partial<EvtxArchiveMember>;
+  return (
+    typeof member.path === "string" &&
+    member.path.length > 0 &&
+    typeof member.kind === "string" &&
+    ARCHIVE_MEMBER_KINDS.includes(member.kind as (typeof ARCHIVE_MEMBER_KINDS)[number]) &&
+    typeof member.outcome === "string" &&
+    ARCHIVE_MEMBER_OUTCOMES.includes(
+      member.outcome as (typeof ARCHIVE_MEMBER_OUTCOMES)[number]
+    ) &&
+    (member.sha256 === undefined ||
+      (typeof member.sha256 === "string" && /^[0-9a-fA-F]{64}$/.test(member.sha256)))
+  );
+}
+
+function parseArchiveMembers(value: unknown): EvtxArchiveMember[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("the event log reader returned an invalid archive member list");
+  }
+  const invalidIndex = value.findIndex((member) => !isArchiveMember(member));
+  if (invalidIndex >= 0) {
+    throw new Error(
+      `the event log reader returned an invalid archive member at index ${invalidIndex}`
+    );
+  }
+  return value as EvtxArchiveMember[];
+}
+
+function parseOptionalArray<T>(
+  value: unknown,
+  fieldName: string,
+  validator: (entry: unknown) => entry is T
+): T[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`the event log reader returned an invalid ${fieldName} list`);
+  }
+  const invalidIndex = value.findIndex((entry) => !validator(entry));
+  if (invalidIndex >= 0) {
+    throw new Error(
+      `the event log reader returned an invalid ${fieldName} at index ${invalidIndex}`
+    );
+  }
+  return value as T[];
+}
 
 function isCoverageGap(value: unknown): value is EvtxCoverageGap {
   if (typeof value !== "object" || value === null) return false;
@@ -113,9 +174,9 @@ export function sourceCoverageMessages(
  * The parts of an event-log IPC reply the store reads, verified once.
  *
  * Not a schema validator, and deliberately not per-handler checks: it guards the fields the store
- * destructures and iterates. If a future backend change dropped `errorMessages`, spreading it
- * would throw somewhere unrelated and surface as a confusing load error; this fails at the
- * boundary with a message that names the contract.
+ * destructures and iterates. Optional arrays may be omitted by older readers, but a present
+ * malformed array fails at the boundary with a message naming its field and invalid index. A
+ * present totalRecords count must be a nonnegative safe integer.
  *
  * Throws rather than returning a default, because a reply the store cannot read is not a reply
  * with no events, and quietly showing an empty list is the failure this workspace exists to avoid.
@@ -126,6 +187,7 @@ export function assertParseResultShape(value: unknown): {
   errorMessages: string[];
   coverageGaps: EvtxCoverageGap[];
   coverage: EventLogSourceCoverage[];
+  archiveMembers: EvtxArchiveMember[];
   totalRecords: number | null;
 } {
   const reply = value as {
@@ -134,35 +196,40 @@ export function assertParseResultShape(value: unknown): {
     errorMessages?: unknown;
     coverageGaps?: unknown;
     coverage?: unknown;
+    archiveMembers?: unknown;
     totalRecords?: unknown;
   };
   if (!Array.isArray(reply?.records) || !Array.isArray(reply?.channels)) {
     throw new Error("the event log reader returned a reply this build cannot read");
   }
-  const coverage = Array.isArray(reply.coverage)
-    ? reply.coverage.filter(isEventLogSourceCoverage)
-    : [];
+  const errorMessages = parseOptionalArray(
+    reply.errorMessages,
+    "errorMessages",
+    (entry): entry is string => typeof entry === "string"
+  );
+  const coverageGaps = parseOptionalArray(reply.coverageGaps, "coverageGaps", isCoverageGap);
+  const coverage = parseOptionalArray(reply.coverage, "coverage", isEventLogSourceCoverage);
+  const totalRecords = reply.totalRecords;
+  if (
+    totalRecords !== undefined &&
+    (typeof totalRecords !== "number" ||
+      !Number.isSafeInteger(totalRecords) ||
+      totalRecords < 0)
+  ) {
+    throw new Error("the event log reader returned an invalid totalRecords count");
+  }
   return {
     records: reply.records,
     channels: reply.channels,
     // Absent means the reader reported no gaps, which is different from a malformed reply.
-    errorMessages: Array.isArray(reply.errorMessages)
-      ? reply.errorMessages.filter((entry): entry is string => typeof entry === "string")
-      : [],
-    coverageGaps: Array.isArray(reply.coverageGaps)
-      ? reply.coverageGaps.filter(isCoverageGap)
-      : [],
+    errorMessages,
+    coverageGaps,
     coverage,
+    archiveMembers: parseArchiveMembers(reply.archiveMembers),
     // How many records the reader says it sent, counting any streamed separately from this reply.
     // `null` when the reader did not say, which must stay distinguishable from zero: treating an
     // absent count as zero would turn "I cannot check completeness" into "nothing was missing".
-    // A non-finite or negative count is no answer either, so it is rejected the same way.
-    totalRecords:
-      typeof reply.totalRecords === "number" &&
-      Number.isFinite(reply.totalRecords) &&
-      reply.totalRecords >= 0
-        ? reply.totalRecords
-        : null,
+    totalRecords: totalRecords === undefined ? null : totalRecords,
   };
 }
 
