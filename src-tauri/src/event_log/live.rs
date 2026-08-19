@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -774,17 +775,15 @@ fn subscription_unavailable(error: &Error) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn clear_error_status(channel: &str, error: &Error) -> EvtxClearResult {
-    let detail = format_source_error("EvtClearLog", error, false);
-    if win32_code(error) == 5 {
+fn clear_error_status(channel: &str, error: &Error, remote: bool) -> EvtxClearResult {
+    let code = win32_code(error);
+    let detail = format_source_error("EvtClearLog", error, remote);
+    let denied = code == 5
+        || (remote && matches!(remote_error_kind(code), "access denied" | "credentials rejected"));
+    if denied {
         EvtxClearResult {
             channel: channel.to_string(),
             result: EvtxClearStatus::Denied { detail },
-        }
-    } else if win32_code(error) == 2 || win32_code(error) == 15007 {
-        EvtxClearResult {
-            channel: channel.to_string(),
-            result: EvtxClearStatus::Unavailable { detail },
         }
     } else {
         EvtxClearResult {
@@ -793,6 +792,58 @@ fn clear_error_status(channel: &str, error: &Error) -> EvtxClearResult {
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+fn clear_remote_session_error(channel: &str, detail: String) -> EvtxClearResult {
+    let denied = detail.to_ascii_lowercase().contains("access denied")
+        || detail.to_ascii_lowercase().contains("credentials rejected");
+    let result = if denied {
+        EvtxClearStatus::Denied { detail }
+    } else {
+        EvtxClearStatus::Unavailable { detail }
+    };
+    EvtxClearResult {
+        channel: channel.to_string(),
+        result,
+    }
+}
+/// Identity used by polling tails to reject a record already emitted by an earlier poll.
+///
+/// The numeric field is a transport convenience, not a complete identity: it loses precision in
+/// JavaScript for large IDs and maps an absent EventRecordID to zero. Keep the lossless text and a
+/// bounded fingerprint of the event payload so distinct missing-ID records remain visible.
+fn polling_record_identity(record: &EvtxRecord) -> (String, u64) {
+    let id_text = record
+        .event_record_id_text
+        .clone()
+        .unwrap_or_else(|| record.event_record_id.to_string());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if record.raw_xml.is_empty() {
+        record.timestamp.hash(&mut hasher);
+        record.timestamp_epoch.hash(&mut hasher);
+        record.provider.hash(&mut hasher);
+        record.channel.hash(&mut hasher);
+        record.event_id.hash(&mut hasher);
+        format!("{:?}", record.level).hash(&mut hasher);
+        record.computer.hash(&mut hasher);
+        record.message.hash(&mut hasher);
+        record.source_label.hash(&mut hasher);
+        record.task.hash(&mut hasher);
+        record.opcode.hash(&mut hasher);
+        record.process_id.hash(&mut hasher);
+        record.thread_id.hash(&mut hasher);
+        record.user_sid.hash(&mut hasher);
+        record.keywords.hash(&mut hasher);
+        for field in &record.event_data {
+            field.name.hash(&mut hasher);
+            field.value.hash(&mut hasher);
+        }
+    } else {
+        record.raw_xml.hash(&mut hasher);
+    }
+    (id_text, hasher.finish())
+}
+
 
 #[cfg(target_os = "windows")]
 fn start_polling_tail(
@@ -812,7 +863,7 @@ fn start_polling_tail(
     let worker_channel = channel.clone();
     let worker_fallback_gap = fallback_gap.clone();
     let worker = thread::spawn(move || {
-        let mut seen = HashSet::<u64>::new();
+        let mut seen = HashSet::<(String, u64)>::new();
         let mut first_poll = true;
         while !worker_stop.load(Ordering::Acquire) {
             let outcome = if let Some(machine) = remote_machine.as_deref() {
@@ -839,12 +890,12 @@ fn start_polling_tail(
             match outcome {
                 Ok(scan) => {
                     let mut records = scan.records;
-                    records.retain(|record| seen.insert(record.event_record_id));
+                    records.retain(|record| seen.insert(polling_record_identity(record)));
                     if seen.len() > 8192 {
-                        let mut ids = seen.iter().copied().collect::<Vec<_>>();
-                        ids.sort_unstable();
-                        for id in ids.into_iter().take(4096) {
-                            seen.remove(&id);
+                        let mut identities = seen.iter().cloned().collect::<Vec<_>>();
+                        identities.sort_unstable();
+                        for identity in identities.into_iter().take(4096) {
+                            seen.remove(&identity);
                         }
                     }
                     let mut gaps = scan.gaps;
@@ -1049,7 +1100,11 @@ fn tail_key(request_id: &str, channel: &str) -> String {
 
 /// Clear a live channel only from an already-elevated application process.
 #[cfg(target_os = "windows")]
-pub fn clear_channel(channel: &str, confirmed: bool) -> EvtxClearResult {
+pub fn clear_channel(
+    channel: &str,
+    confirmed: bool,
+    remote_machine: Option<&str>,
+) -> EvtxClearResult {
     if !confirmed {
         return EvtxClearResult {
             channel: channel.to_string(),
@@ -1075,14 +1130,33 @@ pub fn clear_channel(channel: &str, confirmed: bool) -> EvtxClearResult {
             },
         };
     }
+
+    // A remote request must own a valid RPC session before EvtClearLog is reached. In particular,
+    // never fall through to the local `None` session when opening the requested target fails.
+    let remote_session = match remote_machine {
+        Some(machine) => match open_remote_session(machine) {
+            Ok((session, _normalized_machine)) => Some(session),
+            Err(detail) => return clear_remote_session_error(channel, detail),
+        },
+        None => None,
+    };
+    let session_handle = remote_session.as_ref().map(OwnedEvtHandle::raw);
     let channel_hstring = HSTRING::from(channel);
-    let result = unsafe { EvtClearLog(None, &channel_hstring, PCWSTR::null(), 0) };
+    let remote = remote_machine.is_some();
+    let result = unsafe {
+        EvtClearLog(
+            session_handle,
+            &channel_hstring,
+            PCWSTR::null(),
+            0,
+        )
+    };
     let result = match result {
         Ok(()) => EvtxClearResult {
             channel: channel.to_string(),
             result: EvtxClearStatus::Cleared,
         },
-        Err(error) => clear_error_status(channel, &error),
+        Err(error) => clear_error_status(channel, &error, remote),
     };
     // Re-probe after the operation. The clear path must not claim that an elevation transition
     // happened or leave the frontend believing the process changed privilege.
@@ -1416,9 +1490,64 @@ mod tests {
         assert!(normalize_remote_machine_name("host\0suffix").is_err());
         assert!(normalize_remote_machine_name("host\nsuffix").is_err());
         assert_eq!(normalize_remote_machine_name(r"\\host").unwrap(), "host");
-
     }
 
+    #[test]
+    fn polling_identity_keeps_lossless_large_id_text() {
+        let mut first = identity_test_record(u64::MAX, Some(u64::MAX.to_string()), "<Event>A</Event>");
+        let mut second = first.clone();
+        second.event_record_id_text = Some("18446744073709551616".to_string());
+        assert_ne!(
+            polling_record_identity(&first),
+            polling_record_identity(&second)
+        );
+        first.event_record_id_text = None;
+        second.event_record_id_text = None;
+        assert_eq!(
+            polling_record_identity(&first),
+            polling_record_identity(&second)
+        );
+    }
+
+    #[test]
+    fn polling_identity_keeps_distinct_missing_id_xml_records() {
+        let first = identity_test_record(0, Some("0".to_string()), "<Event>A</Event>");
+        let second = identity_test_record(0, Some("0".to_string()), "<Event>B</Event>");
+        assert_ne!(
+            polling_record_identity(&first),
+            polling_record_identity(&second)
+        );
+    }
+
+    fn identity_test_record(
+        event_record_id: u64,
+        event_record_id_text: Option<String>,
+        raw_xml: &str,
+    ) -> EvtxRecord {
+        EvtxRecord {
+            id: 0,
+            event_record_id,
+            event_record_id_text,
+            timestamp: String::new(),
+            timestamp_epoch: 0,
+            provider: String::new(),
+            channel: String::new(),
+            event_id: 0,
+            level: super::super::models::EvtxLevel::Information,
+            computer: String::new(),
+            message: String::new(),
+            event_data: Vec::new(),
+            raw_xml: raw_xml.to_string(),
+            source_label: String::new(),
+            task: None,
+            opcode: None,
+            process_id: None,
+            thread_id: None,
+            user_sid: None,
+            keywords: None,
+            mapped: Vec::new(),
+        }
+    }
 }
 #[cfg(all(test, target_os = "windows"))]
 mod live_service_tests {

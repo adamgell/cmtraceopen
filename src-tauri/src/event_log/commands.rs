@@ -276,7 +276,7 @@ async fn query_channels_impl(
             }
 
             all_records.sort_by_key(|record| record.timestamp_epoch);
-            let total_records = (streamed + all_records.len()) as u64;
+            let total_records = streamed as u64;
             Ok(EvtxParseResult {
                 records: all_records,
                 channels: channel_infos,
@@ -428,6 +428,7 @@ pub async fn evtx_stop_tail(request_id: String, channel: String) -> Result<EvtxT
 pub async fn evtx_clear_channel(
     channel: String,
     confirmed: bool,
+    remote_machine: Option<String>,
 ) -> Result<EvtxClearResult, String> {
     if !confirmed {
         return Ok(EvtxClearResult {
@@ -437,12 +438,19 @@ pub async fn evtx_clear_channel(
     }
     #[cfg(target_os = "windows")]
     {
-        tokio::task::spawn_blocking(move || super::live::clear_channel(&channel, confirmed))
-            .await
-            .map_err(|error| format!("Task join error: {error}"))?
+        let remote_machine = remote_machine
+            .as_deref()
+            .map(super::live::normalize_remote_machine_name)
+            .transpose()?;
+        tokio::task::spawn_blocking(move || {
+            super::live::clear_channel(&channel, confirmed, remote_machine.as_deref())
+        })
+        .await
+        .map_err(|error| format!("Task join error: {error}"))?
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = remote_machine;
         Ok(EvtxClearResult {
             channel,
             result: EvtxClearStatus::Unsupported {
@@ -691,12 +699,14 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn channel_clear_reports_structured_unsupported_result() {
+    fn remote_channel_clear_reports_structured_unsupported_result() {
         let result = tauri::async_runtime::block_on(super::evtx_clear_channel(
             "Application".to_string(),
             true,
+            Some("remote-host".to_string()),
         ))
         .expect("portable clear command should return a structured result");
+        assert_eq!(result.channel, "Application");
         assert!(matches!(
             result.result,
             super::super::models::EvtxClearStatus::Unsupported { .. }
@@ -708,6 +718,7 @@ mod tests {
         let result = tauri::async_runtime::block_on(super::evtx_clear_channel(
             "Application".to_string(),
             false,
+            Some("remote-host".to_string()),
         ))
         .expect("cancelled clear should be a result, not an IPC failure");
         assert!(matches!(
