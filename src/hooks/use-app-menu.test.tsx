@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
+import { useTimelineStore } from "../stores/timeline-store";
 import type { WorkspaceId } from "../types/log";
 import { useAppMenu } from "./use-app-menu";
 import { useKeyboard } from "./use-keyboard";
@@ -17,6 +18,14 @@ const eventMocks = vi.hoisted(() => {
 
   return { state, listen, unlisten };
 });
+
+const timelineMocks = vi.hoisted(() => ({
+  openTimelineSource: vi.fn(async () => undefined),
+}));
+
+const dialogMocks = vi.hoisted(() => ({
+  open: vi.fn(async () => undefined as string | undefined),
+}));
 
 const actionMocks = vi.hoisted(() => ({
   current: {
@@ -87,6 +96,12 @@ vi.mock("./use-app-actions", () => ({
 
 vi.mock("../lib/recent-entries", () => ({
   clearRecentEntries: recentMocks.clearRecentEntries,
+}));
+
+vi.mock("../workspaces/timeline/open-timeline-source", () => timelineMocks);
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: dialogMocks.open,
 }));
 
 interface TestMenuPayload {
@@ -162,6 +177,9 @@ describe("useAppMenu", () => {
     vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
     eventMocks.state.callback = null;
     actionMocks.current.commandState = { ...initialCommandState };
+    timelineMocks.openTimelineSource.mockReset().mockResolvedValue(undefined);
+    dialogMocks.open.mockReset().mockResolvedValue(undefined);
+    useTimelineStore.getState().reset();
     useUiStore.setState({
       activeWorkspace: "log",
       activeView: "log",
@@ -347,6 +365,36 @@ describe("useAppMenu", () => {
       "[app-menu] rejected unavailable workspace target",
       expect.any(Object),
     );
+  });
+  it("replaces the timeline for native New Timeline folder opens", async () => {
+    useTimelineStore.setState({
+      bundle: {
+        id: "existing",
+        sources: [],
+        timeRangeMs: [0, 0],
+        totalEntries: 0,
+        incidents: [],
+        deniedGuids: [],
+        errors: [],
+        tunables: {
+          overlapWindowMs: 5000,
+          minSourceCount: 2,
+          maxIncidentSpanMs: 60000,
+          enabledSignalKinds: ["errorSeverity"],
+        },
+      },
+    });
+    dialogMocks.open.mockResolvedValueOnce("C:/Evidence/NewTimeline");
+
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+    await emitMenuAction({ action: "timeline_new_from_folder" });
+
+    expect(timelineMocks.openTimelineSource).toHaveBeenCalledWith({
+      kind: "folder",
+      path: "C:/Evidence/NewTimeline",
+    });
+    expect(useTimelineStore.getState().bundle).toBeNull();
   });
 
   it("opens a recent entry in its recorded workspace", async () => {

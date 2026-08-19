@@ -8,6 +8,7 @@ import type {
   ParseResult,
 } from "../types/log";
 import type { EvidenceBundleMetadata } from "../types/evidence";
+import type { RegistryParseResult } from "../types/registry";
 import { useLogStore, setCachedTabSnapshot, clearAllTabSnapshots } from "../stores/log-store";
 import type { TabEntrySnapshot } from "./tab-snapshot-cache";
 import { useUiStore } from "../stores/ui-store";
@@ -257,6 +258,45 @@ describe("switchToTab", () => {
       "registry fixture is unreadable",
     );
     expect(useLogStore.getState().isLoading).toBe(false);
+  });
+  it("returns null when registry application becomes stale", async () => {
+    const fileSourceA: LogSource = { kind: "file", path: fileA };
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    const registryResult: ParseResult = {
+      ...parseResult,
+      filePath: fileA,
+      parserSelection: {
+        ...parseResult.parserSelection,
+        parser: "registry",
+        implementation: "registry",
+      },
+    };
+    const registryData: RegistryParseResult = {
+      keys: [],
+      filePath: fileA,
+      fileSize: 1,
+      totalKeys: 0,
+      totalValues: 0,
+      parseErrors: 0,
+    };
+    const pendingRegistry = deferred<RegistryParseResult>();
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    commands.openLogFile.mockResolvedValueOnce(registryResult);
+    commands.parseRegistryFile.mockReturnValueOnce(pendingRegistry.promise);
+
+    const pendingLoad = loadSelectedLogFile(fileA, fileSourceA);
+    await vi.waitFor(() => {
+      expect(commands.parseRegistryFile).toHaveBeenCalledWith(fileA);
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+    pendingRegistry.resolve(registryData);
+
+    await expect(pendingLoad).resolves.toBeNull();
   });
 
   it("restores a cached migrated tab as a standalone file", async () => {
@@ -791,6 +831,30 @@ describe("source loading progress ownership", () => {
 
     expect(useLogStore.getState().folderLoadProgress).toBeNull();
     expect(useLogStore.getState().sourceStatus.kind).toBe("error");
+  });
+  it("returns null when selected-file recovery becomes stale", async () => {
+    const selectedPath = sourceEntries[0].path;
+    const currentPath = "C:/Windows/CCM/Logs/Current.log";
+    let rejectOpenLogFile: (error: unknown) => void = () => undefined;
+    const pendingOpenLogFile = new Promise<ParseResult>((_, reject) => {
+      rejectOpenLogFile = reject;
+    });
+    commands.openLogFile.mockReturnValueOnce(pendingOpenLogFile);
+    const staleLoad = loadLogSource(folderSource, {
+      selectedFilePath: selectedPath,
+    });
+    await vi.waitFor(() => {
+      expect(commands.openLogFile).toHaveBeenCalledWith(selectedPath);
+    });
+
+    commands.openLogSourceFile.mockResolvedValueOnce({
+      ...parseResult,
+      filePath: currentPath,
+    });
+    await loadLogSource({ kind: "file", path: currentPath });
+    rejectOpenLogFile(new Error("selected file failed"));
+
+    await expect(staleLoad).resolves.toBeNull();
   });
 
   it("ignores a path probe superseded by a newer source load", async () => {

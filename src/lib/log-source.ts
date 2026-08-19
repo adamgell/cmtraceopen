@@ -167,8 +167,8 @@ async function applyParseResultToStore(
   selectedFilePath: string,
   result: ParseResult,
   switchGeneration: number,
-): Promise<void> {
-  if (!isCurrentTabSwitch(switchGeneration)) return;
+): Promise<boolean> {
+  if (!isCurrentTabSwitch(switchGeneration)) return false;
   const state = useLogStore.getState();
   // Registry files use a dedicated viewer — load structured data instead of log entries
   if (result.parserSelection?.parser === "registry") {
@@ -180,7 +180,7 @@ async function applyParseResultToStore(
       throw err;
     }
     const { setCachedRegistry, useRegistryStore } = await import("../stores/registry-store");
-    if (!isCurrentTabSwitch(switchGeneration)) return;
+    if (!isCurrentTabSwitch(switchGeneration)) return false;
 
     state.setActiveSource(source);
     state.setSelectedSourceFilePath(selectedFilePath);
@@ -209,7 +209,7 @@ async function applyParseResultToStore(
     useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source), "registry");
     setCachedRegistry(selectedFilePath, registryData);
     useRegistryStore.getState().setRegistryData(registryData);
-    return;
+    return true;
   }
 
   state.setActiveSource(source);
@@ -245,6 +245,7 @@ async function applyParseResultToStore(
   // Open (or switch to) a tab for the loaded file
   const fileName = selectedFilePath.split(/[\\/]/).pop() ?? selectedFilePath;
   useUiStore.getState().openTab(selectedFilePath, fileName, buildTabSourceContext(source));
+  return true;
 }
 
 function clearSelectedFileState(source: LogSource, entries: FolderEntry[]): void {
@@ -433,14 +434,9 @@ async function recoverFromSelectedFileLoadFailure(
   selectedFilePath: string,
   error: unknown,
   loadGeneration: number,
-): Promise<LoadLogSourceResult> {
+): Promise<LoadLogSourceResult | null> {
   if (!isCurrentTabSwitch(loadGeneration)) {
-    return {
-      source,
-      entries: [],
-      selectedFilePath: null,
-      parseResult: null,
-    };
+    return null;
   }
   const state = useLogStore.getState();
   const { kind, message, accessDenied } = classifySourceError(error);
@@ -453,12 +449,7 @@ async function recoverFromSelectedFileLoadFailure(
 
   await stopCurrentTailIfNeeded(null);
   if (!isCurrentTabSwitch(loadGeneration)) {
-    return {
-      source,
-      entries: [],
-      selectedFilePath: null,
-      parseResult: null,
-    };
+    return null;
   }
   clearSelectedFileState(source, entries);
 
@@ -696,13 +687,13 @@ export async function loadSelectedLogFile(
 
     const result = await openLogFile(filePath);
     if (!isCurrentTabSwitch(operationGeneration)) return null;
-    await applyParseResultToStore(
+    const applied = await applyParseResultToStore(
       source,
       result.filePath,
       result,
       operationGeneration,
     );
-    return result;
+    return applied ? result : null;
   } finally {
     if (isCurrentTabSwitch(operationGeneration)) {
       state.setLoading(false);
@@ -1168,12 +1159,15 @@ export async function loadLogSource(
 
       state.setSourceEntries([]);
       state.setBundleMetadata(null);
-      await applyParseResultToStore(
+      const applied = await applyParseResultToStore(
         source,
         result.filePath,
         result,
         loadGeneration,
       );
+      if (!applied) {
+        return null;
+      }
 
       return {
         source,
@@ -1247,12 +1241,15 @@ export async function loadLogSource(
 
       state.setSourceEntries([]);
       state.setBundleMetadata(null);
-      await applyParseResultToStore(
+      const applied = await applyParseResultToStore(
         source,
         result.filePath,
         result,
         loadGeneration,
       );
+      if (!applied) {
+        return null;
+      }
 
       return {
         source,

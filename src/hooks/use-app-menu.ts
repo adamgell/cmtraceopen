@@ -366,6 +366,10 @@ export function useAppMenu() {
               const { openTimelineSource } = await import(
                 "../workspaces/timeline/open-timeline-source"
               );
+              const { useTimelineStore } = await import(
+                "../stores/timeline-store"
+              );
+              useTimelineStore.getState().setBundle(null);
               useUiStore.getState().ensureWorkspaceVisible(
                 "timeline",
                 "native-menu.timeline-new-from-folder",
