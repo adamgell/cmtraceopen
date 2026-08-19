@@ -36,15 +36,12 @@ reviews:
     drafts: true
     base_branches:
       - main
-    # Dependency bumps and release automation are machine-generated; skip them.
+    # Release automation is machine-generated; skip it.
     ignore_usernames:
-      - dependabot[bot]
       - github-actions[bot]
     ignore_title_keywords:
       - WIP
       - DO NOT MERGE
-      - chore(deps)
-      - chore(deps-dev)
 
   # Exclude generated, vendored, and binary-ish paths from review.
   path_filters:
