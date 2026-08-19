@@ -17,9 +17,7 @@ import type {
   EvtxParseResult,
   EvtxTimeWindow,
   EventLogSourceCoverage,
-  EventLogSourceManifest,
   EventQueryFilterSubset,
-  EvtxClearResult,
   EvtxLiveMode,
   EvtxTailBatch,
   EvtxTailStatus,
@@ -27,6 +25,11 @@ import type {
 import { EVTX_TIME_WINDOW_MS } from "./types";
 import type { LogEntry } from "../../types/log";
 import type { UnifiedTimeline } from "./unified-timeline";
+
+type EvtxClearStatusResult =
+  | { status: "cleared" | "cancelled" | "empty" }
+  | { status: "denied" | "unavailable" | "unsupported"; detail: string };
+type EvtxClearResponse = { channel: string; result: EvtxClearStatusResult };
 
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
@@ -309,7 +312,7 @@ loadGeneration: number;
   refreshLoadedChannels: () => Promise<void>;
   startLiveTail: () => Promise<EvtxTailStatus[]>;
   stopLiveTail: () => Promise<void>;
-  clearChannel: (channel: string, confirmed: boolean) => Promise<EvtxClearResult>;
+  clearChannel: (channel: string, confirmed: boolean) => Promise<EvtxClearStatusResult>;
   setTimeZoneMode: (mode: EvtxTimeZoneMode) => void;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
@@ -1123,7 +1126,7 @@ loadGeneration: generation,
       activeTailChannels.delete(channel);
       tailSequences.delete(tailSequenceKey(requestId, channel));
     }
-    const response = await invoke<{ channel: string; result: EvtxClearResult }>(
+    const response = await invoke<EvtxClearResponse>(
       "evtx_clear_channel",
       { channel, confirmed, remoteMachine: state.remoteMachine }
     );

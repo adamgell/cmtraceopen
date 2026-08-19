@@ -133,6 +133,38 @@ fn entity_encoded_field_re() -> &'static Regex {
         .expect("entity-encoded field redaction pattern must compile")
     })
 }
+/// JSON properties whose delimiters are escaped with backslashes, as in a JSON string embedded
+/// inside another serialized field.
+fn escaped_json_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)\\"(?P<field>RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName|ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost|Password|Pwd|Passphrase|LicenseKey|License_Key|ProductKey|Product_Key|SerialKey|Serial|ApiKey|Api_Key|ApiSecret|Api_Secret|AccessToken|Access_Token|Token|Secret|ClientSecret|Client_Secret|Credential|Credentials|Authorization)\\"\s*:\s*\\"(?P<value>.*?)\\""#,
+        )
+        .expect("escaped JSON field redaction pattern must compile")
+    })
+}
+
+fn redact_escaped_json_fields(value: &str) -> String {
+    escaped_json_field_re()
+        .replace_all(value, |caps: &regex::Captures<'_>| {
+            let field = &caps["field"];
+            let value = &caps["value"];
+            let redacted = if already_masked(value) {
+                value.to_owned()
+            } else {
+                let prefix = format!("{field}: ");
+                let redacted = redact_text(&format!("{prefix}{value}"));
+                redacted
+                    .strip_prefix(&prefix)
+                    .unwrap_or(value)
+                    .to_owned()
+            };
+            format!(r#"\"{field}\":\"{redacted}\""#)
+        })
+        .into_owned()
+}
+
 
 fn redact_entity_encoded_fields(value: &str) -> String {
     entity_encoded_field_re()
@@ -427,8 +459,16 @@ pub fn redact_text(value: &str) -> String {
             trailing
         )
     });
-
-    let masked = msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+    let source: &str = &masked;
+    let masked = msi_property_re().replace_all(source, |caps: &regex::Captures<'_>| {
+        let matched = caps.get(0).expect("MSI property capture must include the full match");
+        let is_redaction_token =
+            matched.start() > 0
+                && source.as_bytes()[matched.start() - 1] == b'['
+                && caps["property"].trim() == "secret:";
+        if is_redaction_token {
+            return matched.as_str().to_owned();
+        }
         let value = &caps["value"];
         if already_masked(value) {
             return format!("{}{}", &caps["property"], value);
@@ -455,6 +495,7 @@ pub fn redact_text(value: &str) -> String {
             stable_token("sid", &caps[0].to_ascii_uppercase())
         })
         .into_owned();
+    let masked = redact_escaped_json_fields(&masked);
     redact_entity_encoded_fields(&masked)
 }
 #[cfg(test)]

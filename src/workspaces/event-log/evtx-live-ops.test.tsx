@@ -58,7 +58,7 @@ describe("event-log live operations", () => {
         };
       }
       if (name === "evtx_clear_channel") {
-        return { channel: args.channel, result: { status: "cleared", channel: args.channel } };
+        return { channel: args.channel, result: { status: "cleared" } };
       }
       return undefined;
     });
@@ -86,7 +86,7 @@ describe("event-log live operations", () => {
 
     const result = await useEvtxStore.getState().clearChannel("Application", true);
 
-    expect(result).toEqual({ status: "cleared", channel: "Application" });
+    expect(result).toEqual({ status: "cleared" });
     expect(invoke).toHaveBeenCalledWith("evtx_clear_channel", {
       channel: "Application",
       confirmed: true,
