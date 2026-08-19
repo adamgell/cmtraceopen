@@ -442,6 +442,32 @@ describe("useAppMenu", () => {
     expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
   });
 
+  it("restores Always on Top state when the native pin rejects", async () => {
+    const error = new Error("native pin unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    useUiStore.setState({ alwaysOnTop: false });
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("sync_app_menu_state", expect.anything()),
+    );
+    vi.mocked(invoke).mockRejectedValueOnce(error);
+
+    await emitMenuAction({ action: "toggle_always_on_top" });
+
+    expect(useUiStore.getState().alwaysOnTop).toBe(false);
+    expect(invoke).toHaveBeenCalledWith("set_always_on_top", { enabled: true });
+    expect(consoleError).toHaveBeenCalledWith(
+      "[app-menu] failed to handle native menu action",
+      expect.objectContaining({
+        error,
+        payload: expect.objectContaining({ action: "toggle_always_on_top" }),
+      }),
+    );
+  });
+
   it("opens the Collect Diagnostics dialog from the native menu", async () => {
     useUiStore.setState({ showCollectDiagnosticsDialog: false });
     renderHook(() => useAppMenu());

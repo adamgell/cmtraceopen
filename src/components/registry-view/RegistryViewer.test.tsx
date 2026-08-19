@@ -113,9 +113,12 @@ describe("RegistryViewer", () => {
 
     render(<RegistryViewer />);
 
-    expect(capturedRangeExtractor).toBeDefined();
-    expect(
-      capturedRangeExtractor!({ startIndex: 0, endIndex: 0, overscan: 0 }),
-    ).toEqual(expect.arrayContaining([0, 5]));
+    const rangeExtractor = capturedRangeExtractor;
+    if (!rangeExtractor) {
+      throw new Error("RegistryViewer test mock did not capture a range extractor");
+    }
+    expect(rangeExtractor({ startIndex: 0, endIndex: 0, overscan: 0 })).toEqual(
+      expect.arrayContaining([0, 5]),
+    );
   });
 });

@@ -120,6 +120,11 @@ describe("LogListView selection and jump fixtures", () => {
     expect(
       screen.getByText("Policy evaluation 1 completed").closest("[role='option']"),
     ).toHaveStyle({ outline: "1px solid rgba(59, 130, 246, 0.5)" });
+    const additiveRow = screen
+      .getByText("Policy evaluation 3 completed")
+      .closest("[role='option']");
+    expect(additiveRow).toHaveAttribute("data-selected", "true");
+    expect(additiveRow).toHaveAttribute("aria-selected", "true");
   });
 
   it("selects every displayed row on Ctrl/Cmd+A", () => {

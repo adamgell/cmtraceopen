@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AboutDialog } from "./AboutDialog";
@@ -30,6 +30,28 @@ describe("AboutDialog", () => {
     const dialog = await screen.findByRole("dialog", { name: "About CMTrace Open" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(await screen.findByText("CMTrace Open")).toBeVisible();
+  });
+
+  it("traps focus and restores focus to the opener", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+
+    const view = render(<AboutDialog isOpen onClose={() => {}} />);
+    const dialog = screen.getByRole("dialog", { name: "About CMTrace Open" });
+    const ok = screen.getByRole("button", { name: "OK" });
+
+    expect(dialog).toHaveAttribute("tabindex", "-1");
+    expect(document.activeElement).toBe(ok);
+
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(ok);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(ok);
+
+    view.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("shows main channel app metadata", async () => {

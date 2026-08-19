@@ -217,8 +217,8 @@ export function useAppMenu() {
             return;
           case "toggle_always_on_top": {
             const next = !useUiStore.getState().alwaysOnTop;
-            useUiStore.getState().setAlwaysOnTop(next);
             await invoke("set_always_on_top", { enabled: next });
+            useUiStore.getState().setAlwaysOnTop(next);
             return;
           }
           case "increase_text_size":
