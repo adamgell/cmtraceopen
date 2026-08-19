@@ -42,6 +42,7 @@ All notable changes to this project will be documented in this file.
 - **Parser purity gate (#461)**: Restore the locked pure-module purity gate so free-text prose mentioning process APIs cannot trip wasm cleanliness false positives.
 - **SCCM server coverage topology (#455)**: Keep producer-host and workflow-subject handles on coverage rows so distinct physical producers do not collapse; reject incongruent topology instead of inventing results.
 - **Bounded discovery coverage (#454)**: Preserve correctness of bounded discovery coverage under partial native capture.
+- **MSI managed update policy (#576)**: Fixed `DISABLEUPDATECHECKS=1` installation failures caused by Master Packager Dev corrupting PowerShell custom-action braces; the MSI now writes the conditional 64-bit HKLM policy successfully.
 - **Rust 1.97 hierarchy lint**: Satisfy newer compiler hierarchy lints in SCCM hierarchy modules.
 
 ### Build & CI
