@@ -82,6 +82,8 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
       }}
     >
       <div
+        ref={surfaceRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="About CMTrace Open"

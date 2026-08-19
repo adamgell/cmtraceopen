@@ -6,7 +6,6 @@ import { loadPathAsLogSource } from "../../lib/log-source";
 import { useUiStore } from "../../stores/ui-store";
 import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getThemeById } from "../../lib/themes";
-import { useModalFocus } from "../../hooks/use-modal-focus";
 
 interface CollectionCompleteDialogProps {
   result: CollectionResult | null;
@@ -14,8 +13,6 @@ interface CollectionCompleteDialogProps {
 }
 
 export function CollectionCompleteDialog({ result, onClose }: CollectionCompleteDialogProps) {
-  const surfaceRef = useRef<HTMLDivElement>(null);
-  useModalFocus(result != null, surfaceRef);
   const [showGaps, setShowGaps] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalFocus(result !== null, dialogRef);

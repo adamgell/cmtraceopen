@@ -20,8 +20,6 @@ export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnostics
   useModalFocus(isOpen, dialogRef);
   const setCollectionProgress = useUiStore((s) => s.setCollectionProgress);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
-  const surfaceRef = useRef<HTMLDivElement>(null);
-  useModalFocus(isOpen, surfaceRef);
   const collectingRef = useRef(false);
 
   // Category-level enabled state (all enabled by default)

@@ -405,21 +405,6 @@ export function useAppActions(): AppActionHandlers {
 
   const openPathForActiveWorkspace = useCallback(
     async (path: string) => {
-      const workspaceDefinition = getWorkspace(activeWorkspace);
-      if (workspaceDefinition.onOpenPath) {
-        await workspaceDefinition.onOpenPath(path);
-        return;
-      }
-      if (workspaceDefinition.onOpenSource) {
-        const pathKind = await inferPathKind(path);
-        const source: LogSource =
-          pathKind === "folder"
-            ? { kind: "folder", path }
-            : { kind: "file", path };
-        await workspaceDefinition.onOpenSource(source, "drag-drop.path-open");
-        return;
-      }
-
       if (activeWorkspace === "dsregcmd") {
         useUiStore
           .getState()

@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useModalFocus } from "../../hooks/use-modal-focus";
 import type { UpdateInfo } from "../../hooks/use-update-checker";
-import { useModalFocus } from "../../hooks/use-modal-focus";
 import { getUpdateChannelLabel } from "../../lib/update-channel";
 
 interface UpdateDialogProps {

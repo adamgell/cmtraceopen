@@ -186,8 +186,6 @@ interface UiState {
   graphApiStatus: GraphApiPhase;
   graphApiCapability: GraphHostCapability | null;
   graphApiLastAttempt: GraphApiLastAttempt | null;
-  /** DNS/DHCP banner dismissals for the current app session, keyed by source path. */
-  dismissedDnsBannerPaths: string[];
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -259,7 +257,6 @@ interface UiState {
   setGraphApiStatus: (status: GraphApiPhase) => void;
   setGraphApiCapability: (capability: GraphHostCapability | null) => void;
   setGraphApiLastAttempt: (attempt: GraphApiLastAttempt | null) => void;
-  dismissDnsBanner: (path: string) => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -276,15 +273,8 @@ const sanitizePersistedUiState = (
   delete sanitized.graphApiCapability;
   delete sanitized.graphApiLastAttempt;
 
-  if (sanitized.dismissedDnsBannerPaths !== undefined) {
-    sanitized.dismissedDnsBannerPaths = Array.isArray(
-      sanitized.dismissedDnsBannerPaths
-    )
-      ? sanitized.dismissedDnsBannerPaths.filter(
-          (path): path is string => typeof path === "string"
-        )
-      : [];
-  }
+  // Banner dismissals are session-local; discard any legacy persisted values.
+  delete sanitized.dismissedDnsBannerPaths;
 
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
@@ -365,7 +355,6 @@ export const useUiStore = create<UiState>()(
       graphApiStatus: "disconnected",
       graphApiCapability: null,
       graphApiLastAttempt: null,
-      dismissedDnsBannerPaths: [],
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setAlwaysOnTop: (alwaysOnTop) => set({ alwaysOnTop }),
@@ -672,12 +661,6 @@ export const useUiStore = create<UiState>()(
       setGraphApiStatus: (status) => set({ graphApiStatus: status }),
       setGraphApiCapability: (capability) => set({ graphApiCapability: capability }),
       setGraphApiLastAttempt: (attempt) => set({ graphApiLastAttempt: attempt }),
-      dismissDnsBanner: (path) =>
-        set((state) => ({
-          dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)
-            ? state.dismissedDnsBannerPaths
-            : [...state.dismissedDnsBannerPaths, path],
-        })),
     }),
     {
       name: "cmtraceopen-ui-preferences",
@@ -693,7 +676,6 @@ export const useUiStore = create<UiState>()(
         defaultShowInfoPane: state.defaultShowInfoPane,
         confirmTabClose: state.confirmTabClose,
         alwaysOnTop: state.alwaysOnTop,
-        dismissedDnsBannerPaths: state.dismissedDnsBannerPaths,
         graphApiEnabled: state.graphApiEnabled,
         recentSessions: state.recentSessions,
       }),
