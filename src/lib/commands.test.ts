@@ -136,6 +136,7 @@ describe("parse and folder IPC response validation", () => {
 
   it("rejects malformed parser and folder responses", async () => {
     vi.mocked(invoke)
+      .mockResolvedValueOnce({ filePath: "C:\\Logs\\App.log" })
       .mockResolvedValueOnce([{ filePath: "C:\\Logs\\App.log" }])
       .mockResolvedValueOnce({
         sourceKind: "folder",
@@ -143,6 +144,9 @@ describe("parse and folder IPC response validation", () => {
         entries: [{ name: "App.log", path: "C:\\Logs\\App.log" }],
       });
 
+    await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
+      "invalid response",
+    );
     await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7)).rejects.toThrow(
       "invalid response",
     );
@@ -171,7 +175,14 @@ function validGraphStatus() {
 
 describe("SCCM product-path IPC boundary", () => {
   it("invokes discovery and capture without accepting frontend inputs", async () => {
-    const discovery = { supported: true, roles: [], sources: [], issues: [] };
+    const discovery = {
+      supported: true,
+      configmgrVersion: null,
+      roles: [],
+      sources: [],
+      issues: [],
+      advancedSources: [],
+    };
     const capture = {
       bundleRoot: "C:\\capture",
       capturedAtUtc: "2026-08-04T14:30:00Z",
@@ -225,7 +236,14 @@ describe("SCCM product-path IPC boundary", () => {
       pathClass: request.pathClass,
       sourceVersion: request.expectedSourceVersion,
     };
-    const result = { bundleRoot: "C:\\bundle", sources: [] };
+    const result = {
+      bundleRoot: "C:\\bundle",
+      capturedAtUtc: "2026-08-04T14:30:00Z",
+      roles: [],
+      sources: [],
+      artifactCount: 0,
+      retainedBytes: 0,
+    };
     vi.mocked(invoke)
       .mockResolvedValueOnce(capability)
       .mockResolvedValueOnce(result)

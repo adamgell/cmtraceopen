@@ -277,10 +277,11 @@ function normalizeCommandInvokeError(
   return normalizedError;
 }
 
+type CommandDecoder<T> = (value: unknown, commandName: string) => T;
+
 async function invokeCommand<T>(
   commandName: string,
   args?: Record<string, unknown>,
-  decoder?: (value: unknown) => T,
 ): Promise<T> {
   let response: unknown;
   try {
@@ -288,7 +289,12 @@ async function invokeCommand<T>(
   } catch (error) {
     throw normalizeCommandInvokeError(commandName, error);
   }
-  return decoder ? decoder(response) : (response as T);
+
+  const decoder = COMMAND_DECODERS[commandName];
+  if (!decoder) {
+    throw new Error(`No response decoder registered for '${commandName}'.`);
+  }
+  return decoder(response, commandName) as T;
 }
 
 function isCommandRecord(value: unknown): value is Record<string, unknown> {
@@ -403,6 +409,151 @@ function invalidCommandResponse(commandName: string): never {
   throw new Error(`Command '${commandName}' returned an invalid response.`);
 }
 
+type CommandFieldValidator = (value: unknown) => boolean;
+
+function hasCommandFields(
+  value: Record<string, unknown>,
+  fields: Record<string, CommandFieldValidator>,
+): boolean {
+  return Object.entries(fields).every(([key, validator]) =>
+    validator(value[key]),
+  );
+}
+
+function decodeRecordResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T {
+  if (
+    !isCommandRecord(value) ||
+    !hasCommandFields(value, fields)
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  return value as T;
+}
+
+function decodeRecordArrayResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) => isCommandRecord(item) && hasCommandFields(item, fields),
+    )
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  return value as T;
+}
+
+function decodeStringArrayResponse(
+  value: unknown,
+  commandName: string,
+): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeStringResponse(value: unknown, commandName: string): string {
+  if (typeof value !== "string") return invalidCommandResponse(commandName);
+  return value;
+}
+
+function decodeBooleanResponse(value: unknown, commandName: string): boolean {
+  if (typeof value !== "boolean") return invalidCommandResponse(commandName);
+  return value;
+}
+
+function decodeNullableRecordResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T | null {
+  if (value === null) return null;
+  return decodeRecordResponse<T>(value, commandName, fields);
+}
+
+function decodeUnitResponse(value: unknown, commandName: string): void {
+  if (value !== null && value !== undefined) {
+    return invalidCommandResponse(commandName);
+  }
+}
+
+function decodeWorkspaceIdResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId {
+  if (!isWorkspaceIdValue(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeNullableWorkspaceIdResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId | null {
+  return value === null ? null : decodeWorkspaceIdResponse(value, commandName);
+}
+
+function decodePathKindResponse(
+  value: unknown,
+  commandName: string,
+): "file" | "folder" | "unknown" {
+  if (value !== "file" && value !== "folder" && value !== "unknown") {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+const WORKSPACE_IDS: readonly WorkspaceId[] = [
+  "log",
+  "intune",
+  "new-intune",
+  "dsregcmd",
+  "macos-diag",
+  "macos-jamf",
+  "deployment",
+  "event-log",
+  "esp-diagnostics",
+  "sccm",
+  "secureboot",
+  "sysmon",
+  "timeline",
+  "dns-dhcp",
+];
+
+function isWorkspaceIdValue(value: unknown): value is WorkspaceId {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_IDS.some((workspaceId) => workspaceId === value)
+  );
+}
+
+function decodeWorkspaceIdArrayResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId[] {
+  if (!Array.isArray(value) || !value.every(isWorkspaceIdValue)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function isCommandRecordArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isCommandRecord);
+}
+
+function isNullableCommandRecord(value: unknown): boolean {
+  return value === null || isCommandRecord(value);
+}
+
 function decodeParseResults(
   value: unknown,
   commandName: string,
@@ -411,6 +562,40 @@ function decodeParseResults(
     return invalidCommandResponse(commandName);
   }
   return value;
+}
+
+function decodeParseResult(
+  value: unknown,
+  commandName: string,
+): ParseResult {
+  if (!isParseResultResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeAggregateParseResult(
+  value: unknown,
+  commandName: string,
+): AggregateParseResult {
+  return decodeRecordResponse<AggregateParseResult>(value, commandName, {
+    entries: (entries) =>
+      Array.isArray(entries) && entries.every(isLogEntryResponse),
+    totalLines: isFiniteCommandNumber,
+    parseErrors: isFiniteCommandNumber,
+    folderPath: (path) => typeof path === "string",
+    files: (files) =>
+      Array.isArray(files) &&
+      files.every(
+        (file) =>
+          isCommandRecord(file) &&
+          typeof file.filePath === "string" &&
+          isFiniteCommandNumber(file.totalLines) &&
+          isFiniteCommandNumber(file.parseErrors) &&
+          isFiniteCommandNumber(file.fileSize) &&
+          isFiniteCommandNumber(file.byteOffset),
+      ),
+  });
 }
 
 function decodeFolderListingResult(
@@ -434,23 +619,16 @@ export async function parseFilesBatch(
   paths: string[],
   requestId: number,
 ): Promise<ParseResult[]> {
-  const commandName = "parse_files_batch";
-  return invokeCommand(
-    commandName,
+  return invokeCommand<ParseResult[]>(
+    "parse_files_batch",
     { paths, requestId },
-    (value) => decodeParseResults(value, commandName),
   );
 }
 
 export async function listLogFolder(
   path: string,
 ): Promise<FolderListingResult> {
-  const commandName = "list_log_folder";
-  return invokeCommand(
-    commandName,
-    { path },
-    (value) => decodeFolderListingResult(value, commandName),
-  );
+  return invokeCommand<FolderListingResult>("list_log_folder", { path });
 }
 
 export async function inspectEvidenceBundle(
@@ -1241,6 +1419,7 @@ export async function macosQueryUnifiedLog(
   resultCap: number,
 ): Promise<MacosUnifiedLogResult> {
   const now = new Date();
+
   const start = new Date(now.getTime() - timeRangeMinutes * 60 * 1000);
   const fmt = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
@@ -1281,3 +1460,375 @@ export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResu
     {},
   );
 }
+
+function decodeSecureBootAnalysisResult(
+  value: unknown,
+  commandName: string,
+): SecureBootAnalysisResult {
+  return decodeRecordResponse<SecureBootAnalysisResult>(value, commandName, {
+    stage: (field) => typeof field === "string",
+    dataSource: (field) => typeof field === "string",
+    scanState: isCommandRecord,
+    sessions: isCommandRecordArray,
+    timeline: isCommandRecordArray,
+    diagnostics: isCommandRecordArray,
+    scriptResult: isNullableCommandRecord,
+  });
+}
+
+type UntypedCommandDecoder = CommandDecoder<unknown>;
+
+const COMMAND_DECODERS: Record<string, UntypedCommandDecoder> = {
+  open_log_file: decodeParseResult,
+  parse_files_batch: decodeParseResults,
+  list_log_folder: decodeFolderListingResult,
+  inspect_evidence_bundle: (value, commandName) =>
+    decodeRecordResponse<EvidenceBundleDetails>(value, commandName, {
+      bundleRootPath: (field) => typeof field === "string",
+      metadata: isCommandRecord,
+      manifestContent: (field) => typeof field === "string",
+      artifacts: isCommandRecordArray,
+      expectedEvidence: isCommandRecordArray,
+      observedGaps: isStringArray,
+      priorityQuestions: isStringArray,
+    }),
+  inspect_evidence_artifact: (value, commandName) =>
+    decodeRecordResponse<EvidenceArtifactPreview>(value, commandName, {
+      path: (field) => typeof field === "string",
+      intakeKind: (field) => typeof field === "string",
+      summary: (field) => typeof field === "string",
+    }),
+  parse_registry_file: (value, commandName) =>
+    decodeRecordResponse<RegistryParseResult>(value, commandName, {
+      keys: isCommandRecordArray,
+      filePath: (field) => typeof field === "string",
+      fileSize: isFiniteCommandNumber,
+      totalKeys: isFiniteCommandNumber,
+      totalValues: isFiniteCommandNumber,
+      parseErrors: isFiniteCommandNumber,
+    }),
+  get_known_log_sources: (value, commandName) =>
+    decodeRecordArrayResponse<KnownSourceMetadata[]>(value, commandName, {
+      id: (field) => typeof field === "string",
+      label: (field) => typeof field === "string",
+      description: (field) => typeof field === "string",
+      platform: (field) => typeof field === "string",
+      sourceKind: isLogSourceKind,
+      source: isLogSourceResponse,
+      filePatterns: isStringArray,
+    }),
+  open_log_folder_aggregate: decodeAggregateParseResult,
+  start_tail: decodeUnitResponse,
+  stop_tail: decodeUnitResponse,
+  pause_tail: decodeUnitResponse,
+  resume_tail: decodeUnitResponse,
+  analyze_intune_logs: (value, commandName) =>
+    decodeRecordResponse<IntuneAnalysisResult>(value, commandName, {
+      events: isCommandRecordArray,
+      downloads: isCommandRecordArray,
+      summary: isCommandRecord,
+      diagnostics: isCommandRecordArray,
+      sourceFile: (field) => typeof field === "string",
+      sourceFiles: isStringArray,
+      diagnosticsCoverage: (field) => typeof field === "string",
+      diagnosticsConfidence: (field) => typeof field === "string",
+      repeatedFailures: isCommandRecordArray,
+      guidRegistry: isCommandRecord,
+    }),
+  analyze_sysmon_logs: (value, commandName) =>
+    decodeRecordResponse<SysmonAnalysisResult>(value, commandName, {
+      events: isCommandRecordArray,
+      summary: isCommandRecord,
+      config: isCommandRecord,
+      dashboard: isCommandRecord,
+      sourcePath: (field) => typeof field === "string",
+    }),
+  analyze_dsregcmd: (value, commandName) =>
+    decodeRecordResponse<DsregcmdAnalysisResult>(value, commandName, {
+      facts: isCommandRecord,
+      derived: isCommandRecord,
+      diagnostics: isCommandRecordArray,
+      policyEvidence: isCommandRecord,
+      osVersion: isNullableCommandRecord,
+      proxyEvidence: isNullableCommandRecord,
+      enrollmentEvidence: isNullableCommandRecord,
+      activeEvidence: isNullableCommandRecord,
+      scheduledTaskEvidence: isNullableCommandRecord,
+      eventLogAnalysis: isNullableCommandRecord,
+    }),
+  capture_dsregcmd: (value, commandName) =>
+    decodeRecordResponse<DsregcmdCaptureResult>(value, commandName, {
+      input: (field) => typeof field === "string",
+      bundlePath: isNullableCommandString,
+      evidenceFilePath: isNullableCommandString,
+    }),
+  inspect_path_kind: decodePathKindResponse,
+  write_text_output_file: decodeUnitResponse,
+  load_dsregcmd_source: (value, commandName) =>
+    decodeRecordResponse<DsregcmdResolvedSource>(value, commandName, {
+      input: (field) => typeof field === "string",
+      bundlePath: isNullableCommandString,
+      resolvedPath: isNullableCommandString,
+      evidenceFilePath: isNullableCommandString,
+    }),
+  get_initial_file_paths: decodeStringArrayResponse,
+  get_initial_workspace: decodeNullableWorkspaceIdResponse,
+  get_app_elevation_state: (value, commandName) =>
+    decodeRecordResponse<AppElevationState>(value, commandName, {
+      platformSupported: (field) => typeof field === "boolean",
+      isElevated: (field) => typeof field === "boolean",
+    }),
+  restart_as_administrator: (value, commandName) =>
+    decodeRecordResponse<RelaunchResult>(value, commandName, {
+      launched: (field) => typeof field === "boolean",
+      reason: (field) => typeof field === "string",
+    }),
+  get_initial_elevation_restore: (value, commandName) =>
+    decodeNullableRecordResponse<RestoreTicket>(value, commandName, {
+      schemaVersion: isFiniteCommandNumber,
+      ticketId: (field) => typeof field === "string",
+      createdAtMs: isFiniteCommandNumber,
+      originPid: isFiniteCommandNumber,
+      workspace: isWorkspaceIdValue,
+      target: isCommandRecord,
+      reason: (field) => typeof field === "string",
+      retryAttempted: (field) => typeof field === "boolean",
+    }),
+  get_available_workspaces: decodeWorkspaceIdArrayResponse,
+  discover_sccm_environment: (value, commandName) =>
+    decodeRecordResponse<SccmEnvironmentDiscovery>(value, commandName, {
+      supported: (field) => typeof field === "boolean",
+      configmgrVersion: isNullableCommandString,
+      roles: isCommandRecordArray,
+      sources: isCommandRecordArray,
+      issues: isCommandRecordArray,
+      advancedSources: isCommandRecordArray,
+    }),
+  capture_sccm_diagnostics: (value, commandName) =>
+    decodeRecordResponse<SccmCaptureResult>(value, commandName, {
+      bundleRoot: (field) => typeof field === "string",
+      capturedAtUtc: (field) => typeof field === "string",
+      roles: isStringArray,
+      sources: isCommandRecordArray,
+      artifactCount: isFiniteCommandNumber,
+      retainedBytes: isFiniteCommandNumber,
+    }),
+  authorize_sccm_advanced_capture: (value, commandName) =>
+    decodeRecordResponse<SccmAdvancedCaptureCapability>(value, commandName, {
+      capabilityHandle: (field) => typeof field === "string",
+      cardId: (field) => typeof field === "string",
+      cardVersion: (field) => typeof field === "string",
+      sourceId: (field) => typeof field === "string",
+      roleScope: (field) => typeof field === "string",
+      pathClass: (field) => typeof field === "string",
+      sourceVersion: isNullableCommandString,
+    }),
+  capture_sccm_advanced_diagnostics: (value, commandName) =>
+    decodeRecordResponse<SccmCaptureResult>(value, commandName, {
+      bundleRoot: (field) => typeof field === "string",
+      capturedAtUtc: (field) => typeof field === "string",
+      roles: isStringArray,
+      sources: isCommandRecordArray,
+      artifactCount: isFiniteCommandNumber,
+      retainedBytes: isFiniteCommandNumber,
+    }),
+  cancel_sccm_advanced_capture: decodeUnitResponse,
+  reveal_in_file_manager: decodeUnitResponse,
+  get_update_policy: (value, commandName) =>
+    decodeRecordResponse<UpdatePolicy>(value, commandName, {
+      updateChecksDisabledByPolicy: (field) => typeof field === "boolean",
+    }),
+  check_dns_logging_status: (value, commandName) =>
+    decodeRecordResponse<DnsLoggingStatus>(value, commandName, {
+      dnsServerInstalled: (field) => typeof field === "boolean",
+      debugLoggingEnabled: (field) => typeof field === "boolean",
+      logFilePath: isNullableCommandString,
+      dhcpServerInstalled: (field) => typeof field === "boolean",
+    }),
+  enable_dns_debug_logging: decodeStringResponse,
+  collect_dns_dhcp_from_domain: (value, commandName) =>
+    decodeRecordResponse<DnsDhcpCollectionResult>(value, commandName, {
+      bundlePath: (field) => typeof field === "string",
+      servers: isCommandRecordArray,
+      totalFiles: isFiniteCommandNumber,
+      totalBytes: isFiniteCommandNumber,
+      durationMs: isFiniteCommandNumber,
+    }),
+  get_file_association_prompt_status: (value, commandName) =>
+    decodeRecordResponse<FileAssociationPromptStatus>(value, commandName, {
+      supported: (field) => typeof field === "boolean",
+      shouldPrompt: (field) => typeof field === "boolean",
+      isAssociated: (field) => typeof field === "boolean",
+    }),
+  associate_log_files_with_app: decodeUnitResponse,
+  set_file_association_prompt_suppressed: decodeUnitResponse,
+  get_system_date_time_preferences: (value, commandName) =>
+    decodeRecordResponse<SystemDateTimePreferences>(value, commandName, {
+      datePattern: (field) => typeof field === "string",
+      timePattern: (field) => typeof field === "string",
+      amDesignator: isNullableCommandString,
+      pmDesignator: isNullableCommandString,
+    }),
+  collect_diagnostics: (value, commandName) =>
+    decodeRecordResponse<CollectionResult>(value, commandName, {
+      bundlePath: (field) => typeof field === "string",
+      bundleId: (field) => typeof field === "string",
+      artifactCounts: isCommandRecord,
+      durationMs: isFiniteCommandNumber,
+      gaps: isCommandRecordArray,
+    }),
+  get_esp_elevation_state: (value, commandName) =>
+    decodeRecordResponse<EspElevationState>(value, commandName, {
+      isElevated: (field) => typeof field === "boolean",
+      restartSupported: (field) => typeof field === "boolean",
+      restrictedSources: isStringArray,
+    }),
+  analyze_esp_evidence: (value, commandName) =>
+    decodeRecordResponse<EspDiagnosticsSnapshot>(value, commandName, {
+      schemaVersion: isFiniteCommandNumber,
+      scenario: (field) => typeof field === "string",
+      phase: (field) => typeof field === "string",
+      generatedAtUtc: (field) => typeof field === "string",
+      elevation: isCommandRecord,
+      identity: isCommandRecord,
+      profile: isNullableCommandRecord,
+      enrollments: isCommandRecordArray,
+      sessions: isCommandRecordArray,
+      workloads: isCommandRecordArray,
+      installerCorrelations: isCommandRecordArray,
+      nodeCache: isCommandRecordArray,
+      registrationEvents: isCommandRecordArray,
+      deliveryOptimization: isNullableCommandRecord,
+      hardware: isNullableCommandRecord,
+      activity: isCommandRecordArray,
+      findings: isCommandRecordArray,
+      coverage: isCommandRecordArray,
+      rawEvidence: isCommandRecordArray,
+      graph: isNullableCommandRecord,
+    }),
+  export_esp_session: decodeUnitResponse,
+  start_esp_diagnostics_session: (value, commandName) =>
+    decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
+      sessionId: (field) => typeof field === "string",
+      requestId: (field) => typeof field === "string",
+      sequence: isFiniteCommandNumber,
+      state: (field) => typeof field === "string",
+      snapshot: isCommandRecord,
+    }),
+  get_esp_diagnostics_session: (value, commandName) =>
+    decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
+      sessionId: (field) => typeof field === "string",
+      requestId: (field) => typeof field === "string",
+      sequence: isFiniteCommandNumber,
+      state: (field) => typeof field === "string",
+      snapshot: isCommandRecord,
+    }),
+  stop_esp_diagnostics_session: decodeUnitResponse,
+  restart_esp_as_administrator: (value, commandName) =>
+    decodeRecordResponse<EspRelaunchResult>(value, commandName, {
+      launched: (field) => typeof field === "boolean",
+      reason: (field) => typeof field === "string",
+    }),
+  graph_fetch_esp_diagnostics: (value, commandName) =>
+    decodeRecordResponse<EspGraphOverlay>(value, commandName, {
+      requestId: (field) => typeof field === "string",
+      requestedAtUtc: (field) => typeof field === "string",
+      deviceMatch: isCommandRecord,
+      autopilotIdentity: isCommandRecord,
+      deploymentProfile: isCommandRecord,
+      intendedDeploymentProfile: isCommandRecord,
+      profileAssignments: isCommandRecord,
+      autopilotEvents: isCommandRecord,
+      enrollmentConfiguration: isCommandRecord,
+      apps: isCommandRecord,
+      policies: isCommandRecord,
+      scripts: isCommandRecord,
+    }),
+  esp_flip_app_installed: (value, commandName) =>
+    decodeRecordResponse<EspAppFlipResult>(value, commandName, {
+      appId: (field) => typeof field === "string",
+      installationState: isFiniteCommandNumber,
+      backup: isCommandRecord,
+    }),
+  esp_restore_app_state: decodeUnitResponse,
+  graph_cancel_esp_diagnostics: decodeUnitResponse,
+  graph_reserve_interactive_operation: decodeGraphInteractiveOperationTicket,
+  graph_authenticate: decodeGraphAuthAttemptResult,
+  graph_cancel_authentication: decodeBooleanResponse,
+  graph_request_missing_permissions: decodeGraphPermissionUpgradeResult,
+  graph_get_auth_status: decodeGraphAuthStatus,
+  graph_sign_out: decodeUnitResponse,
+  graph_resolve_guids: (value, commandName) =>
+    decodeRecordResponse<GraphResolutionResult>(value, commandName, {
+      resolved: isCommandRecord,
+      notFound: isStringArray,
+      errors: isStringArray,
+    }),
+  graph_fetch_all_apps: (value, commandName) =>
+    decodeRecordArrayResponse<GraphAppInfo[]>(value, commandName, {
+      id: (field) => typeof field === "string",
+      displayName: (field) => typeof field === "string",
+      publisher: isNullableCommandString,
+      odataType: isNullableCommandString,
+    }),
+  macos_scan_environment: (value, commandName) =>
+    decodeRecordResponse<MacosDiagEnvironment>(value, commandName, {
+      macosVersion: (field) => typeof field === "string",
+      macosBuild: (field) => typeof field === "string",
+      fullDiskAccess: (field) => typeof field === "string",
+      tools: isCommandRecord,
+      directories: isCommandRecord,
+      summary: (field) => typeof field === "string",
+    }),
+  macos_scan_intune_logs: (value, commandName) =>
+    decodeRecordResponse<MacosIntuneLogScanResult>(value, commandName, {
+      files: isCommandRecordArray,
+      scannedDirectories: isStringArray,
+      totalSizeBytes: isFiniteCommandNumber,
+    }),
+  macos_list_profiles: (value, commandName) =>
+    decodeRecordResponse<MacosProfilesResult>(value, commandName, {
+      profiles: isCommandRecordArray,
+      enrollmentStatus: isCommandRecord,
+      rawOutput: (field) => typeof field === "string",
+    }),
+  macos_inspect_defender: (value, commandName) =>
+    decodeRecordResponse<MacosDefenderResult>(value, commandName, {
+      health: isNullableCommandRecord,
+      logFiles: isCommandRecordArray,
+      diagFiles: isCommandRecordArray,
+    }),
+  macos_list_packages: (value, commandName) =>
+    decodeRecordResponse<MacosPackagesResult>(value, commandName, {
+      packages: isCommandRecordArray,
+      totalCount: isFiniteCommandNumber,
+      microsoftCount: isFiniteCommandNumber,
+    }),
+  macos_get_package_info: (value, commandName) =>
+    decodeRecordResponse<MacosPackageInfo>(value, commandName, {
+      packageId: (field) => typeof field === "string",
+      version: (field) => typeof field === "string",
+      volume: isNullableCommandString,
+      location: isNullableCommandString,
+      installTime: isNullableCommandString,
+    }),
+  macos_get_package_files: (value, commandName) =>
+    decodeRecordResponse<MacosPackageFiles>(value, commandName, {
+      packageId: (field) => typeof field === "string",
+      files: isStringArray,
+      fileCount: isFiniteCommandNumber,
+    }),
+  macos_query_unified_log: (value, commandName) =>
+    decodeRecordResponse<MacosUnifiedLogResult>(value, commandName, {
+      entries: isCommandRecordArray,
+      totalMatched: isFiniteCommandNumber,
+      capped: (field) => typeof field === "boolean",
+      resultCap: isFiniteCommandNumber,
+      predicateUsed: (field) => typeof field === "string",
+      timeRange: isNullableCommandRecord,
+    }),
+  analyze_secureboot: decodeSecureBootAnalysisResult,
+  rescan_secureboot: decodeSecureBootAnalysisResult,
+  run_secureboot_detection: decodeSecureBootAnalysisResult,
+  run_secureboot_remediation: decodeSecureBootAnalysisResult,
+};
