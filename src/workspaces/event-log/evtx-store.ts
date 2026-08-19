@@ -17,6 +17,7 @@ import type {
   EvtxParseResult,
   EvtxTimeWindow,
   EventLogSourceCoverage,
+  EventLogSourceManifest,
   EventQueryFilterSubset,
   EvtxLiveMode,
   EvtxTailBatch,

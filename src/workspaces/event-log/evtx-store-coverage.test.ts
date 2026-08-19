@@ -1235,20 +1235,23 @@ describe("records that arrive in batches while the query runs", () => {
       ...firstMissing,
       rawXml: "<Event><Provider Name=\"two\" /></Event>",
     };
-    invoke.mockResolvedValueOnce({
-      records: [
-        largeId,
-        secondLargeId,
-        firstSource,
-        secondSource,
-        firstMissing,
-        secondMissing,
-        { ...largeId },
-      ],
-      channels: [{ name: "Application", eventCount: 7, sourceType: "live" as const }],
-      totalRecords: 7,
-      parseErrors: 0,
-      errorMessages: [],
+    invoke.mockImplementationOnce(async () => {
+      emitTerminal("Application", 0, 7);
+      return {
+        records: [
+          largeId,
+          secondLargeId,
+          firstSource,
+          secondSource,
+          firstMissing,
+          secondMissing,
+          { ...largeId },
+        ],
+        channels: [{ name: "Application", eventCount: 7, sourceType: "live" as const }],
+        totalRecords: 7,
+        parseErrors: 0,
+        errorMessages: [],
+      };
     });
 
     await useEvtxStore.getState().queryChannels(["Application"]);
