@@ -197,7 +197,7 @@ fn bundle_from_source(source: &str) -> Option<String> {
 }
 
 /// Converts a parsed log entry, or reports why it cannot be placed.
-pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
+pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, Box<UnplacedItem>> {
     let file = entry.file_path.clone();
     let source = entry.source_file.clone().unwrap_or_else(|| file.clone());
     let bundle = bundle_from_source(&source).or_else(|| bundle_from_source(&file));
@@ -219,10 +219,10 @@ pub fn from_log_entry(entry: &LogEntry) -> Result<TimelineItem, UnplacedItem> {
             message: entry.message.clone(),
             origin,
         }),
-        None => Err(UnplacedItem {
+        None => Err(Box::new(UnplacedItem {
             origin,
             reason: UnplacedReason::MissingTimestamp,
-        }),
+        })),
     }
 }
 
@@ -233,7 +233,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry]) {
     for entry in entries {
         match from_log_entry(entry) {
             Ok(item) => placed.push(item),
-            Err(item) => unplaced.push(item),
+            Err(item) => unplaced.push(*item),
         }
     }
     *timeline = merge(placed, unplaced);

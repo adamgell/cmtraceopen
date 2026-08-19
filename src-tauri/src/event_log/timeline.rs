@@ -149,26 +149,26 @@ fn extract_activity_id(xml: &str) -> Option<String> {
 }
 
 /// Converts one event, or reports why it has no position.
-pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, UnplacedItem> {
+pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, Box<UnplacedItem>> {
     from_event_with_occurrence(record, 0)
 }
 
 fn from_event_with_occurrence(
     record: &EvtxRecord,
     occurrence: usize,
-) -> Result<TimelineItem, UnplacedItem> {
+) -> Result<TimelineItem, Box<UnplacedItem>> {
     from_event_with_origin(record, origin_of(record, occurrence))
 }
 
 fn from_event_with_origin(
     record: &EvtxRecord,
     origin: TimelineOrigin,
-) -> Result<TimelineItem, UnplacedItem> {
+) -> Result<TimelineItem, Box<UnplacedItem>> {
     if !timestamp_is_present(record) {
-        return Err(UnplacedItem {
+        return Err(Box::new(UnplacedItem {
             origin,
             reason: UnplacedReason::MissingTimestamp,
-        });
+        }));
     }
 
     Ok(TimelineItem {
@@ -233,7 +233,7 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
     for entry in entries {
         match from_log_entry(entry) {
             Ok(item) => placed.push(item),
-            Err(reason) => unplaced.push(reason),
+            Err(reason) => unplaced.push(*reason),
         }
     }
     for OrderedRecord {
@@ -244,7 +244,7 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
     {
         match from_event_with_origin(record, origin) {
             Ok(item) => placed.push(item),
-            Err(item) => unplaced.push(item),
+            Err(item) => unplaced.push(*item),
         }
     }
 
@@ -258,7 +258,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
     for entry in entries {
         match from_log_entry(entry) {
             Ok(item) => placed.push(item),
-            Err(item) => unplaced.push(item),
+            Err(item) => unplaced.push(*item),
         }
     }
     let mut existing_occurrences = std::collections::HashMap::new();
@@ -283,7 +283,7 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
         let origin = origin_with_occurrence(origin, record, occurrence + offset);
         match from_event_with_origin(record, origin) {
             Ok(item) => placed.push(item),
-            Err(item) => unplaced.push(item),
+            Err(item) => unplaced.push(*item),
         }
     }
     *timeline = merge(placed, unplaced);
