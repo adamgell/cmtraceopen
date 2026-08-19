@@ -46,6 +46,30 @@ describe("EVTX marker identity adapter", () => {
       evtxMarkerKey(record({ eventRecordId: 7, channel: "System" }))
     );
   });
+  it("keeps missing-ID records distinct across sources and raw XML occurrences", () => {
+    const missingId = record({
+      eventRecordId: 0,
+      eventRecordIdText: "0",
+      rawXml: "<Event><EventData><Data Name=\"App\">first.exe</Data></EventData></Event>",
+    });
+    const differentOccurrence = record({
+      eventRecordId: 0,
+      eventRecordIdText: "0",
+      rawXml: "<Event><EventData><Data Name=\"App\">second.exe</Data></EventData></Event>",
+    });
+    const differentSource = record({
+      eventRecordId: 0,
+      eventRecordIdText: "0",
+      sourceLabel: "System.evtx",
+      rawXml: missingId.rawXml,
+    });
+
+    expect(evtxMarkerKey(missingId)).not.toBe(evtxMarkerKey(differentOccurrence));
+    expect(evtxMarkerLineId(missingId)).not.toBe(evtxMarkerLineId(differentOccurrence));
+    expect(evtxMarkerKey(missingId)).not.toBe(evtxMarkerKey(differentSource));
+    expect(evtxMarkerLineId(missingId)).not.toBe(evtxMarkerLineId(differentSource));
+  });
+
   it("derives display terms without changing the centralized match predicate", () => {
     const quickFilter = {
       ...DEFAULT_EVTX_QUICK_FILTER,

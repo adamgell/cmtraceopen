@@ -65,10 +65,12 @@ export function evtxMarkerLineId(record: EvtxRecord, occurrenceKey?: string): nu
 function evtxOccurrenceKey(record: EvtxRecord): string {
   return [
     record.timestampEpoch,
+    record.eventRecordIdText ?? "",
     record.eventId,
     record.provider,
     record.message,
     record.eventData.map((field) => `${field.name}=${field.value}`).join("\u001e"),
+    record.rawXml,
   ].join("\u001f");
 }
 
