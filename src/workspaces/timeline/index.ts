@@ -28,8 +28,8 @@ export const timelineWorkspace: WorkspaceDefinition = {
   },
   onOpenSource: async (source, trigger) => {
     useUiStore.getState().ensureWorkspaceVisible("timeline", trigger);
-    const { openTimelineSource } = await import("./open-timeline-source");
     try {
+      const { openTimelineSource } = await import("./open-timeline-source");
       await openTimelineSource(source);
     } catch (error) {
       console.error("[timeline] failed to open source", {

@@ -572,15 +572,6 @@ export async function getKnownSourceMetadataById(
 
   return knownSources.find((source) => source.id === sourceId) ?? null;
 }
-export function loadSelectedLogFile(
-  filePath: string,
-  source: LogSource,
-): Promise<ParseResult | null>;
-export function loadSelectedLogFile(
-  filePath: string,
-  source: LogSource,
-  switchGeneration: number,
-): Promise<ParseResult | null>;
 export async function loadSelectedLogFile(
   filePath: string,
   source: LogSource,

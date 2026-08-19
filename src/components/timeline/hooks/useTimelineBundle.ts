@@ -1,12 +1,12 @@
 import { useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { buildTimeline } from "../../../lib/commands";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import type { TimelineBundle } from "../../../types/timeline";
 
 export async function buildTimelineFromSources(
   sources: { path: string; displayName?: string }[],
 ): Promise<TimelineBundle> {
-  const bundle = await invoke<TimelineBundle>("build_timeline_cmd", { sources });
+  const bundle = await buildTimeline(sources);
   useTimelineStore.getState().setBundle(bundle);
   return bundle;
 }

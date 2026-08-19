@@ -12,6 +12,7 @@ import {
   graphCancelAuthentication,
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
+  buildTimeline,
   listLogFolder,
   openLogFile,
   parseFilesBatch,
@@ -128,9 +129,9 @@ describe("parse and folder IPC response validation", () => {
       .mockResolvedValueOnce([parseResult])
       .mockResolvedValueOnce(folderListing);
 
-    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).resolves.toEqual([
-      parseResult,
-    ]);
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).resolves.toEqual(
+      [parseResult],
+    );
     await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
   });
 
@@ -151,6 +152,77 @@ describe("parse and folder IPC response validation", () => {
       "invalid response",
     );
     await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");
+  });
+});
+
+function validTimelineBundle() {
+  return {
+    id: "timeline-1",
+    sources: [
+      {
+        idx: 0,
+        kind: "intuneEvents",
+        path: "C:\\Logs",
+        displayName: "Logs",
+        color: "#2563eb",
+        entryCount: 1,
+      },
+    ],
+    timeRangeMs: [100, 200],
+    totalEntries: 1,
+    incidents: [
+      {
+        id: 0,
+        tsStartMs: 100,
+        tsEndMs: 200,
+        signalCount: 2,
+        sourceCount: 2,
+        confidence: 0.5,
+        anchorEventRef: null,
+        anchorGuid: null,
+        summary: "Overlapping failures",
+      },
+    ],
+    deniedGuids: [],
+    errors: [],
+    tunables: {
+      overlapWindowMs: 5_000,
+      minSourceCount: 2,
+      maxIncidentSpanMs: 60_000,
+      enabledSignalKinds: ["errorSeverity"],
+    },
+  };
+}
+
+describe("timeline IPC response validation", () => {
+  it("preserves a valid timeline bundle", async () => {
+    const bundle = validTimelineBundle();
+    vi.mocked(invoke).mockResolvedValue(bundle);
+
+    await expect(
+      buildTimeline([{ path: "C:\\Logs", displayName: "Logs" }]),
+    ).resolves.toEqual(bundle);
+    expect(invoke).toHaveBeenCalledWith("build_timeline_cmd", {
+      sources: [{ path: "C:\\Logs", displayName: "Logs" }],
+    });
+  });
+
+  it("rejects a timeline bundle with malformed nested source data", async () => {
+    const bundle = validTimelineBundle();
+    const malformedBundle = {
+      ...bundle,
+      sources: [
+        {
+          ...bundle.sources[0],
+          kind: { logFile: { parserKind: "not-a-parser" } },
+        },
+      ],
+    };
+    vi.mocked(invoke).mockResolvedValue(malformedBundle);
+
+    await expect(buildTimeline([{ path: "C:\\Logs" }])).rejects.toThrow(
+      "Command 'build_timeline_cmd' returned an invalid response.",
+    );
   });
 });
 
@@ -249,7 +321,9 @@ describe("SCCM product-path IPC boundary", () => {
       .mockResolvedValueOnce(result)
       .mockResolvedValueOnce(undefined);
 
-    await expect(authorizeSccmAdvancedCapture(request)).resolves.toBe(capability);
+    await expect(authorizeSccmAdvancedCapture(request)).resolves.toBe(
+      capability,
+    );
     await expect(
       captureSccmAdvancedDiagnostics(capability.capabilityHandle),
     ).resolves.toBe(result);
@@ -257,9 +331,13 @@ describe("SCCM product-path IPC boundary", () => {
       cancelSccmAdvancedCapture(capability.capabilityHandle),
     ).resolves.toBeUndefined();
 
-    expect(invoke).toHaveBeenNthCalledWith(1, "authorize_sccm_advanced_capture", {
-      request,
-    });
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "authorize_sccm_advanced_capture",
+      {
+        request,
+      },
+    );
     expect(invoke).toHaveBeenNthCalledWith(
       2,
       "capture_sccm_advanced_diagnostics",

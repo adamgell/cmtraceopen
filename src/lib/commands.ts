@@ -49,6 +49,7 @@ import type {
   SccmAdvancedCaptureCapability,
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
+import type { TimelineBundle } from "../types/timeline";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -406,6 +407,130 @@ function isFolderListingResponse(value: unknown): value is FolderListingResult {
       isCommandRecord(value.bundleMetadata))
   );
 }
+const TIMELINE_PARSER_KINDS = new Set([
+  "ccm",
+  "simple",
+  "timestamped",
+  "plain",
+  "iisW3c",
+  "panther",
+  "cbs",
+  "dism",
+  "reportingEvents",
+  "msi",
+  "psadtLegacy",
+  "intuneMacOs",
+  "intuneDeviceInventory",
+  "dhcp",
+  "burn",
+  "patchMyPcDetection",
+  "registry",
+  "secureBootLog",
+  "dnsDebug",
+  "dnsAudit",
+  "cmtLog",
+  "companyPortal",
+]);
+
+const TIMELINE_SIGNAL_KINDS = new Set([
+  "errorSeverity",
+  "knownErrorCode",
+  "imeFailed",
+]);
+
+function isTimelineSourceKind(value: unknown): boolean {
+  if (value === "intuneEvents") return true;
+  if (!isCommandRecord(value) || !isCommandRecord(value.logFile)) {
+    return false;
+  }
+  return (
+    typeof value.logFile.parserKind === "string" &&
+    TIMELINE_PARSER_KINDS.has(value.logFile.parserKind)
+  );
+}
+
+function isTimelineSourceMeta(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.idx) &&
+    isTimelineSourceKind(value.kind) &&
+    typeof value.path === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.color === "string" &&
+    isFiniteCommandNumber(value.entryCount)
+  );
+}
+
+function isTimelineIncident(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.id) &&
+    isFiniteCommandNumber(value.tsStartMs) &&
+    isFiniteCommandNumber(value.tsEndMs) &&
+    isFiniteCommandNumber(value.signalCount) &&
+    isFiniteCommandNumber(value.sourceCount) &&
+    isFiniteCommandNumber(value.confidence) &&
+    (value.anchorEventRef === undefined ||
+      value.anchorEventRef === null ||
+      (Array.isArray(value.anchorEventRef) &&
+        value.anchorEventRef.length === 2 &&
+        value.anchorEventRef.every(isFiniteCommandNumber))) &&
+    (value.anchorGuid === undefined ||
+      value.anchorGuid === null ||
+      typeof value.anchorGuid === "string") &&
+    typeof value.summary === "string"
+  );
+}
+
+function isTimelineError(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.message === "string"
+  );
+}
+
+function isTimelineTunables(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.overlapWindowMs) &&
+    isFiniteCommandNumber(value.minSourceCount) &&
+    isFiniteCommandNumber(value.maxIncidentSpanMs) &&
+    Array.isArray(value.enabledSignalKinds) &&
+    value.enabledSignalKinds.every(
+      (kind) => typeof kind === "string" && TIMELINE_SIGNAL_KINDS.has(kind),
+    )
+  );
+}
+
+function isTimelineBundleResponse(value: unknown): value is TimelineBundle {
+  return (
+    isCommandRecord(value) &&
+    typeof value.id === "string" &&
+    Array.isArray(value.sources) &&
+    value.sources.every(isTimelineSourceMeta) &&
+    Array.isArray(value.timeRangeMs) &&
+    value.timeRangeMs.length === 2 &&
+    value.timeRangeMs.every(isFiniteCommandNumber) &&
+    isFiniteCommandNumber(value.totalEntries) &&
+    Array.isArray(value.incidents) &&
+    value.incidents.every(isTimelineIncident) &&
+    isStringArray(value.deniedGuids) &&
+    Array.isArray(value.errors) &&
+    value.errors.every(isTimelineError) &&
+    isTimelineTunables(value.tunables)
+  );
+}
+
+function decodeTimelineBundle(
+  value: unknown,
+  commandName: string,
+): TimelineBundle {
+  if (!isTimelineBundleResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
 
 function invalidCommandResponse(commandName: string): never {
   throw new Error(`Command '${commandName}' returned an invalid response.`);
@@ -631,6 +756,12 @@ export async function listLogFolder(
   path: string,
 ): Promise<FolderListingResult> {
   return invokeCommand("list_log_folder", { path });
+}
+
+export async function buildTimeline(
+  sources: { path: string; displayName?: string }[],
+): Promise<TimelineBundle> {
+  return invokeCommand("build_timeline_cmd", { sources });
 }
 
 export async function inspectEvidenceBundle(
@@ -1446,10 +1577,36 @@ function decodeSecureBootAnalysisResult(
     scriptResult: isNullableCommandRecord,
   });
 }
+
+const decodeSccmCaptureResult: CommandDecoder<SccmCaptureResult> = (
+  value,
+  commandName,
+) =>
+  decodeRecordResponse<SccmCaptureResult>(value, commandName, {
+    bundleRoot: (field) => typeof field === "string",
+    capturedAtUtc: (field) => typeof field === "string",
+    roles: isStringArray,
+    sources: isCommandRecordArray,
+    artifactCount: isFiniteCommandNumber,
+    retainedBytes: isFiniteCommandNumber,
+  });
+
+const decodeEspSessionEnvelope: CommandDecoder<EspSessionEnvelope> = (
+  value,
+  commandName,
+) =>
+  decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
+    sessionId: (field) => typeof field === "string",
+    requestId: (field) => typeof field === "string",
+    sequence: isFiniteCommandNumber,
+    state: (field) => typeof field === "string",
+    snapshot: isCommandRecord,
+  });
 const COMMAND_DECODERS = {
   open_log_file: decodeParseResult,
   parse_files_batch: decodeParseResults,
   list_log_folder: decodeFolderListingResult,
+  build_timeline_cmd: decodeTimelineBundle,
   inspect_evidence_bundle: (value, commandName) =>
     decodeRecordResponse<EvidenceBundleDetails>(value, commandName, {
       bundleRootPath: (field) => typeof field === "string",
@@ -1572,15 +1729,7 @@ const COMMAND_DECODERS = {
       issues: isCommandRecordArray,
       advancedSources: isCommandRecordArray,
     }),
-  capture_sccm_diagnostics: (value, commandName) =>
-    decodeRecordResponse<SccmCaptureResult>(value, commandName, {
-      bundleRoot: (field) => typeof field === "string",
-      capturedAtUtc: (field) => typeof field === "string",
-      roles: isStringArray,
-      sources: isCommandRecordArray,
-      artifactCount: isFiniteCommandNumber,
-      retainedBytes: isFiniteCommandNumber,
-    }),
+  capture_sccm_diagnostics: decodeSccmCaptureResult,
   authorize_sccm_advanced_capture: (value, commandName) =>
     decodeRecordResponse<SccmAdvancedCaptureCapability>(value, commandName, {
       capabilityHandle: (field) => typeof field === "string",
@@ -1591,15 +1740,7 @@ const COMMAND_DECODERS = {
       pathClass: (field) => typeof field === "string",
       sourceVersion: isNullableCommandString,
     }),
-  capture_sccm_advanced_diagnostics: (value, commandName) =>
-    decodeRecordResponse<SccmCaptureResult>(value, commandName, {
-      bundleRoot: (field) => typeof field === "string",
-      capturedAtUtc: (field) => typeof field === "string",
-      roles: isStringArray,
-      sources: isCommandRecordArray,
-      artifactCount: isFiniteCommandNumber,
-      retainedBytes: isFiniteCommandNumber,
-    }),
+  capture_sccm_advanced_diagnostics: decodeSccmCaptureResult,
   cancel_sccm_advanced_capture: decodeUnitResponse,
   reveal_in_file_manager: decodeUnitResponse,
   get_update_policy: (value, commandName) =>
@@ -1675,22 +1816,8 @@ const COMMAND_DECODERS = {
       graph: isNullableCommandRecord,
     }),
   export_esp_session: decodeUnitResponse,
-  start_esp_diagnostics_session: (value, commandName) =>
-    decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
-      sessionId: (field) => typeof field === "string",
-      requestId: (field) => typeof field === "string",
-      sequence: isFiniteCommandNumber,
-      state: (field) => typeof field === "string",
-      snapshot: isCommandRecord,
-    }),
-  get_esp_diagnostics_session: (value, commandName) =>
-    decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
-      sessionId: (field) => typeof field === "string",
-      requestId: (field) => typeof field === "string",
-      sequence: isFiniteCommandNumber,
-      state: (field) => typeof field === "string",
-      snapshot: isCommandRecord,
-    }),
+  start_esp_diagnostics_session: decodeEspSessionEnvelope,
+  get_esp_diagnostics_session: decodeEspSessionEnvelope,
   stop_esp_diagnostics_session: decodeUnitResponse,
   restart_esp_as_administrator: (value, commandName) =>
     decodeRecordResponse<EspRelaunchResult>(value, commandName, {

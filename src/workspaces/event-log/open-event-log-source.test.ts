@@ -19,6 +19,7 @@ describe("openEventLogSource", () => {
     vi.clearAllMocks();
     useEvtxStore.setState({
       parseFiles: vi.fn(async () => undefined),
+      setLoadError: vi.fn(),
     } as never);
   });
 
@@ -111,6 +112,9 @@ describe("openEventLogSource", () => {
         pathKind: "folder",
       }),
     ).rejects.toThrow("No .evtx files were found for that known source.");
+    expect(useEvtxStore.getState().setLoadError).toHaveBeenCalledWith(
+      "No .evtx files were found for that known source.",
+    );
     expect(useEvtxStore.getState().parseFiles).not.toHaveBeenCalled();
   });
 
@@ -159,5 +163,8 @@ describe("openEventLogSource", () => {
     await expect(
       openEventLogSource({ kind: "folder", path: "/tmp/empty" }),
     ).rejects.toThrow(/No \.evtx files/);
+    expect(useEvtxStore.getState().setLoadError).toHaveBeenCalledWith(
+      "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.",
+    );
   });
 });

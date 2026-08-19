@@ -95,4 +95,25 @@ describe("INTUNE-009 analyzeIntuneLogs Graph option", () => {
       { includeLiveEventLogs: true, graphApiEnabled: false },
     );
   });
+
+  it("excludes live event logs for other known sources", async () => {
+    useUiStore.setState({ graphApiEnabled: false });
+    const onOpen = createOnOpen("intune");
+
+    await onOpen(
+      {
+        kind: "known",
+        sourceId: "windows-cbs-logs",
+        defaultPath: "C:/Windows/Logs/CBS",
+        pathKind: "folder",
+      },
+      "test.known-source",
+    );
+
+    expect(analyzeIntuneLogsMock).toHaveBeenCalledWith(
+      "C:/Windows/Logs/CBS",
+      expect.any(String),
+      { includeLiveEventLogs: false, graphApiEnabled: false },
+    );
+  });
 });

@@ -26,7 +26,10 @@ function incomingFromListing(
 let timelineOpenQueue: Promise<void> = Promise.resolve();
 
 function enqueueTimelineOpen(operation: () => Promise<void>): Promise<void> {
-  const queued = timelineOpenQueue.then(operation);
+  const queued = timelineOpenQueue.then(() => {
+    useTimelineStore.getState().setLoadError(null);
+    return operation();
+  });
   timelineOpenQueue = queued.catch((error) => {
     useTimelineStore
       .getState()

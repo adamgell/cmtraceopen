@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listLogFolder } from "../../lib/commands";
 import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
 import { useTimelineStore } from "../../stores/timeline-store";
+import type { TimelineBundle } from "../../types/timeline";
 import {
   openTimelineSource,
   replaceTimelineSource,
@@ -31,18 +32,35 @@ function deferred<T>() {
   };
 }
 
-type TimelineBuildResult = Awaited<ReturnType<typeof buildTimelineFromSources>>;
-
-function bundleFor(paths: string[]): TimelineBuildResult {
+function bundleFor(paths: string[]): TimelineBundle {
   return {
-    sources: paths.map((path, idx) => ({ path, idx })),
-  } as TimelineBuildResult;
+    id: "fixture",
+    sources: paths.map((path, idx) => ({
+      idx,
+      kind: "intuneEvents",
+      path,
+      displayName: path,
+      color: "#000000",
+      entryCount: 0,
+    })),
+    timeRangeMs: [0, 0],
+    totalEntries: 0,
+    incidents: [],
+    deniedGuids: [],
+    errors: [],
+    tunables: {
+      overlapWindowMs: 5_000,
+      minSourceCount: 2,
+      maxIncidentSpanMs: 60_000,
+      enabledSignalKinds: ["errorSeverity"],
+    },
+  };
 }
 
 describe("openTimelineSource", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useTimelineStore.setState({ bundle: null } as never);
+    useTimelineStore.setState({ bundle: null, loadError: null });
   });
 
   it("builds a timeline from a single file", async () => {
@@ -103,8 +121,8 @@ describe("openTimelineSource", () => {
 
   it("unions folder files with an existing timeline", async () => {
     useTimelineStore.setState({
-      bundle: { sources: [{ path: "/tmp/existing.log" }] },
-    } as never);
+      bundle: bundleFor(["/tmp/existing.log"]),
+    });
     vi.mocked(listLogFolder).mockResolvedValue({
       sourceKind: "folder",
       source: { kind: "folder", path: "/tmp/logs" },
@@ -134,10 +152,10 @@ describe("openTimelineSource", () => {
   });
   it("replaces pending timeline appends instead of merging stale sources", async () => {
     useTimelineStore.setState({
-      bundle: { sources: [{ path: "/tmp/existing.log" }] },
-    } as never);
-    const firstBuild = deferred<TimelineBuildResult>();
-    const secondBuild = deferred<TimelineBuildResult>();
+      bundle: bundleFor(["/tmp/existing.log"]),
+    });
+    const firstBuild = deferred<TimelineBundle>();
+    const secondBuild = deferred<TimelineBundle>();
     vi.mocked(buildTimelineFromSources)
       .mockImplementationOnce(async () => {
         const bundle = await firstBuild.promise;
@@ -172,8 +190,8 @@ describe("openTimelineSource", () => {
   });
   it("clears the current timeline for an empty replacement folder", async () => {
     useTimelineStore.setState({
-      bundle: { sources: [{ path: "/tmp/existing.log" }] },
-    } as never);
+      bundle: bundleFor(["/tmp/existing.log"]),
+    });
     vi.mocked(listLogFolder).mockResolvedValue({
       sourceKind: "folder",
       source: { kind: "folder", path: "/tmp/empty-replacement" },
@@ -191,8 +209,8 @@ describe("openTimelineSource", () => {
 
   it("clears the current timeline before a replacement load failure", async () => {
     useTimelineStore.setState({
-      bundle: { sources: [{ path: "/tmp/existing.log" }] },
-    } as never);
+      bundle: bundleFor(["/tmp/existing.log"]),
+    });
     vi.mocked(listLogFolder).mockRejectedValue(new Error("access denied"));
 
     await expect(
@@ -200,6 +218,7 @@ describe("openTimelineSource", () => {
     ).rejects.toThrow("access denied");
 
     expect(useTimelineStore.getState().bundle).toBeNull();
+    expect(useTimelineStore.getState().loadError).toBe("access denied");
   });
 
   it("adds the folder itself when IME logs are present", async () => {
@@ -234,8 +253,9 @@ describe("openTimelineSource", () => {
 
   it("does not treat an empty folder as an IntuneEvents source", async () => {
     useTimelineStore.setState({
-      bundle: { sources: [{ path: "/tmp/existing.log" }] },
-    } as never);
+      bundle: bundleFor(["/tmp/existing.log"]),
+      loadError: "stale error",
+    });
     vi.mocked(listLogFolder).mockResolvedValue({
       sourceKind: "folder",
       source: { kind: "folder", path: "/tmp/empty" },
@@ -244,11 +264,12 @@ describe("openTimelineSource", () => {
 
     await openTimelineSource({ kind: "folder", path: "/tmp/empty" });
     expect(buildTimelineFromSources).not.toHaveBeenCalled();
+    expect(useTimelineStore.getState().loadError).toBeNull();
   });
   it("serializes overlapping opens so later files are not lost", async () => {
     const listing = deferred<Awaited<ReturnType<typeof listLogFolder>>>();
-    const firstBuild = deferred<TimelineBuildResult>();
-    const secondBuild = deferred<TimelineBuildResult>();
+    const firstBuild = deferred<TimelineBundle>();
+    const secondBuild = deferred<TimelineBundle>();
     const folderSource = { kind: "folder" as const, path: "/tmp/logs" };
     const fileSource = { kind: "file" as const, path: "/tmp/other.log" };
 
