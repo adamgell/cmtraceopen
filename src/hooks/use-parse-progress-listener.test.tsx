@@ -7,10 +7,7 @@ const eventMocks = vi.hoisted(() => ({
   listener: null as ((event: { payload: unknown }) => void) | null,
   unlisten: vi.fn(),
   listen: vi.fn(
-    async (
-      _event: string,
-      listener: (event: { payload: unknown }) => void,
-    ) => {
+    async (_event: string, listener: (event: { payload: unknown }) => void) => {
       eventMocks.listener = listener;
       return eventMocks.unlisten;
     },
@@ -139,7 +136,7 @@ describe("useParseProgressListener", () => {
     expect(useLogStore.getState().folderLoadCompletedFiles).toBe(3);
   });
 
-  it("resets the monotonic counter for a new request", async () => {
+  it("resets ownership before a new request event arrives", async () => {
     activateProgress(7);
     renderHook(() => useParseProgressListener());
     await waitFor(() => expect(eventMocks.listener).not.toBeNull());
@@ -153,9 +150,6 @@ describe("useParseProgressListener", () => {
         folderLoadCompletedFiles: 0,
         folderLoadCurrentFile: "",
       });
-    });
-
-    act(() => {
       eventMocks.listener?.({
         payload: progress({ requestId: 8, globalCompleted: 1 }),
       });

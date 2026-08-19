@@ -3,8 +3,13 @@ import { listLogFolder } from "../../lib/commands";
 import { useTimelineStore } from "../../stores/timeline-store";
 import type { FolderEntry, LogSource } from "../../types/log";
 
-function incomingFromListing(folderPath: string, entries: FolderEntry[]): string[] {
-  const childPaths = entries.filter((entry) => !entry.isDir).map((entry) => entry.path);
+function incomingFromListing(
+  folderPath: string,
+  entries: FolderEntry[],
+): string[] {
+  const childPaths = entries
+    .filter((entry) => !entry.isDir)
+    .map((entry) => entry.path);
   if (childPaths.length === 0) {
     return [];
   }
@@ -37,9 +42,11 @@ async function appendTimelineSources(incoming: string[]): Promise<void> {
 
   const existing =
     useTimelineStore.getState().bundle?.sources.map((item) => item.path) ?? [];
-  const merged = Array.from(new Set([...existing, ...incoming])).map((path) => ({
-    path,
-  }));
+  const merged = Array.from(new Set([...existing, ...incoming])).map(
+    (path) => ({
+      path,
+    }),
+  );
   await buildTimelineFromSources(merged);
 }
 
@@ -78,6 +85,7 @@ export function openTimelineSource(source: LogSource): Promise<void> {
 
 export function replaceTimelineSource(source: LogSource): Promise<void> {
   return enqueueTimelineOpen(async () => {
+    useTimelineStore.getState().setBundle(null);
     await replaceTimelineSources(await incomingFromSource(source));
   });
 }

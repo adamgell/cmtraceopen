@@ -63,9 +63,7 @@ export function useParseProgressListener() {
   const isFolderLoading = useLogStore(
     (state) => state.folderLoadProgress !== null,
   );
-  const folderLoadRequestId = useLogStore(
-    (state) => state.folderLoadRequestId,
-  );
+  const folderLoadRequestId = useLogStore((state) => state.folderLoadRequestId);
   const globalCompletedRef = useRef(0);
   const trackedRequestIdRef = useRef<number | null>(null);
 
@@ -98,6 +96,13 @@ export function useParseProgressListener() {
           return;
         }
 
+        // Reset synchronously from the event's ownership boundary. The
+        // request-id effect normally keeps this ref current, but an event can
+        // arrive before React flushes that effect after a new load starts.
+        if (trackedRequestIdRef.current !== state.folderLoadRequestId) {
+          trackedRequestIdRef.current = state.folderLoadRequestId;
+          globalCompletedRef.current = 0;
+        }
         const globalTotal = state.folderLoadTotalFiles;
         if (
           globalTotal === null ||

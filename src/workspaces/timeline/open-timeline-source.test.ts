@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listLogFolder } from "../../lib/commands";
 import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
 import { useTimelineStore } from "../../stores/timeline-store";
-import { openTimelineSource, replaceTimelineSource } from "./open-timeline-source";
+import {
+  openTimelineSource,
+  replaceTimelineSource,
+} from "./open-timeline-source";
 
 vi.mock("../../lib/commands", () => ({
   listLogFolder: vi.fn(),
@@ -106,8 +109,20 @@ describe("openTimelineSource", () => {
       sourceKind: "folder",
       source: { kind: "folder", path: "/tmp/logs" },
       entries: [
-        { name: "a.log", path: "/tmp/logs/a.log", isDir: false, sizeBytes: 1, modifiedUnixMs: null },
-        { name: "dir", path: "/tmp/logs/dir", isDir: true, sizeBytes: null, modifiedUnixMs: null },
+        {
+          name: "a.log",
+          path: "/tmp/logs/a.log",
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+        {
+          name: "dir",
+          path: "/tmp/logs/dir",
+          isDir: true,
+          sizeBytes: null,
+          modifiedUnixMs: null,
+        },
       ],
     });
 
@@ -154,6 +169,37 @@ describe("openTimelineSource", () => {
 
     secondBuild.resolve(bundleFor(["/tmp/new.log"]));
     await Promise.all([append, replacement]);
+  });
+  it("clears the current timeline for an empty replacement folder", async () => {
+    useTimelineStore.setState({
+      bundle: { sources: [{ path: "/tmp/existing.log" }] },
+    } as never);
+    vi.mocked(listLogFolder).mockResolvedValue({
+      sourceKind: "folder",
+      source: { kind: "folder", path: "/tmp/empty-replacement" },
+      entries: [],
+    });
+
+    await replaceTimelineSource({
+      kind: "folder",
+      path: "/tmp/empty-replacement",
+    });
+
+    expect(useTimelineStore.getState().bundle).toBeNull();
+    expect(buildTimelineFromSources).not.toHaveBeenCalled();
+  });
+
+  it("clears the current timeline before a replacement load failure", async () => {
+    useTimelineStore.setState({
+      bundle: { sources: [{ path: "/tmp/existing.log" }] },
+    } as never);
+    vi.mocked(listLogFolder).mockRejectedValue(new Error("access denied"));
+
+    await expect(
+      replaceTimelineSource({ kind: "folder", path: "/tmp/denied" }),
+    ).rejects.toThrow("access denied");
+
+    expect(useTimelineStore.getState().bundle).toBeNull();
   });
 
   it("adds the folder itself when IME logs are present", async () => {
@@ -252,15 +298,11 @@ describe("openTimelineSource", () => {
       { path: "/tmp/other.log" },
     ]);
 
-    secondBuild.resolve(
-      bundleFor(["/tmp/logs/a.log", "/tmp/other.log"]),
-    );
+    secondBuild.resolve(bundleFor(["/tmp/logs/a.log", "/tmp/other.log"]));
     await Promise.all([folderOpen, fileOpen]);
 
-    expect(useTimelineStore.getState().bundle?.sources.map((s) => s.path)).toEqual([
-      "/tmp/logs/a.log",
-      "/tmp/other.log",
-    ]);
+    expect(
+      useTimelineStore.getState().bundle?.sources.map((s) => s.path),
+    ).toEqual(["/tmp/logs/a.log", "/tmp/other.log"]);
   });
-
 });
