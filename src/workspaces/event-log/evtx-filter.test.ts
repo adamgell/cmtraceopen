@@ -130,6 +130,39 @@ describe("quick filter semantics", () => {
       visible(quick({ query: "Ada", scope: "allColumns" }))
     ).toHaveLength(1);
   });
+  it("keeps visible-column quick filters out of hidden provider values", () => {
+    const providerOnly = record({
+      provider: "HiddenProvider",
+      message: "Visible message",
+    });
+    expect(
+      visible(
+        quick({ query: "HiddenProvider", scope: "visibleColumns" }),
+        [providerOnly]
+      )
+    ).toHaveLength(0);
+    expect(
+      visible(
+        quick({ query: "Visible message", scope: "visibleColumns" }),
+        [providerOnly]
+      )
+    ).toHaveLength(1);
+  });
+
+  it("applies the ordinary provider search used by the timeline and export", () => {
+    const providerOnly = record({ provider: "ProviderOnly", message: "Other message" });
+    expect(
+      selectVisibleRecords({
+        records: [providerOnly],
+        selectedChannels: new Set(["Application"]),
+        filterLevels: new Set(["Information"]),
+        filterEventIds: "",
+        filterSearch: "ProviderOnly",
+        quickFilter: quick(),
+        visibleColumns: ["message"],
+      })
+    ).toHaveLength(1);
+  });
 
   it("can hide matching records instead of showing them", () => {
     expect(visible(quick({ query: "Boot", action: "hide" }))).toHaveLength(0);
