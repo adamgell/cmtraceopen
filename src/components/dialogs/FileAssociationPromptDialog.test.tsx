@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   associateLogFilesWithApp,
   setFileAssociationPromptSuppressed,
@@ -12,13 +12,21 @@ vi.mock("../../lib/commands", () => ({
 }));
 
 describe("FileAssociationPromptDialog", () => {
+  let opener: HTMLButtonElement;
+
+  beforeEach(() => {
+    opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+  });
+
+  afterEach(() => {
+    opener.remove();
+  });
   it("traps focus and restores the opener when closed", () => {
     vi.mocked(associateLogFilesWithApp).mockResolvedValue(undefined);
     vi.mocked(setFileAssociationPromptSuppressed).mockResolvedValue(undefined);
 
-    const opener = document.createElement("button");
-    document.body.appendChild(opener);
-    opener.focus();
 
     const rendered = render(
       <FileAssociationPromptDialog isOpen onClose={() => {}} />,
@@ -46,7 +54,6 @@ describe("FileAssociationPromptDialog", () => {
       <FileAssociationPromptDialog isOpen={false} onClose={() => {}} />,
     );
     expect(document.activeElement).toBe(opener);
-    opener.remove();
   });
 
   it("keeps focus on the dialog surface while submission disables its controls", () => {
@@ -54,9 +61,6 @@ describe("FileAssociationPromptDialog", () => {
       new Promise<void>(() => {}),
     );
 
-    const opener = document.createElement("button");
-    document.body.appendChild(opener);
-    opener.focus();
 
     const rendered = render(
       <FileAssociationPromptDialog isOpen onClose={() => {}} />,
@@ -76,6 +80,5 @@ describe("FileAssociationPromptDialog", () => {
       <FileAssociationPromptDialog isOpen={false} onClose={() => {}} />,
     );
     expect(document.activeElement).toBe(opener);
-    opener.remove();
   });
 });

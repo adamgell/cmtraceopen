@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { useFilterStore } from "../../stores/filter-store";
 import { FilterDialog } from "./FilterDialog";
+
+  afterEach(() => {
+    useFilterStore.getState().clearFilter();
+  });
 
 describe("FilterDialog", () => {
   it("exposes a dialog landmark when open", () => {
@@ -107,5 +112,26 @@ describe("FilterDialog", () => {
     );
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+  it("moves focus to the dialog surface when filtering disables controls", () => {
+    render(
+      <FilterDialog
+        isOpen
+        onClose={() => {}}
+        onApply={async () => undefined}
+        currentClauses={[]}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Filter" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    act(() => {
+      useFilterStore.getState().setIsFiltering(true);
+    });
+
+    expect(document.activeElement).toBe(dialog);
   });
 });

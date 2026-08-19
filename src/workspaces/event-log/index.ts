@@ -31,15 +31,19 @@ export const eventLogWorkspace: WorkspaceDefinition = {
       const { openEventLogSource } = await import("./open-event-log-source");
       await openEventLogSource(source);
     } catch (error) {
-      const { useEvtxStore } = await import("./evtx-store");
-      useEvtxStore.getState().setLoadError(
-        error instanceof Error ? error.message : String(error),
-      );
       console.error("[event-log] failed to open source", {
         source,
         trigger,
         error,
       });
+      try {
+        const { useEvtxStore } = await import("./evtx-store");
+        useEvtxStore.getState().setLoadError(
+          error instanceof Error ? error.message : String(error),
+        );
+      } catch (storeError) {
+        console.error("[event-log] failed to record load error", storeError);
+      }
       if (trigger === "drag-drop.path-open") {
         throw error;
       }

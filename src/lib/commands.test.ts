@@ -152,12 +152,14 @@ describe("parse and folder IPC response validation", () => {
       });
 
     await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
-      "invalid response",
+      "Command 'open_log_file' returned an invalid response.",
     );
     await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).rejects.toThrow(
-      "invalid response",
+      "Command 'parse_files_batch' returned an invalid response.",
     );
-    await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");
+    await expect(listLogFolder("C:\\Logs")).rejects.toThrow(
+      "Command 'list_log_folder' returned an invalid response.",
+    );
   });
 });
 function validIntuneAnalysis() {
