@@ -71,6 +71,26 @@ describe("UpdateDialog", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+  it("keeps focus inside the dialog when downloading starts", () => {
+    const { props, view } = renderDialog({
+      updateInfo: availableUpdate(),
+    });
+    const downloadButton = screen.getByRole("button", { name: "Download & install" });
+    downloadButton.focus();
+
+    view.rerender(
+      <UpdateDialog
+        {...props}
+        isDownloading={true}
+        downloadProgress={0.42}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Check for Updates" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    view.unmount();
+  });
+
 
   it("shows Cancel while checking", () => {
     const { props } = renderDialog({ isChecking: true });

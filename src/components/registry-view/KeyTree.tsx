@@ -72,9 +72,23 @@ export function KeyTree() {
     (virtualRow) => virtualRow.index === selectedIndex,
   );
 
+  const handleFocus = useCallback(() => {
+    if (selectedIndex < 0 && flatRows.length > 0) {
+      setSelectedKeyPath(flatRows[0].node.fullPath);
+    }
+  }, [flatRows, selectedIndex, setSelectedKeyPath]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (selectedIndex < 0) return;
+      if (selectedIndex < 0) {
+        if (flatRows.length === 0) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const initialIndex = e.key === "ArrowUp" ? flatRows.length - 1 : 0;
+          setSelectedKeyPath(flatRows[initialIndex].node.fullPath);
+        }
+        return;
+      }
       const row = flatRows[selectedIndex];
       if (!row) return;
 
@@ -86,16 +100,27 @@ export function KeyTree() {
         setSelectedKeyPath(flatRows[selectedIndex - 1].node.fullPath);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        if (
-          row.node.children.length > 0 &&
-          !expandedPaths.has(row.node.fullPath)
-        ) {
-          toggleExpanded(row.node.fullPath);
+        if (row.node.children.length > 0) {
+          if (!expandedPaths.has(row.node.fullPath)) {
+            toggleExpanded(row.node.fullPath);
+          } else {
+            const child = flatRows[selectedIndex + 1];
+            if (child && child.depth > row.depth) {
+              setSelectedKeyPath(child.node.fullPath);
+            }
+          }
         }
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         if (expandedPaths.has(row.node.fullPath)) {
           toggleExpanded(row.node.fullPath);
+        } else if (row.depth > 0) {
+          for (let index = selectedIndex - 1; index >= 0; index--) {
+            if (flatRows[index].depth < row.depth) {
+              setSelectedKeyPath(flatRows[index].node.fullPath);
+              break;
+            }
+          }
         }
       }
     },
@@ -119,6 +144,7 @@ export function KeyTree() {
           : undefined
       }
       tabIndex={0}
+      onFocus={handleFocus}
       onKeyDown={handleKeyDown}
       style={{
         height: "100%",
@@ -126,6 +152,7 @@ export function KeyTree() {
         outline: "none",
       }}
     >
+
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,

@@ -1,17 +1,8 @@
 import { useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import type { UpdateInfo } from "../../hooks/use-update-checker";
 import { getUpdateChannelLabel } from "../../lib/update-channel";
-
-/** Everything the browser would let Tab reach inside the modal. */
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(", ");
 
 interface UpdateDialogProps {
   isOpen: boolean;
@@ -39,66 +30,21 @@ export function UpdateDialog({
   onSkipVersion,
 }: UpdateDialogProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const surface = surfaceRef.current;
-    const target =
-      surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ?? surface;
-    target?.focus();
-
-    return () => {
-      previouslyFocused?.focus();
-    };
-  }, [isOpen]);
+  const focusKey = [
+    isChecking,
+    isDownloading,
+    updateInfo?.available ?? false,
+    updateInfo?.newVersion ?? "",
+    updateInfo?.canAutoUpdate ?? false,
+    Boolean(updateInfo?.error),
+  ].join(":");
+  useModalFocus(isOpen, surfaceRef, undefined, focusKey);
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (!isDownloading) onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-
-      const surface = surfaceRef.current;
-      if (!surface) return;
-
-      const focusable = Array.from(
-        surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-      );
-      if (focusable.length === 0) {
-        e.preventDefault();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-
-      if (!active || !surface.contains(active)) {
-        e.preventDefault();
-        first.focus();
-        return;
-      }
-      if (e.shiftKey && active === first) {
-        e.preventDefault();
-        last.focus();
-        return;
-      }
-      if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-      }
+      if (e.key === "Escape" && !isDownloading) onClose();
     };
-
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [isDownloading, isOpen, onClose]);

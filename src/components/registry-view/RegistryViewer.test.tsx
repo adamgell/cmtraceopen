@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RegistryViewer } from "./RegistryViewer";
 import { useRegistryStore } from "../../stores/registry-store";
@@ -106,6 +106,67 @@ describe("RegistryViewer", () => {
 
     fireEvent.click(treeItems[0]);
     expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+  });
+
+  it("initializes tree focus and navigates vertically", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const treeItems = screen.getAllByRole("treeitem");
+
+    fireEvent.focus(tree);
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+    expect(treeItems[0]).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[1].id);
+
+    fireEvent.keyDown(tree, { key: "ArrowUp" });
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+  });
+  it("initializes from an arrow key when no row is selected", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const treeItems = screen.getAllByRole("treeitem");
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
+    expect(treeItems[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("moves into the first child with ArrowRight from an expanded parent", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const treeItems = screen.getAllByRole("treeitem");
+
+    fireEvent.focus(tree);
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+
+    expect(tree).toHaveAttribute("aria-activedescendant", treeItems[1].id);
+  });
+
+  it("moves from a collapsed child to its parent with ArrowLeft", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+
+    fireEvent.focus(tree);
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    act(() => {
+      useRegistryStore
+        .getState()
+        .toggleExpanded("HKEY_LOCAL_MACHINE\\SYSTEM");
+    });
+
+    const collapsedItems = screen.getAllByRole("treeitem");
+    fireEvent.keyDown(tree, { key: "ArrowLeft" });
+
+    expect(tree).toHaveAttribute(
+      "aria-activedescendant",
+      collapsedItems[0].id,
+    );
   });
   it("keeps a selected registry row in the virtualized range", () => {
     const selectedPath = fixture.keys[1].path;

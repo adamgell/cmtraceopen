@@ -117,6 +117,7 @@ export function FilterDialog({
       );
       if (focusable.length === 0) {
         e.preventDefault();
+        surface.focus();
         return;
       }
 

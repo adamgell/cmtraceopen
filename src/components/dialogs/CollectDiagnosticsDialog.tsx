@@ -8,6 +8,7 @@ import {
 } from "../../lib/collection-categories";
 import { collectDiagnostics } from "../../lib/commands";
 import { useUiStore } from "../../stores/ui-store";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 
 interface CollectDiagnosticsDialogProps {
   isOpen: boolean;
@@ -17,6 +18,8 @@ interface CollectDiagnosticsDialogProps {
 export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnosticsDialogProps) {
   const setCollectionProgress = useUiStore((s) => s.setCollectionProgress);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  useModalFocus(isOpen, surfaceRef);
   const collectingRef = useRef(false);
 
   // Category-level enabled state (all enabled by default)
@@ -200,9 +203,11 @@ export function CollectDiagnosticsDialog({ isOpen, onClose }: CollectDiagnostics
       }}
     >
       <div
+        ref={surfaceRef}
         role="dialog"
         aria-modal="true"
         aria-label="Collect Diagnostics"
+        tabIndex={-1}
         style={{
           width: "520px",
           maxHeight: "80vh",
