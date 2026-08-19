@@ -260,6 +260,41 @@ describe("switchToTab", () => {
     );
     expect(useLogStore.getState().isLoading).toBe(false);
   });
+  it("returns null when a stale registry parse rejects", async () => {
+    const fileSourceA: LogSource = { kind: "file", path: fileA };
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    const registryResult: ParseResult = {
+      ...parseResult,
+      filePath: fileA,
+      parserSelection: {
+        ...parseResult.parserSelection,
+        parser: "registry",
+        implementation: "registry",
+      },
+    };
+    const parseError = new Error("registry fixture is unreadable");
+    let rejectRegistry!: (error: Error) => void;
+    const pendingRegistry = new Promise<RegistryParseResult>((_, reject) => {
+      rejectRegistry = reject;
+    });
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    commands.openLogFile.mockResolvedValueOnce(registryResult);
+    commands.parseRegistryFile.mockReturnValueOnce(pendingRegistry);
+
+    const pendingLoad = loadSelectedLogFile(fileA, fileSourceA);
+    await vi.waitFor(() => {
+      expect(commands.parseRegistryFile).toHaveBeenCalledWith(fileA);
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+    rejectRegistry(parseError);
+
+    await expect(pendingLoad).resolves.toBeNull();
+  });
   it("returns null when registry application becomes stale", async () => {
     const fileSourceA: LogSource = { kind: "file", path: fileA };
     const fileSourceB: LogSource = { kind: "file", path: fileB };

@@ -73,6 +73,7 @@ describe("ui-store", () => {
     });
 
     it("filters invalid dismissed paths during rehydration", async () => {
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
       localStorage.setItem(
         "cmtraceopen-ui-preferences",
         JSON.stringify({

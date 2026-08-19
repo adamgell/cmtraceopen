@@ -5,6 +5,7 @@ import {
   authorizeSccmAdvancedCapture,
   cancelSccmAdvancedCapture,
   captureSccmAdvancedDiagnostics,
+  analyzeIntuneLogs,
   discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
@@ -132,6 +133,11 @@ describe("parse and folder IPC response validation", () => {
     await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).resolves.toEqual(
       [parseResult],
     );
+    expect(invoke).toHaveBeenCalledWith("parse_files_batch", {
+      paths: ["C:\\Logs\\App.log"],
+      requestId: 7,
+      completedOffset: 0,
+    });
     await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
   });
 
@@ -154,6 +160,28 @@ describe("parse and folder IPC response validation", () => {
     await expect(listLogFolder("C:\\Logs")).rejects.toThrow("invalid response");
   });
 });
+describe("Intune IPC response validation", () => {
+  it("accepts structured diagnostics metadata", async () => {
+    const result = {
+      events: [],
+      downloads: [],
+      summary: {},
+      diagnostics: [],
+      sourceFile: "C:\\Logs\\IntuneManagementExtension.log",
+      sourceFiles: [],
+      diagnosticsCoverage: {},
+      diagnosticsConfidence: {},
+      repeatedFailures: [],
+      guidRegistry: {},
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(
+      analyzeIntuneLogs("C:\\Logs", "request-1"),
+    ).resolves.toEqual(result);
+  });
+});
+
 
 function validTimelineBundle() {
   return {

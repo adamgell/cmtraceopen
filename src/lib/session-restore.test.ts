@@ -19,21 +19,24 @@ const restoredLoadResult = {
   parseResult: null,
 };
 
-function sessionJson(clauses: unknown[]): string {
+function sessionJson(clauses: unknown[], tabCount = 1): string {
+  const tabs = Array.from({ length: tabCount }, (_, index) => {
+    const filePath = index === 0 ? "/tmp/app.log" : `/tmp/app-${index}.log`;
+    return {
+      filePath,
+      fileHash: "abc",
+      fileSize: 100,
+      selectedId: null,
+      scrollPosition: null,
+      activeColumns: [],
+    };
+  });
+
   return JSON.stringify({
     version: 1,
     savedAt: "2026-01-01T00:00:00Z",
     workspace: "log",
-    tabs: [
-      {
-        filePath: "/tmp/app.log",
-        fileHash: "abc",
-        fileSize: 100,
-        selectedId: null,
-        scrollPosition: null,
-        activeColumns: [],
-      },
-    ],
+    tabs,
     activeTabIndex: 0,
     mergedTabState: null,
     filters: {
@@ -73,10 +76,11 @@ describe("restoreSession filter restore (issue #193)", () => {
   });
 
   it("does not aggregate after an individual restore is superseded", async () => {
-    vi.mocked(readTextFile).mockResolvedValue(sessionJson([]));
+    vi.mocked(readTextFile).mockResolvedValue(sessionJson([], 2));
     vi.mocked(loadPathAsLogSource).mockResolvedValueOnce(null);
 
     await expect(restoreSession("/tmp/session.cmtrace")).resolves.toBeNull();
+    expect(loadPathAsLogSource).toHaveBeenCalledTimes(1);
     expect(loadFilesAsLogSource).not.toHaveBeenCalled();
   });
 

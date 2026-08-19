@@ -21,7 +21,7 @@ describe("openEventLogSource", () => {
     useEvtxStore.setState({
       parseFiles: vi.fn(async () => undefined),
       setLoadError: vi.fn(),
-    } as never);
+    });
   });
 
   it("parses a single evtx file", async () => {
@@ -35,7 +35,7 @@ describe("openEventLogSource", () => {
     useEvtxStore.setState({
       parseFiles,
       setLoadError: vi.fn(),
-    } as never);
+    });
     invoke.mockRejectedValueOnce(new Error("not a file"));
 
     await expect(

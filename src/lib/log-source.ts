@@ -176,6 +176,7 @@ async function applyParseResultToStore(
     try {
       registryData = await parseRegistryFile(selectedFilePath);
     } catch (err) {
+      if (!isCurrentTabSwitch(switchGeneration)) return false;
       console.error("[log-source] failed to load registry file", err);
       throw err;
     }
