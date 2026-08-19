@@ -234,7 +234,7 @@ pub fn query_channel(
     maps: &MapRegistry,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_with_progress(channel, maps, max_events, |_, _| {})
+    query_channel_with_progress(channel, maps, max_events, |_, _| Ok(()))
 }
 
 /// Queries a channel with server-side filtering.
@@ -255,8 +255,8 @@ pub fn query_channel_filtered(
         max_events,
         None,
         "Live",
-        |_, _| {},
-        |_| {},
+        |_, _| Ok(()),
+        |_| Ok(()),
     )
 }
 
@@ -276,7 +276,7 @@ pub fn query_channel_with_progress(
         None,
         "Live",
         on_progress,
-        |_| {},
+        |_| Ok(()),
     )
 }
 
@@ -297,7 +297,7 @@ pub fn query_channel_filtered_with_progress(
         None,
         "Live",
         on_progress,
-        |_| {},
+        |_| Ok(()),
     )
 }
 
@@ -305,7 +305,8 @@ pub fn query_channel_filtered_with_progress(
 ///
 /// `on_batch` is handed every batch and is expected to take the records from it. Whatever it leaves
 /// is returned in the [`ChannelScan`], so a caller that forgets to drain still gets correct results
-/// rather than losing them; it simply holds the channel in memory as before.
+/// rather than losing them; it simply holds the channel in memory as before. A callback error
+/// aborts the query and is returned to the caller.
 #[cfg(target_os = "windows")]
 pub fn query_channel_streamed(
     channel: &str,
@@ -313,7 +314,7 @@ pub fn query_channel_streamed(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-    on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+    on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
     query_channel_inner(
         channel,
@@ -336,7 +337,7 @@ pub fn query_remote_channel_streamed(
     maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-    on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+    on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
     let (session, machine) = open_remote_session(machine)?;
     let source_label = format!("Remote: {machine}");
@@ -357,7 +358,8 @@ pub fn query_remote_channel_streamed(
 /// `on_batch` receives the batch by mutable reference and may take the records out of it. Whatever
 /// it leaves behind is accumulated into the returned [`ChannelScan`]. That is the whole difference
 /// between streaming and collecting: a caller that drains never holds more than one batch, and a
-/// caller that ignores the argument gets the channel in one piece exactly as before.
+/// caller that ignores the argument gets the channel in one piece exactly as before. A callback
+/// error aborts the query and is returned to the caller.
 ///
 /// The distinction matters because one channel dominates a scan. On a measured seven-day scan,
 /// Security was 286,401 of 404,769 events and 191.8 seconds of 267, so a caller waiting for this
@@ -371,7 +373,7 @@ fn query_channel_inner(
     session: Option<EVT_HANDLE>,
     source_label: &str,
     on_progress: impl Fn(usize, Option<usize>),
-    mut on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+    mut on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
     let remote = source_label.starts_with("Remote:");
     let coverage_channel = if let Some(machine) = source_label.strip_prefix("Remote: ") {
@@ -571,7 +573,7 @@ fn query_channel_inner(
 
         // The caller sees the batch before anything else happens to it. Draining it here is what
         // makes delivery incremental; leaving it collects the channel as before.
-        on_batch(&mut batch_records);
+        on_batch(&mut batch_records)?;
         records.append(&mut batch_records);
     }
 
@@ -873,8 +875,8 @@ fn start_polling_tail(
                     &filter,
                     &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
                     Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| {},
-                    |_| {},
+                    |_, _| Ok(()),
+                    |_| Ok(()),
                 )
             } else {
                 query_channel_streamed(
@@ -882,8 +884,8 @@ fn start_polling_tail(
                     &filter,
                     &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
                     Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| {},
-                    |_| {},
+                    |_, _| Ok(()),
+                    |_| Ok(()),
                 )
             };
 
@@ -1223,6 +1225,18 @@ pub fn query_channel_filtered_with_progress(
 ) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_streamed(
+    _channel: &str,
+    _filter: &EventQueryFilter,
+    _maps: &MapRegistry,
+    _max_events: Option<u64>,
+    _on_progress: impl Fn(usize, Option<usize>),
+    _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
+) -> Result<ChannelScan, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
 
 #[cfg(not(target_os = "windows"))]
 pub fn query_remote_channel_streamed(
@@ -1232,7 +1246,7 @@ pub fn query_remote_channel_streamed(
     _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
-    _on_batch: impl FnMut(&mut Vec<EvtxRecord>),
+    _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
     Err("Remote event log queries are only available on Windows.".to_string())
 }
@@ -1752,8 +1766,8 @@ mod live_service_tests {
             &EventQueryFilter::default(),
             &no_maps(),
             Some(10),
-            |_, _| {},
-            |_| {},
+            |_, _| Ok(()),
+            |_| Ok(()),
         )
         .expect("remote query succeeds");
         if scan.records.is_empty() {
@@ -1792,8 +1806,8 @@ mod live_service_tests {
                 &EventQueryFilter::default(),
                 &no_maps(),
                 Some(10),
-                |_, _| {},
-                |_| {},
+                |_, _| Ok(()),
+                |_| Ok(()),
             )
             .expect("remote query succeeds");
             assert!(

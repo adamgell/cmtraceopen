@@ -123,7 +123,7 @@ fn query_source_channel(
     maps: &cmtraceopen_parser::eventmap::MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
-    on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>),
+    on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>) -> Result<(), String>,
 ) -> Result<super::live::ChannelScan, String> {
     match remote_machine {
         Some(machine) => super::live::query_remote_channel_streamed(
@@ -197,42 +197,56 @@ async fn query_channels_impl(
                         },
                         |batch| {
                             if batch.is_empty() {
-                                return;
+                                return Ok(());
                             }
                             let records = std::mem::take(batch);
-                            if let Err(error) = app_ref.emit(
-                                "evtx-record-batch",
-                                EvtxRecordBatch {
-                                    request_id: batch_request_id.clone(),
-                                    channel: batch_channel.clone(),
-                                    sequence,
-                                    records,
-                                },
-                            ) {
-                                log::warn!(
-                                    "event=evtx_batch_emit_failed channel=\"{batch_channel}\" \
-                                     sequence={sequence} error=\"{error}\""
-                                );
-                            }
+                            app_ref
+                                .emit(
+                                    "evtx-record-batch",
+                                    EvtxRecordBatch {
+                                        request_id: batch_request_id.clone(),
+                                        channel: batch_channel.clone(),
+                                        sequence,
+                                        records,
+                                    },
+                                )
+                                .map_err(|error| {
+                                    format!(
+                                        "event=evtx_batch_emit_failed channel=\"{batch_channel}\" \
+                                         sequence={sequence} error=\"{error}\""
+                                    )
+                                })?;
                             sequence += 1;
+                            Ok(())
                         },
                     );
                     let sequence_count = sequence;
                     let total_records = outcome.as_ref().map(|scan| scan.delivered).unwrap_or(0);
-                    if let Err(error) = app_ref.emit(
-                        "evtx-record-stream-complete",
-                        EvtxRecordStreamComplete {
-                            channel: batch_channel.clone(),
-                            request_id: batch_request_id.clone(),
-                            sequence_count,
-                            total_records,
+                    let terminal_emit = app_ref
+                        .emit(
+                            "evtx-record-stream-complete",
+                            EvtxRecordStreamComplete {
+                                channel: batch_channel.clone(),
+                                request_id: batch_request_id.clone(),
+                                sequence_count,
+                                total_records,
+                            },
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "event=evtx_stream_complete_emit_failed channel=\"{batch_channel}\" \
+                                 error=\"{error}\""
+                            )
+                        });
+                    let outcome = match terminal_emit {
+                        Ok(()) => outcome,
+                        Err(terminal_error) => match outcome {
+                            Ok(_) => Err(terminal_error),
+                            Err(query_error) => {
+                                Err(format!("{query_error}; {terminal_error}"))
+                            }
                         },
-                    ) {
-                        log::warn!(
-                            "event=evtx_stream_complete_emit_failed channel=\"{batch_channel}\" \
-                             error=\"{error}\""
-                        );
-                    }
+                    };
                     (channel.clone(), outcome)
                 })
                 .collect();
