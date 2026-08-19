@@ -127,17 +127,19 @@ describe("LogListView selection and jump fixtures", () => {
       outline: "1px solid rgba(59, 130, 246, 0.5)",
     });
   });
-  it("selects every displayed row on Ctrl/Cmd+A", () => {
-    render(<LogListView />);
-    const list = screen.getByRole("listbox", { name: "Log entries" });
-    fireEvent.keyDown(list, { key: "a", metaKey: true });
-    fireEvent.keyDown(list, { key: "a", ctrlKey: true });
-    for (const id of [1, 2, 3, 4, 5]) {
-      expect(screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']")).toHaveStyle({
-        outline: "1px solid rgba(59, 130, 246, 0.5)",
-      });
-    }
-  });
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    "selects every displayed row on select-all (%o)",
+    (modifier) => {
+      render(<LogListView />);
+      const list = screen.getByRole("listbox", { name: "Log entries" });
+      fireEvent.keyDown(list, { key: "a", ...modifier });
+      for (const id of [1, 2, 3, 4, 5]) {
+        expect(screen.getByText(`Policy evaluation ${id} completed`).closest("[role='option']")).toHaveStyle({
+          outline: "1px solid rgba(59, 130, 246, 0.5)",
+        });
+      }
+    },
+  );
 
   it("consumes a matching pending scroll target and selects the first line at or after the target", () => {
     render(<LogListView />);

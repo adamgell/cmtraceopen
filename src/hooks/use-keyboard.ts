@@ -176,7 +176,8 @@ export function useKeyboard() {
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
       const suppressibleShortcut =
-        event.ctrlKey || event.metaKey || /^F\d{1,2}$/.test(event.key);
+        ((event.ctrlKey || event.metaKey) && !event.altKey) ||
+        /^F\d{1,2}$/.test(event.key);
       const isInput = isTypingTarget(event.target);
 
       // Modal surfaces own Escape/Tab handling, but global app and browser

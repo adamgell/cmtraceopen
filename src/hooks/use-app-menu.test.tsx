@@ -602,6 +602,23 @@ describe("useKeyboard native menu parity", () => {
     ).toBe(false);
     modal.remove();
   });
+  it("allows AltGr text entry in modal inputs", () => {
+    useUiStore.setState({
+      currentPlatform: "windows",
+      showCollectDiagnosticsDialog: true,
+    });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    renderHook(() => useKeyboard());
+
+    expect(
+      fireEvent.keyDown(input, { key: "@", ctrlKey: true, altKey: true }),
+    ).toBe(true);
+    expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
+
+    input.remove();
+  });
   it("restarts a non-log workspace without dragging a stale source along", async () => {
     useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
     // activeSource survives a workspace switch, so it is still set here even
