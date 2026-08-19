@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 #[cfg(target_os = "windows")]
 const FILE_ASSOCIATION_PROG_ID: &str = "CMTraceOpen.LogFile";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-const LOG_FILE_EXTENSIONS: &[&str] = &[".log", ".lo_", ".log_"];
+const LOG_FILE_EXTENSIONS: &[&str] = &[".log", ".lo_", ".log_", ".cmtlog"];
 const FILE_ASSOCIATION_PROMPT_FILE_NAME: &str = "file-association-preferences.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn log_file_extensions_include_each_unique_rotation() {
-        assert_eq!(LOG_FILE_EXTENSIONS, &[".log", ".lo_", ".log_"]);
+        assert_eq!(LOG_FILE_EXTENSIONS, &[".log", ".lo_", ".log_", ".cmtlog"]);
 
         let unique_extensions: HashSet<_> = LOG_FILE_EXTENSIONS.iter().copied().collect();
         assert_eq!(unique_extensions.len(), LOG_FILE_EXTENSIONS.len());

@@ -108,13 +108,19 @@ export async function restoreSession(sessionPath: string): Promise<string | null
   // Load each file individually to create proper per-file tabs.
   // If every file fails, fall back to the aggregate load path so the user
   // isn't left with empty tabs after the pre-clear above.
+  // A null result means a newer source load superseded restore; abort instead
+  // of reopening the stale session through that fallback.
   // Track which paths actually opened so the index/scroll restore below
   // targets the right tab even when some files failed to load.
   const filePaths = validTabs.map((t) => t.filePath);
   const loadedTabsByPath = new Map<string, (typeof validTabs)[number]>();
   for (const tab of validTabs) {
     try {
-      await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
+      const result = await loadPathAsLogSource(tab.filePath, { fallbackToFolder: false });
+      if (result === null) {
+        console.info("[session] restore superseded by a newer source load");
+        return null;
+      }
       loadedTabsByPath.set(tab.filePath, tab);
     } catch (error) {
       console.warn("[session] failed to load file during restore", { filePath: tab.filePath, error });
@@ -123,7 +129,11 @@ export async function restoreSession(sessionPath: string): Promise<string | null
 
   if (loadedTabsByPath.size === 0 && filePaths.length > 0) {
     try {
-      await loadFilesAsLogSource(filePaths);
+      const aggregateLoadCompleted = await loadFilesAsLogSource(filePaths);
+      if (!aggregateLoadCompleted) {
+        console.info("[session] aggregate restore superseded by a newer source load");
+        return null;
+      }
       // Aggregate load opens one tab per file in the same order.
       for (const tab of validTabs) loadedTabsByPath.set(tab.filePath, tab);
     } catch (fallbackError) {

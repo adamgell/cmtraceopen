@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import { useFilterStore } from "../../stores/filter-store";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 
 export type FilterOp =
   | "Equals"
@@ -55,9 +56,16 @@ export function FilterDialog({
 }: FilterDialogProps) {
   const [clauses, setClauses] = useState<FilterClause[]>([emptyClause()]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const isFiltering = useFilterStore((s) => s.isFiltering);
   const filterError = useFilterStore((s) => s.filterError);
+  useModalFocus(
+    isOpen,
+    dialogRef,
+    inputRef,
+    `${clauses.length}:${isFiltering ? "filtering" : "ready"}`,
+  );
 
   useEffect(() => {
     if (isOpen) {
@@ -66,15 +74,15 @@ export function FilterDialog({
           ? [...currentClauses]
           : [emptyClause()]
       );
-      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen, currentClauses]);
-
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isFiltering) onClose();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isFiltering) {
+        onClose();
+      }
     };
 
     window.addEventListener("keydown", handleKey);
@@ -168,6 +176,11 @@ export function FilterDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        aria-label="Filter"
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

@@ -48,6 +48,37 @@ describe("ui-store", () => {
     });
   });
 
+  describe("DNS banner dismissal", () => {
+    it("keeps dismissed paths in the current session only", async () => {
+      await useUiStore.persist.clearStorage();
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+
+      useUiStore.getState().dismissDnsBannerPath("C:/Logs/DnsServer.log");
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
+
+      const persisted = JSON.parse(
+        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
+      );
+      expect(persisted.state?.dismissedDnsBannerPaths).toBeUndefined();
+
+      localStorage.setItem(
+        "cmtraceopen-ui-preferences",
+        JSON.stringify({
+          state: {
+            dismissedDnsBannerPaths: ["C:/Logs/DnsServer.log"],
+          },
+        }),
+      );
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([]);
+    });
+  });
+
   describe("persisted preferences", () => {
     it("finishes hydration when no preferences have been stored yet", async () => {
       await useUiStore.persist.clearStorage();

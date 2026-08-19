@@ -309,9 +309,6 @@ export function AppShell() {
     const tabs = useUiStore.getState().openTabs;
     if (activeTabIndex < 0 || activeTabIndex >= tabs.length) return;
     const tab = tabs[activeTabIndex];
-    const currentPath = useLogStore.getState().openFilePath;
-    if (currentPath === tab.filePath) return;
-
     useUiStore.getState().ensureLogViewVisible("tab-switch");
     switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
       console.error("[tab-switch] failed to load", tab.filePath, err);

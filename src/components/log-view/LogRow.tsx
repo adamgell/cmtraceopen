@@ -302,7 +302,7 @@ export const LogRow = memo(function LogRow({
   }
 
   // Multi-select visual: subtle blue background when no marker tint is present
-  const showMultiSelectHighlight = isMultiSelected && !isSelected && !marker;
+  const showMultiSelectHighlight = isMultiSelected && !marker;
 
   return (
     <div
@@ -351,6 +351,7 @@ export const LogRow = memo(function LogRow({
     >
       {/* Marker gutter */}
       <div
+        data-testid="log-row-marker-gutter"
         style={{
           display: "flex",
           alignItems: "center",

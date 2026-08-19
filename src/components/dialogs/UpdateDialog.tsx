@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { tokens } from "@fluentui/react-components";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 import type { UpdateInfo } from "../../hooks/use-update-checker";
 import { getUpdateChannelLabel } from "../../lib/update-channel";
 
@@ -28,6 +29,16 @@ export function UpdateDialog({
   onOpenReleasePage,
   onSkipVersion,
 }: UpdateDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const focusKey = isChecking
+    ? "checking"
+    : isDownloading
+      ? "downloading"
+      : updateInfo?.available
+        ? "available"
+        : "idle";
+
+  useModalFocus(isOpen, dialogRef, undefined, focusKey);
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -35,7 +46,7 @@ export function UpdateDialog({
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [isOpen, isDownloading, onClose]);
+  }, [isDownloading, isOpen, onClose]);
 
   // Trigger check when dialog opens via menu (no existing updateInfo)
   useEffect(() => {
@@ -241,7 +252,14 @@ export function UpdateDialog({
         if (e.target === e.currentTarget && !isDownloading) onClose();
       }}
     >
-      <div style={dialogStyle}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Check for Updates"
+        tabIndex={-1}
+        style={dialogStyle}
+      >
         {renderContent()}
       </div>
     </div>

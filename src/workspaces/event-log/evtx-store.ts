@@ -86,6 +86,7 @@ interface EvtxState {
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
+  setLoadError: (error: string | null) => void;
   setTimeZoneMode: (mode: EvtxTimeZoneMode) => void;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
@@ -158,6 +159,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       set({ isLoading: false, loadError: message });
+      throw error;
     }
   },
 
@@ -448,6 +450,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadElapsedMs: performance.now() - startTime,
     });
   },
+  setLoadError: (error) =>
+    set(
+      error === null
+        ? { loadError: null }
+        : { isLoading: false, loadError: error },
+    ),
 
   setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
 
