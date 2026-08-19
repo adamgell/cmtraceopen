@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::export::{self, ExportFormat};
 use super::models::EvtxRecord;
+use quick_xml::XmlVersion;
 
 #[cfg(test)]
 use std::io::Cursor;
@@ -151,9 +152,14 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
-                    let value = attribute.unescape_value().map_err(|error| {
-                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML attribute is malformed: {error}"))
-                    })?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("raw XML attribute is malformed: {error}"),
+                            )
+                        })?;
                     if has_illegal_xml_control(value.as_bytes()) {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                     }
@@ -171,9 +177,14 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     let attribute = attribute.map_err(|error| {
                         io::Error::new(io::ErrorKind::InvalidData, format!("raw XML is malformed: {error}"))
                     })?;
-                    let value = attribute.unescape_value().map_err(|error| {
-                        io::Error::new(io::ErrorKind::InvalidData, format!("raw XML attribute is malformed: {error}"))
-                    })?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("raw XML attribute is malformed: {error}"),
+                            )
+                        })?;
                     if has_illegal_xml_control(value.as_bytes()) {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an illegal control character"));
                     }
@@ -245,7 +256,6 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "raw XML has an invalid comment"));
                 }
             }
-            _ => {}
         }
     }
     if depth != 0 || !root_seen {
@@ -489,6 +499,12 @@ fn record(message: &str) -> EvtxRecord {
         task: None,
         opcode: None,
         process_id: None,
+        activity_id: None,
+        related_activity_id: None,
+        session_id: None,
+        device_id: None,
+        user_id: None,
+        process_start_time: None,
         thread_id: None,
         user_sid: None,
         keywords: None,

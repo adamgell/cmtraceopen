@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::RwLock;
@@ -393,6 +392,12 @@ mod tests {
             task: None,
             opcode: None,
             process_id: None,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             thread_id: None,
             user_sid: None,
             keywords: None,
@@ -477,6 +482,12 @@ mod tests {
             task: None,
             opcode: None,
             process_id: None,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             thread_id: None,
             user_sid: None,
             keywords: None,

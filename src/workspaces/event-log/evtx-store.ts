@@ -997,6 +997,7 @@ loadGeneration: generation,
         }));
       }
     });
+    await Promise.all(promises);
     if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
     const finalState = get();
     const remoteRefreshFailed =

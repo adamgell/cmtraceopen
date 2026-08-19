@@ -8,7 +8,7 @@
 
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    correlate_timeline, from_log_entry, merge, normalize_machine_identity, timeline_sort_key,
+    correlate_timeline, from_log_entry, merge, timeline_sort_key,
     TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
@@ -124,6 +124,19 @@ fn raw_correlation_ids(xml: &str) -> (Option<String>, Option<String>) {
 }
 
 
+fn machine_of(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_ascii_lowercase().as_str(),
+            "unknown" | "n/a" | "na" | "none" | "null" | "not available" | "not_applicable"
+        )
+    {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
 fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
     let (raw_activity_id, raw_related_activity_id) = raw_correlation_ids(&record.raw_xml);
     TimelineOrigin::Event {
@@ -146,9 +159,6 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
     }
 }
 
-fn machine_of(value: &str) -> Option<String> {
-    normalize_machine_identity(Some(value))
-}
 
 fn bundle_from_source(source: &str) -> Option<String> {
     source
@@ -517,7 +527,7 @@ mod tests {
         match &from_event(&source).expect("placed").origin {
             TimelineOrigin::Event {
                 source,
-                machine,
+                machine: _,
                 stable_id,
                 ..
             } => {

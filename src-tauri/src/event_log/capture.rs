@@ -115,7 +115,7 @@ fn event_message_text(message_id: Option<u32>, formatted: Option<String>) -> Opt
 #[cfg(any(target_os = "windows", test))]
 fn trim_provider_text(value: String) -> String {
     value
-        .trim_end_matches(|character| matches!(character, '\0' | '\r' | '\n' | '\t' | ' '))
+        .trim_end_matches(['\0', '\r', '\n', '\t', ' '])
         .to_string()
 }
 

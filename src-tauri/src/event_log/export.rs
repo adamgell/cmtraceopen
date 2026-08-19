@@ -289,7 +289,7 @@ fn redact_xml_tag(tag: &str) -> String {
     });
     let mut pending_label: Option<String> = None;
     while cursor < tag.len() {
-        let Some(relative) = tag[cursor..].find(|character| character == '"' || character == '\'')
+        let Some(relative) = tag[cursor..].find(['"', '\''])
         else {
             output.push_str(&tag[cursor..]);
             break;
@@ -305,9 +305,9 @@ fn redact_xml_tag(tag: &str) -> String {
         let before = tag[..opening].trim_end();
         let attr_name = before
             .rfind('=')
-            .and_then(|equals| before[..equals].trim_end().rsplit(|c: char| c == ' ' || c == '\t').next())
+            .and_then(|equals| before[..equals].trim_end().rsplit([' ', '\t']).next())
             .unwrap_or("")
-            .trim_start_matches(|c: char| c == '<' || c == '/');
+            .trim_start_matches(['<', '/']);
         let value = &tag[opening + 1..end];
         let label = if attr_name.eq_ignore_ascii_case("value") {
             pending_label
@@ -490,6 +490,12 @@ mod tests {
             task: Some(13312),
             opcode: None,
             process_id: Some(1234),
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
             thread_id: None,
             user_sid: Some("S-1-5-18".into()),
             keywords: Some("0x80".into()),

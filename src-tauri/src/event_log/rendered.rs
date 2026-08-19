@@ -132,6 +132,8 @@ pub fn record_from_parts(
         computer,
         message,
         event_data,
+        raw_xml: xml.to_string(),
+        source_label: "Live".to_string(),
         task: system.task,
         opcode: system.opcode,
         process_id: system.process_id,

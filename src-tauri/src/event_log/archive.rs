@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::RwLock;
 
@@ -277,11 +278,18 @@ fn read_member_digest<R: Read>(
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn push_existing_gap(result: &mut ArchiveParseResult, gap: EvtxCoverageGap) {

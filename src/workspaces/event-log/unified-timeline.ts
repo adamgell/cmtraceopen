@@ -71,6 +71,11 @@ export type TimelineOrigin =
       /** EventRecordID, scoped to the event channel. */
       recordId: number;
     };
+export function isEventOrigin(
+  origin: TimelineOrigin
+): origin is Extract<TimelineOrigin, { kind: "event" }> {
+  return origin.kind === "event";
+}
 export interface TimelineItem {
   timestampMs: number;
   severity: TimelineSeverity;
@@ -264,9 +269,9 @@ export function filterTimelineToRecords(
   const items = timeline.items.filter((item) => keep(item.origin));
   const unplaced = timeline.unplaced.filter((item) => keep(item.origin));
   const visibleIds = new Set(
-    [...items, ...unplaced]
-      .filter((item) => item.origin.kind === "event")
-      .map((item) => item.origin.stableId),
+    [...items, ...unplaced].flatMap((item) =>
+      isEventOrigin(item.origin) ? [item.origin.stableId] : [],
+    ),
   );
   const edges = (timeline.edges ?? []).filter(
     (edge) =>

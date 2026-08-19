@@ -25,7 +25,6 @@ const MAX_SOURCE_INPUTS: usize = 256;
 const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 const MAX_SOURCE_RECORDS: usize = 1_000_000;
 const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
-/// Maximum number of files a source selection may hand to the EVTX parser.
 
 /// Keeps the normalized manifest member path as the record's source identity.
 ///
@@ -152,7 +151,7 @@ pub fn build_source_manifest_for_selections(
             vec![PathBuf::from(source)]
         };
 
-        if is_wildcard
+        if is_wildcard && paths.is_empty()
             && !manifest.coverage[coverage_start..].iter().any(|coverage| {
                 matches!(
                     coverage,
@@ -352,6 +351,7 @@ fn expand_wildcard(
     paths
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_wildcard_dir(
     directory: &Path,
     pattern: &str,
@@ -818,8 +818,8 @@ fn expand_path(
         return Ok(());
     }
 
-    if !is_evtx_candidate(path)
-        && !(matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
+    if !(is_evtx_candidate(path)
+        || matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
     {
         manifest.coverage.push(SourceCoverage::Unsupported {
             path: path_string,
@@ -883,7 +883,7 @@ fn first_reparse_component(path: &Path) -> std::io::Result<Option<PathBuf>> {
 fn is_platform_temp_alias(path: &Path) -> bool {
     #[cfg(unix)]
     {
-        return path == Path::new("/var") || path == Path::new("/tmp");
+        path == Path::new("/var") || path == Path::new("/tmp")
     }
     #[cfg(not(unix))]
     {
@@ -1031,10 +1031,10 @@ fn normalize_source_path(path: &Path) -> String {
 
 fn normalize_windows_path(raw: &str) -> String {
     let raw = raw.replace('/', "\\");
-    let (prefix, rest) = if raw.starts_with("\\\\?\\") {
-        ("\\\\?\\".to_string(), &raw[4..])
-    } else if raw.starts_with("\\\\") {
-        ("\\\\".to_string(), &raw[2..])
+    let (prefix, rest) = if let Some(stripped) = raw.strip_prefix("\\\\?\\") {
+        ("\\\\?\\".to_string(), stripped)
+    } else if let Some(stripped) = raw.strip_prefix("\\\\") {
+        ("\\\\".to_string(), stripped)
     } else if raw.len() >= 3 && raw.as_bytes()[1] == b':' {
         (raw[..3].to_string(), &raw[3..])
     } else {
@@ -1043,21 +1043,24 @@ fn normalize_windows_path(raw: &str) -> String {
     let minimum_components = if prefix == "\\\\" {
         2
     } else if prefix == "\\\\?\\"
-        && rest
+        && (rest
             .split('\\')
             .next()
             .is_some_and(|component| component.eq_ignore_ascii_case("UNC"))
-    {
-        3
-    } else if prefix == "\\\\?\\"
-        && {
-            let mut components = rest.split('\\');
-            components.next().is_some_and(|component| component.eq_ignore_ascii_case("GLOBALROOT"))
-                && components.next().is_some_and(|component| component.eq_ignore_ascii_case("Device"))
-                && components
+            || {
+                let mut components = rest.split('\\');
+                components
                     .next()
-                    .is_some_and(|component| component.to_ascii_lowercase().starts_with("harddiskvolumeshadowcopy"))
-        }
+                    .is_some_and(|component| component.eq_ignore_ascii_case("GLOBALROOT"))
+                    && components
+                        .next()
+                        .is_some_and(|component| component.eq_ignore_ascii_case("Device"))
+                    && components.next().is_some_and(|component| {
+                        component
+                            .to_ascii_lowercase()
+                            .starts_with("harddiskvolumeshadowcopy")
+                    })
+            })
     {
         3
     } else if prefix == "\\\\?\\"
@@ -1122,8 +1125,7 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
         entries: Vec::new(),
         coverage,
     };
-    let mut inspected = 0usize;
-    for source in &input.entries {
+    for (inspected, source) in input.entries.iter().enumerate() {
         if inspected >= MAX_SOURCE_MANIFEST_ENTRIES {
             record_manifest_limit(
                 &mut validated,
@@ -1132,7 +1134,6 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
             );
             break;
         }
-        inspected += 1;
         let path = Path::new(&source.path);
         if validated.entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
             record_manifest_limit(
@@ -1174,8 +1175,8 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
                 continue;
             }
         }
-        if !is_evtx_candidate(path)
-            && !(matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
+        if !(is_evtx_candidate(path)
+            || matches!(kind, EventLogSourceKind::Archive) && is_archive_candidate(path))
         {
             validated.coverage.push(SourceCoverage::Unsupported {
                 path: source.path.clone(),
@@ -1455,6 +1456,7 @@ pub fn parse_evtx_manifest(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_parsed_file(
     source_path: &str,
     file: ParsedFile,
@@ -1686,6 +1688,7 @@ where
                 value: text.clone(),
             });
         }
+        let identity = super::event_node::extract_event_identity(&fields);
 
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
@@ -1698,7 +1701,7 @@ where
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
-            event_record_id_text: Some(event_record_id.to_string()),
+            event_record_id_text: system.event_record_id.map(|value| value.to_string()),
             timestamp: timestamp_str,
             timestamp_epoch,
             provider,
@@ -1716,12 +1719,12 @@ where
             thread_id: system.thread_id,
             user_sid: system.user_sid,
             keywords: system.keywords,
-            activity_id: None,
-            related_activity_id: None,
-            session_id: None,
-            device_id: None,
-            user_id: None,
-            process_start_time: None,
+            activity_id: system.activity_id,
+            related_activity_id: system.related_activity_id,
+            session_id: identity.session_id,
+            device_id: identity.device_id,
+            user_id: identity.user_id,
+            process_start_time: identity.process_start_time,
             mapped,
         });
     }
