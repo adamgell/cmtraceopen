@@ -63,8 +63,8 @@ const KNOWN_SOURCE_BY_PRESET_MENU_ID: Record<string, string> = {
 const KNOWN_SOURCE_BY_MENU_ID: Record<string, string> = {};
 let tabSwitchGeneration = 0;
 
-function isCurrentTabSwitch(generation?: number): boolean {
-  return generation === undefined || generation === tabSwitchGeneration;
+function isCurrentTabSwitch(generation: number): boolean {
+  return generation === tabSwitchGeneration;
 }
 
 export interface KnownSourceCatalogActionIds {
@@ -166,7 +166,7 @@ async function applyParseResultToStore(
   source: LogSource,
   selectedFilePath: string,
   result: ParseResult,
-  switchGeneration?: number,
+  switchGeneration: number,
 ): Promise<void> {
   if (!isCurrentTabSwitch(switchGeneration)) return;
   const state = useLogStore.getState();
@@ -695,7 +695,7 @@ export async function loadSelectedLogFile(
     if (!isCurrentTabSwitch(operationGeneration)) return null;
 
     const result = await openLogFile(filePath);
-    if (!isCurrentTabSwitch(operationGeneration)) return result;
+    if (!isCurrentTabSwitch(operationGeneration)) return null;
     await applyParseResultToStore(
       source,
       result.filePath,

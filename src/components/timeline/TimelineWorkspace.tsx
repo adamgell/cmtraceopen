@@ -10,12 +10,12 @@ import { TimelineRuler } from "./TimelineRuler";
 import { BrushOverlay } from "./BrushOverlay";
 import { LogListView } from "../log-view/LogListView";
 import { timelineLogListDataSource } from "./log-list-adapter";
-import { buildTimelineFromSources } from "./hooks/useTimelineBundle";
 
 const LANE_HEIGHT = 22;
 
 export function TimelineWorkspace() {
   const bundle = useTimelineStore((s) => s.bundle);
+  const loadError = useTimelineStore((s) => s.loadError);
   const laneVisibility = useTimelineStore((s) => s.laneVisibility);
   const soloSourceIdx = useTimelineStore((s) => s.soloSourceIdx);
   const [hover, setHover] = useState<string | null>(null);
@@ -52,15 +52,16 @@ export function TimelineWorkspace() {
       .map((f) => (f as File & { path?: string }).path)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     if (paths.length === 0) return;
-    const existing =
-      useTimelineStore.getState().bundle?.sources.map((s) => s.path) ?? [];
-    const merged = Array.from(new Set([...existing, ...paths])).map(
-      (path) => ({ path }),
-    );
     try {
-      await buildTimelineFromSources(merged);
-    } catch (err) {
-      console.error("[timeline] failed to add sources to timeline", err);
+      const { openTimelineFiles } = await import(
+        "../../workspaces/timeline/open-timeline-source"
+      );
+      await openTimelineFiles(paths);
+    } catch (error) {
+      console.error("[timeline] failed to add sources to timeline", error);
+      useTimelineStore
+        .getState()
+        .setLoadError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -78,6 +79,18 @@ export function TimelineWorkspace() {
           borderRadius: 8,
         }}
       >
+        {loadError && (
+          <div
+            role="alert"
+            style={{
+              marginBottom: 8,
+              color: tokens.colorPaletteRedForeground1,
+              fontSize: 12,
+            }}
+          >
+            {loadError}
+          </div>
+        )}
         <div style={{ fontSize: 14, marginBottom: 6 }}>
           Drop log files here
         </div>
@@ -100,12 +113,32 @@ export function TimelineWorkspace() {
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       style={{
+        position: "relative",
         display: "grid",
         gridTemplateColumns: "1fr 340px",
         gridTemplateRows: "auto auto auto 1fr",
         height: "100%",
       }}
     >
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            position: "absolute",
+            top: 4,
+            left: 8,
+            right: 8,
+            zIndex: 2,
+            padding: "6px 10px",
+            color: tokens.colorPaletteRedForeground1,
+            background: tokens.colorNeutralBackground1,
+            border: `1px solid ${tokens.colorPaletteRedBorder2}`,
+            fontSize: 12,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
       <LaneLegend />
       <div />
       <IncidentChipBar />

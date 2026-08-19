@@ -46,6 +46,13 @@ describe("timeline-store", () => {
     expect(s.bundle?.id).toBe("t1");
     expect(s.laneVisibility).toEqual({ 0: true, 1: true });
   });
+  it("tracks and clears source-open errors", () => {
+    useTimelineStore.getState().setLoadError("timeline build failed");
+    expect(useTimelineStore.getState().loadError).toBe("timeline build failed");
+
+    useTimelineStore.getState().setBundle(bundle);
+    expect(useTimelineStore.getState().loadError).toBeNull();
+  });
 
   it("solo toggle sets and clears soloSourceIdx", () => {
     useTimelineStore.getState().setBundle(bundle);

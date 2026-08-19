@@ -11,32 +11,39 @@ function evtxPathsFromFolderEntries(entries: FolderEntry[]): string[] {
 export async function openEventLogSource(source: LogSource): Promise<void> {
   const parseFiles = useEvtxStore.getState().parseFiles;
 
-  if (source.kind === "file") {
-    await parseFiles([source.path]);
-    return;
-  }
+  try {
+    if (source.kind === "file") {
+      await parseFiles([source.path]);
+      return;
+    }
 
-  if (source.kind === "folder") {
-    const listing = await listLogFolder(source.path);
+    if (source.kind === "folder") {
+      const listing = await listLogFolder(source.path);
+      const evtxPaths = evtxPathsFromFolderEntries(listing.entries);
+      if (evtxPaths.length === 0) {
+        throw new Error(
+          "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.",
+        );
+      }
+      await parseFiles(evtxPaths);
+      return;
+    }
+
+    if (source.pathKind === "file") {
+      await parseFiles([source.defaultPath]);
+      return;
+    }
+
+    const listing = await listLogFolder(source.defaultPath);
     const evtxPaths = evtxPathsFromFolderEntries(listing.entries);
     if (evtxPaths.length === 0) {
-      throw new Error(
-        "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.",
-      );
+      throw new Error("No .evtx files were found for that known source.");
     }
     await parseFiles(evtxPaths);
-    return;
+  } catch (error) {
+    useEvtxStore.getState().setLoadError(
+      error instanceof Error ? error.message : String(error),
+    );
+    throw error;
   }
-
-  if (source.pathKind === "file") {
-    await parseFiles([source.defaultPath]);
-    return;
-  }
-
-  const listing = await listLogFolder(source.defaultPath);
-  const evtxPaths = evtxPathsFromFolderEntries(listing.entries);
-  if (evtxPaths.length === 0) {
-    throw new Error("No .evtx files were found for that known source.");
-  }
-  await parseFiles(evtxPaths);
 }

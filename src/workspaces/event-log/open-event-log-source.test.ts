@@ -28,6 +28,91 @@ describe("openEventLogSource", () => {
       "/tmp/Application.evtx",
     ]);
   });
+  it("parses a known file source using its default path", async () => {
+    const defaultPath = "/tmp/Application.evtx";
+
+    await openEventLogSource({
+      kind: "known",
+      sourceId: "known-application",
+      defaultPath,
+      pathKind: "file",
+    });
+
+    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([defaultPath]);
+    expect(listLogFolder).not.toHaveBeenCalled();
+  });
+
+  it("parses evtx files from a known folder source", async () => {
+    const defaultPath = "/tmp/logs";
+    vi.mocked(listLogFolder).mockResolvedValue({
+      sourceKind: "folder",
+      source: {
+        kind: "known",
+        sourceId: "known-logs",
+        defaultPath,
+        pathKind: "folder",
+      },
+      entries: [
+        {
+          name: "SYSTEM.EVTX",
+          path: `${defaultPath}/SYSTEM.EVTX`,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+        {
+          name: "notes.txt",
+          path: `${defaultPath}/notes.txt`,
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+        {
+          name: "nested.evtx",
+          path: `${defaultPath}/nested.evtx`,
+          isDir: true,
+          sizeBytes: null,
+          modifiedUnixMs: null,
+        },
+      ],
+    });
+
+    await openEventLogSource({
+      kind: "known",
+      sourceId: "known-logs",
+      defaultPath,
+      pathKind: "folder",
+    });
+
+    expect(listLogFolder).toHaveBeenCalledWith(defaultPath);
+    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([
+      `${defaultPath}/SYSTEM.EVTX`,
+    ]);
+  });
+
+  it("rejects a known folder with no evtx files", async () => {
+    const defaultPath = "/tmp/empty";
+    vi.mocked(listLogFolder).mockResolvedValue({
+      sourceKind: "folder",
+      source: {
+        kind: "known",
+        sourceId: "known-empty",
+        defaultPath,
+        pathKind: "folder",
+      },
+      entries: [],
+    });
+
+    await expect(
+      openEventLogSource({
+        kind: "known",
+        sourceId: "known-empty",
+        defaultPath,
+        pathKind: "folder",
+      }),
+    ).rejects.toThrow("No .evtx files were found for that known source.");
+    expect(useEvtxStore.getState().parseFiles).not.toHaveBeenCalled();
+  });
 
   it("parses evtx files from a folder and ignores other names", async () => {
     vi.mocked(listLogFolder).mockResolvedValue({

@@ -29,6 +29,17 @@ export const timelineWorkspace: WorkspaceDefinition = {
   onOpenSource: async (source, trigger) => {
     useUiStore.getState().ensureWorkspaceVisible("timeline", trigger);
     const { openTimelineSource } = await import("./open-timeline-source");
-    await openTimelineSource(source);
+    try {
+      await openTimelineSource(source);
+    } catch (error) {
+      console.error("[timeline] failed to open source", {
+        source,
+        trigger,
+        error,
+      });
+      if (trigger === "drag-drop.path-open") {
+        throw error;
+      }
+    }
   },
 };

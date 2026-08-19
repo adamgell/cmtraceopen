@@ -52,7 +52,7 @@ function policyValue(
   };
 }
 
-function nullFacts(): DsregcmdFacts {
+function fixtureFacts(): DsregcmdFacts {
   return {
     joinState: {
       azureAdJoined: true,
@@ -227,7 +227,7 @@ function eventLogAnalysis(): EventLogAnalysis {
 
 function analysisResult(): DsregcmdAnalysisResult {
   return {
-    facts: nullFacts(),
+    facts: fixtureFacts(),
     derived: {
       joinType: "HybridEntraIdJoined",
       joinTypeLabel: "Hybrid Entra ID joined",

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   FolderEntry,
+  FolderListingResult,
   KnownSourceMetadata,
   LogEntry,
   LogSource,
@@ -201,12 +202,6 @@ function evidenceBundleMetadata(): EvidenceBundleMetadata {
   };
 }
 
-type FolderListing = {
-  sourceKind: "folder";
-  source: LogSource;
-  entries: FolderEntry[];
-  bundleMetadata: null;
-};
 
 function deferred<T>() {
   let resolvePromise: ((value: T) => void) | undefined;
@@ -296,7 +291,7 @@ describe("switchToTab", () => {
       sourceOpenMode: "aggregate-folder",
     });
 
-    const listing = deferred<FolderListing>();
+    const listing = deferred<FolderListingResult>();
     commands.listLogSourceFolder.mockReturnValue(listing.promise);
 
     const pending = switchToTab(fileB, {
@@ -360,7 +355,7 @@ describe("switchToTab", () => {
       entries: snapshotFor(fileC, "Start line").entries,
       activeSource: { kind: "folder", path: "C:/Windows/CCM/Logs/Start" },
     });
-    const firstListing = deferred<FolderListing>();
+    const firstListing = deferred<FolderListingResult>();
     commands.listLogSourceFolder.mockReturnValueOnce(firstListing.promise);
     commands.listLogSourceFolder.mockResolvedValueOnce({
       sourceKind: "folder",
@@ -423,7 +418,7 @@ describe("switchToTab", () => {
       activeSource: { kind: "file", path: fileC },
     });
 
-    const staleListing = deferred<FolderListing>();
+    const staleListing = deferred<FolderListingResult>();
     commands.listLogSourceFolder.mockReturnValueOnce(staleListing.promise);
 
     const folderSwitch = switchToTab(fileA, {
@@ -475,7 +470,7 @@ describe("switchToTab", () => {
       activeSource: { kind: "file", path: fileC },
     });
 
-    const listing = deferred<FolderListing>();
+    const listing = deferred<FolderListingResult>();
     const parsed = deferred<ParseResult>();
     commands.listLogSourceFolder.mockReturnValueOnce(listing.promise);
     commands.openLogFile.mockReturnValueOnce(parsed.promise);
@@ -550,6 +545,35 @@ describe("switchToTab", () => {
     expect(useLogStore.getState().activeSource).toEqual(fileSourceB);
     expect(useLogStore.getState().sourceEntries).toEqual([]);
     expect(useLogStore.getState().bundleMetadata).toBeNull();
+  });
+  it("returns null when a selected-file load becomes stale", async () => {
+    const fileSourceA: LogSource = { kind: "file", path: fileA };
+    const fileSourceB: LogSource = { kind: "file", path: fileB };
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+
+    const staleResult = deferred<ParseResult>();
+    commands.openLogFile.mockReturnValueOnce(staleResult.promise);
+
+    const pendingLoad = loadSelectedLogFile(fileA, fileSourceA);
+    await vi.waitFor(() => {
+      expect(commands.openLogFile).toHaveBeenCalledWith(fileA);
+    });
+
+    await switchToTab(fileB, {
+      sourceKind: "file",
+      sourcePath: fileB,
+      source: fileSourceB,
+    });
+
+    staleResult.resolve({
+      ...parseResult,
+      filePath: fileA,
+      entries: [makeEntry(1, fileA, "AppEnforce line")],
+    });
+
+    await expect(pendingLoad).resolves.toBeNull();
+    expect(useLogStore.getState().openFilePath).toBe(fileB);
+    expect(useLogStore.getState().activeSource).toEqual(fileSourceB);
   });
   it("invalidates a pending switch when reselecting the displayed tab", async () => {
     const fileSourceA: LogSource = { kind: "file", path: fileA };

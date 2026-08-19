@@ -28,6 +28,17 @@ export const eventLogWorkspace: WorkspaceDefinition = {
     useUiStore.getState().ensureWorkspaceVisible("event-log", trigger);
     // Lazy: evtx-store registers Tauri event listeners at module load.
     const { openEventLogSource } = await import("./open-event-log-source");
-    await openEventLogSource(source);
+    try {
+      await openEventLogSource(source);
+    } catch (error) {
+      console.error("[event-log] failed to open source", {
+        source,
+        trigger,
+        error,
+      });
+      if (trigger === "drag-drop.path-open") {
+        throw error;
+      }
+    }
   },
 };

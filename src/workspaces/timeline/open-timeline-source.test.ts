@@ -11,6 +11,30 @@ vi.mock("../../lib/commands", () => ({
 vi.mock("../../components/timeline/hooks/useTimelineBundle", () => ({
   buildTimelineFromSources: vi.fn(async () => ({ sources: [] })),
 }));
+function deferred<T>() {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+
+  return {
+    promise,
+    resolve(value: T) {
+      if (!resolvePromise) {
+        throw new Error("Deferred promise resolver was not initialized");
+      }
+      resolvePromise(value);
+    },
+  };
+}
+
+type TimelineBuildResult = Awaited<ReturnType<typeof buildTimelineFromSources>>;
+
+function bundleFor(paths: string[]): TimelineBuildResult {
+  return {
+    sources: paths.map((path, idx) => ({ path, idx })),
+  } as TimelineBuildResult;
+}
 
 describe("openTimelineSource", () => {
   beforeEach(() => {
@@ -87,6 +111,69 @@ describe("openTimelineSource", () => {
 
     await openTimelineSource({ kind: "folder", path: "/tmp/empty" });
     expect(buildTimelineFromSources).not.toHaveBeenCalled();
+  });
+  it("serializes overlapping opens so later files are not lost", async () => {
+    const listing = deferred<Awaited<ReturnType<typeof listLogFolder>>>();
+    const firstBuild = deferred<TimelineBuildResult>();
+    const secondBuild = deferred<TimelineBuildResult>();
+    const folderSource = { kind: "folder" as const, path: "/tmp/logs" };
+    const fileSource = { kind: "file" as const, path: "/tmp/other.log" };
+
+    vi.mocked(listLogFolder).mockReturnValueOnce(listing.promise);
+    vi.mocked(buildTimelineFromSources)
+      .mockImplementationOnce(async () => {
+        const bundle = await firstBuild.promise;
+        useTimelineStore.getState().setBundle(bundle);
+        return bundle;
+      })
+      .mockImplementationOnce(async () => {
+        const bundle = await secondBuild.promise;
+        useTimelineStore.getState().setBundle(bundle);
+        return bundle;
+      });
+
+    const folderOpen = openTimelineSource(folderSource);
+    const fileOpen = openTimelineSource(fileSource);
+
+    listing.resolve({
+      sourceKind: "folder",
+      source: folderSource,
+      entries: [
+        {
+          name: "a.log",
+          path: "/tmp/logs/a.log",
+          isDir: false,
+          sizeBytes: 1,
+          modifiedUnixMs: null,
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(buildTimelineFromSources).toHaveBeenCalledTimes(1);
+    });
+    expect(buildTimelineFromSources).toHaveBeenNthCalledWith(1, [
+      { path: "/tmp/logs/a.log" },
+    ]);
+
+    firstBuild.resolve(bundleFor(["/tmp/logs/a.log"]));
+    await vi.waitFor(() => {
+      expect(buildTimelineFromSources).toHaveBeenCalledTimes(2);
+    });
+    expect(buildTimelineFromSources).toHaveBeenNthCalledWith(2, [
+      { path: "/tmp/logs/a.log" },
+      { path: "/tmp/other.log" },
+    ]);
+
+    secondBuild.resolve(
+      bundleFor(["/tmp/logs/a.log", "/tmp/other.log"]),
+    );
+    await Promise.all([folderOpen, fileOpen]);
+
+    expect(useTimelineStore.getState().bundle?.sources.map((s) => s.path)).toEqual([
+      "/tmp/logs/a.log",
+      "/tmp/other.log",
+    ]);
   });
 
 });
