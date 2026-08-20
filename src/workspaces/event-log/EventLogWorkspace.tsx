@@ -1,20 +1,45 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
+import { diagnoseEventRecords } from "../../lib/commands";
 import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxCoverageBanner } from "./EvtxCoverageBanner";
+import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { selectVisibleRecords } from "./evtx-filter";
-import { filterTimelineToRecords, scopeLogEntries, type UnifiedTimeline } from "./unified-timeline";
+import {
+  filterTimelineToRecords,
+  scopeLogEntries,
+  type UnifiedTimeline,
+} from "./unified-timeline";
+import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
+import type { DiagnosisSummary } from "./types";
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
 const MAX_DETAIL_RATIO = 0.7;
+const DIAGNOSIS_DEBOUNCE_MS = 75;
+const EMPTY_TIMELINE: UnifiedTimeline = { items: [], unplaced: [] };
+
+type DiagnosisSnapshot = {
+  records: Parameters<typeof diagnoseEventRecords>[0];
+  coverageGaps: Exclude<Parameters<typeof diagnoseEventRecords>[1], undefined>;
+  timeline: UnifiedTimeline;
+  textEntries: Exclude<Parameters<typeof diagnoseEventRecords>[3], undefined>;
+};
+
+type DiagnosisPump = {
+  pending: DiagnosisSnapshot | null;
+  running: boolean;
+  timer: number | null;
+  revision: number;
+  mounted: boolean;
+};
 
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
@@ -29,7 +54,7 @@ export function EventLogWorkspace() {
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const scopedLogEntries = useMemo(
     () => scopeLogEntries(logEntries, activeLogSource, logSourceOpenMode),
-    [logEntries, activeLogSource, logSourceOpenMode]
+    [logEntries, activeLogSource, logSourceOpenMode],
   );
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
@@ -65,21 +90,61 @@ export function EventLogWorkspace() {
       timeZoneMode,
       timeWindow,
       nowEpoch,
-    ]
+    ],
   );
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
+  const coverageDetails = useEvtxStore((s) => s.coverageDetails);
+  const sourceManifest = useEvtxStore((s) => s.sourceManifest);
+  const tailCoverageGaps = useEvtxStore((s) => s.tailCoverageGaps);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
-
-  const [timeline, setTimeline] = useState<UnifiedTimeline>({ items: [], unplaced: [] });
-  const [timelineError, setTimelineError] = useState<string | null>(null);
-  const visibleTimeline = useMemo(
-    () => filterTimelineToRecords(timeline, visibleRecords, records),
-    [timeline, visibleRecords, records]
+  const diagnosisCoverageGaps = useMemo(
+    () =>
+      mergeDiagnosisCoverageGaps(
+        coverageDetails,
+        sourceManifest?.coverage ?? [],
+        coverageGaps,
+        tailCoverageGaps,
+      ),
+    [coverageDetails, sourceManifest, coverageGaps, tailCoverageGaps],
   );
 
+  const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
+  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
+  const diagnosisPumpRef = useRef<DiagnosisPump>({
+    pending: null,
+    running: false,
+    timer: null,
+    revision: 0,
+    mounted: false,
+  });
+
+  const [timeline, setTimeline] = useState<UnifiedTimeline>({
+    items: [],
+    unplaced: [],
+  });
+  const [timelinePending, setTimelinePending] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const timelineInputsRef = useRef<{
+    records: typeof records;
+    entries: typeof scopedLogEntries;
+  } | null>(null);
+  const timelineIsCurrent =
+    timelineInputsRef.current?.records === records &&
+    timelineInputsRef.current?.entries === scopedLogEntries;
+  const visibleTimeline = useMemo(
+    () =>
+      timelineIsCurrent
+        ? filterTimelineToRecords(timeline, visibleRecords, records)
+        : null,
+    [timeline, timelineIsCurrent, visibleRecords, records],
+  );
+  const diagnosisTimeline = timelineIsCurrent ? timeline : null;
+
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
-  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
+    null,
+  );
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -87,7 +152,10 @@ export function EventLogWorkspace() {
       const delta = resizeRef.current.startY - e.clientY;
       const newHeight = Math.max(
         MIN_DETAIL_HEIGHT,
-        Math.min(resizeRef.current.startHeight + delta, window.innerHeight * MAX_DETAIL_RATIO)
+        Math.min(
+          resizeRef.current.startHeight + delta,
+          window.innerHeight * MAX_DETAIL_RATIO,
+        ),
       );
       setDetailHeight(newHeight);
     };
@@ -106,31 +174,139 @@ export function EventLogWorkspace() {
       if (resizeRef.current) {
         resizeRef.current = null;
         document.body.style.cursor = "";
+
         document.body.style.userSelect = "";
       }
     };
   }, []);
+  useEffect(() => {
+    const pump = diagnosisPumpRef.current;
+    pump.mounted = true;
+    return () => {
+      pump.mounted = false;
+      pump.revision += 1;
+      if (pump.timer !== null) window.clearTimeout(pump.timer);
+      pump.timer = null;
+      pump.pending = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const pump = diagnosisPumpRef.current;
+    const revision = pump.revision + 1;
+    pump.revision = revision;
+    if (pump.timer !== null) window.clearTimeout(pump.timer);
+    pump.timer = null;
+    pump.pending = null;
+
+    if (
+      records.length === 0 &&
+      diagnosisCoverageGaps.length === 0 &&
+      scopedLogEntries.length === 0
+    ) {
+      setDiagnosis(null);
+      setDiagnosisError(null);
+      return () => {
+        if (pump.timer !== null) window.clearTimeout(pump.timer);
+        pump.timer = null;
+        if (pump.revision !== revision) return;
+        pump.pending = null;
+      };
+    }
+
+    if (diagnosisTimeline === null) {
+      setDiagnosis(null);
+      setDiagnosisError(null);
+      return () => {
+        if (pump.timer !== null) window.clearTimeout(pump.timer);
+        pump.timer = null;
+        if (pump.revision !== revision) return;
+        pump.pending = null;
+      };
+    }
+
+    pump.pending = {
+      records,
+      coverageGaps: diagnosisCoverageGaps,
+      timeline: diagnosisTimeline,
+      textEntries: scopedLogEntries,
+    };
+    setDiagnosis(null);
+    setDiagnosisError(null);
+
+    const run = () => {
+      pump.timer = null;
+      if (!pump.mounted || pump.running || pump.pending === null) return;
+      const snapshot = pump.pending;
+      pump.pending = null;
+      pump.running = true;
+      const startRevision = pump.revision;
+      void diagnoseEventRecords(
+        snapshot.records,
+        snapshot.coverageGaps,
+        snapshot.timeline,
+        snapshot.textEntries,
+      )
+        .then((summary) => {
+          if (pump.mounted && pump.revision === startRevision)
+            setDiagnosis(summary);
+        })
+        .catch((error: unknown) => {
+          if (!pump.mounted || pump.revision !== startRevision) return;
+          const message =
+            error instanceof Error ? error.message : String(error);
+          setDiagnosis(null);
+          setDiagnosisError(
+            `Operational diagnosis could not be built: ${message}`,
+          );
+        })
+        .finally(() => {
+          pump.running = false;
+          if (!pump.mounted || pump.pending === null || pump.timer !== null)
+            return;
+          pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
+        });
+    };
+
+    pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
+    return () => {
+      if (pump.timer !== null) window.clearTimeout(pump.timer);
+      pump.timer = null;
+      if (pump.revision !== revision) return;
+      pump.pending = null;
+    };
+  }, [records, diagnosisCoverageGaps, scopedLogEntries, diagnosisTimeline]);
 
   useEffect(() => {
     let cancelled = false;
     if (records.length === 0 && scopedLogEntries.length === 0) {
-      setTimeline({ items: [], unplaced: [] });
+      timelineInputsRef.current = { records, entries: scopedLogEntries };
+      setTimelinePending(false);
+      setTimeline(EMPTY_TIMELINE);
       setTimelineError(null);
       return () => {
         cancelled = true;
       };
     }
 
+    setTimelinePending(true);
+    timelineInputsRef.current = null;
+    setTimelineError(null);
+
     void buildUnifiedTimeline(records, scopedLogEntries)
       .then((nextTimeline) => {
         if (cancelled) return;
+        setTimelinePending(false);
+        timelineInputsRef.current = { records, entries: scopedLogEntries };
         setTimeline(nextTimeline);
         setTimelineError(null);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setTimelinePending(false);
         const message = error instanceof Error ? error.message : String(error);
-        setTimeline({ items: [], unplaced: [] });
+        timelineInputsRef.current = null;
+        setTimeline(EMPTY_TIMELINE);
         setTimelineError(`Unified timeline could not be built: ${message}`);
       });
 
@@ -142,7 +318,10 @@ export function EventLogWorkspace() {
   const hasData =
     scopedLogEntries.length > 0 ||
     (sourceMode !== null &&
-      (records.length > 0 || channels.length > 0 || coverageGaps.length > 0));
+      (records.length > 0 ||
+        channels.length > 0 ||
+        coverageGaps.length > 0 ||
+        diagnosisCoverageGaps.length > 0));
 
   if (!hasData && !isLoading) {
     return <SourcePicker />;
@@ -172,14 +351,30 @@ export function EventLogWorkspace() {
         overflow: "hidden",
       }}
     >
-      {isLoading && (
-        <ProgressBar style={{ width: "100%", flexShrink: 0 }} />
+      {diagnosisError && (
+        <div
+          role="alert"
+          style={{
+            color: tokens.colorPaletteRedForeground1,
+            padding: "4px 12px",
+          }}
+        >
+          {diagnosisError}
+        </div>
       )}
+      {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
       <EvtxFilterBar />
       <EvtxCoverageBanner />
+      <EventDiagnosisPanel summary={diagnosis} />
 
       {timelineError && (
-        <div role="alert" style={{ color: tokens.colorPaletteRedForeground1, padding: "4px 12px" }}>
+        <div
+          role="alert"
+          style={{
+            color: tokens.colorPaletteRedForeground1,
+            padding: "4px 12px",
+          }}
+        >
           {timelineError}
         </div>
       )}
@@ -211,7 +406,10 @@ export function EventLogWorkspace() {
               overflowX: "hidden",
             }}
           >
-            <UnifiedTimelineView timeline={visibleTimeline} />
+            <UnifiedTimelineView
+              timeline={visibleTimeline ?? EMPTY_TIMELINE}
+              pending={timelinePending}
+            />
           </div>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <EvtxTimeline nowEpoch={nowEpoch} />
@@ -229,7 +427,10 @@ export function EventLogWorkspace() {
                 }}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  resizeRef.current = { startY: e.clientY, startHeight: detailHeight };
+                  resizeRef.current = {
+                    startY: e.clientY,
+                    startHeight: detailHeight,
+                  };
                   document.body.style.cursor = "row-resize";
                   document.body.style.userSelect = "none";
                 }}

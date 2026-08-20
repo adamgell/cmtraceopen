@@ -176,6 +176,18 @@ pub struct ProviderMetadata {
     pub source_os_build: Option<u32>,
 }
 
+fn compare_event_stable(left: &ProviderEvent, right: &ProviderEvent) -> std::cmp::Ordering {
+    left.description
+        .as_deref()
+        .cmp(&right.description.as_deref())
+        .then_with(|| left.log_name.as_deref().cmp(&right.log_name.as_deref()))
+        .then_with(|| left.template.as_deref().cmp(&right.template.as_deref()))
+        .then_with(|| left.level.cmp(&right.level))
+        .then_with(|| left.task.cmp(&right.task))
+        .then_with(|| left.opcode.cmp(&right.opcode))
+        .then_with(|| left.keywords.cmp(&right.keywords))
+}
+
 impl ProviderMetadata {
     /// Finds the definition for `event_id`, preferring an exact `version` match and channel match.
     ///
@@ -190,20 +202,38 @@ impl ProviderMetadata {
         version: Option<u32>,
         log_name: Option<&str>,
     ) -> Option<&ProviderEvent> {
+        let exact_channel_available = log_name.is_some_and(|actual| {
+            self.events.iter().any(|event| {
+                event.id == event_id
+                    && event
+                        .log_name
+                        .as_deref()
+                        .is_some_and(|expected| expected.eq_ignore_ascii_case(actual))
+            })
+        });
         let candidates = self.events.iter().filter(|event| {
             event.id == event_id
-                && match (event.log_name.as_deref(), log_name) {
-                    (Some(expected), Some(actual)) => expected.eq_ignore_ascii_case(actual),
-                    (Some(_), None) => false,
-                    (None, _) => true,
+                && match (event.log_name.as_deref(), log_name, exact_channel_available) {
+                    (Some(expected), Some(actual), true) => expected.eq_ignore_ascii_case(actual),
+                    (None, Some(_), false) => true,
+                    (None, None, _) => true,
+                    _ => false,
                 }
         });
         if let Some(version) = version {
-            if let Some(exact) = candidates.clone().find(|event| event.version == version) {
+            if let Some(exact) = candidates
+                .clone()
+                .filter(|event| event.version == version)
+                .max_by(|left, right| compare_event_stable(left, right))
+            {
                 return Some(exact);
             }
         }
-        candidates.max_by_key(|event| event.version)
+        candidates.max_by(|left, right| {
+            left.version
+                .cmp(&right.version)
+                .then_with(|| compare_event_stable(left, right))
+        })
     }
     /// Renders the selected event definition without consulting a Windows registry.
     ///
@@ -216,7 +246,10 @@ impl ProviderMetadata {
         log_name: Option<&str>,
         insertions: &[String],
     ) -> Option<RenderedDescription> {
-        let template = self.event(event_id, version, log_name)?.description.as_deref()?;
+        let template = self
+            .event(event_id, version, log_name)?
+            .description
+            .as_deref()?;
         Some(render_description(template, insertions))
     }
 
@@ -470,6 +503,62 @@ mod tests {
     }
 
     #[test]
+    fn exact_channel_match_beats_wildcard_at_the_same_version() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 42,
+                    version: 3,
+                    description: Some("wildcard".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 42,
+                    version: 3,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(42, Some(3), Some("provider/admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn channel_tier_precedes_version_fallback() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 43,
+                    version: 9,
+                    description: Some("wildcard-newer".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 43,
+                    version: 2,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin-older".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(43, Some(7), Some("Provider/Admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin-older")
+        );
+    }
+
+    #[test]
     fn event_lookup_requires_the_captured_channel() {
         let metadata = ProviderMetadata {
             events: vec![
@@ -502,7 +591,9 @@ mod tests {
                 .and_then(|event| event.description.as_deref()),
             Some("operational")
         );
-        assert!(metadata.event(42, Some(0), Some("Provider/Debug")).is_none());
+        assert!(metadata
+            .event(42, Some(0), Some("Provider/Debug"))
+            .is_none());
     }
 
     #[test]

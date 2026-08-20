@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   EVTX_EXPORT_FORMATS,
   exportPayload,
@@ -42,6 +42,15 @@ describe("event export invocation", () => {
     expect(exportPayload("html", input)[0]).not.toHaveProperty("rawXml");
     expect(exportPayload("html", input)[0]).not.toHaveProperty("eventData");
     expect(exportPayload("rawXml", input)[0]).toHaveProperty("rawXml");
+  });
+
+  it("types reduced and lossless payloads by export format", () => {
+    const input = [record()];
+
+    expectTypeOf(exportPayload("csv", input)).toEqualTypeOf<
+      Array<Omit<EvtxRecord, "rawXml" | "eventData">>
+    >();
+    expectTypeOf(exportPayload("json", input)).toEqualTypeOf<EvtxRecord[]>();
   });
 
   it("rejects malformed IPC byte counts instead of claiming success", () => {

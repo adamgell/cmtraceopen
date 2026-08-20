@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventLogSourceManifest } from "./types";
 
 const expandEventLogSources = vi.hoisted(() => vi.fn());
@@ -10,6 +10,10 @@ vi.mock("./evtx-store", () => ({
 }));
 
 const { openEventLogSources } = await import("./open-event-log-source");
+beforeEach(() => {
+  expandEventLogSources.mockReset();
+  parseManifest.mockReset();
+});
 
 describe("openEventLogSources provenance", () => {
   it("keeps backend archive and VSS kinds when the picker reports a generic file", async () => {
@@ -33,4 +37,5 @@ describe("openEventLogSources provenance", () => {
       "vss",
     ]);
   });
+
 });

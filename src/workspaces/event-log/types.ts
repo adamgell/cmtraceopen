@@ -14,6 +14,8 @@ export interface EvtxRecord {
   eventData: EvtxField[];
   rawXml: string;
   sourceLabel: string;
+  /** Distinguishes archived text records from Windows event records. */
+  originKind?: "event" | "log";
   /** Provider-defined task grouping, absent when the event declares none. */
   task?: number | null;
   /** Operation within the task. */
@@ -193,4 +195,151 @@ export interface EventQueryFilterSubset {
   time?: { kind: "last"; milliseconds: number };
   levels?: number[];
   providers?: string[];
+}
+export type DiagnosisCoverageState =
+  | "covered"
+  | "unknown"
+  | "absent"
+  | "accessDenied"
+  | "capped"
+  | "skipped"
+  | "unsupported"
+  | "malformed"
+  | "parseFailed";
+
+export type DiagnosisFindingClass =
+  | "confirmedFailure"
+  | "likelyContributor"
+  | "symptom"
+  | "recovered"
+  | "contradictoryEvidence"
+  | "coverageGap"
+  | "unknown";
+
+export type DiagnosisFindingSeverity = "info" | "warning" | "error" | "critical";
+export type DiagnosisFindingConfidence = "unknown" | "low" | "medium" | "high";
+
+export interface DiagnosisIntuneEvidence {
+  evidenceId: string;
+  sourceArtifactId: string;
+}
+
+export interface DiagnosisSccmEvidence {
+  artifactId: string;
+  entryId: string;
+  lineStart?: number | null;
+  lineEnd?: number | null;
+}
+
+export interface DiagnosisTextLogEvidence {
+  source: string;
+  filePath: string;
+  lineNumber: number;
+  entryId: number;
+}
+
+export interface DiagnosisEventEvidence {
+  source: string;
+  provider: string;
+  eventId: number;
+  recordId: number;
+  recordIdText?: string | null;
+  fallbackIdentity?: string | null;
+  machine?: string | null;
+  channel?: string | null;
+  activityId?: string | null;
+}
+
+export type DiagnosisEvidence =
+  | { kind: "intune"; value: DiagnosisIntuneEvidence }
+  | { kind: "esp"; value: DiagnosisIntuneEvidence }
+  | { kind: "sccm"; value: DiagnosisSccmEvidence }
+  | { kind: "dsregcmdRaw"; value: string }
+  | { kind: "textLog"; value: DiagnosisTextLogEvidence }
+  | { kind: "event"; value: DiagnosisEventEvidence };
+
+export interface DiagnosisCoverageGap {
+  id: string;
+  source: string;
+  state: DiagnosisCoverageState;
+  detail: string;
+  evidence: DiagnosisEvidence[];
+}
+
+export interface DiagnosisFinding {
+  findingId: string;
+  class: DiagnosisFindingClass;
+  severity: DiagnosisFindingSeverity;
+  confidence: DiagnosisFindingConfidence;
+  title: string;
+  summary: string;
+  evidence: DiagnosisEvidence[];
+  coverageGaps: DiagnosisCoverageGap[];
+  recommendedChecks: string[];
+}
+
+export interface DiagnosisErrorToken {
+  raw: string;
+  decimal?: number | null;
+  hex?: string | null;
+  malformed: boolean;
+  found: boolean;
+  description?: string | null;
+  category?: string | null;
+}
+
+export interface EventDiagnosis {
+  evidence: DiagnosisEvidence[];
+  family: "autopilot" | "esp" | "mdmEnrollment" | "configMgrClient" | "other";
+  findings: DiagnosisFinding[];
+  errorTokens: DiagnosisErrorToken[];
+}
+
+export type DiagnosisCorrelationBasis =
+  | "exactIdentifier"
+  | "candidateIdentifier"
+  | "timestampOnly";
+export type DiagnosisCorrelationStatus =
+  | "exact"
+  | "candidate"
+  | "ambiguous"
+  | "coverageBlocked"
+  | "notCausal";
+
+export interface DiagnosisCorrelationEvidence {
+  originId: string;
+  field: string;
+  value: string;
+}
+
+export interface DiagnosisCorrelationEdge {
+  left: string;
+  right: string | null;
+  basis: DiagnosisCorrelationBasis;
+  status: DiagnosisCorrelationStatus;
+  candidateIds: string[];
+  evidence: DiagnosisCorrelationEvidence[];
+}
+
+export interface DiagnosisOverview {
+  outcome:
+    | "confirmedFailure"
+    | "contradictoryEvidence"
+    | "symptomsOnly"
+    | "insufficientEvidence"
+    | "noFindings";
+  headline: string;
+  findingCount: number;
+  coverageGapCount: number;
+  evidenceCount: number;
+  correlationCount: number;
+}
+
+export interface DiagnosisSummary {
+  findings: DiagnosisFinding[];
+  evidence: DiagnosisEvidence[];
+  coverageGaps: DiagnosisCoverageGap[];
+  correlations: DiagnosisCorrelationEdge[];
+  events: EventDiagnosis[];
+  overview: DiagnosisOverview;
 }

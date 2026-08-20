@@ -19,10 +19,9 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::intune::apps::windows::common::redact_text as shared_redact_text;
 use cmtraceopen_parser::intune::device::windows::compliance::{
     analyze_compliance, analyze_compliance_bundle, decode_bundle, redact_text,
-    redacted_export_projection,
-    ComplianceAccessDecision, ComplianceAccessFact, ComplianceCustomFact, ComplianceCustomState,
-    ComplianceInput, ComplianceReportState, ComplianceServiceFact, ComplianceServiceState,
-    ComplianceSnapshot, ComplianceSourceInput,
+    redacted_export_projection, ComplianceAccessDecision, ComplianceAccessFact,
+    ComplianceCustomFact, ComplianceCustomState, ComplianceInput, ComplianceReportState,
+    ComplianceServiceFact, ComplianceServiceState, ComplianceSnapshot, ComplianceSourceInput,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneEvidenceRef, IntuneNamedValue, IntuneObservationContext,
@@ -30,8 +29,7 @@ use cmtraceopen_parser::intune::evidence::{
     IntuneTimestampKind,
 };
 use cmtraceopen_parser::intune::normalized::{
-    NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,
-    NormalizedWindowsEvent,
+    NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport, NormalizedWindowsEvent,
 };
 use serde_json::{json, Value};
 use support::{
@@ -991,11 +989,8 @@ fn re_collecting_the_same_records_does_not_change_the_analysis() {
 
         let doubled = ComplianceInput {
             events: [input.events.clone(), input.events.clone()].concat(),
-            setting_reports: [
-                input.setting_reports.clone(),
-                input.setting_reports.clone(),
-            ]
-            .concat(),
+            setting_reports: [input.setting_reports.clone(), input.setting_reports.clone()]
+                .concat(),
             ..input
         };
         assert_eq!(
@@ -1019,7 +1014,9 @@ fn irrelevant_evidence_does_not_change_an_existing_conclusion() {
         let baseline = conclusions(&analyze_compliance(&input));
 
         let mut widened = input;
-        widened.events.push(evidence_that_says_nothing("irrelevant-1"));
+        widened
+            .events
+            .push(evidence_that_says_nothing("irrelevant-1"));
         widened
             .events
             .insert(0, evidence_that_says_nothing("irrelevant-2"));
@@ -1384,7 +1381,11 @@ fn redaction_preserves_states_coverage_and_evidence() {
 const SHARED_GRAMMAR_SPANS: [(&str, &str, &str); 9] = [
     // A SID with the minimum identifying sub-authority count. The fork required
     // one more group than the owner, so exactly this shape was exported raw.
-    ("short SID", "owner S-1-5-21-1010 evaluated", "S-1-5-21-1010"),
+    (
+        "short SID",
+        "owner S-1-5-21-1010 evaluated",
+        "S-1-5-21-1010",
+    ),
     // The legacy profile root. The fork matched only `Users`.
     (
         "legacy profile root",
@@ -1408,11 +1409,7 @@ const SHARED_GRAMMAR_SPANS: [(&str, &str, &str); 9] = [
         r"reading \\FILESRV01\share\baseline.json",
         "FILESRV01",
     ),
-    (
-        "account field",
-        r"RunAsUser = CONTOSO\jsmith",
-        "jsmith",
-    ),
+    ("account field", r"RunAsUser = CONTOSO\jsmith", "jsmith"),
     (
         "tenant id field",
         "TenantId: 99999999-8888-4777-8666-555555555555",
@@ -1462,7 +1459,9 @@ fn the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte() {
         let shared = shared_redact_text(input);
         let lane = redact_text(input);
         failures.require(shared == lane, || {
-            format!("{concern}: shared grammar produced {shared:?} but compliance produced {lane:?}")
+            format!(
+                "{concern}: shared grammar produced {shared:?} but compliance produced {lane:?}"
+            )
         });
     }
     failures.assert_empty("compliance redaction grammar parity");

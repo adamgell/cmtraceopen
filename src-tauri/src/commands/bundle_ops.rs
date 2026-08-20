@@ -255,24 +255,14 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
             }
             Ok(None) => {}
             Err(error) => {
-                push_collection_error(
-                    &mut child_errors,
-                    &mut truncated,
-                    &dir,
-                    &error.to_string(),
-                );
+                push_collection_error(&mut child_errors, &mut truncated, &dir, &error.to_string());
                 continue;
             }
         }
         let identity = match fs::canonicalize(&dir) {
             Ok(path) => path,
             Err(error) => {
-                push_collection_error(
-                    &mut child_errors,
-                    &mut truncated,
-                    &dir,
-                    &error.to_string(),
-                );
+                push_collection_error(&mut child_errors, &mut truncated, &dir, &error.to_string());
                 continue;
             }
         };
@@ -292,12 +282,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                     "event=collect_files_recursive_skip reason=read_dir_error path=\"{}\" error=\"{error}\"",
                     dir.display()
                 );
-                push_collection_error(
-                    &mut child_errors,
-                    &mut truncated,
-                    &dir,
-                    &error.to_string(),
-                );
+                push_collection_error(&mut child_errors, &mut truncated, &dir, &error.to_string());
                 continue;
             }
         };
@@ -491,6 +476,7 @@ fn unsafe_entry_metadata(metadata: &fs::Metadata) -> bool {
         use std::os::windows::fs::MetadataExt;
         return metadata.file_attributes() & 0x400 != 0;
     }
+    #[cfg(not(target_os = "windows"))]
     false
 }
 

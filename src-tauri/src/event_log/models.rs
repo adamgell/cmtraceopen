@@ -15,11 +15,20 @@ pub enum EvtxCoverageGapKind {
     LimitReached,
     Empty,
     File,
+    /// A rejected, truncated, or zero-filled EVTX chunk. `chunk_id` identifies its region.
     Chunk,
     Record,
     Xml,
     Provider,
     Limit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EvtxOriginKind {
+    #[default]
+    Event,
+    Log,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +44,11 @@ pub struct EvtxCoverageGap {
 }
 
 impl EvtxCoverageGap {
-    pub fn new(source: impl Into<String>, kind: EvtxCoverageGapKind, reason: impl Into<String>) -> Self {
+    pub fn new(
+        source: impl Into<String>,
+        kind: EvtxCoverageGapKind,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             source: source.into(),
             kind,
@@ -89,6 +102,8 @@ pub struct EvtxRecord {
     #[serde(default)]
     pub raw_xml: String,
     pub source_label: String,
+    #[serde(default)]
+    pub origin_kind: EvtxOriginKind,
     /// Provider-defined task grouping, when the event declares one.
     #[serde(default)]
     pub task: Option<u32>,
@@ -128,6 +143,25 @@ pub struct EvtxRecord {
     /// Columns produced by an EvtxECmd map, empty when no map covers this event type.
     #[serde(default)]
     pub mapped: Vec<super::maps::MappedColumn>,
+}
+
+pub(crate) const MAX_SAFE_EVENT_RECORD_ID: u64 = 9_007_199_254_740_991;
+
+pub(crate) fn canonical_event_record_id_text(record: &EvtxRecord) -> String {
+    record
+        .event_record_id_text
+        .as_deref()
+        .filter(|value| {
+            !value.is_empty()
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && value.parse::<u64>().is_ok()
+        })
+        .filter(|value| {
+            record.event_record_id > MAX_SAFE_EVENT_RECORD_ID
+                || value.parse::<u64>().ok() == Some(record.event_record_id)
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| record.event_record_id.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

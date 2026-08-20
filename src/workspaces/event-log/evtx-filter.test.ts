@@ -40,7 +40,7 @@ const visible = (
     filterEventIds: "",
     filterSearch: "",
     quickFilter,
-    visibleColumns: ["provider", "message"],
+    visibleColumns: ["message"],
   });
 describe("parseEventIdFilter", () => {
   it("returns null when the box constrains nothing", () => {

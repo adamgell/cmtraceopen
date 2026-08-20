@@ -1,16 +1,16 @@
 pub mod archive;
-pub mod commands;
 pub mod capture;
+pub mod commands;
 pub mod event_node;
 pub mod export;
-pub mod writer;
+pub mod fetch;
 pub mod maps;
 pub mod models;
 pub mod parser;
-pub mod fetch;
 pub mod provider_db;
 pub mod rendered;
 pub mod timeline;
+pub mod writer;
 
 #[cfg(target_os = "windows")]
 pub mod live;

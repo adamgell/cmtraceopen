@@ -21,6 +21,7 @@ fn is_unavailable_message_error(code: u32) -> bool {
 #[cfg(any(target_os = "windows", test))]
 fn is_unavailable_provider_error(message: &str) -> bool {
     message.contains("0x80070002")
+        || message.contains("0x8007000D")
         || message.contains("0x80070715")
         || message.contains("0x80073AAF")
         || message.contains("0x80073B01")
@@ -45,6 +46,7 @@ pub struct CaptureError {
 }
 
 impl CaptureError {
+    #[cfg(not(target_os = "windows"))]
     fn unsupported() -> Self {
         Self {
             kind: CaptureErrorKind::Unsupported,
@@ -132,18 +134,16 @@ fn trim_provider_text(value: String) -> String {
         .to_string()
 }
 
-
 #[cfg(target_os = "windows")]
 mod windows_capture {
     use super::*;
     use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage, ProviderMetadata};
-    use std::collections::BTreeMap;
     use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{
-        ERROR_EVT_CHANNEL_NOT_FOUND, ERROR_EVT_MESSAGE_ID_NOT_FOUND, ERROR_EVT_MESSAGE_NOT_FOUND,
-        ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS,
-        ERROR_NOT_FOUND,
+        ERROR_EVT_CHANNEL_NOT_FOUND, ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND,
+        ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_FOUND, ERROR_NO_MORE_ITEMS,
     };
     use windows::Win32::System::EventLog::*;
 
@@ -206,9 +206,6 @@ mod windows_capture {
             _ => Err("metadata value has an invalid type".to_string()),
         }
     }
-    fn optional_nonzero_number(value: OwnedVariant) -> Result<Option<u64>, String> {
-        Ok(optional_number(value)?.filter(|value| *value != 0))
-    }
     fn optional_message_id(value: OwnedVariant) -> Result<Option<u32>, String> {
         let Some(value) = optional_number(value)? else {
             return Ok(None);
@@ -221,15 +218,13 @@ mod windows_capture {
         u32::from((raw_id & 0xFFFF) as u16)
     }
     fn opcode_metadata_key(raw_value: u64) -> u64 {
-        let opcode = (raw_value >> 16) & 0xFFFF;
-        let task = raw_value & 0xFFFF;
-        if task == 0 { opcode } else { raw_value }
+        (raw_value >> 16) & 0xFFFF
     }
     fn metadata_key_value(target: u8, raw_value: u64) -> u64 {
-        if target == 1 {
-            opcode_metadata_key(raw_value)
-        } else {
-            raw_value
+        match target {
+            0 => raw_value & 0xFFFF,
+            1 => opcode_metadata_key(raw_value),
+            _ => raw_value,
         }
     }
     fn optional_string(value: OwnedVariant) -> Result<Option<String>, String> {
@@ -273,12 +268,6 @@ mod windows_capture {
     }
     fn write_i64(output: &mut Vec<u8>, value: i64) {
         output.extend_from_slice(&value.to_le_bytes());
-    }
-    fn write_optional_i64(output: &mut Vec<u8>, value: Option<u32>) {
-        match value {
-            Some(value) => write_i64(output, i64::from(value)),
-            None => write_i64(output, -1),
-        }
     }
     fn write_levels_map(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
         if map.is_empty() {
@@ -346,9 +335,11 @@ mod windows_capture {
                 }
             }
             let from_data = &template[start..];
-            let Some(close) = from_data.char_indices().skip(5).find_map(|(index, ch)| {
-                (ch == '>').then_some(index)
-            }) else {
+            let Some(close) = from_data
+                .char_indices()
+                .skip(5)
+                .find_map(|(index, ch)| (ch == '>').then_some(index))
+            else {
                 nodes.push(TemplateNode::Raw(from_data.to_string()));
                 break;
             };
@@ -360,7 +351,13 @@ mod windows_capture {
             let element = &from_data[..element_end];
             let chars: Vec<char> = element.chars().collect();
             let mut pos = 5;
-            let mut values = [String::new(), String::new(), String::new(), String::new(), String::new()];
+            let mut values = [
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ];
             let mut raw = false;
             while pos < chars.len() {
                 while pos < chars.len() && matches!(chars[pos], ' ' | '\t' | '\r' | '\n' | '/') {
@@ -370,7 +367,9 @@ mod windows_capture {
                     break;
                 }
                 let name_start = pos;
-                while pos < chars.len() && !matches!(chars[pos], '=' | ' ' | '\t' | '\r' | '\n' | '/') {
+                while pos < chars.len()
+                    && !matches!(chars[pos], '=' | ' ' | '\t' | '\r' | '\n' | '/')
+                {
                     pos += 1;
                 }
                 let name: String = chars[name_start..pos].iter().collect();
@@ -451,7 +450,10 @@ mod windows_capture {
         let mut keywords = event.keywords.clone();
         keywords.sort_unstable();
         keywords.dedup();
-        write_i32(&mut output, i32::try_from(keywords.len()).unwrap_or(i32::MAX));
+        write_i32(
+            &mut output,
+            i32::try_from(keywords.len()).unwrap_or(i32::MAX),
+        );
         for keyword in keywords {
             write_i64(&mut output, keyword as i64);
         }
@@ -473,7 +475,12 @@ mod windows_capture {
     fn write_i64_dictionary(output: &mut Vec<u8>, map: &BTreeMap<String, String>) {
         let mut entries: Vec<(i64, &str)> = map
             .iter()
-            .filter_map(|(key, value)| key.parse().ok().map(|key| (key, value.as_str())))
+            .filter_map(|(key, value)| {
+                key.parse::<i64>()
+                    .ok()
+                    .or_else(|| key.parse::<u64>().ok().map(|value| value as i64))
+                    .map(|key| (key, value.as_str()))
+            })
             .collect();
         entries.sort_by_key(|(key, _)| *key);
         write_i32(output, i32::try_from(entries.len()).unwrap_or(i32::MAX));
@@ -506,14 +513,6 @@ mod windows_capture {
         // ProviderName and source provenance identify the database row, not rendered content.
         // The current parser model has no owning-publisher field, so it is the canonical null.
         write_string(&mut encoded, None);
-        write_optional_i64(&mut encoded, metadata.source_os_build);
-        write_i32(
-            &mut encoded,
-            i32::try_from(metadata.unavailable_categories.len()).unwrap_or(i32::MAX),
-        );
-        for category in &metadata.unavailable_categories {
-            write_string(&mut encoded, Some(category));
-        }
         write_sorted_blobs(
             &mut encoded,
             metadata.events.iter().map(encode_event).collect(),
@@ -545,12 +544,14 @@ mod windows_capture {
         channels: &BTreeMap<u32, ChannelReference>,
         channel_id: u64,
     ) -> Option<String> {
-        channels.get(&(channel_id as u32)).map(|channel| channel.path.clone())
+        channels
+            .get(&(channel_id as u32))
+            .map(|channel| channel.path.clone())
     }
     fn insert_named_metadata(map: &mut BTreeMap<String, String>, key: u64, value: String) {
         map.entry(key.to_string()).or_insert(value);
     }
-    fn keyword_bits(mask: u64) -> Vec<u64> {
+    fn keyword_bits(mut mask: u64) -> Vec<u64> {
         let mut bits = Vec::new();
         while mask != 0 {
             let bit = 1u64 << (u64::BITS - 1 - mask.leading_zeros());
@@ -614,7 +615,9 @@ mod windows_capture {
         mut read: impl FnMut(*mut EVT_VARIANT, u32, &mut u32) -> windows::core::Result<()>,
     ) -> Result<OwnedVariant, String> {
         if size == 0 || size > MAX_BUFFER_BYTES {
-            return Err(format!("metadata property size {size} exceeds bounded buffer"));
+            return Err(format!(
+                "metadata property size {size} exceeds bounded buffer"
+            ));
         }
         let words = (size + std::mem::size_of::<u64>() - 1) / std::mem::size_of::<u64>();
         let mut buffer = vec![0u64; words];
@@ -639,12 +642,16 @@ mod windows_capture {
         if let Err(error) = first {
             let code = win32_code(&error);
             if code != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!("property {} query failed (code {}): {}", property.0, code, error));
+                return Err(format!(
+                    "property {} query failed (code {}): {}",
+                    property.0, code, error
+                ));
             }
         } else {
             return Ok(None);
         }
-        let size = usize::try_from(used).map_err(|_| "metadata property size overflow".to_string())?;
+        let size =
+            usize::try_from(used).map_err(|_| "metadata property size overflow".to_string())?;
         read_variant(size, |destination, buffer_size, used| {
             EvtGetPublisherMetadataProperty(
                 metadata,
@@ -664,8 +671,10 @@ mod windows_capture {
         match get_publisher_variant(metadata, property) {
             Ok(value) => Ok((value, false)),
             Err(error)
-                if error.contains(&format!("code {}", ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0))
-                    || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
+                if error.contains(&format!(
+                    "code {}",
+                    ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0
+                )) || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
                     || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
             {
                 Ok((None, true))
@@ -681,21 +690,17 @@ mod windows_capture {
         let first = EvtGetEventMetadataProperty(metadata, property, 0, 0, None, &mut used);
         if let Err(error) = first {
             if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!("event property {} query failed: {}", property.0, error));
+                return Err(format!(
+                    "event property {} query failed: {}",
+                    property.0, error
+                ));
             }
         } else {
             return Err(format!("event property {} is empty", property.0));
         }
         let size = usize::try_from(used).map_err(|_| "event property size overflow".to_string())?;
         read_variant(size, |destination, buffer_size, used| {
-            EvtGetEventMetadataProperty(
-                metadata,
-                property,
-                0,
-                buffer_size,
-                Some(destination),
-                used,
-            )
+            EvtGetEventMetadataProperty(metadata, property, 0, buffer_size, Some(destination), used)
         })
     }
 
@@ -713,7 +718,8 @@ mod windows_capture {
         } else {
             return Err(format!("object property {property} is empty"));
         }
-        let size = usize::try_from(used).map_err(|_| "object property size overflow".to_string())?;
+        let size =
+            usize::try_from(used).map_err(|_| "object property size overflow".to_string())?;
         read_variant(size, |destination, buffer_size, used| {
             EvtGetObjectArrayProperty(
                 array_handle,
@@ -726,7 +732,10 @@ mod windows_capture {
             )
         })
     }
-    unsafe fn format_message(metadata: EVT_HANDLE, message_id: u32) -> Result<Option<String>, String> {
+    unsafe fn format_message(
+        metadata: EVT_HANDLE,
+        message_id: u32,
+    ) -> Result<Option<String>, String> {
         let mut used = 0u32;
         let initial = EvtFormatMessage(
             Some(metadata),
@@ -818,42 +827,55 @@ mod windows_capture {
         };
         let array_handle = EvtHandle(array_handle);
         let mut count = 0u32;
-        EvtGetObjectArraySize(array_handle.0.0, &mut count)
+        EvtGetObjectArraySize(array_handle.0 .0, &mut count)
             .map_err(|error| format!("channel reference array size failed: {error}"))?;
-        let count = usize::try_from(count)
-            .map_err(|_| "channel reference size overflow".to_string())?;
+        let count =
+            usize::try_from(count).map_err(|_| "channel reference size overflow".to_string())?;
         if count > MAX_OBJECT_ARRAY_ITEMS {
             return Err("channel reference array exceeds bound".to_string());
         }
         let mut names = BTreeMap::new();
         for index in 0..count {
-            let index = u32::try_from(index)
-                .map_err(|_| "channel reference index overflow".to_string())?;
+            let index =
+                u32::try_from(index).map_err(|_| "channel reference index overflow".to_string())?;
             let channel_id = number(object_property(
-                array_handle.0.0,
+                array_handle.0 .0,
                 index,
                 EvtPublisherMetadataChannelReferenceID.0 as u32,
             )?)
             .ok_or_else(|| "channel reference ID has an invalid type".to_string())?;
             let path = string(object_property(
-                array_handle.0.0,
+                array_handle.0 .0,
                 index,
                 EvtPublisherMetadataChannelReferencePath.0 as u32,
             )?)
             .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
             let message_id = optional_message_id(object_property(
-                array_handle.0.0,
+                array_handle.0 .0,
                 index,
                 EvtPublisherMetadataChannelReferenceMessageID.0 as u32,
             )?)?;
-            names.insert(
-                channel_id as u32,
-                ChannelReference { path, message_id },
-            );
+            names.insert(channel_id as u32, ChannelReference { path, message_id });
         }
         Ok((names, unavailable))
     }
 
+    fn merge_provider_message(
+        message: &mut ProviderMessage,
+        provider_name: &str,
+        template: Option<String>,
+        text: Option<String>,
+    ) {
+        if message.provider_name.is_none() {
+            message.provider_name = Some(provider_name.to_string());
+        }
+        if message.template.is_none() {
+            message.template = template;
+        }
+        if message.text.is_none() {
+            message.text = text;
+        }
+    }
     unsafe fn capture_provider(
         publisher_name: &str,
         metadata_handle: EVT_HANDLE,
@@ -866,22 +888,26 @@ mod windows_capture {
         };
         let (channels, channels_unavailable) = channel_names(metadata_handle)?;
         if channels_unavailable {
-            metadata.unavailable_categories.insert("channels".to_string());
+            metadata
+                .unavailable_categories
+                .insert("channels".to_string());
         }
         let mut messages = BTreeMap::new();
         collect_messages(metadata_handle, &mut messages)?;
         for channel in channels.values() {
             if let Some(message_id) = channel.message_id {
                 let text = format_message(metadata_handle, message_id)?;
-                messages.entry(message_id as u64).or_insert(ProviderMessage {
-                    raw_id: message_id as u64,
-                    short_id: short_message_id(message_id),
-                    provider_name: Some(publisher_name.to_string()),
-                    template: None,
-                    tag: None,
-                    log_link: None,
-                    text,
-                });
+                messages
+                    .entry(message_id as u64)
+                    .or_insert(ProviderMessage {
+                        raw_id: message_id as u64,
+                        short_id: short_message_id(message_id),
+                        provider_name: Some(publisher_name.to_string()),
+                        template: None,
+                        tag: None,
+                        log_link: None,
+                        text,
+                    });
             }
         }
 
@@ -889,10 +915,34 @@ mod windows_capture {
             message.provider_name = Some(publisher_name.to_string());
         }
         for (array_property, name_property, value_property, message_property, target) in [
-            (EvtPublisherMetadataLevels, EvtPublisherMetadataLevelName, EvtPublisherMetadataLevelValue, EvtPublisherMetadataLevelMessageID, 3u8),
-            (EvtPublisherMetadataTasks, EvtPublisherMetadataTaskName, EvtPublisherMetadataTaskValue, EvtPublisherMetadataTaskMessageID, 0u8),
-            (EvtPublisherMetadataOpcodes, EvtPublisherMetadataOpcodeName, EvtPublisherMetadataOpcodeValue, EvtPublisherMetadataOpcodeMessageID, 1u8),
-            (EvtPublisherMetadataKeywords, EvtPublisherMetadataKeywordName, EvtPublisherMetadataKeywordValue, EvtPublisherMetadataKeywordMessageID, 2u8),
+            (
+                EvtPublisherMetadataLevels,
+                EvtPublisherMetadataLevelName,
+                EvtPublisherMetadataLevelValue,
+                EvtPublisherMetadataLevelMessageID,
+                3u8,
+            ),
+            (
+                EvtPublisherMetadataTasks,
+                EvtPublisherMetadataTaskName,
+                EvtPublisherMetadataTaskValue,
+                EvtPublisherMetadataTaskMessageID,
+                0u8,
+            ),
+            (
+                EvtPublisherMetadataOpcodes,
+                EvtPublisherMetadataOpcodeName,
+                EvtPublisherMetadataOpcodeValue,
+                EvtPublisherMetadataOpcodeMessageID,
+                1u8,
+            ),
+            (
+                EvtPublisherMetadataKeywords,
+                EvtPublisherMetadataKeywordName,
+                EvtPublisherMetadataKeywordValue,
+                EvtPublisherMetadataKeywordMessageID,
+                2u8,
+            ),
         ] {
             let (array_value, unavailable) =
                 optional_publisher_variant(metadata_handle, array_property)?;
@@ -916,36 +966,65 @@ mod windows_capture {
             };
             let array_handle = EvtHandle(array_handle);
             let mut count = 0u32;
-            EvtGetObjectArraySize(array_handle.0.0, &mut count)
-                .map_err(|error| format!("metadata array {} size failed: {error}", array_property.0))?;
-            let count = usize::try_from(count).map_err(|_| "metadata array size overflow".to_string())?;
+            EvtGetObjectArraySize(array_handle.0 .0, &mut count).map_err(|error| {
+                format!("metadata array {} size failed: {error}", array_property.0)
+            })?;
+            let count =
+                usize::try_from(count).map_err(|_| "metadata array size overflow".to_string())?;
             if count > MAX_OBJECT_ARRAY_ITEMS {
                 return Err(format!("metadata array {} exceeds bound", array_property.0));
             }
             for index in 0..count {
-                let index = u32::try_from(index).map_err(|_| "metadata array index overflow".to_string())?;
-                let name = string(object_property(array_handle.0.0, index, name_property.0 as u32)?)
-                    .ok_or_else(|| format!("metadata array {} name has an invalid type", array_property.0))?;
-                let raw_value = number(object_property(array_handle.0.0, index, value_property.0 as u32)?)
-                    .ok_or_else(|| format!("metadata array {} value has an invalid type", array_property.0))?;
+                let index = u32::try_from(index)
+                    .map_err(|_| "metadata array index overflow".to_string())?;
+                let name = string(object_property(
+                    array_handle.0 .0,
+                    index,
+                    name_property.0 as u32,
+                )?)
+                .ok_or_else(|| {
+                    format!(
+                        "metadata array {} name has an invalid type",
+                        array_property.0
+                    )
+                })?;
+                let raw_value = number(object_property(
+                    array_handle.0 .0,
+                    index,
+                    value_property.0 as u32,
+                )?)
+                .ok_or_else(|| {
+                    format!(
+                        "metadata array {} value has an invalid type",
+                        array_property.0
+                    )
+                })?;
                 let value = metadata_key_value(target, raw_value);
                 let message_id = optional_message_id(object_property(
-                    array_handle.0.0,
+                    array_handle.0 .0,
                     index,
                     message_property.0 as u32,
                 )?)?;
                 let message_text = if let Some(message_id) = message_id {
                     let text = format_message(metadata_handle, message_id)?;
-                    messages.entry(message_id as u64).or_insert(ProviderMessage {
-                        raw_id: message_id as u64,
-                        short_id: short_message_id(message_id),
-                        provider_name: Some(publisher_name.to_string()),
-                        template: None,
-                        tag: None,
-                        log_link: None,
-                        text: text.clone(),
-                    });
-                    category_message_text(Some(message_id), text.map(trim_provider_text), trim_provider_text(name))
+                    let entry =
+                        messages
+                            .entry(message_id as u64)
+                            .or_insert_with(|| ProviderMessage {
+                                raw_id: message_id as u64,
+                                short_id: short_message_id(message_id),
+                                provider_name: Some(publisher_name.to_string()),
+                                template: None,
+                                tag: None,
+                                log_link: None,
+                                text: text.clone(),
+                            });
+                    merge_provider_message(entry, publisher_name, None, text.clone());
+                    category_message_text(
+                        Some(message_id),
+                        text.map(trim_provider_text),
+                        trim_provider_text(name),
+                    )
                 } else {
                     category_message_text(None, None, trim_provider_text(name))
                 };
@@ -976,44 +1055,54 @@ mod windows_capture {
                 Err(error) => return Err(format!("event metadata enumeration failed: {error}")),
             };
             let id = optional_number(get_event_variant(event_handle.0, EventMetadataEventID)?)?
-                .ok_or_else(|| "event metadata is missing EventID".to_string())? as u32;
-            let version = optional_number(get_event_variant(event_handle.0, EventMetadataEventVersion)?)?
-                .unwrap_or(0) as u32;
-            let channel_index = optional_number(get_event_variant(event_handle.0, EventMetadataEventChannel)?)?
-                .unwrap_or(0);
+                .ok_or_else(|| "event metadata is missing EventID".to_string())?
+                as u32;
+            let version = optional_number(get_event_variant(
+                event_handle.0,
+                EventMetadataEventVersion,
+            )?)?
+            .unwrap_or(0) as u32;
+            let channel_index = optional_number(get_event_variant(
+                event_handle.0,
+                EventMetadataEventChannel,
+            )?)?
+            .unwrap_or(0);
             let log_name = resolve_channel_name(&channels, channel_index);
-            let level = optional_nonzero_number(get_event_variant(
+            let level =
+                optional_number(get_event_variant(event_handle.0, EventMetadataEventLevel)?)?
+                    .map(|value| value as u32);
+            let task = optional_number(get_event_variant(event_handle.0, EventMetadataEventTask)?)?
+                .map(|value| value as u32);
+            let opcode =
+                optional_number(get_event_variant(event_handle.0, EventMetadataEventOpcode)?)?
+                    .map(|value| value as u32);
+            let keywords = optional_number(get_event_variant(
                 event_handle.0,
-                EventMetadataEventLevel,
+                EventMetadataEventKeyword,
             )?)?
-            .map(|value| value as u32);
-            let task = optional_nonzero_number(get_event_variant(
+            .map(keyword_bits)
+            .unwrap_or_default();
+            let template = optional_template(get_event_variant(
                 event_handle.0,
-                EventMetadataEventTask,
-            )?)?
-            .map(|value| value as u32);
-            let opcode = optional_nonzero_number(get_event_variant(
+                EventMetadataEventTemplate,
+            )?)?;
+            let description = if let Some(message_id) = optional_message_id(get_event_variant(
                 event_handle.0,
-                EventMetadataEventOpcode,
-            )?)?
-            .map(|value| value as u32);
-            let keywords = optional_number(get_event_variant(event_handle.0, EventMetadataEventKeyword)?)?
-                .map(keyword_bits)
-                .unwrap_or_default();
-            let template = optional_template(get_event_variant(event_handle.0, EventMetadataEventTemplate)?)?;
-            let description = if let Some(message_id) =
-                optional_message_id(get_event_variant(event_handle.0, EventMetadataEventMessageID)?)?
-            {
+                EventMetadataEventMessageID,
+            )?)? {
                 let text = format_message(metadata_handle, message_id)?;
-                messages.entry(message_id as u64).or_insert(ProviderMessage {
-                    raw_id: message_id as u64,
-                    short_id: short_message_id(message_id),
-                    provider_name: Some(publisher_name.to_string()),
-                    template: template.clone(),
-                    tag: None,
-                    log_link: None,
-                    text: text.clone(),
-                });
+                let entry = messages
+                    .entry(message_id as u64)
+                    .or_insert_with(|| ProviderMessage {
+                        raw_id: message_id as u64,
+                        short_id: short_message_id(message_id),
+                        provider_name: Some(publisher_name.to_string()),
+                        template: template.clone(),
+                        tag: None,
+                        log_link: None,
+                        text: text.clone(),
+                    });
+                merge_provider_message(entry, publisher_name, template.clone(), text.clone());
                 event_message_text(Some(message_id), text.map(trim_provider_text))
             } else {
                 event_message_text(None, None)
@@ -1055,8 +1144,9 @@ mod windows_capture {
         let _capture_guard = CAPTURE_WRITE_LOCK
             .lock()
             .map_err(|_| CaptureError::traversal("provider capture lock is poisoned"))?;
-        let publisher_enum = unsafe { EvtOpenPublisherEnum(None, 0) }
-            .map_err(|error| CaptureError::traversal(format!("cannot open publisher enumeration: {error}")))?;
+        let publisher_enum = unsafe { EvtOpenPublisherEnum(None, 0) }.map_err(|error| {
+            CaptureError::traversal(format!("cannot open publisher enumeration: {error}"))
+        })?;
         let publisher_enum = EvtHandle(publisher_enum);
         let mut captured = Vec::new();
         let mut captured_items = 0usize;
@@ -1068,15 +1158,23 @@ mod windows_capture {
             let mut publisher_buffer = vec![0u16; BUFFER_RETRY];
             let mut used = 0u32;
             let publisher_name = loop {
-                match unsafe { EvtNextPublisherId(publisher_enum.0, Some(&mut publisher_buffer), &mut used) } {
+                match unsafe {
+                    EvtNextPublisherId(publisher_enum.0, Some(&mut publisher_buffer), &mut used)
+                } {
                     Ok(()) => {
-                        let length = usize::try_from(used).unwrap_or(0).min(publisher_buffer.len());
-                        break String::from_utf16_lossy(&publisher_buffer[..length]).trim_end_matches('\0').to_string();
+                        let length = usize::try_from(used)
+                            .unwrap_or(0)
+                            .min(publisher_buffer.len());
+                        break String::from_utf16_lossy(&publisher_buffer[..length])
+                            .trim_end_matches('\0')
+                            .to_string();
                     }
                     Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => {
                         hit_safety_bound = false;
                         if captured.is_empty() && failures.is_empty() {
-                            return Err(CaptureError::traversal("publisher enumeration returned no providers"));
+                            return Err(CaptureError::traversal(
+                                "publisher enumeration returned no providers",
+                            ));
                         }
                         break String::new();
                     }
@@ -1084,14 +1182,22 @@ mod windows_capture {
                         let required = usize::try_from(used).unwrap_or(0);
                         if required == 0 || required > MAX_BUFFER_BYTES / 2 {
                             hit_safety_bound = false;
-                            failures.push(ProviderCaptureFailure { provider_name: "<publisher enumeration>".to_string(), error: format!("publisher name buffer size {required} exceeds bound") });
+                            failures.push(ProviderCaptureFailure {
+                                provider_name: "<publisher enumeration>".to_string(),
+                                error: format!(
+                                    "publisher name buffer size {required} exceeds bound"
+                                ),
+                            });
                             break String::new();
                         }
                         publisher_buffer.resize(required + 1, 0);
                     }
                     Err(error) => {
                         hit_safety_bound = false;
-                        failures.push(ProviderCaptureFailure { provider_name: "<publisher enumeration>".to_string(), error: error.to_string() });
+                        failures.push(ProviderCaptureFailure {
+                            provider_name: "<publisher enumeration>".to_string(),
+                            error: error.to_string(),
+                        });
                         break String::new();
                     }
                 }
@@ -1129,10 +1235,12 @@ mod windows_capture {
                             }
                             captured_items += item_count;
                             let version_key = provider_version_key(&metadata);
-                            captured.push(crate::event_log::provider_db::CapturedProviderMetadata {
-                                metadata,
-                                version_key,
-                            });
+                            captured.push(
+                                crate::event_log::provider_db::CapturedProviderMetadata {
+                                    metadata,
+                                    version_key,
+                                },
+                            );
                         }
                         Err(error) => {
                             if is_unavailable_provider_error(&error) {
@@ -1169,7 +1277,9 @@ mod windows_capture {
         }
         if captured.is_empty() {
             if failures.is_empty() {
-                return Err(CaptureError::traversal("publisher enumeration exceeded its safety bound"));
+                return Err(CaptureError::traversal(
+                    "publisher enumeration exceeded its safety bound",
+                ));
             }
             return Err(CaptureError::provider_failures(failures));
         }
@@ -1186,224 +1296,288 @@ mod windows_capture {
             .map_err(CaptureError::traversal)?;
         Ok(())
     }
-#[cfg(test)]
-mod windows_tests {
-    use super::*;
+    #[cfg(test)]
+    mod windows_tests {
+        use super::*;
 
-    #[test]
-    fn null_optional_metadata_is_not_a_capture_error() {
-        assert_eq!(optional_number(OwnedVariant::Null).expect("null is valid"), None);
-        assert_eq!(optional_string(OwnedVariant::Null).expect("null is valid"), None);
-    }
-    #[test]
-    fn zero_optional_event_metadata_is_absent() {
-        assert_eq!(optional_nonzero_number(OwnedVariant::Number(0)).expect("zero is valid"), None);
-        assert_eq!(optional_nonzero_number(OwnedVariant::Number(7)).expect("number is valid"), Some(7));
-        assert_eq!(optional_template(OwnedVariant::String(String::new())).expect("empty is valid"), None);
-        assert_eq!(optional_template(OwnedVariant::String("xml".to_string())).expect("text is valid"), Some("xml".to_string()));
-    }
+        #[test]
+        fn null_optional_metadata_is_not_a_capture_error() {
+            assert_eq!(
+                optional_number(OwnedVariant::Null).expect("null is valid"),
+                None
+            );
+            assert_eq!(
+                optional_string(OwnedVariant::Null).expect("null is valid"),
+                None
+            );
+        }
+        #[test]
+        fn empty_optional_template_is_absent() {
+            assert_eq!(
+                optional_template(OwnedVariant::String(String::new())).expect("empty is valid"),
+                None
+            );
+            assert_eq!(
+                optional_template(OwnedVariant::String("xml".to_string())).expect("text is valid"),
+                Some("xml".to_string())
+            );
+        }
 
-    #[test]
-    fn version_keys_are_canonical_base32() {
-        let key = canonical_version_key(&ProviderMetadata::default());
-        assert!(key.starts_with("vk1:"));
-        assert!(key[4..]
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || b"234567".contains(&byte)));
-        assert_eq!(base32(&[0]), "aa");
-        assert_eq!(base32(&[0xff; 32]).len(), 52);
-    }
-    #[test]
-    fn template_signature_uses_rendered_fields_not_attribute_order() {
-        let first = ProviderEvent {
+        #[test]
+        fn version_keys_are_canonical_base32() {
+            let key = canonical_version_key(&ProviderMetadata::default());
+            assert!(key.starts_with("vk1:"));
+            assert!(key[4..]
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || b"234567".contains(&byte)));
+            assert_eq!(base32(&[0]), "aa");
+            assert_eq!(base32(&[0xff; 32]).len(), 52);
+        }
+        #[test]
+        fn template_signature_uses_rendered_fields_not_attribute_order() {
+            let first = ProviderEvent {
             template: Some(
                 r#"<template><data name="Name" inType="win:UnicodeString" length="4"/></template>"#
                     .to_string(),
             ),
             ..ProviderEvent::default()
         };
-        let second = ProviderEvent {
+            let second = ProviderEvent {
             template: Some(
                 r#"<template><data length="4" inType="win:UnicodeString" name="Name"/></template>"#
                     .to_string(),
             ),
             ..ProviderEvent::default()
         };
-        assert_eq!(encode_event(&first), encode_event(&second));
-    }
-    #[test]
-    fn aggregate_metadata_item_count_is_bounded() {
-        let metadata = ProviderMetadata {
-            events: vec![ProviderEvent::default()],
-            messages: vec![ProviderMessage::default()],
-            levels: BTreeMap::from([("1".to_string(), "level".to_string())]),
-            tasks: BTreeMap::from([("2".to_string(), "task".to_string())]),
-            opcodes: BTreeMap::from([("3".to_string(), "opcode".to_string())]),
-            keywords: BTreeMap::from([("4".to_string(), "keyword".to_string())]),
-            ..ProviderMetadata::default()
-        };
-        assert_eq!(metadata_item_count(&metadata), 6);
-        assert!(metadata_item_count(&metadata) < MAX_CAPTURED_METADATA_ITEMS);
-    }
-    #[test]
-    fn zero_event_values_are_preserved_but_message_sentinel_is_absent() {
-        assert_eq!(optional_number(OwnedVariant::Number(0)).expect("zero is valid"), Some(0));
-        assert_eq!(
-            optional_message_id(OwnedVariant::Number(0)).expect("zero message id is valid"),
-            Some(0)
-        );
-        assert_eq!(
-            optional_message_id(OwnedVariant::Number(u32::MAX as u64)).expect("sentinel is valid"),
-            None
-        );
-        assert_eq!(
-            optional_message_id(OwnedVariant::Number(0x1_0001)).expect("message id is valid"),
-            Some(0x1_0001)
-        );
-        assert!(optional_message_id(OwnedVariant::Number(u32::MAX as u64 + 1)).is_err());
-        assert_eq!(short_message_id(0x1_0001), 1);
-    }
-
-    #[test]
-    fn zero_event_level_task_and_opcode_values_are_absent() {
-        assert_eq!(optional_nonzero_number(OwnedVariant::Number(0)).unwrap(), None);
-        assert_eq!(optional_nonzero_number(OwnedVariant::Number(9)).unwrap(), Some(9));
-    }
-
-    #[test]
-    fn event_keyword_masks_preserve_all_captured_bits() {
-        assert_eq!(
-            keyword_bits(0xFFFF_0000_0000_0005),
-            vec![
-                0x8000_0000_0000_0000,
-                0x4000_0000_0000_0000,
-                0x2000_0000_0000_0000,
-                0x1000_0000_0000_0000,
-                0x0800_0000_0000_0000,
-                0x0400_0000_0000_0000,
-                0x0200_0000_0000_0000,
-                0x0100_0000_0000_0000,
-                0x0080_0000_0000_0000,
-                0x0040_0000_0000_0000,
-                0x0020_0000_0000_0000,
-                0x0010_0000_0000_0000,
-                0x0008_0000_0000_0000,
-                0x0004_0000_0000_0000,
-                0x0002_0000_0000_0000,
-                0x0001_0000_0000_0000,
-                4,
-                1,
-            ]
-        );
-        assert_eq!(keyword_bits(0xFFFF_0000_0000_0000).len(), 16);
-    }
-
-    #[test]
-    fn opcode_metadata_lookup_preserves_task_specific_values() {
-        let mut names = BTreeMap::new();
-        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0000), "global".to_string());
-        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0002), "task two".to_string());
-        insert_named_metadata(&mut names, opcode_metadata_key(0x000B_0007), "task seven".to_string());
-        assert_eq!(names.get("11").map(String::as_str), Some("global"));
-        assert_eq!(names.get("720898").map(String::as_str), Some("task two"));
-        assert_eq!(names.get("720903").map(String::as_str), Some("task seven"));
-    }
-
-    #[test]
-    fn canonical_version_keys_ignore_order_but_change_with_content() {
-        let first = ProviderMetadata {
-            provider_name: "provider-a".to_string(),
-            events: vec![
-                ProviderEvent {
-                    id: 2,
-                    version: 1,
-                    description: Some("two".to_string()),
-                    keywords: vec![4, 1, 4],
-                    ..ProviderEvent::default()
-                },
-                ProviderEvent {
-                    id: 1,
-                    description: Some("one".to_string()),
-                    ..ProviderEvent::default()
-                },
-            ],
-            messages: vec![ProviderMessage {
-                raw_id: 7,
-                short_id: 7,
-                text: Some("message".to_string()),
+            assert_eq!(encode_event(&first), encode_event(&second));
+        }
+        #[test]
+        fn aggregate_metadata_item_count_is_bounded() {
+            let metadata = ProviderMetadata {
+                events: vec![ProviderEvent::default()],
+                messages: vec![ProviderMessage::default()],
+                levels: BTreeMap::from([("1".to_string(), "level".to_string())]),
+                tasks: BTreeMap::from([("2".to_string(), "task".to_string())]),
+                opcodes: BTreeMap::from([("3".to_string(), "opcode".to_string())]),
+                keywords: BTreeMap::from([("4".to_string(), "keyword".to_string())]),
+                ..ProviderMetadata::default()
+            };
+            assert_eq!(metadata_item_count(&metadata), 6);
+            assert!(metadata_item_count(&metadata) < MAX_CAPTURED_METADATA_ITEMS);
+        }
+        #[test]
+        fn zero_event_values_are_preserved_but_message_sentinel_is_absent() {
+            assert_eq!(
+                optional_number(OwnedVariant::Number(0)).expect("zero is valid"),
+                Some(0)
+            );
+            assert_eq!(
+                optional_message_id(OwnedVariant::Number(0)).expect("zero message id is valid"),
+                Some(0)
+            );
+            assert_eq!(
+                optional_message_id(OwnedVariant::Number(u32::MAX as u64))
+                    .expect("sentinel is valid"),
+                None
+            );
+            assert_eq!(
+                optional_message_id(OwnedVariant::Number(0x1_0001)).expect("message id is valid"),
+                Some(0x1_0001)
+            );
+            assert!(optional_message_id(OwnedVariant::Number(u32::MAX as u64 + 1)).is_err());
+            assert_eq!(short_message_id(0x1_0001), 1);
+        }
+        #[test]
+        fn duplicate_provider_messages_fill_missing_fields_without_overwriting() {
+            let mut message = ProviderMessage {
+                provider_name: None,
+                template: None,
+                text: None,
                 ..ProviderMessage::default()
-            }],
-            keywords: BTreeMap::from([("1".to_string(), "one".to_string())]),
-            ..ProviderMetadata::default()
-        };
-        let mut reordered = first.clone();
-        reordered.provider_name = "provider-b".to_string();
-        reordered.events.reverse();
-        reordered.events[1].keywords.reverse();
-        assert_eq!(canonical_version_key(&first), canonical_version_key(&reordered));
-        let mut changed = first.clone();
-        changed.events[0].description = Some("different".to_string());
-        assert_ne!(canonical_version_key(&first), canonical_version_key(&changed));
-        let mut changed_build = first.clone();
-        changed_build.source_os_build = Some(26200);
-        assert_ne!(canonical_version_key(&first), canonical_version_key(&changed_build));
-        let mut changed_categories = first.clone();
-        changed_categories
-            .unavailable_categories
-            .insert("keywords".to_string());
-        assert_ne!(
-            canonical_version_key(&first),
-            canonical_version_key(&changed_categories)
-        );
-    }
-    #[test]
-    fn event_keyword_masks_expand_to_declared_bits() {
-        assert_eq!(
-            keyword_bits(0x8001_0000_0000_0005),
-            vec![0x8000_0000_0000_0000, 0x0001_0000_0000_0000, 4, 1]
-        );
-        assert!(keyword_bits(0).is_empty());
-    }
+            };
+            merge_provider_message(
+                &mut message,
+                "Provider",
+                Some("<template/>".to_string()),
+                Some("first".to_string()),
+            );
+            merge_provider_message(
+                &mut message,
+                "Other",
+                Some("<replacement/>".to_string()),
+                Some("replacement".to_string()),
+            );
+            assert_eq!(message.provider_name.as_deref(), Some("Provider"));
+            assert_eq!(message.template.as_deref(), Some("<template/>"));
+            assert_eq!(message.text.as_deref(), Some("first"));
+        }
 
-    #[test]
-    fn opcode_metadata_key_keeps_task_specific_identity() {
-        assert_eq!(metadata_key_value(1, 0x000B_0000), 11);
-        assert_eq!(metadata_key_value(1, 0x000B_0002), 0x000B_0002);
-        assert_eq!(metadata_key_value(0, 0x0000_0007), 7);
-        assert_eq!(metadata_key_value(2, 0x8000_0000_0000_0001), 0x8000_0000_0000_0001);
-    }
+        #[test]
+        fn canonical_event_and_message_ids_use_wire_widths() {
+            let mut event = ProviderEvent {
+                version: 1,
+                ..ProviderEvent::default()
+            };
+            let first_event = encode_event(&event);
+            event.version = 257;
+            assert_eq!(first_event, encode_event(&event));
 
-    #[test]
-    fn opcode_name_collision_keeps_first_display_name() {
-        let mut names = BTreeMap::new();
-        insert_named_metadata(&mut names, 11, "first".to_string());
-        insert_named_metadata(&mut names, 11, "second".to_string());
-        assert_eq!(names.get("11").map(String::as_str), Some("first"));
-    }
-    #[test]
-    fn channel_resolution_uses_reference_id_not_array_position() {
-        let channels = BTreeMap::from([
-            (
-                7,
-                ChannelReference {
-                    path: "Admin".to_string(),
-                    message_id: Some(100),
-                },
-            ),
-            (
-                42,
-                ChannelReference {
-                    path: "Operational".to_string(),
-                    message_id: None,
-                },
-            ),
-        ]);
-        assert_eq!(resolve_channel_name(&channels, 7).as_deref(), Some("Admin"));
-        assert_eq!(resolve_channel_name(&channels, 1), None);
-        assert_eq!(channels.get(&7).and_then(|channel| channel.message_id), Some(100));
-    }
-}
+            let mut message = ProviderMessage {
+                short_id: 1,
+                ..ProviderMessage::default()
+            };
+            let first_message = encode_message(&message);
+            message.short_id = 65_537;
+            assert_eq!(first_message, encode_message(&message));
+        }
 
+        #[test]
+        fn event_keyword_masks_preserve_all_captured_bits() {
+            let bits = keyword_bits(0xFFFF_0000_0000_0005);
+            assert_eq!(bits.len(), 18);
+            assert_eq!(bits[0], 0x8000_0000_0000_0000);
+            assert_eq!(bits[15], 0x0001_0000_0000_0000);
+            assert_eq!(&bits[16..], &[4, 1]);
+        }
+
+        #[test]
+        fn opcode_metadata_lookup_projects_packed_values_and_tasks_use_low_word() {
+            let mut names = BTreeMap::new();
+            insert_named_metadata(
+                &mut names,
+                opcode_metadata_key(0x000B_0000),
+                "global".to_string(),
+            );
+            insert_named_metadata(
+                &mut names,
+                opcode_metadata_key(0x000B_0002),
+                "task two".to_string(),
+            );
+            insert_named_metadata(
+                &mut names,
+                opcode_metadata_key(0x000B_0007),
+                "task seven".to_string(),
+            );
+            assert_eq!(names.get("11").map(String::as_str), Some("global"));
+
+            let mut tasks = BTreeMap::new();
+            insert_named_metadata(
+                &mut tasks,
+                metadata_key_value(0, 0x000B_0002),
+                "task two".to_string(),
+            );
+            assert_eq!(tasks.get("2").map(String::as_str), Some("task two"));
+        }
+
+        #[test]
+        fn canonical_version_keys_ignore_order_but_change_with_content() {
+            let first = ProviderMetadata {
+                provider_name: "provider-a".to_string(),
+                events: vec![
+                    ProviderEvent {
+                        id: 2,
+                        version: 1,
+                        description: Some("two".to_string()),
+                        keywords: vec![4, 1, 4],
+                        ..ProviderEvent::default()
+                    },
+                    ProviderEvent {
+                        id: 1,
+                        description: Some("one".to_string()),
+                        ..ProviderEvent::default()
+                    },
+                ],
+                messages: vec![ProviderMessage {
+                    raw_id: 7,
+                    short_id: 7,
+                    text: Some("message".to_string()),
+                    ..ProviderMessage::default()
+                }],
+                keywords: BTreeMap::from([("1".to_string(), "one".to_string())]),
+                ..ProviderMetadata::default()
+            };
+            let mut reordered = first.clone();
+            reordered.provider_name = "provider-b".to_string();
+            reordered.events.reverse();
+            reordered.events[1].keywords.reverse();
+            assert_eq!(
+                canonical_version_key(&first),
+                canonical_version_key(&reordered)
+            );
+            let mut changed = first.clone();
+            changed.events[0].description = Some("different".to_string());
+            assert_ne!(
+                canonical_version_key(&first),
+                canonical_version_key(&changed)
+            );
+            let mut changed_build = first.clone();
+            changed_build.source_os_build = Some(26200);
+            assert_eq!(
+                canonical_version_key(&first),
+                canonical_version_key(&changed_build)
+            );
+            let mut changed_categories = first.clone();
+            changed_categories
+                .unavailable_categories
+                .insert("keywords".to_string());
+            assert_eq!(
+                canonical_version_key(&first),
+                canonical_version_key(&changed_categories)
+            );
+        }
+        #[test]
+        fn event_keyword_masks_expand_to_declared_bits() {
+            assert_eq!(
+                keyword_bits(0x8001_0000_0000_0005),
+                vec![0x8000_0000_0000_0000, 0x0001_0000_0000_0000, 4, 1]
+            );
+            assert!(keyword_bits(0).is_empty());
+        }
+
+        #[test]
+        fn opcode_metadata_key_projects_opcode_and_task_values() {
+            assert_eq!(metadata_key_value(1, 0x000B_0000), 11);
+            assert_eq!(metadata_key_value(1, 0x000B_0002), 11);
+            assert_eq!(metadata_key_value(1, 0x0001_0000), 1);
+            assert_eq!(metadata_key_value(0, 0x000B_0002), 2);
+            assert_eq!(
+                metadata_key_value(2, 0x8000_0000_0000_0001),
+                0x8000_0000_0000_0001
+            );
+        }
+        #[test]
+        fn opcode_name_collision_keeps_first_display_name() {
+            let mut names = BTreeMap::new();
+            insert_named_metadata(&mut names, 11, "first".to_string());
+            insert_named_metadata(&mut names, 11, "second".to_string());
+            assert_eq!(names.get("11").map(String::as_str), Some("first"));
+        }
+        #[test]
+        fn channel_resolution_uses_reference_id_not_array_position() {
+            let channels = BTreeMap::from([
+                (
+                    7,
+                    ChannelReference {
+                        path: "Admin".to_string(),
+                        message_id: Some(100),
+                    },
+                ),
+                (
+                    42,
+                    ChannelReference {
+                        path: "Operational".to_string(),
+                        message_id: None,
+                    },
+                ),
+            ]);
+            assert_eq!(resolve_channel_name(&channels, 7).as_deref(), Some("Admin"));
+            assert_eq!(resolve_channel_name(&channels, 1), None);
+            assert_eq!(
+                channels.get(&7).and_then(|channel| channel.message_id),
+                Some(100)
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1440,7 +1614,10 @@ mod tests {
     #[test]
     fn absent_event_message_id_stays_absent_even_for_empty_text() {
         assert_eq!(event_message_text(None, Some(String::new())), None);
-        assert_eq!(event_message_text(Some(7), Some(String::new())), Some(String::new()));
+        assert_eq!(
+            event_message_text(Some(7), Some(String::new())),
+            Some(String::new())
+        );
     }
 
     #[test]
@@ -1486,7 +1663,12 @@ mod tests {
         assert!(is_unavailable_provider_error(
             "message query failed: MUI entry is missing (0x80073B01)"
         ));
-        assert!(!is_unavailable_provider_error("metadata array 16 exceeds bound"));
+        assert!(is_unavailable_provider_error(
+            "cannot open publisher metadata: The data is invalid. (0x8007000D)"
+        ));
+        assert!(!is_unavailable_provider_error(
+            "metadata array 16 exceeds bound"
+        ));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1500,7 +1682,6 @@ mod tests {
         assert_eq!(json["kind"], "unsupported");
         assert!(json["failures"].as_array().is_some_and(Vec::is_empty));
     }
-
 
     #[cfg(target_os = "windows")]
     #[test]

@@ -16,8 +16,8 @@
 use cmtraceopen_parser::eventmap::{EventNode, MapRegistry};
 
 use super::event_node::{
-    extract_event_data, extract_event_identity, extract_system_fields, parse_event_xml, EventFields,
-    SystemFields,
+    extract_event_data, extract_event_identity, extract_system_fields, parse_event_xml,
+    EventFields, SystemFields,
 };
 use super::models::{EvtxField, EvtxLevel, EvtxRecord};
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
@@ -134,6 +134,7 @@ pub fn record_from_parts(
         event_data,
         raw_xml: xml.to_string(),
         source_label: "Live".to_string(),
+        origin_kind: super::models::EvtxOriginKind::Event,
         task: system.task,
         opcode: system.opcode,
         process_id: system.process_id,

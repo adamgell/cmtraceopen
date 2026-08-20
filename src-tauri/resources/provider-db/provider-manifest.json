@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "status": "unavailable",
-  "reason": "No Windows-captured EventLogExpert ProviderDetails database is available in this repository; generating one on macOS would fabricate provider provenance.",
+  "status": "available",
+  "reason": "Sanitized ProviderDetails rows captured by CMTrace Open's native Windows provider walker. The curated set retains only device-management and deployment providers; no event instances, user identifiers, tenant identifiers, or host-specific paths are included. Rows come from the explicitly listed Windows builds and remain separated into one database per build.",
   "providerFamilies": [
     "MDM",
     "Autopilot",
@@ -10,5 +10,64 @@
     "ConfigMgr client",
     "AppX",
     "Windows Update"
-  ]
+  ],
+  "sourceWindowsBuilds": [
+    20348,
+    26200
+  ],
+  "providerVersion": "cmtrace-open/1.5.1 provider-capture schema v1",
+  "databases": [
+    {
+      "file": "cmtraceopen-provider-windows-20348.db",
+      "sourceWindowsBuild": 20348,
+      "sha256": "5a49ab87cb81caba2cb37cfc364de4e22a9f95276c91661d528fcab2a2158849",
+      "providerCount": 1,
+      "providers": [
+        "Microsoft-ConfigMgr"
+      ]
+    },
+    {
+      "file": "cmtraceopen-provider-windows-26200.db",
+      "sourceWindowsBuild": 26200,
+      "sha256": "8725b3b840de5ce9b0bb4c5c5ce77d92a3316532a5267f0515bbbe9ea18d8bd2",
+      "providerCount": 9,
+      "providers": [
+        "Microsoft-Windows-AAD",
+        "Microsoft-Windows-AppXDeployment",
+        "Microsoft-Windows-AppXDeployment-Server",
+        "Microsoft-Windows-AppxPackagingOM",
+        "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+        "Microsoft-Windows-DeviceManagement-Pushrouter",
+        "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+        "Microsoft-Windows-Provisioning-Diagnostics-Provider",
+        "Microsoft-Windows-WindowsUpdateClient"
+      ]
+    }
+  ],
+  "familyProviders": {
+    "MDM": [
+      "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+      "Microsoft-Windows-DeviceManagement-Pushrouter"
+    ],
+    "Autopilot": [
+      "Microsoft-Windows-ModernDeployment-Diagnostics-Provider"
+    ],
+    "ESP": [
+      "Microsoft-Windows-Provisioning-Diagnostics-Provider"
+    ],
+    "AAD": [
+      "Microsoft-Windows-AAD"
+    ],
+    "ConfigMgr client": [
+      "Microsoft-ConfigMgr"
+    ],
+    "AppX": [
+      "Microsoft-Windows-AppXDeployment",
+      "Microsoft-Windows-AppXDeployment-Server",
+      "Microsoft-Windows-AppxPackagingOM"
+    ],
+    "Windows Update": [
+      "Microsoft-Windows-WindowsUpdateClient"
+    ]
+  }
 }

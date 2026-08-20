@@ -126,7 +126,12 @@ describe("UnifiedTimelineView", () => {
               coverage: { state: "gap", gap: { source: "ambiguous", reason: "duplicate" } },
             },
           ],
-          coverageGaps: [{ source: "coverage", reason: "unsupported identity" }],
+          coverageGaps: [
+            {
+              source: "correlation",
+              reason: "coverage gap limit reached; 2 additional gaps omitted",
+            },
+          ],
         }}
       />,
     );
@@ -137,6 +142,8 @@ describe("UnifiedTimelineView", () => {
     expect(screen.getByText(/exact · high · activityId: \{activity\}/)).toBeInTheDocument();
     expect(screen.getByText("candidate IDs: ambiguous-target, other-target")).toBeInTheDocument();
     expect(screen.getByText(/coverage reason: duplicate/)).toBeInTheDocument();
-    expect(screen.getByText(/coverage: unsupported identity/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/coverage: coverage gap limit reached; 2 additional gaps omitted/),
+    ).toBeInTheDocument();
   });
 });

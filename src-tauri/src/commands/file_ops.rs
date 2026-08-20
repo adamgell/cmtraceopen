@@ -7,6 +7,11 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use super::bundle_ops::{
+    collect_files_recursive, detect_evidence_bundle_metadata, unsafe_ancestor_reason,
+    unsafe_entry_reason,
+};
+use super::known_sources::KnownSourcePathKind;
 use crate::intune::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
     AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
@@ -14,11 +19,6 @@ use crate::models::log_entry::{
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
 use crate::watcher::tail::InitialLogicalRecord;
-use super::bundle_ops::{
-    collect_files_recursive, detect_evidence_bundle_metadata, unsafe_ancestor_reason,
-    unsafe_entry_reason,
-};
-use super::known_sources::KnownSourcePathKind;
 const MAX_FOLDER_LISTING_ENTRIES: usize = 4_096;
 const MAX_FOLDER_LISTING_WORK: usize = 16_384;
 const MAX_FOLDER_LISTING_ERRORS: usize = 4_096;
@@ -1043,7 +1043,10 @@ mod tests {
 
         let result = list_log_folder(dir.to_string_lossy().to_string()).expect("list folder");
         assert!(result.bundle_metadata.is_none());
-        assert!(result.entries.iter().any(|entry| entry.name == "Application.evtx"));
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.name == "Application.evtx"));
 
         fs::remove_dir_all(&dir).expect("remove ordinary folder");
     }
@@ -1094,7 +1097,6 @@ mod tests {
         let result =
             list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list folder");
         let bundle_metadata = result.bundle_metadata.expect("bundle metadata");
-
 
         assert_eq!(bundle_metadata.primary_entry_points.len(), 2);
         assert!(bundle_metadata

@@ -246,6 +246,64 @@ pub struct TimelineCoverageGap {
     pub source: String,
     pub reason: String,
 }
+/// Classification for a timeline coverage gap.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimelineCoverageState {
+    /// Work was intentionally skipped because the available identity was insufficient.
+    Skipped,
+    /// Required source identity was not available.
+    Absent,
+    /// A source value was present but could not be interpreted.
+    Malformed,
+    /// A configured item or relation budget was reached.
+    Capped,
+    /// The source or correlation mode is not supported.
+    Unsupported,
+    /// The source was observed but has no stronger classification.
+    Unknown,
+}
+/// Classifies a producer-owned timeline coverage reason without duplicating its
+/// wire strings in consumers.
+pub fn coverage_state(reason: &str) -> TimelineCoverageState {
+    let lower = reason.to_ascii_lowercase();
+    let is_correlation_group_limit = (lower.starts_with("exact ")
+        && lower.contains(" identity group exceeds the ")
+        && lower.ends_with(" correlation limit"))
+        || (lower.starts_with("secondary ")
+            && lower.contains(" identity group exceeds the ")
+            && lower.ends_with(" correlation limit"));
+
+    if lower == "no explicit identity keys were present; timestamp-only correlation is not causal"
+        || lower == "only secondary identity was present; correlation remains low confidence"
+    {
+        TimelineCoverageState::Skipped
+    } else if lower == "machine identity unavailable; exact correlation is restricted"
+        || lower == "process start identity was unavailable for a nonzero process id"
+        || lower == "process start identity requires a nonzero process id"
+    {
+        TimelineCoverageState::Absent
+    } else if lower.starts_with("conflicting explicit identity aliases for ")
+        || lower.starts_with("multiple exact identity candidates remain: ")
+    {
+        TimelineCoverageState::Skipped
+    } else if lower.starts_with("duplicate origin identity coalesced from ") {
+        TimelineCoverageState::Unknown
+    } else if lower.starts_with("process start identity was present but its timestamp was invalid")
+    {
+        TimelineCoverageState::Malformed
+    } else if (lower.starts_with("correlation relation budget") && lower.ends_with(" was reached"))
+        || lower.starts_with("coverage gap limit reached;")
+        || lower.starts_with("correlation candidate output budget reached;")
+        || lower.starts_with("correlation edge output budget reached;")
+        || is_correlation_group_limit
+    {
+        TimelineCoverageState::Capped
+    } else {
+        TimelineCoverageState::Unsupported
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -457,9 +515,8 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                     reason: format!("conflicting explicit identity aliases for {field}"),
                 })
                 .collect::<Vec<_>>();
-            let is_conflicted = |field: &str| {
-                identity_conflicts.iter().any(|conflict| conflict == field)
-            };
+            let is_conflicted =
+                |field: &str| identity_conflicts.iter().any(|conflict| conflict == field);
             let push_exact = |keys: &mut Vec<TimelineCorrelationKey>,
                               kind: TimelineCorrelationKeyKind,
                               value: Option<&str>,
@@ -593,18 +650,109 @@ pub fn origin_id(origin: &TimelineOrigin) -> String {
 /// conflicting set of exact keys remains ambiguous with all candidate IDs. Secondary process-only
 /// identity can only produce a low-confidence candidate edge. No timestamp, channel proximity, or
 /// message/error text participates in this reducer.
+const MAX_CORRELATION_GROUP_MEMBERS: usize = 256;
+const MAX_CORRELATION_RELATIONS: usize = 25_000;
+const MAX_CORRELATION_GAPS: usize = 4_096;
+const CORRELATION_GAP_TRUNCATION_SOURCE: &str = "correlation";
+const MAX_CORRELATION_CANDIDATE_BYTES: usize = 1_048_576;
+const CORRELATION_CANDIDATE_BUDGET_REASON: &str =
+    "correlation candidate output budget reached; candidate IDs omitted";
+const MAX_CORRELATION_EDGE_BYTES: usize = 16 * 1024 * 1024;
+const CORRELATION_EDGE_BUDGET_REASON: &str =
+    "correlation edge output budget reached; additional edges omitted";
+
+fn disambiguate_observation_ids(
+    observations: &[TimelineCorrelationObservation],
+) -> Vec<TimelineCorrelationObservation> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // A duplicate origin is already represented by multiple timeline items. Keep its
+    // canonical base ID and merge only the identity material used by correlation. Adding
+    // an occurrence suffix here would make edges and gaps refer to an ID no timeline
+    // origin owns.
+    struct Accumulator {
+        observation: TimelineCorrelationObservation,
+        machines: BTreeSet<String>,
+        count: usize,
+    }
+
+    let mut grouped = BTreeMap::<String, Accumulator>::new();
+    for observation in observations {
+        let entry = grouped
+            .entry(observation.origin_id.clone())
+            .or_insert_with(|| Accumulator {
+                observation: TimelineCorrelationObservation {
+                    origin_id: observation.origin_id.clone(),
+                    machine: None,
+                    exact_keys: Vec::new(),
+                    secondary_keys: Vec::new(),
+                    coverage_gaps: Vec::new(),
+                },
+                machines: BTreeSet::new(),
+                count: 0,
+            });
+        entry.count += 1;
+        if let Some(machine) = normalize_machine_identity(observation.machine.as_deref()) {
+            entry.machines.insert(machine);
+        }
+        entry
+            .observation
+            .exact_keys
+            .extend(observation.exact_keys.iter().cloned());
+        entry
+            .observation
+            .secondary_keys
+            .extend(observation.secondary_keys.iter().cloned());
+        entry
+            .observation
+            .coverage_gaps
+            .extend(observation.coverage_gaps.iter().cloned());
+    }
+
+    grouped
+        .into_values()
+        .map(|mut entry| {
+            if entry.count > 1 {
+                let origin_id = entry.observation.origin_id.clone();
+                entry.observation.coverage_gaps.push(TimelineCoverageGap {
+                    source: origin_id,
+                    reason: format!(
+                        "duplicate origin identity coalesced from {} observations",
+                        entry.count
+                    ),
+                });
+            }
+            let observation = &mut entry.observation;
+            observation.exact_keys.sort();
+            observation.exact_keys.dedup();
+            observation.secondary_keys.sort();
+            observation.secondary_keys.dedup();
+            observation.coverage_gaps.sort_by(|left, right| {
+                left.source
+                    .cmp(&right.source)
+                    .then_with(|| left.reason.cmp(&right.reason))
+            });
+            observation
+                .coverage_gaps
+                .dedup_by(|left, right| left.source == right.source && left.reason == right.reason);
+            observation.machine = (entry.machines.len() == 1)
+                .then(|| entry.machines.into_iter().next().expect("one machine"));
+            entry.observation
+        })
+        .collect()
+}
+
 pub fn correlate_observations(
     observations: &[TimelineCorrelationObservation],
 ) -> (Vec<TimelineCorrelationEdge>, Vec<TimelineCoverageGap>) {
     use std::collections::{BTreeMap, BTreeSet};
 
-    let mut ordered: Vec<_> = observations.iter().collect();
+    let disambiguated = disambiguate_observation_ids(observations);
+    let mut ordered: Vec<_> = disambiguated.iter().collect();
     ordered.sort_by(|left, right| left.origin_id.cmp(&right.origin_id));
 
-    let mut exact_groups: BTreeMap<
-        (String, TimelineCorrelationKeyKind, String),
-        BTreeSet<String>,
-    > = BTreeMap::new();
+    let mut exact_groups: BTreeMap<(String, TimelineCorrelationKeyKind, String), BTreeSet<String>> =
+        BTreeMap::new();
     let mut secondary_groups: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     let by_id: BTreeMap<_, _> = ordered
         .iter()
@@ -636,13 +784,48 @@ pub fn correlate_observations(
     type Relation = (String, String);
     let mut exact_candidates: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut relation_keys: BTreeMap<Relation, BTreeSet<TimelineCorrelationKey>> = BTreeMap::new();
+    let mut fanout_gaps = BTreeSet::new();
+    let mut relation_budget = MAX_CORRELATION_RELATIONS;
     for ((_, kind, value), ids) in &exact_groups {
         if ids.len() < 2 {
             continue;
         }
+        if ids.len() > MAX_CORRELATION_GROUP_MEMBERS {
+            let reason = format!(
+                "exact {kind:?} identity group exceeds the {MAX_CORRELATION_GROUP_MEMBERS}-member correlation limit"
+            );
+            for id in ids {
+                fanout_gaps.insert((id.clone(), reason.clone()));
+            }
+            continue;
+        }
+        if relation_budget == 0 {
+            let reason =
+                format!("correlation relation budget of {MAX_CORRELATION_RELATIONS} was reached");
+            for id in ids {
+                fanout_gaps.insert((id.clone(), reason.clone()));
+            }
+            continue;
+        }
+        let pair_count = ids.len().saturating_mul(ids.len().saturating_sub(1)) / 2;
+        if pair_count > relation_budget {
+            let reason =
+                format!("correlation relation budget of {MAX_CORRELATION_RELATIONS} was reached");
+            for id in ids {
+                fanout_gaps.insert((id.clone(), reason.clone()));
+            }
+            relation_budget = 0;
+            continue;
+        }
         let ids: Vec<_> = ids.iter().cloned().collect();
-        for (left_index, left) in ids.iter().enumerate() {
+        let mut truncated = false;
+        'exact_pairs: for (left_index, left) in ids.iter().enumerate() {
             for right in ids.iter().skip(left_index + 1) {
+                if relation_budget == 0 {
+                    truncated = true;
+                    break 'exact_pairs;
+                }
+                relation_budget -= 1;
                 exact_candidates
                     .entry(left.clone())
                     .or_default()
@@ -654,20 +837,24 @@ pub fn correlate_observations(
                 let relation = (left.clone(), right.clone());
                 for endpoint in [left, right] {
                     if let Some(observation) = by_id.get(endpoint) {
-                        relation_keys
-                            .entry(relation.clone())
-                            .or_default()
-                            .extend(
-                                observation
-                                    .exact_keys
-                                    .iter()
-                                    .filter(|key| {
-                                        correlation_kind(&key.kind) == *kind && key.value == *value
-                                    })
-                                    .cloned(),
-                            );
+                        relation_keys.entry(relation.clone()).or_default().extend(
+                            observation
+                                .exact_keys
+                                .iter()
+                                .filter(|key| {
+                                    correlation_kind(&key.kind) == *kind && key.value == *value
+                                })
+                                .cloned(),
+                        );
                     }
                 }
+            }
+        }
+        if truncated {
+            let reason =
+                format!("correlation relation budget of {MAX_CORRELATION_RELATIONS} was reached");
+            for id in ids {
+                fanout_gaps.insert((id, reason.clone()));
             }
         }
     }
@@ -678,8 +865,26 @@ pub fn correlate_observations(
         if ids.len() < 2 {
             continue;
         }
+        if ids.len() > MAX_CORRELATION_GROUP_MEMBERS {
+            let reason = format!(
+                "secondary identity group exceeds the {MAX_CORRELATION_GROUP_MEMBERS}-member correlation limit"
+            );
+            for id in ids {
+                fanout_gaps.insert((id.clone(), reason.clone()));
+            }
+            continue;
+        }
+        if relation_budget == 0 {
+            let reason =
+                format!("correlation relation budget of {MAX_CORRELATION_RELATIONS} was reached");
+            for id in ids {
+                fanout_gaps.insert((id.clone(), reason.clone()));
+            }
+            continue;
+        }
         let ids: Vec<_> = ids.iter().cloned().collect();
-        for (left_index, left) in ids.iter().enumerate() {
+        let mut truncated = false;
+        'secondary_pairs: for (left_index, left) in ids.iter().enumerate() {
             if exact_candidates
                 .get(left)
                 .is_some_and(|candidates| !candidates.is_empty())
@@ -687,12 +892,17 @@ pub fn correlate_observations(
                 continue;
             }
             for right in ids.iter().skip(left_index + 1) {
+                if relation_budget == 0 {
+                    truncated = true;
+                    break 'secondary_pairs;
+                }
                 if exact_candidates
                     .get(right)
                     .is_some_and(|candidates| !candidates.is_empty())
                 {
                     continue;
                 }
+                relation_budget -= 1;
                 candidate_relations
                     .entry((left.clone(), right.clone()))
                     .or_default()
@@ -702,9 +912,19 @@ pub fn correlate_observations(
                     });
             }
         }
+        if truncated {
+            let reason =
+                format!("correlation relation budget of {MAX_CORRELATION_RELATIONS} was reached");
+            for id in ids {
+                fanout_gaps.insert((id, reason.clone()));
+            }
+        }
     }
 
     let mut edges = Vec::new();
+    let mut candidate_output_budget = MAX_CORRELATION_CANDIDATE_BYTES;
+    let mut edge_output_budget = MAX_CORRELATION_EDGE_BYTES;
+    let mut edge_output_truncated = false;
     for (relation, keys) in relation_keys
         .into_iter()
         .map(|(relation, keys)| (relation, (keys, true)))
@@ -714,6 +934,9 @@ pub fn correlate_observations(
                 .map(|(relation, keys)| (relation, (keys, false))),
         )
     {
+        if edge_output_truncated {
+            continue;
+        }
         let (left, right) = relation;
         let (keys, exact) = keys;
         let mut candidates = BTreeSet::new();
@@ -759,7 +982,25 @@ pub fn correlate_observations(
                 });
             }
         }
-        let candidate_ids: Vec<_> = if ambiguous {
+        let candidate_bytes = if ambiguous {
+            candidates
+                .iter()
+                .filter(|candidate| *candidate != &left)
+                .fold(0usize, |total, candidate| {
+                    total.saturating_add(candidate.len())
+                })
+        } else {
+            0
+        };
+        let candidate_output_truncated = ambiguous && candidate_bytes > candidate_output_budget;
+        if candidate_output_truncated {
+            fanout_gaps.insert((
+                CORRELATION_GAP_TRUNCATION_SOURCE.to_string(),
+                CORRELATION_CANDIDATE_BUDGET_REASON.to_string(),
+            ));
+        }
+        let candidate_ids: Vec<_> = if ambiguous && !candidate_output_truncated {
+            candidate_output_budget = candidate_output_budget.saturating_sub(candidate_bytes);
             candidates
                 .iter()
                 .filter(|candidate| *candidate != &left)
@@ -775,21 +1016,67 @@ pub fn correlate_observations(
             key_label(&key.kind),
             key_part(&key.value)
         );
-        let coverage_gap = [&left, &right]
-            .iter()
-            .find_map(|endpoint| by_id.get(*endpoint)?.coverage_gaps.first().cloned())
-            .or_else(|| {
-                ambiguous.then(|| TimelineCoverageGap {
-                    source: left.clone(),
-                    reason: format!(
-                        "multiple exact identity candidates remain: {}",
-                        candidate_ids.join(", ")
-                    ),
+        let coverage_gap = if candidate_output_truncated {
+            Some(TimelineCoverageGap {
+                source: left.clone(),
+                reason: CORRELATION_CANDIDATE_BUDGET_REASON.to_string(),
+            })
+        } else {
+            [&left, &right]
+                .iter()
+                .find_map(|endpoint| by_id.get(*endpoint)?.coverage_gaps.first().cloned())
+                .or_else(|| {
+                    ambiguous.then(|| TimelineCoverageGap {
+                        source: left.clone(),
+                        reason: format!(
+                            "multiple exact identity candidates remain: {}",
+                            candidate_ids.join(", ")
+                        ),
+                    })
                 })
-            });
+        };
         let coverage = coverage_gap
             .map(TimelineCorrelationCoverage::gap)
             .unwrap_or_else(TimelineCorrelationCoverage::covered);
+        let evidence_bytes = evidence
+            .iter()
+            .map(|entry| {
+                entry
+                    .origin_id
+                    .len()
+                    .saturating_add(entry.field.len())
+                    .saturating_add(entry.value.len())
+            })
+            .sum::<usize>();
+        let coverage_bytes = coverage
+            .gap
+            .as_ref()
+            .map(|gap| gap.source.len().saturating_add(gap.reason.len()))
+            .unwrap_or_default();
+        let edge_payload_bytes = id
+            .len()
+            .saturating_add(left.len())
+            .saturating_add(right.len())
+            .saturating_add(key_label(&key.kind).len())
+            .saturating_add(key.value.len())
+            .saturating_add(
+                candidate_ids
+                    .iter()
+                    .fold(0usize, |total, value| total.saturating_add(value.len())),
+            )
+            .saturating_add(evidence_bytes)
+            .saturating_add(coverage_bytes)
+            .saturating_add(512);
+        let estimated_edge_bytes = edge_payload_bytes.saturating_mul(8);
+        if estimated_edge_bytes > edge_output_budget {
+            edge_output_truncated = true;
+            fanout_gaps.insert((
+                CORRELATION_GAP_TRUNCATION_SOURCE.to_string(),
+                CORRELATION_EDGE_BUDGET_REASON.to_string(),
+            ));
+            continue;
+        }
+        edge_output_budget = edge_output_budget.saturating_sub(estimated_edge_bytes);
         edges.push(TimelineCorrelationEdge {
             id,
             from_id: left,
@@ -803,7 +1090,7 @@ pub fn correlate_observations(
         });
     }
 
-    let mut gap_set = BTreeSet::new();
+    let mut gap_set = fanout_gaps;
     for observation in ordered {
         gap_set.extend(
             observation
@@ -833,10 +1120,27 @@ pub fn correlate_observations(
             ));
         }
     }
-    let gaps = gap_set
+    let truncated = gap_set.len() > MAX_CORRELATION_GAPS;
+    let retained_limit = if truncated {
+        MAX_CORRELATION_GAPS.saturating_sub(1)
+    } else {
+        MAX_CORRELATION_GAPS
+    };
+    let omitted_count = gap_set.len().saturating_sub(retained_limit);
+    let mut gaps = gap_set
         .into_iter()
+        .take(retained_limit)
         .map(|(source, reason)| TimelineCoverageGap { source, reason })
-        .collect();
+        .collect::<Vec<_>>();
+    if truncated {
+        let gap_label = if omitted_count == 1 { "gap" } else { "gaps" };
+        gaps.push(TimelineCoverageGap {
+            source: CORRELATION_GAP_TRUNCATION_SOURCE.to_string(),
+            reason: format!(
+                "coverage gap limit reached; {omitted_count} additional {gap_label} omitted"
+            ),
+        });
+    }
     (edges, gaps)
 }
 
@@ -1018,7 +1322,12 @@ pub fn merge(
 ) -> UnifiedTimeline {
     let mut items: Vec<TimelineItem> = placed.into_iter().collect();
     items.sort_by_cached_key(|item| {
-        timeline_sort_key(item.timestamp_ms, item.severity, &item.message, &item.origin)
+        timeline_sort_key(
+            item.timestamp_ms,
+            item.severity,
+            &item.message,
+            &item.origin,
+        )
     });
     let mut unplaced: Vec<UnplacedItem> = unplaced.into_iter().collect();
     unplaced.sort_by_cached_key(|item| origin_sort_key(&item.origin));
@@ -1119,7 +1428,10 @@ mod tests {
 
         assert_eq!(timeline.items.len(), 1);
         assert_eq!(timeline.unplaced.len(), 1);
-        assert_eq!(timeline.unplaced[0].reason, UnplacedReason::MissingTimestamp);
+        assert_eq!(
+            timeline.unplaced[0].reason,
+            UnplacedReason::MissingTimestamp
+        );
         assert!(!timeline.is_complete());
     }
 
@@ -1127,7 +1439,12 @@ mod tests {
     fn an_unplaced_item_still_says_where_it_came_from() {
         let timeline = from_log_entries(&[log_entry(None, "orphan", Severity::Error)]);
         match &timeline.unplaced[0].origin {
-            TimelineOrigin::Log { file, line, component, .. } => {
+            TimelineOrigin::Log {
+                file,
+                line,
+                component,
+                ..
+            } => {
                 assert!(file.ends_with("IntuneManagementExtension.log"));
                 assert_eq!(*line, 7);
                 assert_eq!(component.as_deref(), Some("IME"));
@@ -1275,9 +1592,16 @@ mod tests {
     #[test]
     fn appending_records_reconciles_into_the_same_deterministic_order() {
         let mut timeline = merge([event(3_000, "last", TimelineSeverity::Info)], []);
-        append(&mut timeline, &[log_entry(Some(1_000), "first", Severity::Info)]);
+        append(
+            &mut timeline,
+            &[log_entry(Some(1_000), "first", Severity::Info)],
+        );
 
-        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        let messages: Vec<&str> = timeline
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
         assert_eq!(messages, vec!["first", "last"]);
         assert!(timeline.is_complete());
     }
@@ -1300,7 +1624,10 @@ mod tests {
     #[test]
     fn append_keeps_missing_timestamps_visible_and_counts_them() {
         let mut timeline = merge([event(1_000, "placed", TimelineSeverity::Info)], []);
-        append(&mut timeline, &[log_entry(None, "unplaced", Severity::Info)]);
+        append(
+            &mut timeline,
+            &[log_entry(None, "unplaced", Severity::Info)],
+        );
 
         assert_eq!(timeline.items.len(), 1);
         assert_eq!(timeline.unplaced.len(), 1);
@@ -1314,10 +1641,20 @@ mod tests {
     #[test]
     fn equal_timestamps_use_canonical_order_for_live_reconciliation() {
         let mut timeline = UnifiedTimeline::default();
-        append(&mut timeline, &[log_entry(Some(5_000), "second", Severity::Info)]);
-        append(&mut timeline, &[log_entry(Some(5_000), "first", Severity::Info)]);
+        append(
+            &mut timeline,
+            &[log_entry(Some(5_000), "second", Severity::Info)],
+        );
+        append(
+            &mut timeline,
+            &[log_entry(Some(5_000), "first", Severity::Info)],
+        );
 
-        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        let messages: Vec<&str> = timeline
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
         assert_eq!(messages, vec!["first", "second"]);
     }
 
@@ -1354,7 +1691,12 @@ mod tests {
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
-            TimelineOrigin::Log { file, source, bundle, .. } => {
+            TimelineOrigin::Log {
+                file,
+                source,
+                bundle,
+                ..
+            } => {
                 assert_eq!(file, "/bundle/evidence/ccm.log");
                 assert_eq!(source, "store.cs:1");
                 assert_eq!(bundle.as_deref(), Some("bundle"));
@@ -1371,7 +1713,12 @@ mod tests {
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
-            TimelineOrigin::Log { file, source, bundle, .. } => {
+            TimelineOrigin::Log {
+                file,
+                source,
+                bundle,
+                ..
+            } => {
                 assert_eq!(file, "/logs/setupact.log");
                 assert_eq!(source, "/logs/setupact.log");
                 assert_eq!(bundle, &None);
@@ -1398,6 +1745,77 @@ mod tests {
         assert_eq!(json["source"], "cmt.log");
         assert_eq!(json["recordId"], 7);
     }
+
+    #[test]
+    fn duplicate_log_origins_keep_a_resolvable_base_gap() {
+        let mut first = log_entry(Some(1_000), "first", Severity::Info);
+        first.id = 17;
+        let mut second = first.clone();
+        second.message = "second".to_string();
+        let timeline = from_log_entries(&[first, second]);
+
+        let (edges, gaps) = correlate_timeline(&timeline.items, &timeline.unplaced);
+
+        assert!(edges.is_empty());
+        assert_eq!(gaps.len(), 2);
+        assert!(gaps
+            .iter()
+            .all(|gap| gap.source == origin_id(&timeline.items[0].origin)));
+        assert!(gaps.iter().any(|gap| {
+            gap.reason
+                .contains("duplicate origin identity coalesced from 2 observations")
+        }));
+    }
+
+    #[test]
+    fn duplicate_observations_merge_keys_without_synthetic_edge_references() {
+        let observations = [
+            observation(
+                "same-origin",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "activity")],
+                &[],
+            ),
+            observation(
+                "same-origin",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::SessionId, "session")],
+                &[],
+            ),
+            observation(
+                "other-origin",
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::RelatedActivityId, "activity")],
+                &[],
+            ),
+        ];
+        let mut reversed = observations.to_vec();
+        reversed.reverse();
+        assert_eq!(
+            correlate_observations(&observations),
+            correlate_observations(&reversed)
+        );
+
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert_eq!(edges.len(), 1);
+        let edge = &edges[0];
+        assert_eq!(edge.from_id, "other-origin");
+        assert_eq!(edge.to_id.as_deref(), Some("same-origin"));
+        assert!(edge
+            .evidence
+            .iter()
+            .all(|evidence| evidence.origin_id == "other-origin"
+                || evidence.origin_id == "same-origin"));
+        assert!(!edge.id.contains("#occurrence-"));
+        assert!(gaps.iter().any(|gap| {
+            gap.source == "same-origin"
+                && gap
+                    .reason
+                    .contains("duplicate origin identity coalesced from 2 observations")
+        }));
+        assert!(gaps.iter().all(|gap| !gap.source.contains("#occurrence-")));
+    }
     fn observation(
         id: &str,
         machine: Option<&str>,
@@ -1423,6 +1841,195 @@ mod tests {
                 .collect(),
             coverage_gaps: Vec::new(),
         }
+    }
+    #[test]
+    fn correlation_gap_budget_reports_omitted_gaps() {
+        let observations = (0..=MAX_CORRELATION_GAPS)
+            .map(|index| observation(&format!("missing-machine-{index}"), None, &[], &[]))
+            .collect::<Vec<_>>();
+
+        let (_, gaps) = correlate_observations(&observations);
+
+        assert_eq!(gaps.len(), MAX_CORRELATION_GAPS);
+        assert!(gaps.iter().any(|gap| {
+            gap.source == "correlation"
+                && gap.reason == "coverage gap limit reached; 2 additional gaps omitted"
+        }));
+    }
+
+    #[test]
+    fn relation_budget_gap_precedes_member_limit_for_small_exact_group() {
+        let mut observations = (0..224)
+            .map(|index| {
+                observation(
+                    &format!("exact-large-{index}"),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, "a")],
+                    &[],
+                )
+            })
+            .collect::<Vec<_>>();
+        for group in 0..24 {
+            let value = format!("b-{group:02}");
+            observations.extend((0..2).map(|index| {
+                observation(
+                    &format!("exact-pair-{group}-{index}"),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, &value)],
+                    &[],
+                )
+            }));
+        }
+        observations.extend((0..2).map(|index| {
+            observation(
+                &format!("exact-small-{index}"),
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "z")],
+                &[],
+            )
+        }));
+
+        let (_, gaps) = correlate_observations(&observations);
+
+        assert!(gaps.iter().any(|gap| {
+            gap.source == "exact-small-0" && gap.reason.contains("relation budget")
+        }));
+    }
+
+    #[test]
+    fn relation_budget_gap_precedes_member_limit_for_small_secondary_group() {
+        let mut observations = (0..224)
+            .map(|index| {
+                observation(
+                    &format!("secondary-large-{index}"),
+                    Some("HOST"),
+                    &[],
+                    &["a"],
+                )
+            })
+            .collect::<Vec<_>>();
+        for group in 0..24 {
+            let value = format!("b-{group:02}");
+            observations.extend((0..2).map(|index| {
+                observation(
+                    &format!("secondary-pair-{group}-{index}"),
+                    Some("HOST"),
+                    &[],
+                    &[&value],
+                )
+            }));
+        }
+        observations.extend((0..2).map(|index| {
+            observation(
+                &format!("secondary-small-{index}"),
+                Some("HOST"),
+                &[],
+                &["z"],
+            )
+        }));
+
+        let (_, gaps) = correlate_observations(&observations);
+
+        assert!(gaps.iter().any(|gap| {
+            gap.source == "secondary-small-0" && gap.reason.contains("relation budget")
+        }));
+    }
+
+    #[test]
+    fn oversized_exact_identity_group_is_reported_without_pair_expansion() {
+        let observations = (0..=MAX_CORRELATION_GROUP_MEMBERS)
+            .map(|index| {
+                observation(
+                    &format!("event-{index}"),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, "same-activity")],
+                    &[],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert!(edges.is_empty());
+        assert_eq!(gaps.len(), MAX_CORRELATION_GROUP_MEMBERS + 1);
+        assert!(gaps
+            .iter()
+            .all(|gap| gap.reason.contains("correlation limit")));
+    }
+
+    #[test]
+    fn relation_budget_does_not_emit_partial_exact_group_edges() {
+        let mut observations = (0..224)
+            .map(|index| {
+                observation(
+                    &format!("large-{index}"),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, "a")],
+                    &[],
+                )
+            })
+            .collect::<Vec<_>>();
+        for group in 0..23 {
+            let value = format!("b-{group}");
+            observations.extend((0..2).map(|index| {
+                observation(
+                    &format!("pair-{group}-{index}"),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, &value)],
+                    &[],
+                )
+            }));
+        }
+        observations.extend((0..3).map(|index| {
+            observation(
+                &format!("truncated-{index}"),
+                Some("HOST"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "z")],
+                &[],
+            )
+        }));
+
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert!(edges.iter().all(|edge| {
+            !edge.from_id.starts_with("truncated-")
+                && !edge
+                    .to_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("truncated-"))
+        }));
+        assert!(gaps
+            .iter()
+            .filter(|gap| gap.source.starts_with("truncated-"))
+            .all(|gap| gap.reason.contains("relation budget")));
+    }
+    #[test]
+    fn correlation_output_budgets_bound_ambiguous_fanout() {
+        let observations = (0..224)
+            .map(|index| {
+                observation(
+                    &format!("origin-{index:03}-{}", "x".repeat(100_000)),
+                    Some("HOST"),
+                    &[(TimelineCorrelationKeyKind::ActivityId, "activity")],
+                    &[],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let (edges, gaps) = correlate_observations(&observations);
+        let candidate_bytes = edges
+            .iter()
+            .flat_map(|edge| edge.candidate_ids.iter())
+            .fold(0usize, |total, value| total.saturating_add(value.len()));
+        let serialized = serde_json::to_vec(&edges).expect("edges serialize");
+
+        assert!(candidate_bytes <= MAX_CORRELATION_CANDIDATE_BYTES);
+        assert!(serialized.len() <= MAX_CORRELATION_EDGE_BYTES * 2);
+        assert!(gaps.iter().any(|gap| {
+            gap.source == CORRELATION_GAP_TRUNCATION_SOURCE
+                && (gap.reason == CORRELATION_CANDIDATE_BUDGET_REASON
+                    || gap.reason == CORRELATION_EDGE_BUDGET_REASON)
+        }));
     }
 
     #[test]
@@ -1461,7 +2068,10 @@ mod tests {
     fn provider_record_identity_is_scoped_to_source() {
         let mut first = event(1_000, "first", TimelineSeverity::Info);
         let mut second = event(2_000, "second", TimelineSeverity::Info);
-        for (item, source) in [(&mut first, "capture-a.evtx"), (&mut second, "capture-b.evtx")] {
+        for (item, source) in [
+            (&mut first, "capture-a.evtx"),
+            (&mut second, "capture-b.evtx"),
+        ] {
             if let TimelineOrigin::Event {
                 stable_id,
                 source: origin_source,
@@ -1570,7 +2180,9 @@ mod tests {
         ];
         let (edges, gaps) = correlate_observations(&observations);
 
-        assert!(edges.iter().all(|edge| edge.strength != TimelineCorrelationStrength::Exact));
+        assert!(edges
+            .iter()
+            .all(|edge| edge.strength != TimelineCorrelationStrength::Exact));
         assert!(gaps.iter().any(|gap| gap.reason.contains("process start")));
     }
 
@@ -1608,10 +2220,7 @@ mod tests {
 
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].key.kind, TimelineCorrelationKeyKind::ProcessStart);
-        assert_eq!(
-            edges[0].key.value,
-            "123|2026-08-18T10:00:00Z".to_string()
-        );
+        assert_eq!(edges[0].key.value, "123|2026-08-18T10:00:00Z".to_string());
         assert!(gaps.is_empty());
     }
 
@@ -1642,7 +2251,11 @@ mod tests {
             TimelineCorrelationCoverageState::Gap
         );
         assert_eq!(
-            edges[0].coverage.gap.as_ref().map(|gap| gap.reason.as_str()),
+            edges[0]
+                .coverage
+                .gap
+                .as_ref()
+                .map(|gap| gap.reason.as_str()),
             Some("process start identity unavailable")
         );
     }
@@ -1675,7 +2288,10 @@ mod tests {
         let (edges, gaps) = correlate_observations(&observations);
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].strength, TimelineCorrelationStrength::Candidate);
-        assert_eq!(edges[0].coverage.state, TimelineCorrelationCoverageState::Gap);
+        assert_eq!(
+            edges[0].coverage.state,
+            TimelineCorrelationCoverageState::Gap
+        );
         assert!(edges[0]
             .coverage
             .gap
@@ -1689,9 +2305,24 @@ mod tests {
     #[test]
     fn exact_activity_identity_requires_same_machine() {
         let observations = [
-            observation("a", Some("HOST-A"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
-            observation("b", Some("host-a."), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
-            observation("c", Some("HOST-B"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+            observation(
+                "a",
+                Some("HOST-A"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "x")],
+                &[],
+            ),
+            observation(
+                "b",
+                Some("host-a."),
+                &[(TimelineCorrelationKeyKind::ActivityId, "x")],
+                &[],
+            ),
+            observation(
+                "c",
+                Some("HOST-B"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "x")],
+                &[],
+            ),
         ];
         let (edges, gaps) = correlate_observations(&observations);
         assert_eq!(edges.len(), 1);
@@ -1706,13 +2337,19 @@ mod tests {
             observation(
                 "a",
                 Some("HOST"),
-                &[(TimelineCorrelationKeyKind::ProcessStart, "123|2026-08-18t10:00:00z")],
+                &[(
+                    TimelineCorrelationKeyKind::ProcessStart,
+                    "123|2026-08-18t10:00:00z",
+                )],
                 &["process:123"],
             ),
             observation(
                 "b",
                 Some("HOST"),
-                &[(TimelineCorrelationKeyKind::ProcessStart, "123|2026-08-18t10:00:00z")],
+                &[(
+                    TimelineCorrelationKeyKind::ProcessStart,
+                    "123|2026-08-18t10:00:00z",
+                )],
                 &["process:123"],
             ),
         ];
@@ -1772,11 +2409,37 @@ mod tests {
     #[test]
     fn unknown_machine_is_a_coverage_gap_not_a_match() {
         let observations = [
-            observation("a", Some("unknown"), &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
-            observation("b", None, &[(TimelineCorrelationKeyKind::ActivityId, "x")], &[]),
+            observation(
+                "a",
+                Some("unknown"),
+                &[(TimelineCorrelationKeyKind::ActivityId, "x")],
+                &[],
+            ),
+            observation(
+                "b",
+                None,
+                &[(TimelineCorrelationKeyKind::ActivityId, "x")],
+                &[],
+            ),
         ];
         let (edges, gaps) = correlate_observations(&observations);
         assert!(edges.is_empty());
         assert_eq!(gaps.len(), 2);
+    }
+
+    #[test]
+    fn correlation_group_budget_reasons_are_capped() {
+        assert_eq!(
+            super::coverage_state(
+                "exact ActivityId identity group exceeds the 64-member correlation limit"
+            ),
+            super::TimelineCoverageState::Capped
+        );
+        assert_eq!(
+            super::coverage_state(
+                "secondary identity group exceeds the 64-member correlation limit"
+            ),
+            super::TimelineCoverageState::Capped
+        );
     }
 }

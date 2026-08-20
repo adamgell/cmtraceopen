@@ -6,8 +6,10 @@ import {
 import type { Marker } from "../../types/markers";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import {
+  evtxMarkerKey,
   evtxQuickFilterTerms,
   isEvtxBookmark,
+  isEvtxMarkerAddressable,
   type EvtxQuickFilterLike,
 } from "./evtx-marker-adapter";
 import {
@@ -35,11 +37,10 @@ const LEVEL_SHORT: Record<EvtxLevel, string> = {
 };
 
 export type EvtxRowVisualState = "selected" | "marker" | "severity" | "match" | "default";
-
 export function resolveEvtxRowVisualState(input: {
   isSelected: boolean;
   marker: Marker | null;
-  level: EvtxLevel;
+  level: EvtxLevel | null | undefined;
   quickFilterMatch: boolean;
 }): EvtxRowVisualState {
   if (input.isSelected) return "selected";
@@ -132,8 +133,10 @@ export const EvtxTimelineRow = memo(
     ref
   ) {
     const levelColor = LEVEL_COLORS[record.level];
+    const markerAddressable = isEvtxMarkerAddressable(record);
     const bookmark = isEvtxBookmark(marker);
-    const highlightEnabled = Boolean(quickFilter?.highlight && quickFilterMatch);
+    const filterMatch = quickFilterMatch;
+    const highlightEnabled = Boolean(quickFilter?.highlight && filterMatch);
     const highlightTerms = highlightEnabled && quickFilter
       ? evtxQuickFilterTerms(quickFilter)
       : [];
@@ -141,20 +144,23 @@ export const EvtxTimelineRow = memo(
       isSelected,
       marker,
       level: record.level,
-      quickFilterMatch: highlightEnabled,
+      quickFilterMatch: filterMatch,
     });
     const ariaDescription = [
       isSelected ? "Selected" : null,
       marker ? `Tagged ${marker.category}` : null,
       bookmark ? "Bookmarked" : null,
-      highlightEnabled ? "Quick-filter match" : null,
+      filterMatch ? "Quick-filter match" : null,
+      markerAddressable ? null : "Markers unavailable: EventRecordID is missing",
     ].filter(Boolean).join("; ");
     return (
       <div
         data-index={dataIndex}
-        data-evtx-marker-key={`${record.sourceLabel}:${record.channel}:${record.eventRecordId}`}
-        data-quick-filter-match={highlightEnabled ? "true" : "false"}
+        data-evtx-marker-key={evtxMarkerKey(record)}
         data-marker-category={marker?.category}
+        data-quick-filter-match={highlightEnabled ? "true" : "false"}
+        data-evtx-filter-match={filterMatch ? "true" : "false"}
+        data-evtx-visual-state={visualState}
         ref={ref}
         onClick={() => onSelect(isSelected ? null : record.id)}
         onFocus={onFocus}
@@ -168,10 +174,10 @@ export const EvtxTimelineRow = memo(
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect(isSelected ? null : record.id);
-          } else if (e.key.toLowerCase() === "t" && onTag) {
+          } else if (e.key.toLowerCase() === "t" && markerAddressable && onTag) {
             e.preventDefault();
             onTag(record);
-          } else if (e.key.toLowerCase() === "b" && onBookmark) {
+          } else if (e.key.toLowerCase() === "b" && markerAddressable && onBookmark) {
             e.preventDefault();
             onBookmark(record);
           }
@@ -205,12 +211,37 @@ export const EvtxTimelineRow = memo(
           aria-label="Event markers"
           style={{ display: "flex", gap: "4px", flexShrink: 0 }}
         >
+          {filterMatch && (
+            <span
+              data-evtx-filter-match-label="true"
+              aria-hidden="true"
+              style={{
+                fontSize: `${smallFontSize}px`,
+                fontWeight: 600,
+                color: tokens.colorNeutralForeground2,
+              }}
+            >
+              Match
+            </span>
+          )}
           <button
             type="button"
-            tabIndex={grouped ? -1 : undefined}
-            aria-label={marker && !bookmark ? "Remove event tag" : "Tag event"}
-            aria-pressed={Boolean(marker && !bookmark)}
-            title={marker && !bookmark ? `Remove ${marker.category} tag` : "Tag event"}
+            disabled={!markerAddressable}
+            tabIndex={-1}
+            aria-label={
+              markerAddressable
+                ? marker && !bookmark
+                  ? "Remove event tag"
+                  : "Tag event"
+                : "EventRecordID unavailable; tagging is disabled"
+            }
+            title={
+              markerAddressable
+                ? marker && !bookmark
+                  ? `Remove ${marker.category} tag`
+                  : "Tag event"
+                : "EventRecordID unavailable; tagging is disabled"
+            }
             onClick={(event) => {
               event.stopPropagation();
               onTag?.(record);
@@ -220,8 +251,12 @@ export const EvtxTimelineRow = memo(
               border: 0,
               borderRadius: "3px",
               padding: "1px 4px",
-              cursor: "pointer",
-              color: marker && !bookmark ? marker.color : tokens.colorNeutralForeground3,
+              cursor: markerAddressable ? "pointer" : "not-allowed",
+              color: !markerAddressable
+                ? tokens.colorNeutralForeground4
+                : marker && !bookmark
+                  ? marker.color
+                  : tokens.colorNeutralForeground3,
               background: "transparent",
               fontSize: `${smallFontSize}px`,
             }}
@@ -230,10 +265,23 @@ export const EvtxTimelineRow = memo(
           </button>
           <button
             type="button"
-            tabIndex={grouped ? -1 : undefined}
-            aria-label={bookmark ? "Remove bookmark" : "Bookmark event"}
+            disabled={!markerAddressable}
+            tabIndex={-1}
+            aria-label={
+              markerAddressable
+                ? bookmark
+                  ? "Remove bookmark"
+                  : "Bookmark event"
+                : "EventRecordID unavailable; bookmarking is disabled"
+            }
             aria-pressed={bookmark}
-            title={bookmark ? "Remove bookmark" : "Bookmark event"}
+            title={
+              markerAddressable
+                ? bookmark
+                  ? "Remove bookmark"
+                  : "Bookmark event"
+                : "EventRecordID unavailable; bookmarking is disabled"
+            }
             onClick={(event) => {
               event.stopPropagation();
               onBookmark?.(record);
@@ -243,8 +291,12 @@ export const EvtxTimelineRow = memo(
               border: 0,
               borderRadius: "3px",
               padding: "1px 4px",
-              cursor: "pointer",
-              color: bookmark ? "#8b5cf6" : tokens.colorNeutralForeground3,
+              cursor: markerAddressable ? "pointer" : "not-allowed",
+              color: !markerAddressable
+                ? tokens.colorNeutralForeground4
+                : bookmark
+                  ? "#8b5cf6"
+                  : tokens.colorNeutralForeground3,
               background: "transparent",
               fontSize: `${smallFontSize}px`,
             }}

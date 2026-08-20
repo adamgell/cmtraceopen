@@ -31,9 +31,18 @@ fn manifest(directory: &tempfile::TempDir, raw_xml: &str, message: &str) -> std:
 #[test]
 fn binary_exports_stdout_and_reports_coverage_to_stderr() {
     let directory = tempfile::tempdir().expect("temp directory");
-    let manifest = manifest(&directory, "<Event><System><Computer>DESKTOP-JOHN</Computer></System></Event>", "PASSWORD=hunter2");
+    let manifest = manifest(
+        &directory,
+        "<Event><System><Computer>DESKTOP-JOHN</Computer></System></Event>",
+        "PASSWORD=hunter2",
+    );
     let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
-        .args(["--manifest", manifest.to_str().expect("manifest path"), "--format", "json"])
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path"),
+            "--format",
+            "json",
+        ])
         .output()
         .expect("run event-log-export");
     assert!(output.status.success());
@@ -64,8 +73,12 @@ fn binary_exports_to_a_file_without_mixing_bytes_into_stdout() {
         .expect("run event-log-export");
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8(output.stderr).expect("stderr").contains("exportedRecords=1"));
-    assert!(fs::read_to_string(destination).expect("CSV output").contains("Event Time"));
+    assert!(String::from_utf8(output.stderr)
+        .expect("stderr")
+        .contains("exportedRecords=1"));
+    assert!(fs::read_to_string(destination)
+        .expect("CSV output")
+        .contains("Event Time"));
 }
 
 #[test]
@@ -73,13 +86,20 @@ fn binary_returns_nonzero_and_surfaces_writer_errors() {
     let directory = tempfile::tempdir().expect("temp directory");
     let manifest = manifest(&directory, "", "safe");
     let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
-        .args(["--manifest", manifest.to_str().expect("manifest path"), "--format", "xml"])
+        .args([
+            "--manifest",
+            manifest.to_str().expect("manifest path"),
+            "--format",
+            "xml",
+        ])
         .output()
         .expect("run event-log-export");
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr");
-    assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown parseErrors=1 gaps=1"));
+    assert!(
+        stderr.contains("coverage: sourceRecords=1 exportedRecords=unknown parseErrors=1 gaps=1")
+    );
     assert!(stderr.contains("coverage-gap: damaged.evtx: truncated"));
     assert!(stderr.contains("export failed"));
     assert!(stderr.contains("record is missing raw XML"));
@@ -97,7 +117,10 @@ fn binary_returns_nonzero_and_surfaces_writer_errors() {
         .output()
         .expect("run event-log-export");
     assert!(!file_output.status.success());
-    assert_eq!(fs::read_to_string(destination).expect("destination"), "sentinel");
+    assert_eq!(
+        fs::read_to_string(destination).expect("destination"),
+        "sentinel"
+    );
 }
 
 #[test]

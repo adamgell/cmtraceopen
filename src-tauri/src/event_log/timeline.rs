@@ -8,12 +8,12 @@
 
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    correlate_timeline, from_log_entry, merge, timeline_sort_key,
-    TimelineItem, TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
+    correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem, TimelineOrigin,
+    TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
 use super::event_node::{extract_event_identity, extract_system_fields, parse_event_xml};
-use super::models::{EvtxLevel, EvtxRecord};
+use super::models::{EvtxLevel, EvtxOriginKind, EvtxRecord};
 ///
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
 /// decoded form. Information is the resting state, matching how the decoder treats a level it does
@@ -68,7 +68,11 @@ fn record_id(record: &EvtxRecord) -> Option<u64> {
 }
 
 fn stable_event_id(record: &EvtxRecord) -> String {
-    let source = format!("source{}:{}", record.source_label.len(), record.source_label);
+    let source = format!(
+        "source{}:{}",
+        record.source_label.len(),
+        record.source_label
+    );
     let channel = format!("channel{}:{}", record.channel.len(), record.channel);
     let machine = record.computer.trim();
     let machine = format!("machine{}:{}", machine.len(), machine);
@@ -91,7 +95,10 @@ fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> St
 }
 fn stable_event_base_from_id(stable_id: &str) -> &str {
     if stable_id.contains("|missing") {
-        stable_id.rsplit_once('-').map(|(base, _)| base).unwrap_or(stable_id)
+        stable_id
+            .rsplit_once('-')
+            .map(|(base, _)| base)
+            .unwrap_or(stable_id)
     } else {
         stable_id
     }
@@ -153,8 +160,7 @@ fn identity_conflicts_for(record: &EvtxRecord) -> Vec<String> {
     conflicts
 }
 
-
-fn machine_of(value: &str) -> Option<String> {
+fn normalized_provenance(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty()
         || matches!(
@@ -167,7 +173,28 @@ fn machine_of(value: &str) -> Option<String> {
         Some(trimmed.to_string())
     }
 }
+
+fn machine_of(value: &str) -> Option<String> {
+    normalized_provenance(value)
+}
+
+fn component_of(provider: &str) -> Option<String> {
+    normalized_provenance(provider)
+}
+
 fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
+    if record.origin_kind == EvtxOriginKind::Log {
+        return TimelineOrigin::Log {
+            file: record.source_label.clone(),
+            component: component_of(&record.provider),
+            line: u32::try_from(record.event_record_id).unwrap_or(u32::MAX),
+            source: record.source_label.clone(),
+            machine: machine_of(&record.computer),
+            bundle: bundle_from_source(&record.source_label),
+            record_id: record.event_record_id,
+        };
+    }
+
     let (raw_activity_id, raw_related_activity_id) = raw_correlation_ids(&record.raw_xml);
     TimelineOrigin::Event {
         stable_id: stable_event_id_with_occurrence(record, occurrence),
@@ -177,8 +204,20 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         channel: record.channel.clone(),
         provider: record.provider.clone(),
         process_id: record.process_id,
-        activity_id: record.activity_id.clone().or(raw_activity_id),
-        related_activity_id: record.related_activity_id.clone().or(raw_related_activity_id),
+        activity_id: record
+            .activity_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or(raw_activity_id),
+        related_activity_id: record
+            .related_activity_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or(raw_related_activity_id),
         session_id: record.session_id.clone(),
         device_id: record.device_id.clone(),
         user_id: record.user_id.clone().or_else(|| record.user_sid.clone()),
@@ -189,7 +228,6 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         record_id_text: record_id_text(record),
     }
 }
-
 
 fn bundle_from_source(source: &str) -> Option<String> {
     source
@@ -217,7 +255,6 @@ fn parsed_timestamp_epoch(record: &EvtxRecord) -> Option<i64> {
 fn timestamp_is_present(record: &EvtxRecord) -> bool {
     parsed_timestamp_epoch(record).is_some()
 }
-
 
 /// Converts one event, or reports why it has no position.
 pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, Box<UnplacedItem>> {
@@ -319,12 +356,7 @@ pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
             Err(reason) => unplaced.push(*reason),
         }
     }
-    for OrderedRecord {
-        record,
-        origin,
-        ..
-    } in ordered_records(records)
-    {
+    for OrderedRecord { record, origin, .. } in ordered_records(records) {
         match from_event_with_origin(record, origin) {
             Ok(item) => placed.push(item),
             Err(item) => unplaced.push(*item),
@@ -354,7 +386,9 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
     {
         if let TimelineOrigin::Event { stable_id, .. } = origin {
             let base = stable_event_base_from_id(stable_id);
-            *existing_occurrences.entry(base.to_string()).or_insert(0usize) += 1;
+            *existing_occurrences
+                .entry(base.to_string())
+                .or_insert(0usize) += 1;
         }
     }
     for OrderedRecord {
@@ -397,6 +431,7 @@ mod tests {
             event_data: Vec::new(),
             raw_xml: String::new(),
             source_label: "Live".to_string(),
+            origin_kind: EvtxOriginKind::Event,
             task: None,
             opcode: None,
             process_id: None,
@@ -421,6 +456,31 @@ mod tests {
             timestamp,
             file_path: "C:/logs/IntuneManagementExtension.log".to_string(),
             ..LogEntry::default()
+        }
+    }
+
+    #[test]
+    fn log_origin_normalizes_placeholder_components() {
+        for (provider, expected) in [
+            ("", None),
+            ("   ", None),
+            ("UNKNOWN", None),
+            ("unknown", None),
+            ("N/A", None),
+            ("not available", None),
+            ("NOT_APPLICABLE", None),
+            ("  ImeCore  ", Some("ImeCore")),
+        ] {
+            let mut source = record(1, "log", EvtxLevel::Information);
+            source.origin_kind = EvtxOriginKind::Log;
+            source.provider = provider.to_string();
+
+            match origin_of(&source, 0) {
+                TimelineOrigin::Log { component, .. } => {
+                    assert_eq!(component.as_deref(), expected, "provider={provider:?}");
+                }
+                other => panic!("expected log origin, got {other:?}"),
+            }
         }
     }
 
@@ -478,7 +538,11 @@ mod tests {
         let timeline = build(&[], &[text_timestamp, earlier]);
 
         assert_eq!(
-            timeline.items.iter().map(|item| item.message.as_str()).collect::<Vec<_>>(),
+            timeline
+                .items
+                .iter()
+                .map(|item| item.message.as_str())
+                .collect::<Vec<_>>(),
             vec!["earlier", "text timestamp"]
         );
         assert_eq!(timeline.items[1].timestamp_ms, 1_786_276_800_000);
@@ -602,8 +666,8 @@ mod tests {
         first.source_label = "a/b#c".to_string();
         first.channel = "d/e#f".to_string();
         first.message = "secret-token".repeat(100);
-        first.raw_xml = "<Event><System><EventRecordID>0</EventRecordID></System></Event>"
-            .repeat(100);
+        first.raw_xml =
+            "<Event><System><EventRecordID>0</EventRecordID></System></Event>".repeat(100);
 
         let mut second = first.clone();
         second.message = "other-secret".repeat(100);
@@ -690,7 +754,12 @@ mod tests {
                     machine,
                     record_id,
                     ..
-                } => (stable_id.to_string(), source.clone(), machine.clone(), *record_id),
+                } => (
+                    stable_id.to_string(),
+                    source.clone(),
+                    machine.clone(),
+                    *record_id,
+                ),
                 other => panic!("expected event origin, got {other:?}"),
             })
             .collect();
@@ -812,6 +881,32 @@ mod tests {
             other => panic!("expected event origin, got {other:?}"),
         }
     }
+    #[test]
+    fn blank_backend_activity_id_falls_back_to_raw_system_identity() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.activity_id = Some("  ".to_string());
+        source.raw_xml =
+            r#"<Event><System><Correlation ActivityID="{from-xml}"/></System></Event>"#.to_string();
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { activity_id, .. } => {
+                assert_eq!(activity_id.as_deref(), Some("{from-xml}"));
+            }
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+    #[test]
+    fn backend_activity_ids_are_trimmed_before_timeline_correlation() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.activity_id = Some("  {from-backend}  ".to_string());
+        let item = from_event(&source).expect("placed");
+        match item.origin {
+            TimelineOrigin::Event { activity_id, .. } => {
+                assert_eq!(activity_id.as_deref(), Some("{from-backend}"));
+            }
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
 
     #[test]
     fn build_populates_exact_activity_edge_and_coverage_state() {
@@ -861,21 +956,29 @@ mod tests {
         append(&mut split, &[], &[appended]);
 
         assert_eq!(split, full);
-        let messages: Vec<_> = split.items.iter().map(|item| item.message.as_str()).collect();
+        let messages: Vec<_> = split
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
         assert_eq!(messages, vec!["appended", "existing"]);
     }
 
     #[test]
     fn cross_source_equal_time_order_matches_full_build_and_append_history() {
         let event = record(5_000, "event", EvtxLevel::Information);
-        let log = entry( Some(5_000), "log");
+        let log = entry(Some(5_000), "log");
         let full = build(std::slice::from_ref(&log), std::slice::from_ref(&event));
 
         let mut appended = build(&[], &[]);
         append(&mut appended, &[log], &[]);
         append(&mut appended, &[], &[event]);
 
-        let full_messages: Vec<_> = full.items.iter().map(|item| item.message.as_str()).collect();
+        let full_messages: Vec<_> = full
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
         let appended_messages: Vec<_> = appended
             .items
             .iter()
@@ -890,10 +993,17 @@ mod tests {
         append(
             &mut timeline,
             &[],
-            &[record(1_000, "first", EvtxLevel::Information), record(0, "undated", EvtxLevel::Warning)],
+            &[
+                record(1_000, "first", EvtxLevel::Information),
+                record(0, "undated", EvtxLevel::Warning),
+            ],
         );
 
-        let messages: Vec<&str> = timeline.items.iter().map(|item| item.message.as_str()).collect();
+        let messages: Vec<&str> = timeline
+            .items
+            .iter()
+            .map(|item| item.message.as_str())
+            .collect();
         assert_eq!(messages, vec!["first", "second"]);
         assert_eq!(timeline.unplaced.len(), 1);
         assert!(!timeline.is_complete());

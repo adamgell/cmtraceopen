@@ -24,7 +24,12 @@ const record: EvtxRecord = {
   rawXml: "",
   sourceLabel: "capture.evtx",
 };
-const filteredRecord: EvtxRecord = { ...record, id: 8, eventId: 2, message: "filtered" };
+const filteredRecord: EvtxRecord = {
+  ...record,
+  id: 8,
+  eventId: 2,
+  message: "filtered",
+};
 
 describe("buildUnifiedTimeline", () => {
   beforeEach(() => {
@@ -39,6 +44,34 @@ describe("buildUnifiedTimeline", () => {
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
       records: [{ ...record, eventRecordId: "7" }],
+    });
+  });
+  it("accepts an event timeline origin that omits an optional process id", async () => {
+    const timeline = {
+      items: [
+        {
+          timestampMs: 1,
+          severity: "info",
+          message: "event",
+          origin: {
+            kind: "event",
+            stableId: "source:Live|channel:Security|record:7",
+            source: "Live",
+            machine: null,
+            bundle: null,
+            channel: "Security",
+            provider: "Provider",
+            eventId: 1,
+            recordId: 7,
+          },
+        },
+      ],
+      unplaced: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(timeline);
+
+    await expect(buildUnifiedTimeline([record])).resolves.toMatchObject({
+      items: [{ origin: { processId: null } }],
     });
   });
 
@@ -68,7 +101,9 @@ describe("buildUnifiedTimeline", () => {
       sourceLabel: "bundle-b/capture.evtx",
     };
 
-    await expect(buildUnifiedTimeline([record, otherSource])).resolves.toEqual(timeline);
+    await expect(buildUnifiedTimeline([record, otherSource])).resolves.toEqual(
+      timeline,
+    );
     expect(invoke).toHaveBeenCalledWith("evtx_build_unified_timeline", {
       entries: [],
       records: [
@@ -95,7 +130,9 @@ describe("buildUnifiedTimeline", () => {
 
   it("fails closed instead of forwarding unsafe EventRecordIDs through JSON", async () => {
     const unsafe = { ...record, eventRecordId: Number.MAX_SAFE_INTEGER + 2 };
-    await expect(buildUnifiedTimeline([unsafe])).rejects.toThrow("safe integer");
+    await expect(buildUnifiedTimeline([unsafe])).rejects.toThrow(
+      "safe integer",
+    );
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -114,5 +151,126 @@ describe("buildUnifiedTimeline", () => {
       entries: [],
       records: [{ ...lossless, eventRecordId: exactId }],
     });
+  });
+  it("rejects malformed timeline items before returning them to the workspace", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [
+        {
+          timestampMs: 1,
+          severity: "info",
+          message: "bad",
+          origin: { kind: "unknown" },
+        },
+      ],
+      unplaced: [],
+    });
+
+    await expect(buildUnifiedTimeline([record])).rejects.toThrow(
+      /Invalid unified timeline: items\[0\]\.origin\.kind/,
+    );
+  });
+
+  it("rejects malformed correlation edge evidence", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [],
+      unplaced: [],
+      edges: [
+        {
+          id: "edge",
+          fromId: "from",
+          toId: null,
+          key: { kind: "activityId", value: "activity" },
+          strength: "exact",
+          confidence: "high",
+          candidateIds: [],
+          evidence: [{ originId: "from", field: "activityId", value: 42 }],
+          coverage: { state: "covered" },
+        },
+      ],
+    });
+
+    await expect(buildUnifiedTimeline([record])).rejects.toThrow(
+      /Invalid unified timeline: edges\[0\]\.evidence\[0\]\.value/,
+    );
+  });
+  it("rejects a gap correlation edge without a coverage explanation", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [],
+      unplaced: [],
+      edges: [
+        {
+          id: "edge",
+          fromId: "from",
+          toId: null,
+          key: { kind: "activityId", value: "activity" },
+          strength: "ambiguous",
+          confidence: "unknown",
+          candidateIds: [],
+          evidence: [],
+          coverage: { state: "gap" },
+        },
+      ],
+    });
+
+    await expect(buildUnifiedTimeline([record])).rejects.toThrow(
+      /Invalid unified timeline: edges\[0\]\.coverage\.gap/,
+    );
+  });
+
+  it("rejects a covered correlation edge that carries a coverage gap", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [],
+      unplaced: [],
+      edges: [
+        {
+          id: "edge",
+          fromId: "from",
+          toId: null,
+          key: { kind: "activityId", value: "activity" },
+          strength: "exact",
+          confidence: "high",
+          candidateIds: [],
+          evidence: [],
+          coverage: {
+            state: "covered",
+            gap: { source: "from", reason: "unexpected gap" },
+          },
+        },
+      ],
+    });
+
+    await expect(buildUnifiedTimeline([record])).rejects.toThrow(
+      /Invalid unified timeline: edges\[0\]\.coverage\.gap/,
+    );
+  });
+  it("accepts a covered correlation edge with a null coverage gap", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      items: [],
+      unplaced: [],
+      edges: [
+        {
+          id: "edge",
+          fromId: "from",
+          toId: null,
+          key: { kind: "activityId", value: "activity" },
+          strength: "exact",
+          confidence: "high",
+          candidateIds: [],
+          evidence: [],
+          coverage: { state: "covered", gap: null },
+        },
+      ],
+    });
+
+    await expect(buildUnifiedTimeline([record])).resolves.toMatchObject({
+      edges: [{ coverage: { state: "covered" } }],
+    });
+  });
+
+  it("accepts legacy timelines that omit optional correlation fields", async () => {
+    const timeline = { items: [], unplaced: [] };
+    vi.mocked(invoke).mockResolvedValue(timeline);
+
+    await expect(buildUnifiedTimeline([record])).resolves.toEqual(timeline);
   });
 });

@@ -9,7 +9,9 @@ import {
 import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
 import {
+  evtxMarkerKey,
   getEvtxMarker,
+  isEvtxMarkerAddressable,
   loadEvtxMarkers,
   toggleEvtxBookmark,
   toggleEvtxTag,
@@ -44,6 +46,8 @@ export function EvtxDetailPane() {
   if (!record) {
     return (
       <div
+        role="region"
+        aria-label="Event log details"
         style={{
           padding: "16px",
           color: tokens.colorNeutralForeground4,
@@ -57,9 +61,12 @@ export function EvtxDetailPane() {
     );
   }
 
+  const markerAddressable = isEvtxMarkerAddressable(record);
 
   return (
     <div
+      role="region"
+      aria-label="Event log details"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -74,6 +81,7 @@ export function EvtxDetailPane() {
     >
       {/* Header */}
       <div
+        data-evtx-marker-key={evtxMarkerKey(record)}
         style={{
           display: "flex",
           alignItems: "center",
@@ -109,8 +117,26 @@ export function EvtxDetailPane() {
         <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
           <button
             type="button"
-            aria-label={marker?.category === "bookmark" ? "Tag event" : marker ? "Remove event tag" : "Tag event"}
+            disabled={!markerAddressable}
+            aria-label={
+              markerAddressable
+                ? marker?.category === "bookmark"
+                  ? "Tag event"
+                  : marker
+                    ? "Remove event tag"
+                    : "Tag event"
+                : "EventRecordID unavailable; tagging is disabled"
+            }
             aria-pressed={Boolean(marker && marker.category !== "bookmark")}
+            title={
+              markerAddressable
+                ? marker?.category === "bookmark"
+                  ? "Tag event"
+                  : marker
+                    ? "Remove event tag"
+                    : "Tag event"
+                : "EventRecordID unavailable; tagging is disabled"
+            }
             onClick={() => toggleEvtxTag(record)}
             style={{
               border: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -126,8 +152,22 @@ export function EvtxDetailPane() {
           </button>
           <button
             type="button"
-            aria-label={marker?.category === "bookmark" ? "Remove bookmark" : "Bookmark event"}
+            disabled={!markerAddressable}
+            aria-label={
+              markerAddressable
+                ? marker?.category === "bookmark"
+                  ? "Remove bookmark"
+                  : "Bookmark event"
+                : "EventRecordID unavailable; bookmarking is disabled"
+            }
             aria-pressed={marker?.category === "bookmark"}
+            title={
+              markerAddressable
+                ? marker?.category === "bookmark"
+                  ? "Remove bookmark"
+                  : "Bookmark event"
+                : "EventRecordID unavailable; bookmarking is disabled"
+            }
             onClick={() => toggleEvtxBookmark(record)}
             style={{
               border: `1px solid ${tokens.colorNeutralStroke1}`,

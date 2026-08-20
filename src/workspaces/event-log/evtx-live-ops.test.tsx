@@ -188,7 +188,138 @@ describe("event-log live operations", () => {
     rejectStops.get(staleRequestId)?.(new Error("stale tail registry failure"));
     await staleStop;
 
-    expect(useEvtxStore.getState().tailCoverageGaps).toEqual([]);
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (stale tail registry failure)"
+    );
+  });
+  it("does not let stale stop recovery clear a current same-message failure", async () => {
+    useEvtxStore.setState({
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+    });
+    let staleReject!: (error: Error) => void;
+    let retryResolve!: (status: unknown) => void;
+    let currentReject!: (error: Error) => void;
+    let queryResolve!: (value: unknown) => void;
+    let queryRequestId: string | undefined;
+    let staleTailRequestId: string | undefined;
+    let currentTailRequestId: string | undefined;
+    let staleStopAttempts = 0;
+    invoke.mockImplementation((name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_start_tail") {
+        const requestId = String(args.requestId);
+        if (!staleTailRequestId) staleTailRequestId = requestId;
+        else currentTailRequestId = requestId;
+        return {
+          requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: true,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_stop_tail") {
+        const requestId = String(args.requestId);
+        if (requestId === staleTailRequestId) {
+          staleStopAttempts += 1;
+          if (staleStopAttempts === 1) {
+            return new Promise((_, reject) => {
+              staleReject = reject;
+            });
+          }
+          return new Promise((resolve) => {
+            retryResolve = resolve;
+          });
+        }
+        if (requestId === currentTailRequestId) {
+          return new Promise((_, reject) => {
+            currentReject = reject;
+          });
+        }
+        return {
+          requestId,
+          channel: args.channel,
+          mode: "subscription",
+          active: false,
+          nextSequence: 0,
+          coverageGaps: [],
+        };
+      }
+      if (name === "evtx_query_channels") {
+        queryRequestId = String(args.requestId);
+        return new Promise((resolve) => {
+          queryResolve = resolve;
+        });
+      }
+      return undefined;
+    });
+
+    await useEvtxStore.getState().startLiveTail();
+    const sourceQuery = useEvtxStore.getState().queryChannels(["Application"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(staleReject).toBeDefined();
+
+    staleReject(new Error("same failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (same failure)"
+    );
+
+    const nextTail = useEvtxStore.getState().startLiveTail();
+    await nextTail;
+    expect(useEvtxStore.getState().tailRequestId).toBe(currentTailRequestId);
+
+    const stopCurrent = useEvtxStore.getState().stopLiveTail();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(currentReject).toBeDefined();
+    currentReject(new Error("same failure"));
+    await stopCurrent;
+
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (same failure)"
+    );
+
+    retryResolve({
+      requestId: staleTailRequestId,
+      channel: "Application",
+      mode: "subscription",
+      active: false,
+      nextSequence: 0,
+      coverageGaps: [],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+
+    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+      "Application: live tail stop failed (same failure)"
+    );
+
+    listeners.get("evtx-record-stream-complete")?.({
+      payload: {
+        requestId: queryRequestId,
+        channel: "Application",
+        sequenceCount: 0,
+        totalRecords: 0,
+      },
+    });
+    queryResolve({
+      records: [],
+      channels: [{ name: "Application", eventCount: 0, sourceType: "live" as const }],
+      totalRecords: 0,
+      parseErrors: 0,
+      errorMessages: [],
+    });
+    await sourceQuery;
   });
 
   it("retains a failed channel stop for retry", async () => {

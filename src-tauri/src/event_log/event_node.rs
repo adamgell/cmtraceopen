@@ -34,17 +34,22 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
 
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(XmlEvent::Start(start)) => stack.push(element_from(&start)?),
+            Ok(XmlEvent::Start(start)) => {
+                if root.is_some() && stack.is_empty() {
+                    return Err("event XML contained multiple root elements".to_string());
+                }
+                stack.push(element_from(&start)?);
+            }
             Ok(XmlEvent::Empty(empty)) => {
                 let node = element_from(&empty)?;
-                close(&mut stack, &mut root, node);
+                close(&mut stack, &mut root, node)?;
             }
             Ok(XmlEvent::Text(text)) => {
                 let value = text
                     .xml10_content()
                     .map_err(|error| format!("undecodable text: {error}"))?
                     .into_owned();
-                push_text(&mut stack, &value);
+                push_text(&mut stack, &value)?;
             }
             Ok(XmlEvent::GeneralRef(reference)) => {
                 // Entity references are their own event in quick-xml 0.41. Ignoring them would
@@ -58,15 +63,24 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
                 let resolved = quick_xml::escape::unescape(&raw)
                     .map(|value| value.into_owned())
                     .unwrap_or(raw);
-                push_text(&mut stack, &resolved);
+                push_text(&mut stack, &resolved)?;
             }
             Ok(XmlEvent::CData(data)) => {
                 let value = String::from_utf8_lossy(&data).into_owned();
-                push_text(&mut stack, &value);
+                push_text(&mut stack, &value)?;
             }
-            Ok(XmlEvent::End(_)) => {
-                let Some(node) = stack.pop() else { continue };
-                close(&mut stack, &mut root, node);
+            Ok(XmlEvent::End(end)) => {
+                let Some(node) = stack.pop() else {
+                    return Err("event XML contained a stray end element".to_string());
+                };
+                let end_name = local_name(end.name().as_ref());
+                if node.name != end_name {
+                    return Err(format!(
+                        "event XML closed '{}' with '{}'",
+                        node.name, end_name
+                    ));
+                }
+                close(&mut stack, &mut root, node)?;
             }
             Ok(XmlEvent::Eof) => break,
             Ok(_) => {}
@@ -75,21 +89,34 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
         buffer.clear();
     }
 
+    if !stack.is_empty() {
+        return Err("event XML ended before all elements were closed".to_string());
+    }
     root.ok_or_else(|| "event XML contained no elements".to_string())
 }
 
-fn push_text(stack: &mut [EventNode], value: &str) {
+fn push_text(stack: &mut [EventNode], value: &str) -> Result<(), String> {
     if let Some(current) = stack.last_mut() {
         match current.text.as_mut() {
             Some(existing) => existing.push_str(value),
             None => current.text = Some(value.to_string()),
         }
+        Ok(())
+    } else if value.trim().is_empty() {
+        Ok(())
+    } else {
+        Err("event XML contained non-whitespace text outside the root element".to_string())
     }
 }
 
-fn close(stack: &mut [EventNode], root: &mut Option<EventNode>, mut node: EventNode) {
+fn close(
+    stack: &mut [EventNode],
+    root: &mut Option<EventNode>,
+    mut node: EventNode,
+) -> Result<(), String> {
     // Pretty-printed XML puts newlines and indentation inside container elements. That is layout,
-    // not content, so it is dropped once we know the element has children.
+    // not content, so it is dropped once the element closes instead, which removes pretty-printing
+    // without touching real content.
     if !node.children.is_empty()
         && node
             .text
@@ -101,14 +128,16 @@ fn close(stack: &mut [EventNode], root: &mut Option<EventNode>, mut node: EventN
 
     match stack.last_mut() {
         Some(parent) => parent.children.push(node),
-        // The outermost element is the root. Later siblings at depth zero are ignored rather than
-        // replacing it, so a stray trailing element cannot discard the event.
+        // The outermost element is the root. A second depth-zero element is not part of the event
+        // and must not be silently discarded.
         None => {
-            if root.is_none() {
-                *root = Some(node);
+            if root.is_some() {
+                return Err("event XML contained multiple root elements".to_string());
             }
+            *root = Some(node);
         }
     }
+    Ok(())
 }
 
 fn element_from(start: &quick_xml::events::BytesStart<'_>) -> Result<EventNode, String> {
@@ -359,7 +388,13 @@ pub fn extract_event_identity(fields: &[EvtxField]) -> EventIdentityFields {
     EventIdentityFields {
         activity_id: unique_named_value(
             fields,
-            &["ActivityId", "ActivityID", "CorrelationId", "CorrelationID", "TransactionId"],
+            &[
+                "ActivityId",
+                "ActivityID",
+                "CorrelationId",
+                "CorrelationID",
+                "TransactionId",
+            ],
             "activityId",
             &mut conflicts,
         ),
@@ -589,6 +624,22 @@ mod tests {
         );
         assert!(parse_event_xml("<Event").is_err(), "an unclosed tag");
         assert!(parse_event_xml("").is_err(), "an empty document");
+    }
+
+    #[test]
+    fn a_closed_event_followed_by_an_unclosed_element_is_rejected() {
+        assert!(
+            parse_event_xml("<Event></Event><Broken>").is_err(),
+            "content after the root must not become a partial event"
+        );
+    }
+
+    #[test]
+    fn multiple_root_elements_are_rejected() {
+        assert!(
+            parse_event_xml("<Event></Event><Other />").is_err(),
+            "a document must contain exactly one root element"
+        );
     }
 
     #[test]

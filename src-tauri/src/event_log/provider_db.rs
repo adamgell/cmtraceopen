@@ -22,6 +22,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +33,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// What a database contributed, so an operator can see coverage rather than guess at it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +64,9 @@ pub struct ProviderDbLoadFailure {
 pub struct ProviderDbLoadOutcome {
     pub loaded: Vec<ProviderDbInfo>,
     pub failures: Vec<ProviderDbLoadFailure>,
+}
+pub(crate) fn packaged_provider_load_is_complete(outcome: &ProviderDbLoadOutcome) -> bool {
+    !outcome.loaded.is_empty() && outcome.failures.is_empty()
 }
 
 /// Decompresses one gzip JSON payload into `T`.
@@ -189,6 +195,18 @@ impl ProviderDb {
     pub fn info(&self) -> &ProviderDbInfo {
         &self.info
     }
+    fn provider_names(&self) -> Result<BTreeSet<String>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT DISTINCT ProviderName FROM ProviderDetails")
+            .map_err(|error| format!("cannot prepare provider-name query: {error}"))?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("cannot read provider names: {error}"))?
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|error| format!("cannot read provider name: {error}"))?;
+        Ok(names)
+    }
 
     /// Reads every `ProviderDetails` row in deterministic order.
     ///
@@ -207,7 +225,10 @@ impl ProviderDb {
         self.rows_for(Some(provider_name))
     }
 
-    fn rows_for(&self, provider_name: Option<&str>) -> Result<Vec<CapturedProviderMetadata>, String> {
+    fn rows_for(
+        &self,
+        provider_name: Option<&str>,
+    ) -> Result<Vec<CapturedProviderMetadata>, String> {
         let mut statement = self
             .connection
             .prepare(
@@ -264,7 +285,8 @@ impl ProviderDb {
                         state_version_key,
                     )?;
                     if unavailable_categories.is_empty() {
-                        unavailable_categories = unavailable_categories_from_parameters(&parameters)?;
+                        unavailable_categories =
+                            unavailable_categories_from_parameters(&parameters)?;
                     }
                     let version_key = version_key.unwrap_or_default();
                     Ok(CapturedProviderMetadata {
@@ -335,27 +357,83 @@ fn gzip_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
 }
 fn levels_from_maps(blob: &[u8]) -> Result<BTreeMap<String, String>, String> {
     let maps: serde_json::Value = inflate_json(blob)?;
+    let parse_values = |values: &serde_json::Value| -> Result<BTreeMap<String, String>, String> {
+        if let Some(entries) = values.as_array() {
+            let mut levels = BTreeMap::new();
+            for entry in entries {
+                let value = entry
+                    .get("Value")
+                    .or_else(|| entry.get("value"))
+                    .ok_or_else(|| "provider level entry is missing Value".to_string())?;
+                let name = entry
+                    .get("Name")
+                    .or_else(|| entry.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "provider level entry is missing Name".to_string())?;
+                let key = match value {
+                    serde_json::Value::Number(number) => number
+                        .as_u64()
+                        .and_then(|number| u32::try_from(number).ok())
+                        .or_else(|| {
+                            number
+                                .as_i64()
+                                .and_then(|number| u32::try_from(number).ok())
+                        })
+                        .ok_or_else(|| {
+                            "provider level entry Value is outside the UInt32 range".to_string()
+                        })?
+                        .to_string(),
+                    serde_json::Value::String(raw) => raw
+                        .parse::<u32>()
+                        .map(|number| number.to_string())
+                        .map_err(|_| "provider level entry Value is not a UInt32".to_string())?,
+                    _ => return Err("provider level entry Value is not a UInt32".to_string()),
+                };
+                // ValueMapDefinition resolves the first matching entry. Preserve that
+                // behavior when the portable model cannot retain duplicate keys.
+                levels.entry(key).or_insert_with(|| name.to_string());
+            }
+            return Ok(levels);
+        }
+        if let Some(entries) = values.as_object() {
+            let mut levels = BTreeMap::new();
+            for (raw_key, value) in entries {
+                let key = raw_key
+                    .parse::<u32>()
+                    .map(|number| number.to_string())
+                    .map_err(|_| "provider level map key is not a UInt32".to_string())?;
+                let name = value
+                    .as_str()
+                    .ok_or_else(|| "provider level map value is not a string".to_string())?;
+                levels.entry(key).or_insert_with(|| name.to_string());
+            }
+            return Ok(levels);
+        }
+        Err("provider level values are not a map or entries array".to_string())
+    };
     if let Some(levels) = maps.get("levels") {
         if let Some(values) = levels.get("Entries").or_else(|| levels.get("Values")) {
-            return serde_json::from_value(values.clone())
-                .map_err(|error| format!("provider level values are not a map: {error}"));
+            return parse_values(values);
         }
-        return serde_json::from_value(levels.clone())
-            .map_err(|error| format!("provider levels are not a map: {error}"));
+        return parse_values(levels);
     }
-    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_object) {
+    if let Some(definitions) = maps
+        .get("ValueMapDefinition")
+        .and_then(serde_json::Value::as_object)
+    {
         if let Some(levels) = definitions.get("levels") {
             let values = levels.get("Values").unwrap_or(levels);
-            return serde_json::from_value(values.clone())
-                .map_err(|error| format!("provider level values are not a map: {error}"));
+            return parse_values(values);
         }
     }
-    if let Some(definitions) = maps.get("ValueMapDefinition").and_then(serde_json::Value::as_array) {
+    if let Some(definitions) = maps
+        .get("ValueMapDefinition")
+        .and_then(serde_json::Value::as_array)
+    {
         for definition in definitions {
             if definition.get("Name").and_then(serde_json::Value::as_str) == Some("levels") {
                 if let Some(values) = definition.get("Values") {
-                    return serde_json::from_value(values.clone())
-                        .map_err(|error| format!("provider level values are not a map: {error}"));
+                    return parse_values(values);
                 }
             }
         }
@@ -407,7 +485,6 @@ fn unavailable_categories_from_state(
     inflate_json(&blob)
 }
 
-
 /// Provider metadata captured for one concrete provider version.
 ///
 /// The version key is part of the database's composite identity. It must come from the capture
@@ -427,16 +504,16 @@ pub fn write_provider_database(
 ) -> Result<usize, String> {
     validate_captured_providers(providers)?;
     let temporary = temporary_path(path, "write")?;
-    let temporary_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| {
-            format!(
-                "cannot create provider database staging file {}: {error}",
-                temporary.display()
-            )
-        })?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let temporary_file = options.open(&temporary).map_err(|error| {
+        format!(
+            "cannot create provider database staging file {}: {error}",
+            temporary.display()
+        )
+    })?;
     drop(temporary_file);
     let result = (|| {
         write_provider_database_inner(&temporary, providers)?;
@@ -509,17 +586,26 @@ fn write_provider_database_inner(
         let metadata = &captured.metadata;
         let events = gzip_json(&metadata.events)?;
         let keywords = gzip_json(&metadata.keywords)?;
+        let mut level_entries = Vec::with_capacity(metadata.levels.len());
+        for (value, name) in &metadata.levels {
+            let parsed_value = value
+                .parse::<u32>()
+                .map_err(|_| format!("provider level key {value:?} is not a UInt32"))?;
+            level_entries.push(serde_json::json!({
+                "Value": parsed_value,
+                "Name": name,
+            }));
+        }
         let maps = gzip_json(&serde_json::json!({
             "levels": {
-                "Entries": metadata.levels.clone(),
+                "Entries": level_entries,
                 "IsBitMap": false
             }
         }))?;
         let messages = gzip_json(&metadata.messages)?;
         let opcodes = gzip_json(&metadata.opcodes)?;
         let tasks = gzip_json(&metadata.tasks)?;
-        let parameters =
-            gzip_json(&Vec::<cmtraceopen_parser::provider::ProviderMessage>::new())?;
+        let parameters = gzip_json(&Vec::<cmtraceopen_parser::provider::ProviderMessage>::new())?;
         transaction
             .execute(
                 r#"INSERT INTO ProviderDetails
@@ -584,11 +670,20 @@ pub fn export_provider_database(
     let temporary = temporary_path(destination, "export")?;
     let mut temporary_created = false;
     let result = (|| {
-        let source_file = std::fs::File::open(source)
-            .map_err(|error| format!("cannot read provider database {}: {error}", source.display()))?;
+        let source_file = std::fs::File::open(source).map_err(|error| {
+            format!(
+                "cannot read provider database {}: {error}",
+                source.display()
+            )
+        })?;
         let size = source_file
             .metadata()
-            .map_err(|error| format!("cannot stat provider database {}: {error}", source.display()))?
+            .map_err(|error| {
+                format!(
+                    "cannot stat provider database {}: {error}",
+                    source.display()
+                )
+            })?
             .len();
         if size > MAX_PROVIDER_DATABASE_BYTES {
             return Err(format!(
@@ -596,11 +691,16 @@ pub fn export_provider_database(
             ));
         }
         let mut input = source_file.take(MAX_PROVIDER_DATABASE_BYTES + 1);
-        let mut output = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| format!("cannot create provider export {}: {error}", temporary.display()))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut output = options.open(&temporary).map_err(|error| {
+            format!(
+                "cannot create provider export {}: {error}",
+                temporary.display()
+            )
+        })?;
         temporary_created = true;
         let copied = std::io::copy(&mut input, &mut output)
             .map_err(|error| format!("cannot copy provider database: {error}"))?;
@@ -633,14 +733,22 @@ const MAX_PROVIDER_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
 
 fn temporary_path(path: &Path, operation: &str) -> Result<PathBuf, String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("cannot create provider database directory {}: {error}", parent.display()))?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "cannot create provider database directory {}: {error}",
+            parent.display()
+        )
+    })?;
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("provider database path has no valid file name: {}", path.display()))?;
-    static NEXT_TEMPORARY: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
+        .ok_or_else(|| {
+            format!(
+                "provider database path has no valid file name: {}",
+                path.display()
+            )
+        })?;
+    static NEXT_TEMPORARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = NEXT_TEMPORARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(parent.join(format!(
         ".{file_name}.cmtraceopen-{operation}-{}-{nonce}.tmp",
@@ -669,8 +777,11 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), String> {
     };
 
     let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(once(0)).collect();
-    let destination_wide: Vec<u16> =
-        destination.as_os_str().encode_wide().chain(once(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect();
     unsafe {
         MoveFileExW(
             PCWSTR(source_wide.as_ptr()),
@@ -691,7 +802,10 @@ fn same_file(source: &Path, destination: &Path) -> bool {
     if source == destination {
         return true;
     }
-    match (std::fs::canonicalize(source), std::fs::canonicalize(destination)) {
+    match (
+        std::fs::canonicalize(source),
+        std::fs::canonicalize(destination),
+    ) {
         (Ok(source), Ok(destination)) => source == destination,
         _ => false,
     }
@@ -703,6 +817,27 @@ pub const PACKAGED_PROVIDER_DATABASE_DIRECTORY: &str = "provider-db";
 /// Windows capture must never be represented by an empty or synthetic database.
 pub const PACKAGED_PROVIDER_MANIFEST_FILE: &str = "provider-manifest.json";
 
+const REQUIRED_PACKAGED_PROVIDER_FAMILIES: [&str; 7] = [
+    "MDM",
+    "Autopilot",
+    "ESP",
+    "AAD",
+    "ConfigMgr client",
+    "AppX",
+    "Windows Update",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackagedProviderDatabase {
+    file: String,
+    source_windows_build: u32,
+    sha256: String,
+    provider_count: u64,
+    #[serde(default)]
+    providers: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PackagedProviderManifest {
@@ -711,9 +846,168 @@ struct PackagedProviderManifest {
     reason: String,
     #[serde(default)]
     provider_families: Vec<String>,
+    #[serde(default)]
+    source_windows_builds: Vec<u32>,
+    #[serde(default)]
+    provider_version: Option<String>,
+    databases: Option<Vec<PackagedProviderDatabase>>,
 }
 
-/// Finds the packaged provider directory without inventing coverage when no real capture was
+const PACKAGED_SHA256_HEX_LENGTH: usize = 64;
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == PACKAGED_SHA256_HEX_LENGTH
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| {
+            format!(
+                "cannot stat packaged provider database {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if size > MAX_PROVIDER_DATABASE_BYTES {
+        return Err(format!(
+            "packaged provider database {} exceeds the {MAX_PROVIDER_DATABASE_BYTES}-byte limit",
+            path.display()
+        ));
+    }
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        format!(
+            "cannot read packaged provider database {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut bytes_read = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "cannot read packaged provider database {}: {error}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes_read = bytes_read.saturating_add(read as u64);
+        if bytes_read > MAX_PROVIDER_DATABASE_BYTES {
+            return Err(format!(
+                "packaged provider database {} exceeds the {MAX_PROVIDER_DATABASE_BYTES}-byte limit",
+                path.display()
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn validate_packaged_provider_database(
+    directory: &Path,
+    entry: &PackagedProviderDatabase,
+) -> Result<(), String> {
+    if entry.file.is_empty()
+        || entry.file == "."
+        || entry.file == ".."
+        || entry.file.bytes().any(|byte| matches!(byte, b'/' | b'\\'))
+        || Path::new(&entry.file)
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some(entry.file.as_str())
+        || !Path::new(&entry.file)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+    {
+        return Err(format!(
+            "packaged provider manifest declares unsafe database filename {:?}",
+            entry.file
+        ));
+    }
+    if !is_lower_sha256(&entry.sha256) {
+        return Err(format!(
+            "packaged provider manifest database {} has an invalid lowercase sha256",
+            entry.file
+        ));
+    }
+    let provider_names: BTreeSet<&str> = entry.providers.iter().map(String::as_str).collect();
+    if provider_names.len() != entry.providers.len()
+        || entry
+            .providers
+            .iter()
+            .any(|provider| provider.trim().is_empty())
+        || entry.provider_count != entry.providers.len() as u64
+    {
+        return Err(format!(
+            "packaged provider manifest database {} has inconsistent providerCount/providers metadata",
+            entry.file
+        ));
+    }
+
+    let path = directory.join(&entry.file);
+    let file_type = std::fs::symlink_metadata(&path)
+        .map_err(|error| {
+            format!(
+                "cannot stat packaged provider database {}: {error}",
+                path.display()
+            )
+        })?
+        .file_type();
+    if !file_type.is_file() {
+        return Err(format!(
+            "packaged provider database {} is not a regular file",
+            path.display()
+        ));
+    }
+    let actual_sha256 = sha256_file(&path)?;
+    if actual_sha256 != entry.sha256 {
+        return Err(format!(
+            "packaged provider database {} sha256 mismatch: manifest {}, actual {}",
+            path.display(),
+            entry.sha256,
+            actual_sha256
+        ));
+    }
+    let database = ProviderDb::open(&path)?;
+    let info = database.info();
+    if info.provider_count != entry.provider_count {
+        return Err(format!(
+            "packaged provider database {} providerCount mismatch: manifest {}, actual {}",
+            path.display(),
+            entry.provider_count,
+            info.provider_count
+        ));
+    }
+    if info.source_os_build != Some(entry.source_windows_build) {
+        return Err(format!(
+            "packaged provider database {} sourceWindowsBuild mismatch: manifest {}, actual {:?}",
+            path.display(),
+            entry.source_windows_build,
+            info.source_os_build
+        ));
+    }
+    let actual_provider_names = database.provider_names()?;
+    let expected_provider_names: BTreeSet<String> = entry.providers.iter().cloned().collect();
+    if actual_provider_names != expected_provider_names {
+        return Err(format!(
+            "packaged provider database {} providers do not match manifest",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Finds the packaged provider directory without inventing coverage when no real Windows capture is
 /// checked in.
 pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, String> {
     let directory = resource_dir.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
@@ -763,25 +1057,170 @@ pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, Strin
             manifest.reason
         ));
     }
-    let has_database = std::fs::read_dir(&directory)
-        .map_err(|error| format!("cannot inspect packaged provider directory {}: {error}", directory.display()))?
-        .filter_map(Result::ok)
-        .any(|entry| {
-            entry.file_type().is_ok_and(|file_type| file_type.is_file())
-                && entry
-                    .path()
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
-        });
-    if !has_database {
+    let families: BTreeSet<&str> = manifest
+        .provider_families
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if families.len() != manifest.provider_families.len()
+        || families.len() != REQUIRED_PACKAGED_PROVIDER_FAMILIES.len()
+        || REQUIRED_PACKAGED_PROVIDER_FAMILIES
+            .iter()
+            .any(|family| !families.contains(family))
+        || manifest
+            .provider_families
+            .iter()
+            .any(|family| !REQUIRED_PACKAGED_PROVIDER_FAMILIES.contains(&family.as_str()))
+    {
         return Err(format!(
-            "packaged provider manifest {} reports available but {} contains no database; a real \
-             Windows-captured EventLogExpert ProviderDetails database is required before \
-             packaging provider coverage",
+            "packaged provider manifest {} has invalid providerFamilies; expected exactly: {}; cannot claim \
+             EventLogExpert ProviderDetails coverage",
             manifest_path.display(),
-            directory.display()
+            REQUIRED_PACKAGED_PROVIDER_FAMILIES.join(", ")
         ));
+    }
+    let source_builds: BTreeSet<u32> = manifest.source_windows_builds.iter().copied().collect();
+    if source_builds.len() != manifest.source_windows_builds.len()
+        || source_builds.is_empty()
+        || manifest
+            .provider_version
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(format!(
+            "packaged provider manifest {} is missing unique sourceWindowsBuilds or providerVersion provenance; \
+             cannot claim EventLogExpert ProviderDetails coverage",
+            manifest_path.display()
+        ));
+    }
+
+    let Some(databases) = manifest.databases.as_ref() else {
+        return Err(format!(
+            "packaged provider manifest {} is missing databases integrity metadata; cannot claim \
+             EventLogExpert ProviderDetails coverage",
+            manifest_path.display()
+        ));
+    };
+    if databases.is_empty() {
+        return Err(format!(
+            "packaged provider manifest {} declares no databases; cannot claim \
+             EventLogExpert ProviderDetails coverage",
+            manifest_path.display()
+        ));
+    }
+
+    let mut declared_files = BTreeSet::new();
+    let mut declared_lowercase_files = BTreeSet::new();
+    let mut database_builds = BTreeSet::new();
+    for database in databases {
+        if !declared_files.insert(database.file.clone()) {
+            return Err(format!(
+                "packaged provider manifest {} declares database {} more than once",
+                manifest_path.display(),
+                database.file
+            ));
+        }
+        if !declared_lowercase_files.insert(database.file.to_ascii_lowercase()) {
+            return Err(format!(
+                "packaged provider manifest {} declares case-colliding database filenames",
+                manifest_path.display()
+            ));
+        }
+        if !database_builds.insert(database.source_windows_build)
+            || !source_builds.contains(&database.source_windows_build)
+        {
+            return Err(format!(
+                "packaged provider manifest {} has duplicate or undeclared sourceWindowsBuild {}",
+                manifest_path.display(),
+                database.source_windows_build
+            ));
+        }
+    }
+    if database_builds != source_builds {
+        return Err(format!(
+            "packaged provider manifest {} sourceWindowsBuilds do not match database entries",
+            manifest_path.display()
+        ));
+    }
+
+    let mut actual_files = BTreeSet::new();
+    let mut actual_lowercase_files = BTreeSet::new();
+    for entry in std::fs::read_dir(&directory).map_err(|error| {
+        format!(
+            "cannot inspect packaged provider directory {}: {error}",
+            directory.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "cannot read packaged provider directory entry in {}: {error}",
+                directory.display()
+            )
+        })?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_str().ok_or_else(|| {
+            format!(
+                "packaged provider directory {} contains a non-UTF-8 filename",
+                directory.display()
+            )
+        })?;
+        if !Path::new(file_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+        {
+            continue;
+        }
+        if !entry
+            .file_type()
+            .map_err(|error| {
+                format!("cannot inspect packaged provider database {file_name}: {error}")
+            })?
+            .is_file()
+        {
+            return Err(format!(
+                "packaged provider database {} is not a regular file",
+                directory.join(file_name).display()
+            ));
+        }
+        if !actual_lowercase_files.insert(file_name.to_ascii_lowercase()) {
+            return Err(format!(
+                "packaged provider directory contains case-colliding database filenames near {}",
+                file_name
+            ));
+        }
+        actual_files.insert(file_name.to_owned());
+    }
+    if actual_files != declared_files {
+        let missing = declared_files
+            .difference(&actual_files)
+            .cloned()
+            .collect::<Vec<_>>();
+        let extra = actual_files
+            .difference(&declared_files)
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "packaged provider database set does not match manifest (missing: {}; undeclared: {})",
+            if missing.is_empty() {
+                "none".to_string()
+            } else {
+                missing.join(", ")
+            },
+            if extra.is_empty() {
+                "none".to_string()
+            } else {
+                extra.join(", ")
+            }
+        ));
+    }
+    for database in databases {
+        validate_packaged_provider_database(&directory, database).map_err(|error| {
+            format!(
+                "packaged provider manifest {} failed database validation: {error}",
+                manifest_path.display()
+            )
+        })?;
     }
     Ok(directory)
 }
@@ -948,29 +1387,26 @@ impl ProviderStore {
         let Some(rows) = self.provider_versions_cached(provider_name)? else {
             return Ok(None);
         };
-        let channel_matches = |event: &cmtraceopen_parser::provider::ProviderEvent| {
-            match event.log_name.as_deref() {
-                Some(expected) => expected.eq_ignore_ascii_case(channel),
-                None => true,
-            }
-        };
-        let exact = version.and_then(|version| {
+        let channel_score =
+            |event: &cmtraceopen_parser::provider::ProviderEvent| match event.log_name.as_deref() {
+                Some(expected) if expected.eq_ignore_ascii_case(channel) => 2u8,
+                None => 1u8,
+                _ => 0u8,
+            };
+        let find_matching = |requested_version: Option<u32>, minimum_score: u8| {
             rows.iter().find(|row| {
                 row.metadata.events.iter().any(|event| {
                     event.id == event_id
-                        && event.version == version
-                        && channel_matches(event)
+                        && requested_version.is_none_or(|value| event.version == value)
+                        && channel_score(event) >= minimum_score
                 })
             })
-        });
-        let selected = exact.or_else(|| {
-            rows.iter().find(|row| {
-                row.metadata
-                    .events
-                    .iter()
-                    .any(|event| event.id == event_id && channel_matches(event))
-            })
-        });
+        };
+        let selected = version
+            .and_then(|value| find_matching(Some(value), 2))
+            .or_else(|| version.and_then(|value| find_matching(Some(value), 1)))
+            .or_else(|| find_matching(None, 2))
+            .or_else(|| find_matching(None, 1));
         Ok(selected.map(|row| Arc::new(row.metadata.clone())))
     }
 
@@ -1085,7 +1521,6 @@ mod tests {
             .expect("schema");
 
         for (index, (name, build, events_json)) in providers.iter().enumerate() {
-
             connection
                 .execute(
                     r#"INSERT INTO ProviderDetails
@@ -1117,6 +1552,22 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir
     }
+    fn copy_checked_in_package(name: &str) -> PathBuf {
+        let root = temp_dir(name);
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+        let destination = root.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+        std::fs::create_dir_all(&destination).expect("provider package directory");
+        for file in [
+            "cmtraceopen-provider-windows-20348.db",
+            "cmtraceopen-provider-windows-26200.db",
+            PACKAGED_PROVIDER_MANIFEST_FILE,
+        ] {
+            std::fs::copy(source.join(file), destination.join(file)).expect("copy package file");
+        }
+        root
+    }
 
     #[test]
     fn reads_a_provider_and_inflates_its_payloads() {
@@ -1137,7 +1588,10 @@ mod tests {
         assert_eq!(metadata.task_name(1), Some("Enrollment"));
         assert_eq!(metadata.opcode_name(11), Some("Start"));
         assert_eq!(metadata.keyword_names(1), vec!["Error"]);
-        assert!(metadata.levels.is_empty(), "canonical DBs have no fabricated levels");
+        assert!(
+            metadata.levels.is_empty(),
+            "canonical DBs have no fabricated levels"
+        );
     }
 
     #[test]
@@ -1229,8 +1683,16 @@ mod tests {
         build_db(
             &path,
             &[
-                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"first"}]"#),
-                ("Dup", 26200, r#"[{"Id":1,"Version":0,"Description":"second"}]"#),
+                (
+                    "Dup",
+                    26200,
+                    r#"[{"Id":1,"Version":0,"Description":"first"}]"#,
+                ),
+                (
+                    "Dup",
+                    26200,
+                    r#"[{"Id":1,"Version":0,"Description":"second"}]"#,
+                ),
             ],
         );
         let metadata = ProviderDb::open(&path)
@@ -1289,6 +1751,39 @@ mod tests {
             ])
         );
     }
+    #[test]
+    fn duplicate_level_values_keep_the_first_canonical_entry() {
+        let blob = gzip_json(&serde_json::json!({
+            "levels": {
+                "Entries": [
+                    {"Value": 2, "Name": "Information"},
+                    {"Value": 2, "Name": "Informational"}
+                ]
+            }
+        }))
+        .expect("compress map");
+
+        assert_eq!(
+            levels_from_maps(&blob)
+                .expect("read map")
+                .get("2")
+                .map(String::as_str),
+            Some("Information")
+        );
+    }
+
+    #[test]
+    fn non_numeric_level_values_are_rejected() {
+        let blob = gzip_json(&serde_json::json!({
+            "levels": {
+                "Entries": [{"Value": "not-a-number", "Name": "Invalid"}]
+            }
+        }))
+        .expect("compress map");
+
+        let error = levels_from_maps(&blob).expect_err("invalid level should fail");
+        assert!(error.contains("UInt32"), "{error}");
+    }
 
     #[test]
     fn an_empty_payload_is_an_empty_section_not_a_fault() {
@@ -1325,6 +1820,28 @@ mod tests {
         assert!(store.provider("Nobody").expect("query").is_none());
         assert_eq!(store.registered().len(), 2);
     }
+    #[test]
+    fn packaged_provider_load_requires_complete_coverage() {
+        let loaded = ProviderDbLoadOutcome {
+            loaded: vec![ProviderDbInfo {
+                path: "valid.db".into(),
+                provider_count: 1,
+                source_os_build: Some(26200),
+            }],
+            failures: vec![ProviderDbLoadFailure {
+                path: "broken.db".into(),
+                reason: "invalid schema".into(),
+            }],
+        };
+        assert!(!super::packaged_provider_load_is_complete(&loaded));
+        assert!(super::packaged_provider_load_is_complete(
+            &ProviderDbLoadOutcome {
+                failures: Vec::new(),
+                ..loaded
+            }
+        ));
+    }
+
     #[test]
     fn a_written_database_round_trips_through_the_reader() {
         use cmtraceopen_parser::provider::{ProviderEvent, ProviderMessage};
@@ -1385,8 +1902,7 @@ mod tests {
             version_key: "publisher-version-key-old".to_string(),
         };
 
-        let written =
-            write_provider_database(&path, &[captured.clone(), older]).expect("write");
+        let written = write_provider_database(&path, &[captured.clone(), older]).expect("write");
         assert_eq!(written, 2);
         let database = ProviderDb::open(&path).expect("opens");
         let read = database
@@ -1398,7 +1914,10 @@ mod tests {
             read.unavailable_categories,
             ["keywords".to_string()].into_iter().collect()
         );
-        assert_eq!(read.levels.get("2").map(String::as_str), Some("Information"));
+        assert_eq!(
+            read.levels.get("2").map(String::as_str),
+            Some("Information")
+        );
         assert!(read.unavailable_categories.contains("keywords"));
         let rows = database.rows().expect("all captured rows");
         assert_eq!(rows.len(), 2);
@@ -1440,7 +1959,7 @@ mod tests {
             maps,
             serde_json::json!({
                 "levels": {
-                    "Entries": {"2": "Information"},
+                    "Entries": [{"Value": 2, "Name": "Information"}],
                     "IsBitMap": false
                 }
             })
@@ -1557,9 +2076,7 @@ mod tests {
         let path = dir.join("capture.db");
         let connection = Connection::open(&path).expect("create");
         connection
-            .execute_batch(
-                "CREATE TABLE ProviderDetails (ProviderName TEXT, VersionKey TEXT);",
-            )
+            .execute_batch("CREATE TABLE ProviderDetails (ProviderName TEXT, VersionKey TEXT);")
             .expect("schema");
 
         let error = ProviderDb::open(&path).expect_err("missing source build column");
@@ -1762,20 +2279,155 @@ mod tests {
         .expect("manifest");
         let error = packaged_provider_directory(&dir).expect_err("no packaged artifact");
         assert!(error.contains("status unavailable"), "{error}");
-        assert!(error.contains("Windows capture input is not available"), "{error}");
+        assert!(
+            error.contains("Windows capture input is not available"),
+            "{error}"
+        );
         assert!(error.contains("MDM"), "{error}");
         assert!(error.contains("ProviderDetails"), "{error}");
     }
+    #[test]
+    fn packaged_discovery_rejects_a_missing_declared_database() {
+        let root = copy_checked_in_package("packaged-missing-declared");
+        let directory = root.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+        let missing = directory.join("cmtraceopen-provider-windows-20348.db");
+        std::fs::remove_file(&missing).expect("remove declared database");
+
+        let error = packaged_provider_directory(&root).expect_err("missing database must fail");
+
+        assert!(error.contains("missing"), "{error}");
+        assert!(
+            error.contains("cmtraceopen-provider-windows-20348.db"),
+            "{error}"
+        );
+    }
 
     #[test]
-    fn checked_in_packaged_manifest_reports_unavailable_provenance() {
-        let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+    fn packaged_discovery_rejects_an_undeclared_database() {
+        let root = copy_checked_in_package("packaged-extra");
+        let directory = root.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+        std::fs::copy(
+            directory.join("cmtraceopen-provider-windows-20348.db"),
+            directory.join("unexpected.db"),
+        )
+        .expect("copy undeclared database");
+
+        let error = packaged_provider_directory(&root).expect_err("extra database must fail");
+
+        assert!(error.contains("undeclared"), "{error}");
+        assert!(error.contains("unexpected.db"), "{error}");
+    }
+
+    #[test]
+    fn packaged_discovery_rejects_a_database_hash_mismatch() {
+        let root = copy_checked_in_package("packaged-hash-mismatch");
+        let manifest_path = root
+            .join(PACKAGED_PROVIDER_DATABASE_DIRECTORY)
+            .join(PACKAGED_PROVIDER_MANIFEST_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let wrong_hash = "0".repeat(64);
+        let tampered = manifest.replace(
+            "5a49ab87cb81caba2cb37cfc364de4e22a9f95276c91661d528fcab2a2158849",
+            &wrong_hash,
+        );
+        std::fs::write(&manifest_path, tampered).expect("tamper manifest hash");
+
+        let error = packaged_provider_directory(&root).expect_err("hash mismatch must fail");
+
+        assert!(error.contains("sha256"), "{error}");
+        assert!(error.contains("20348.db"), "{error}");
+    }
+
+    #[test]
+    fn packaged_discovery_rejects_provider_metadata_mismatch() {
+        let root = copy_checked_in_package("packaged-metadata-mismatch");
+        let manifest_path = root
+            .join(PACKAGED_PROVIDER_DATABASE_DIRECTORY)
+            .join(PACKAGED_PROVIDER_MANIFEST_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let tampered = manifest.replace("\"providerCount\": 1", "\"providerCount\": 2");
+        std::fs::write(&manifest_path, tampered).expect("tamper provider count");
+
         let error =
-            packaged_provider_directory(&resource_dir).expect_err("provider artifact unavailable");
-        assert!(error.contains("status unavailable"), "{error}");
-        assert!(error.contains("Windows-captured EventLogExpert"), "{error}");
-        assert!(error.contains("MDM"), "{error}");
-        assert!(error.contains("ProviderDetails"), "{error}");
+            packaged_provider_directory(&root).expect_err("provider metadata mismatch must fail");
+
+        assert!(error.contains("providerCount"), "{error}");
+        assert!(error.contains("20348.db"), "{error}");
+    }
+
+    #[test]
+    fn packaged_discovery_rejects_a_source_build_mismatch() {
+        let root = copy_checked_in_package("packaged-source-mismatch");
+        let manifest_path = root
+            .join(PACKAGED_PROVIDER_DATABASE_DIRECTORY)
+            .join(PACKAGED_PROVIDER_MANIFEST_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let tampered = manifest.replace(
+            "\"sourceWindowsBuild\": 20348",
+            "\"sourceWindowsBuild\": 20347",
+        );
+        std::fs::write(&manifest_path, tampered).expect("tamper source build");
+
+        let error = packaged_provider_directory(&root).expect_err("source build must fail");
+
+        assert!(error.contains("sourceWindowsBuild"), "{error}");
+        assert!(error.contains("20347"), "{error}");
+    }
+
+    #[test]
+    fn packaged_discovery_rejects_provider_name_mismatch() {
+        let root = copy_checked_in_package("packaged-provider-name-mismatch");
+        let manifest_path = root
+            .join(PACKAGED_PROVIDER_DATABASE_DIRECTORY)
+            .join(PACKAGED_PROVIDER_MANIFEST_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let tampered = manifest.replace("Microsoft-ConfigMgr", "Wrong-Provider");
+        std::fs::write(&manifest_path, tampered).expect("tamper provider name");
+
+        let error = packaged_provider_directory(&root).expect_err("provider name must fail");
+
+        assert!(error.contains("providers do not match"), "{error}");
+        assert!(error.contains("20348.db"), "{error}");
+    }
+
+    #[test]
+    fn checked_in_packaged_manifest_loads_curated_provenance() {
+        let resource_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let directory =
+            packaged_provider_directory(&resource_dir).expect("curated provider artifact");
+        let mut store = ProviderStore::default();
+        let outcome = store
+            .load_directory(&directory)
+            .expect("load curated providers");
+        assert_eq!(outcome.failures, Vec::new());
+        assert_eq!(outcome.loaded.len(), 2);
+        assert_eq!(
+            outcome
+                .loaded
+                .iter()
+                .filter_map(|info| info.source_os_build)
+                .collect::<BTreeSet<_>>(),
+            [20348, 26200].into_iter().collect()
+        );
+
+        for provider in [
+            "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+            "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "Microsoft-Windows-Provisioning-Diagnostics-Provider",
+            "Microsoft-Windows-AAD",
+            "Microsoft-ConfigMgr",
+            "Microsoft-Windows-AppXDeployment-Server",
+            "Microsoft-Windows-WindowsUpdateClient",
+        ] {
+            let metadata = store
+                .provider(provider)
+                .expect("provider lookup")
+                .expect("curated provider is present");
+            assert!(
+                !metadata.events.is_empty(),
+                "{provider} must retain event metadata"
+            );
+        }
     }
 }
 
@@ -1838,8 +2490,15 @@ mod real_database_tests {
             metadata.events.len()
         );
 
+        let channel = metadata
+            .events
+            .iter()
+            .find(|event| event.id == 4 && event.version == 0)
+            .and_then(|event| event.log_name.as_deref())
+            .expect("event 4 has a captured channel")
+            .to_string();
         let event = metadata
-            .event(4, Some(0), None)
+            .event(4, Some(0), Some(&channel))
             .expect("event id 4 is defined");
         let template = event
             .description

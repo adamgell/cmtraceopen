@@ -115,25 +115,109 @@ export function formatCoverageGap(gap: EvtxCoverageGap): string {
   return `${gap.source}${location}: ${gap.reason}`;
 }
 
+function coverageGapKey(gap: EvtxCoverageGap): string {
+  return JSON.stringify([gap.source, gap.kind, gap.reason, gap.chunkId, gap.eventRecordId]);
+}
+
 /** Accumulates structured gaps without duplicating a rejected region on refresh. */
 export function mergeStructuredCoverageGaps(
   existing: readonly EvtxCoverageGap[],
   incoming: readonly EvtxCoverageGap[]
 ): EvtxCoverageGap[] {
   const merged = [...existing];
-  const seen = new Set(
-    existing.map((gap) =>
-      JSON.stringify([gap.source, gap.kind, gap.reason, gap.chunkId, gap.eventRecordId])
-    )
-  );
+  const seen = new Set(existing.map(coverageGapKey));
   for (const gap of incoming) {
-    const key = JSON.stringify([gap.source, gap.kind, gap.reason, gap.chunkId, gap.eventRecordId]);
+    const key = coverageGapKey(gap);
     if (!seen.has(key)) {
       seen.add(key);
       merged.push(gap);
     }
   }
   return merged;
+}
+
+const MAX_DIAGNOSIS_COVERAGE_GAPS = 256;
+
+function legacyGapKind(reason: string): EvtxCoverageGapKind {
+  const lower = reason.toLowerCase();
+  if (/(access denied|permission denied|\bdenied\b)/.test(lower)) return "accessDenied";
+  if (/(empty|no events?|no records?)/.test(lower)) return "empty";
+  if (/(malformed|invalid)/.test(lower)) return "invalidPattern";
+  if (/(unavailable|unsupported)/.test(lower)) return "unsupported";
+  if (
+    /\breader\s+stopped\s+at\s+\d[\d,]*\s+events?\b[\s,;:()-]*the\s+source\s+may\s+contain\s+more\b/.test(
+      lower
+    ) ||
+    /\bstopped\s+after\s+\d[\d,]*\s+events?\b[\s,;:()-]*the\s+channel\s+could\s+not\s+be\s+read\s+further\b/.test(
+      lower
+    ) ||
+    /(shortfall|not reached|not received|not delivered|delivery|limit|capped|truncat|maximum)/.test(
+      lower
+    )
+  ) {
+    return "limitReached";
+  }
+  if (/(missing|does not exist|not found)/.test(lower)) return "missing";
+  return "record";
+}
+
+function legacyCoverageGap(value: string, fallbackSource: string): EvtxCoverageGap {
+  const message = value.trim();
+  const separator = message.indexOf(": ");
+  const source = separator > 0 ? message.slice(0, separator) : fallbackSource;
+  const reason = separator > 0 ? message.slice(separator + 2) : message;
+  return {
+    source: source || fallbackSource,
+    kind: legacyGapKind(reason),
+    reason,
+  };
+}
+
+/**
+ * Builds the bounded coverage contract sent to operational diagnosis.
+ *
+ * Structured parser and manifest gaps retain their exact kinds. Legacy stream strings are
+ * classified into non-healthy kinds so delivery, shortfall, and unavailable states cannot be
+ * mistaken for a complete source. The synthetic final gap makes the frontend bound explicit; the
+ * backend applies its own independent diagnosis bound after this conversion.
+ */
+export function mergeDiagnosisCoverageGaps(
+  coverageDetails: readonly EvtxCoverageGap[],
+  manifestCoverage: readonly EventLogSourceCoverage[],
+  legacyCoverageGaps: readonly string[],
+  tailCoverageGaps: readonly string[]
+): EvtxCoverageGap[] {
+  const typedManifestGaps: EvtxCoverageGap[] = manifestCoverage.map((gap) => ({
+    source: gap.path,
+    kind: gap.kind,
+    reason: gap.reason,
+  }));
+  const formattedCoverageGaps = new Set(
+    [...coverageDetails, ...typedManifestGaps].map(formatCoverageGap)
+  );
+  const legacyGaps = legacyCoverageGaps
+    .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
+    .map((gap) => legacyCoverageGap(gap, "event-log"));
+  const tailGaps = tailCoverageGaps
+    .filter((gap) => !formattedCoverageGaps.has(gap.trim()))
+    .map((gap) => legacyCoverageGap(gap, "live-tail"));
+  const merged = mergeStructuredCoverageGaps(
+    [],
+    [...coverageDetails, ...typedManifestGaps, ...legacyGaps, ...tailGaps]
+  );
+  if (merged.length <= MAX_DIAGNOSIS_COVERAGE_GAPS) return merged;
+
+  const omitted = merged.length - (MAX_DIAGNOSIS_COVERAGE_GAPS - 1);
+  return [
+    ...merged.slice(0, MAX_DIAGNOSIS_COVERAGE_GAPS - 1),
+    {
+      source: "frontend-diagnosis",
+      kind: "limitReached",
+      reason:
+        `frontend coverage bound omitted ${omitted} additional gaps; ` +
+        "backend diagnosis also enforces an input cap",
+    },
+  ];
 }
 
 /**

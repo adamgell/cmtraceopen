@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
   mergeCoverageGaps,
+  mergeDiagnosisCoverageGaps,
   summarizeCoverageGaps,
 } from "./evtx-coverage";
 
@@ -285,4 +286,83 @@ describe("structured recovery gaps", () => {
     ]);
   });
 
+});
+describe("diagnosis coverage gaps", () => {
+  it("merges typed, manifest, legacy, and tail gaps deterministically", () => {
+    expect(
+      mergeDiagnosisCoverageGaps(
+        [{ source: "parser.evtx", kind: "chunk", reason: "incomplete chunk", chunkId: 4 }],
+        [{ kind: "missing", path: "manifest.evtx", reason: "source path does not exist" }],
+        [
+          "Application: live batch 1 was not delivered",
+          "Remote: remote source unavailable",
+          "Parser: malformed XML",
+          "Application: live batch 1 was not delivered",
+        ],
+        ["Tail: 2 records shortfall"]
+      )
+    ).toEqual([
+      { source: "parser.evtx", kind: "chunk", reason: "incomplete chunk", chunkId: 4 },
+      { source: "manifest.evtx", kind: "missing", reason: "source path does not exist" },
+      { source: "Application", kind: "limitReached", reason: "live batch 1 was not delivered" },
+      { source: "Remote", kind: "unsupported", reason: "remote source unavailable" },
+      { source: "Parser", kind: "invalidPattern", reason: "malformed XML" },
+      { source: "Tail", kind: "limitReached", reason: "2 records shortfall" },
+    ]);
+  });
+  it("keeps one canonical typed gap when its formatted copy is also legacy coverage", () => {
+    const typedGap = {
+      source: "parser.evtx",
+      kind: "limit" as const,
+      reason: "reader stopped at 100 events; the source may contain more",
+      eventRecordId: 99,
+    };
+
+    expect(
+      mergeDiagnosisCoverageGaps(
+        [typedGap],
+        [],
+        [
+          "parser.evtx record 99: reader stopped at 100 events; the source may contain more",
+          "Application: live batch 1 was not delivered",
+        ],
+        ["Tail: unrelated live gap"]
+      )
+    ).toEqual([
+      typedGap,
+      { source: "Application", kind: "limitReached", reason: "live batch 1 was not delivered" },
+      { source: "Tail", kind: "record", reason: "unrelated live gap" },
+    ]);
+  });
+
+  it.each([
+    "Application: reader stopped at 100 events; the source may contain more",
+    "Application: stopped after 100 events, the channel could not be read further (EvtNext failed)",
+  ])("classifies backend reader truncation as limitReached: %s", (message) => {
+    expect(mergeDiagnosisCoverageGaps([], [], [message], [])).toEqual([
+      {
+        source: "Application",
+        kind: "limitReached",
+        reason: message.slice("Application: ".length),
+      },
+    ]);
+  });
+
+
+  it("makes the frontend bound explicit instead of silently dropping gaps", () => {
+    const gaps = mergeDiagnosisCoverageGaps(
+      [],
+      [],
+      Array.from({ length: 257 }, (_, index) => `source-${index}: unreadable record`),
+      []
+    );
+    expect(gaps).toHaveLength(256);
+    expect(gaps[gaps.length - 1]).toEqual({
+      source: "frontend-diagnosis",
+      kind: "limitReached",
+      reason:
+        "frontend coverage bound omitted 2 additional gaps; " +
+        "backend diagnosis also enforces an input cap",
+    });
+  });
 });

@@ -21,6 +21,7 @@ pub const MAX_ARCHIVE_MEMBERS: usize = 512;
 pub const MAX_ARCHIVE_MEMBER_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_ARCHIVE_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE_COVERAGE: usize = MAX_ARCHIVE_MEMBERS + 32;
 fn bounded_member_indices(member_count: usize) -> std::ops::Range<usize> {
     0..member_count.min(MAX_ARCHIVE_MEMBERS)
@@ -31,16 +32,36 @@ fn archive_budget_allows(total: u64, next: u64, limit: u64) -> bool {
         .is_some_and(|remaining| remaining > 0 && next <= remaining)
 }
 fn account_archive_bytes(total: u64, consumed: u64) -> u64 {
-    total
-        .saturating_add(consumed)
-        .min(MAX_ARCHIVE_TOTAL_BYTES)
+    total.saturating_add(consumed).min(MAX_ARCHIVE_TOTAL_BYTES)
 }
 
 fn archive_record_budget_allows(total: usize, max_records: usize) -> bool {
     total < max_records
 }
+const MAX_ARCHIVE_TEXT_PARSE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ARCHIVE_TEXT_RECORDS: usize = 25_000;
 
-fn archive_member_count(file: &mut File) -> std::io::Result<Option<u64>> {
+fn archive_text_parser_admission_allows(
+    declared_bytes: u64,
+    total_records: usize,
+    max_records: usize,
+) -> bool {
+    declared_bytes <= MAX_ARCHIVE_TEXT_PARSE_BYTES
+        && archive_record_budget_allows(total_records, max_records)
+}
+
+fn text_parse_error_is_limit(error: &str) -> bool {
+    error.starts_with("text member exceeds parser budget")
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ArchiveDirectoryInfo {
+    member_count: u64,
+    directory_size: u64,
+    directory_offset: u64,
+}
+
+fn archive_directory_info(file: &mut File) -> std::io::Result<Option<ArchiveDirectoryInfo>> {
     const END_OF_CENTRAL_DIRECTORY: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
     const ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
     const ZIP64_END_OF_CENTRAL_DIRECTORY: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
@@ -68,12 +89,25 @@ fn archive_member_count(file: &mut File) -> std::io::Result<Option<u64>> {
         if index + END_OF_CENTRAL_DIRECTORY_BYTES + comment_len > probe_len {
             continue;
         }
-        let entry_count = u16::from_le_bytes([probe[index + 10], probe[index + 11]]) as u64;
-        if entry_count == u16::MAX as u64 {
-            saw_zip64_sentinel = true;
-        } else {
-            return Ok(Some(entry_count));
+        let member_count = u16::from_le_bytes([probe[index + 10], probe[index + 11]]) as u64;
+        let directory_size = u32::from_le_bytes(
+            probe[index + 12..index + 16]
+                .try_into()
+                .expect("fixed ZIP field"),
+        ) as u64;
+        let directory_offset = u32::from_le_bytes(
+            probe[index + 16..index + 20]
+                .try_into()
+                .expect("fixed ZIP field"),
+        ) as u64;
+        if member_count != u16::MAX as u64 {
+            return Ok(Some(ArchiveDirectoryInfo {
+                member_count,
+                directory_size,
+                directory_offset,
+            }));
         }
+        saw_zip64_sentinel = true;
 
         let eocd_offset = probe_start + index as u64;
         if eocd_offset < 20 {
@@ -85,7 +119,8 @@ fn archive_member_count(file: &mut File) -> std::io::Result<Option<u64>> {
         if locator[0..4] != ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR {
             continue;
         }
-        let zip64_offset = u64::from_le_bytes(locator[8..16].try_into().expect("fixed ZIP64 field"));
+        let zip64_offset =
+            u64::from_le_bytes(locator[8..16].try_into().expect("fixed ZIP64 field"));
         if zip64_offset > file_len.saturating_sub(56) {
             continue;
         }
@@ -93,16 +128,33 @@ fn archive_member_count(file: &mut File) -> std::io::Result<Option<u64>> {
         let mut zip64_end = [0u8; 56];
         file.read_exact(&mut zip64_end)?;
         if zip64_end[0..4] == ZIP64_END_OF_CENTRAL_DIRECTORY {
-            let total_entries =
+            let member_count =
                 u64::from_le_bytes(zip64_end[32..40].try_into().expect("fixed ZIP64 field"));
-            return Ok(Some(total_entries));
+            let directory_size =
+                u64::from_le_bytes(zip64_end[40..48].try_into().expect("fixed ZIP64 field"));
+            let directory_offset =
+                u64::from_le_bytes(zip64_end[48..56].try_into().expect("fixed ZIP64 field"));
+            return Ok(Some(ArchiveDirectoryInfo {
+                member_count,
+                directory_size,
+                directory_offset,
+            }));
         }
     }
     if saw_zip64_sentinel {
-        Ok(Some(u64::MAX))
+        Ok(Some(ArchiveDirectoryInfo {
+            member_count: u64::MAX,
+            directory_size: u64::MAX,
+            directory_offset: u64::MAX,
+        }))
     } else {
         Ok(None)
     }
+}
+
+#[cfg(test)]
+fn archive_member_count(file: &mut File) -> std::io::Result<Option<u64>> {
+    Ok(archive_directory_info(file)?.map(|info| info.member_count))
 }
 
 #[derive(Debug)]
@@ -136,34 +188,48 @@ pub(crate) fn parse_archive(
             format!("failed to open archive: {error}"),
         )
     })?;
-    let member_count_hint = archive_member_count(&mut file).map_err(|error| {
+    let directory_info = archive_directory_info(&mut file).map_err(|error| {
         EvtxCoverageGap::new(
             source.clone(),
             EvtxCoverageGapKind::File,
             format!("archive directory could not be inspected: {error}"),
         )
     })?;
-    if let Some(member_count) =
-        member_count_hint.filter(|count| *count > MAX_ARCHIVE_MEMBERS as u64)
-    {
-        let mut result = ArchiveParseResult::default();
-        push_metadata(
-            &mut result,
-            format!("{source}::[members {MAX_ARCHIVE_MEMBERS}..{member_count})"),
-            EvtxArchiveMemberKind::Binary,
-            None,
-            EvtxArchiveMemberOutcome::Limit,
-        );
-        push_gap(
-            &mut result,
-            &source,
-            EvtxCoverageGapKind::Limit,
-            format!(
-                "archive member count {member_count} exceeds limit of {MAX_ARCHIVE_MEMBERS}; \
-                 later members were not inspected"
-            ),
-        );
-        return Ok(result);
+    if let Some(info) = directory_info {
+        if info.member_count > MAX_ARCHIVE_MEMBERS as u64 {
+            return Err(EvtxCoverageGap::new(
+                source.clone(),
+                EvtxCoverageGapKind::Limit,
+                format!(
+                    "archive member count {} exceeds limit of {MAX_ARCHIVE_MEMBERS}; \
+                     archive was not opened",
+                    info.member_count
+                ),
+            ));
+        }
+        let file_len = file
+            .metadata()
+            .map_err(|error| {
+                EvtxCoverageGap::new(
+                    source.clone(),
+                    EvtxCoverageGapKind::File,
+                    format!("archive metadata could not be inspected: {error}"),
+                )
+            })?
+            .len();
+        let directory_end = info.directory_offset.checked_add(info.directory_size);
+        if info.directory_size > MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES
+            || directory_end.is_none_or(|end| end > file_len)
+        {
+            return Err(EvtxCoverageGap::new(
+                source.clone(),
+                EvtxCoverageGapKind::Limit,
+                format!(
+                    "archive central directory exceeds {MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES} byte \
+                     limit or lies outside the archive"
+                ),
+            ));
+        }
     }
     file.seek(SeekFrom::Start(0)).map_err(|error| {
         EvtxCoverageGap::new(
@@ -208,7 +274,11 @@ pub(crate) fn parse_archive(
             }
         };
         let raw_name = entry.name().to_string();
-        let member_label = format!("{source}::{raw_name}");
+        let member_label = if raw_name.chars().any(is_unsafe_member_character) {
+            format!("{source}::member-{index}")
+        } else {
+            format!("{source}::{raw_name}")
+        };
 
         let Some(member_name) = validate_member_name(&raw_name) else {
             push_metadata(
@@ -279,9 +349,9 @@ pub(crate) fn parse_archive(
             );
             continue;
         }
-        if (is_evtx_name(&member_name) || is_text_name(&member_name))
-            && !archive_record_budget_allows(total_records, max_records)
-        {
+        let compressed_size = entry.compressed_size();
+        let declared_size = entry.size();
+        if is_evtx_name(&member_name) && !archive_record_budget_allows(total_records, max_records) {
             push_metadata(
                 &mut result,
                 normalized_label.clone(),
@@ -297,7 +367,6 @@ pub(crate) fn parse_archive(
             );
             continue;
         }
-        let compressed_size = entry.compressed_size();
         if compressed_size > MAX_ARCHIVE_MEMBER_BYTES {
             push_metadata(
                 &mut result,
@@ -314,7 +383,6 @@ pub(crate) fn parse_archive(
             );
             continue;
         }
-        let declared_size = entry.size();
         if declared_size > MAX_ARCHIVE_MEMBER_BYTES {
             push_metadata(
                 &mut result,
@@ -328,6 +396,27 @@ pub(crate) fn parse_archive(
                 &normalized_label,
                 EvtxCoverageGapKind::Limit,
                 format!("member exceeds {MAX_ARCHIVE_MEMBER_BYTES} byte limit"),
+            );
+            continue;
+        }
+        if is_text_name(&member_name)
+            && !archive_text_parser_admission_allows(declared_size, total_records, max_records)
+        {
+            push_metadata(
+                &mut result,
+                normalized_label.clone(),
+                EvtxArchiveMemberKind::Text,
+                None,
+                EvtxArchiveMemberOutcome::Limit,
+            );
+            push_gap(
+                &mut result,
+                &normalized_label,
+                EvtxCoverageGapKind::Limit,
+                format!(
+                    "text member exceeds parser budget of {MAX_ARCHIVE_TEXT_PARSE_BYTES} bytes \
+                     or archive record budget of {max_records} records"
+                ),
             );
             continue;
         }
@@ -354,8 +443,7 @@ pub(crate) fn parse_archive(
             );
             continue;
         }
-        total_compressed_bytes =
-            total_compressed_bytes.saturating_add(compressed_size);
+        total_compressed_bytes = total_compressed_bytes.saturating_add(compressed_size);
         let Some(remaining_bytes) = MAX_ARCHIVE_TOTAL_BYTES.checked_sub(total_bytes) else {
             push_metadata(
                 &mut result,
@@ -392,11 +480,16 @@ pub(crate) fn parse_archive(
         if !is_evtx_name(&member_name) {
             let category = inventory_category(&member_name);
             if is_text_name(&member_name) {
-                match read_member_bytes(&mut entry, member_limit) {
+                match read_member_bytes(&mut entry, member_limit.min(MAX_ARCHIVE_TEXT_PARSE_BYTES))
+                {
                     Ok(bytes) => {
                         total_bytes = account_archive_bytes(total_bytes, bytes.len() as u64);
                         let digest = sha256_hex(&bytes);
-                        match parse_text_member(bytes, &normalized_label) {
+                        match parse_text_member(
+                            bytes,
+                            &normalized_label,
+                            max_records.saturating_sub(total_records),
+                        ) {
                             Ok(mut parsed) => {
                                 bound_archive_records(
                                     &mut parsed,
@@ -404,8 +497,7 @@ pub(crate) fn parse_archive(
                                     &normalized_label,
                                     max_records,
                                 );
-                                total_records =
-                                    total_records.saturating_add(parsed.records.len());
+                                total_records = total_records.saturating_add(parsed.records.len());
                                 let outcome = parsed_member_outcome(&parsed);
                                 push_metadata(
                                     &mut result,
@@ -420,17 +512,26 @@ pub(crate) fn parse_archive(
                                 });
                             }
                             Err(error) => {
+                                let limited = text_parse_error_is_limit(&error);
                                 push_metadata(
                                     &mut result,
                                     normalized_label.clone(),
                                     EvtxArchiveMemberKind::Text,
                                     Some(digest),
-                                    EvtxArchiveMemberOutcome::Malformed,
+                                    if limited {
+                                        EvtxArchiveMemberOutcome::Limit
+                                    } else {
+                                        EvtxArchiveMemberOutcome::Malformed
+                                    },
                                 );
                                 push_gap(
                                     &mut result,
                                     &normalized_label,
-                                    EvtxCoverageGapKind::File,
+                                    if limited {
+                                        EvtxCoverageGapKind::Limit
+                                    } else {
+                                        EvtxCoverageGapKind::File
+                                    },
                                     format!("text member could not be parsed: {error}"),
                                 );
                             }
@@ -625,10 +726,39 @@ fn is_text_name(name: &str) -> bool {
     inventory_category(name) == "text"
 }
 
-fn parse_text_member(bytes: Vec<u8>, source_label: &str) -> Result<ParsedFile, String> {
+fn bounded_text_content(content: &str, max_lines: usize) -> (&str, bool) {
+    if content.is_empty() {
+        return (content, false);
+    }
+    if max_lines == 0 {
+        return ("", true);
+    }
+
+    let mut end = 0;
+    for (index, line) in content.split_inclusive('\n').enumerate() {
+        if index >= max_lines {
+            return (&content[..end], true);
+        }
+        end += line.len();
+    }
+    (content, false)
+}
+
+fn parse_text_member(
+    bytes: Vec<u8>,
+    source_label: &str,
+    max_records: usize,
+) -> Result<ParsedFile, String> {
+    if bytes.len() as u64 > MAX_ARCHIVE_TEXT_PARSE_BYTES {
+        return Err(format!(
+            "text member exceeds parser budget of {MAX_ARCHIVE_TEXT_PARSE_BYTES} bytes"
+        ));
+    }
     let encoding = detect_encoding(&bytes);
     let content = decode_bytes(&bytes, encoding)?;
-    let (parsed, _) = parse_content(&content, source_label, bytes.len() as u64);
+    let line_limit = max_records.min(MAX_ARCHIVE_TEXT_RECORDS);
+    let (bounded_content, truncated) = bounded_text_content(&content, line_limit);
+    let (parsed, _) = parse_content(bounded_content, source_label, bytes.len() as u64);
     let mut coverage_gaps = Vec::new();
     let messages = Vec::new();
 
@@ -646,6 +776,16 @@ fn parse_text_member(bytes: Vec<u8>, source_label: &str) -> Result<ParsedFile, S
             "text member is empty",
         );
         coverage_gaps.push(gap);
+    }
+    if truncated {
+        coverage_gaps.push(EvtxCoverageGap::new(
+            source_label,
+            EvtxCoverageGapKind::Limit,
+            format!(
+                "text member parsing stopped after {line_limit} lines; \
+                 later records were not parsed"
+            ),
+        ));
     }
 
     let records = parsed
@@ -665,8 +805,13 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
     let event_record_id = u64::from(entry.line_number);
     let provider = entry
         .component
-        .clone()
-        .unwrap_or_else(|| "Text".to_string());
+        .filter(|component| !component.trim().is_empty())
+        .unwrap_or_default();
+    let channel = if provider.is_empty() {
+        source_label.to_string()
+    } else {
+        String::new()
+    };
     EvtxRecord {
         id: 0,
         event_record_id,
@@ -674,10 +819,10 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
         timestamp: entry.timestamp_display.unwrap_or_default(),
         timestamp_epoch: entry.timestamp.unwrap_or_default(),
         provider,
-        channel: "Text".to_string(),
-        event_id: entry.line_number,
+        channel,
+        event_id: 0,
         level: text_level(entry.severity),
-        computer: "Text".to_string(),
+        computer: String::new(),
         message: entry.message,
         event_data: vec![EvtxField {
             name: "Line".to_string(),
@@ -685,6 +830,7 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
         }],
         raw_xml: String::new(),
         source_label: source_label.to_string(),
+        origin_kind: super::models::EvtxOriginKind::Log,
         task: None,
         opcode: None,
         process_id: None,
@@ -720,7 +866,6 @@ fn parsed_member_outcome(parsed: &ParsedFile) -> EvtxArchiveMemberOutcome {
     } else {
         EvtxArchiveMemberOutcome::Parsed
     }
-
 }
 fn bound_archive_records(
     parsed: &mut ParsedFile,
@@ -736,9 +881,7 @@ fn bound_archive_records(
     let gap = EvtxCoverageGap::new(
         source,
         EvtxCoverageGapKind::Limit,
-        format!(
-            "archive record budget of {max_records} records omitted {omitted} parsed records"
-        ),
+        format!("archive record budget of {max_records} records omitted {omitted} parsed records"),
     );
     parsed.coverage_gaps.push(gap);
 }
@@ -783,12 +926,27 @@ fn push_metadata(
     });
 }
 
+/// ZIP member names become coverage labels and CLI-visible reasons. Reject Unicode controls and
+/// noncharacters before either output path can include them.
+fn is_unsafe_member_character(character: char) -> bool {
+    let code_point = character as u32;
+    character.is_control()
+        || (0xFDD0..=0xFDEF).contains(&code_point)
+        || (code_point & 0xFFFF) >= 0xFFFE
+}
+
 fn validate_member_name(raw: &str) -> Option<String> {
+    if raw.chars().any(is_unsafe_member_character) {
+        return None;
+    }
     let normalized = raw.replace('\\', "/");
     if normalized.is_empty()
         || normalized.starts_with('/')
         || normalized.starts_with("//")
-        || normalized.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+        || normalized
+            .as_bytes()
+            .get(1)
+            .is_some_and(|byte| *byte == b':')
     {
         return None;
     }
@@ -803,7 +961,9 @@ fn validate_member_name(raw: &str) -> Option<String> {
 }
 #[derive(Debug)]
 enum MemberReadError {
-    Limit { bytes_read: u64 },
+    Limit {
+        bytes_read: u64,
+    },
     Io {
         source: std::io::Error,
         bytes_read: u64,
@@ -897,7 +1057,6 @@ fn read_member_digest<R: Read>(
     ))
 }
 
-
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -906,24 +1065,31 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn push_existing_gap(result: &mut ArchiveParseResult, gap: EvtxCoverageGap) {
-    if result.coverage.len() < MAX_ARCHIVE_COVERAGE {
-        result.messages.push(format!("{}: {}", gap.source, gap.reason));
+    if result.coverage.len() < MAX_ARCHIVE_COVERAGE - 1 {
+        result
+            .messages
+            .push(format!("{}: {}", gap.source, gap.reason));
         result.coverage.push(gap);
         return;
     }
 
-    result.omitted_coverage = result.omitted_coverage.saturating_add(1);
-    let omitted = result.omitted_coverage;
-    if omitted == 1 {
-        result.coverage.pop();
+    if result.omitted_coverage == 0 {
+        result.omitted_coverage = 1;
         let summary = EvtxCoverageGap::new(
             "<archive coverage>",
             EvtxCoverageGapKind::Limit,
             "additional archive member diagnostics were coalesced",
         );
-        result.messages.push(format!("{}: {}", summary.source, summary.reason));
+        result
+            .messages
+            .push(format!("{}: {}", summary.source, summary.reason));
         result.coverage.push(summary);
-    } else if let Some(summary) = result.coverage.last_mut() {
+        return;
+    }
+
+    result.omitted_coverage = result.omitted_coverage.saturating_add(1);
+    let omitted = result.omitted_coverage;
+    if let Some(summary) = result.coverage.last_mut() {
         summary.reason = format!("{omitted} additional archive member diagnostics were coalesced");
         if let Some(message) = result.messages.last_mut() {
             *message = format!("{}: {}", summary.source, summary.reason);
@@ -944,13 +1110,20 @@ fn push_gap(
 
 #[cfg(test)]
 mod tests {
+    use super::super::models::{
+        ChannelSourceType, EvtxArchiveMember, EvtxArchiveMemberKind, EvtxArchiveMemberOutcome,
+        EvtxCoverageGap, EvtxCoverageGapKind,
+    };
+    use super::super::parser::{
+        parse_evtx_manifest, EventLogSource, EventLogSourceKind, EventLogSourceManifest,
+    };
     use super::{
         account_archive_bytes, archive_budget_allows, archive_member_count,
-        archive_record_budget_allows, bounded_member_indices, parse_archive, parse_text_member,
-        validate_member_name, MemberReadError, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_TOTAL_BYTES,
-    };
-    use super::super::models::{
-        EvtxArchiveMember, EvtxArchiveMemberKind, EvtxArchiveMemberOutcome,
+        archive_record_budget_allows, archive_text_parser_admission_allows, bounded_member_indices,
+        parse_archive, parse_text_member, push_existing_gap, text_parse_error_is_limit,
+        validate_member_name, ArchiveParseResult, MemberReadError,
+        MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES, MAX_ARCHIVE_COVERAGE, MAX_ARCHIVE_MEMBERS,
+        MAX_ARCHIVE_TEXT_PARSE_BYTES, MAX_ARCHIVE_TEXT_RECORDS, MAX_ARCHIVE_TOTAL_BYTES,
     };
     use cmtraceopen_parser::eventmap::MapRegistry;
     use std::fs::{self, File};
@@ -958,10 +1131,130 @@ mod tests {
     use std::sync::RwLock;
 
     #[test]
+    fn componentless_archive_text_members_use_source_qualified_channels() {
+        let path = std::env::temp_dir().join(format!(
+            "cmtraceopen-event-archive-componentless-text-{}.zip",
+            std::process::id()
+        ));
+        let file = File::create(&path).expect("create archive fixture");
+        let mut writer = zip::ZipWriter::new(file);
+        for (name, content) in [
+            ("logs/first.log", b"first archive text member" as &[u8]),
+            ("logs/second.log", b"second archive text member"),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .expect("create text member");
+            writer.write_all(content).expect("write text member");
+        }
+        writer.finish().expect("finish archive fixture");
+
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
+        let archive_path = path.to_string_lossy().into_owned();
+        let parsed = parse_evtx_manifest(
+            &EventLogSourceManifest {
+                entries: vec![EventLogSource {
+                    source_id: archive_path.clone(),
+                    path: archive_path.clone(),
+                    kind: EventLogSourceKind::Archive,
+                }],
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+        )
+        .expect("archive should parse");
+
+        let first_source = format!("{archive_path}::logs/first.log");
+        let second_source = format!("{archive_path}::logs/second.log");
+        assert_eq!(parsed.records.len(), 2);
+        assert!(parsed
+            .records
+            .iter()
+            .all(|record| record.provider.is_empty()));
+        assert_eq!(
+            parsed
+                .records
+                .iter()
+                .map(|record| record.channel.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            2,
+            "component-less archive records must not collide in channel identity"
+        );
+        assert!(parsed
+            .records
+            .iter()
+            .all(|record| !record.channel.is_empty()));
+        assert!(parsed
+            .records
+            .iter()
+            .all(|record| record.channel == record.source_label));
+        assert_eq!(
+            parsed
+                .records
+                .iter()
+                .map(|record| record.channel.as_str())
+                .collect::<std::collections::HashSet<_>>(),
+            [first_source.as_str(), second_source.as_str()]
+                .into_iter()
+                .collect()
+        );
+
+        assert_eq!(parsed.channels.len(), 2);
+        assert!(parsed
+            .channels
+            .iter()
+            .all(|channel| !channel.name.is_empty()));
+        assert_eq!(
+            parsed
+                .channels
+                .iter()
+                .map(|channel| channel.name.as_str())
+                .collect::<std::collections::HashSet<_>>(),
+            [first_source.as_str(), second_source.as_str()]
+                .into_iter()
+                .collect()
+        );
+        assert!(parsed.channels.iter().all(|channel| {
+            matches!(
+                &channel.source_type,
+                ChannelSourceType::File { path } if path == &channel.name
+            )
+        }));
+        assert!(parsed
+            .channels
+            .iter()
+            .all(|channel| channel.event_count == 1));
+
+        fs::remove_file(path).expect("remove archive fixture");
+    }
+
+    #[test]
     fn rejects_traversal_and_absolute_member_paths() {
         assert!(validate_member_name("../outside.evtx").is_none());
         assert!(validate_member_name("/absolute.evtx").is_none());
         assert!(validate_member_name("C:/absolute.evtx").is_none());
+    }
+
+    #[test]
+    fn rejects_terminal_controls_and_unicode_noncharacters() {
+        for name in [
+            "logs/line\rbreak.evtx",
+            "logs/line\nbreak.evtx",
+            "logs/\u{1b}[31m.evtx",
+            "logs/\u{7f}.evtx",
+            "logs/\u{85}.evtx",
+            "logs/\u{fdd0}.evtx",
+            "logs/\u{fffe}.evtx",
+            "logs/\u{1ffff}.evtx",
+        ] {
+            assert!(
+                validate_member_name(name).is_none(),
+                "unsafe archive member should be rejected: {name:?}"
+            );
+        }
     }
 
     #[test]
@@ -978,6 +1271,67 @@ mod tests {
             0..MAX_ARCHIVE_MEMBERS
         );
     }
+    #[test]
+    fn archive_gap_overflow_retains_real_gaps_and_coalesces_repeated_omissions() {
+        let mut result = ArchiveParseResult {
+            parse_errors: 11,
+            ..ArchiveParseResult::default()
+        };
+
+        for index in 0..MAX_ARCHIVE_COVERAGE - 1 {
+            push_existing_gap(
+                &mut result,
+                EvtxCoverageGap::new(
+                    format!("member-{index}"),
+                    EvtxCoverageGapKind::File,
+                    "diagnostic",
+                ),
+            );
+        }
+
+        push_existing_gap(
+            &mut result,
+            EvtxCoverageGap::new("member-omitted-1", EvtxCoverageGapKind::File, "diagnostic"),
+        );
+        assert_eq!(result.coverage.len(), MAX_ARCHIVE_COVERAGE);
+        assert_eq!(result.messages.len(), MAX_ARCHIVE_COVERAGE);
+        assert_eq!(result.omitted_coverage, 1);
+        assert_eq!(result.parse_errors, 11);
+        for index in 0..MAX_ARCHIVE_COVERAGE - 1 {
+            assert_eq!(result.coverage[index].source, format!("member-{index}"));
+            assert_eq!(
+                result.messages[index],
+                format!("member-{index}: diagnostic")
+            );
+        }
+        assert_eq!(result.coverage.last().unwrap().source, "<archive coverage>");
+        assert_eq!(
+            result.messages.last().unwrap(),
+            "<archive coverage>: additional archive member diagnostics were coalesced"
+        );
+
+        for index in 2..=3 {
+            push_existing_gap(
+                &mut result,
+                EvtxCoverageGap::new(
+                    format!("member-omitted-{index}"),
+                    EvtxCoverageGapKind::File,
+                    "diagnostic",
+                ),
+            );
+        }
+        assert_eq!(result.coverage.len(), MAX_ARCHIVE_COVERAGE);
+        assert_eq!(result.messages.len(), MAX_ARCHIVE_COVERAGE);
+        assert_eq!(result.omitted_coverage, 3);
+        assert_eq!(
+            result.coverage.last().unwrap().reason,
+            "3 additional archive member diagnostics were coalesced"
+        );
+        assert_eq!(
+            result.messages.last().unwrap(),
+            "<archive coverage>: 3 additional archive member diagnostics were coalesced"
+        );
+    }
 
     #[test]
     fn compressed_archive_budget_rejects_later_members() {
@@ -987,6 +1341,23 @@ mod tests {
         assert!(!archive_budget_allows(u64::MAX, 1, u64::MAX));
         assert!(!archive_record_budget_allows(0, 0));
         assert!(archive_record_budget_allows(0, 1));
+    }
+
+    #[test]
+    fn text_parser_admission_rejects_oversized_or_exhausted_inputs() {
+        assert!(!archive_text_parser_admission_allows(
+            MAX_ARCHIVE_TEXT_PARSE_BYTES + 1,
+            0,
+            1
+        ));
+        assert!(!archive_text_parser_admission_allows(1, 1, 1));
+        assert!(archive_text_parser_admission_allows(1, 0, 1));
+        assert!(text_parse_error_is_limit(
+            "text member exceeds parser budget of 16777216 bytes"
+        ));
+        assert!(!text_parse_error_is_limit(
+            "text member could not be parsed: checksum failed"
+        ));
     }
 
     #[test]
@@ -1013,10 +1384,7 @@ mod tests {
         assert_eq!(parsed.members.len(), 1);
         assert_eq!(parsed.members[0].parsed.records.len(), 1);
         assert_eq!(parsed.metadata.len(), 2);
-        assert_eq!(
-            parsed.metadata[1].outcome,
-            EvtxArchiveMemberOutcome::Limit
-        );
+        assert_eq!(parsed.metadata[1].outcome, EvtxArchiveMemberOutcome::Limit);
         assert!(parsed.coverage.iter().any(|gap| {
             gap.kind == super::super::models::EvtxCoverageGapKind::Limit
                 && gap.source.ends_with("logs/second.log")
@@ -1064,9 +1432,10 @@ mod tests {
             gap.kind == super::super::models::EvtxCoverageGapKind::File
                 && gap.source.ends_with("logs/app.log")
         }));
-        assert!(!parsed.coverage.iter().any(|gap| {
-            gap.kind == super::super::models::EvtxCoverageGapKind::Limit
-        }));
+        assert!(!parsed
+            .coverage
+            .iter()
+            .any(|gap| { gap.kind == super::super::models::EvtxCoverageGapKind::Limit }));
         fs::remove_file(path).expect("remove archive fixture");
     }
 
@@ -1086,22 +1455,30 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversized_member_count_before_zip_entry_traversal() {
+    fn forged_large_member_count_is_rejected_before_archive_open() {
         let path = std::env::temp_dir().join(format!(
             "cmtraceopen-event-archive-member-limit-{}.zip",
             std::process::id()
         ));
         let file = File::create(&path).expect("create archive fixture");
         let mut writer = zip::ZipWriter::new(file);
-        for index in 0..=MAX_ARCHIVE_MEMBERS {
-            writer
-                .start_file(
-                    format!("logs/member-{index}.log"),
-                    zip::write::SimpleFileOptions::default(),
-                )
-                .expect("create archive member");
-        }
+        writer
+            .start_file("logs/app.log", zip::write::SimpleFileOptions::default())
+            .expect("create archive member");
+        writer
+            .write_all(b"Archive member")
+            .expect("write archive member");
         writer.finish().expect("finish archive fixture");
+
+        let mut bytes = fs::read(&path).expect("read archive fixture");
+        let eocd = bytes
+            .windows(4)
+            .rposition(|signature| signature == [0x50, 0x4b, 0x05, 0x06])
+            .expect("find end of central directory");
+        bytes[eocd + 8..eocd + 10].copy_from_slice(&(MAX_ARCHIVE_MEMBERS as u16 + 1).to_le_bytes());
+        bytes[eocd + 10..eocd + 12]
+            .copy_from_slice(&(MAX_ARCHIVE_MEMBERS as u16 + 1).to_le_bytes());
+        fs::write(&path, bytes).expect("forge archive member count");
 
         let mut file = File::open(&path).expect("open archive fixture");
         assert_eq!(
@@ -1110,20 +1487,46 @@ mod tests {
         );
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let parsed =
-            parse_archive(&path, &maps, &providers, usize::MAX).expect("archive should report a limit");
+        let error = parse_archive(&path, &maps, &providers, usize::MAX)
+            .expect_err("forged large member count should be rejected");
 
-        assert!(parsed.members.is_empty());
-        assert_eq!(parsed.metadata.len(), 1);
-        assert_eq!(
-            parsed.metadata[0].outcome,
-            EvtxArchiveMemberOutcome::Limit
-        );
-        assert_eq!(parsed.parse_errors, 1);
-        assert!(parsed
-            .coverage
-            .iter()
-            .any(|gap| gap.kind == super::super::models::EvtxCoverageGapKind::Limit));
+        assert_eq!(error.kind, EvtxCoverageGapKind::Limit);
+        assert_eq!(error.source, path.to_string_lossy());
+        assert!(error.reason.contains("archive was not opened"));
+        fs::remove_file(path).expect("remove archive fixture");
+    }
+    #[test]
+    fn forged_large_central_directory_is_rejected_before_archive_open() {
+        let path = std::env::temp_dir().join(format!(
+            "cmtraceopen-event-archive-central-limit-{}.zip",
+            std::process::id()
+        ));
+        let file = File::create(&path).expect("create archive fixture");
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file("logs/app.log", zip::write::SimpleFileOptions::default())
+            .expect("create archive member");
+        writer
+            .write_all(b"Archive member")
+            .expect("write archive member");
+        writer.finish().expect("finish archive fixture");
+
+        let mut bytes = fs::read(&path).expect("read archive fixture");
+        let eocd = bytes
+            .windows(4)
+            .rposition(|signature| signature == [0x50, 0x4b, 0x05, 0x06])
+            .expect("find end of central directory");
+        bytes[eocd + 12..eocd + 16]
+            .copy_from_slice(&(MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES as u32 + 1).to_le_bytes());
+        fs::write(&path, bytes).expect("forge archive central directory size");
+
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
+        let error = parse_archive(&path, &maps, &providers, usize::MAX)
+            .expect_err("forged central directory size should be rejected");
+
+        assert_eq!(error.kind, EvtxCoverageGapKind::Limit);
+        assert!(error.reason.contains("central directory"));
         fs::remove_file(path).expect("remove archive fixture");
     }
     #[test]
@@ -1143,13 +1546,64 @@ mod tests {
     #[test]
     fn text_archive_members_use_existing_parser_and_preserve_source() {
         let content = br#"<![LOG[Archive text record]LOG]!><time="08:00:00.000+000" date="01-01-2024" component="ArchiveText" context="" type="1" thread="100" file="">"#;
-        let parsed = parse_text_member(content.to_vec(), "bundle.zip::logs/app.log")
+        let parsed = parse_text_member(content.to_vec(), "bundle.zip::logs/app.log", usize::MAX)
             .expect("text archive member should parse");
 
         assert_eq!(parsed.records.len(), 1);
         assert_eq!(parsed.records[0].message, "Archive text record");
         assert_eq!(parsed.records[0].source_label, "bundle.zip::logs/app.log");
+        assert_eq!(
+            parsed.records[0].origin_kind,
+            super::super::models::EvtxOriginKind::Log
+        );
+        assert_eq!(parsed.records[0].provider, "ArchiveText");
+        assert!(parsed.records[0].channel.is_empty());
+        assert_eq!(parsed.records[0].event_id, 0);
+        assert!(parsed.records[0].computer.is_empty());
+        let timeline = super::super::timeline::build(&[], &parsed.records);
+        assert!(matches!(
+            timeline.items[0].origin,
+            cmtraceopen_parser::unified_timeline::TimelineOrigin::Log { .. }
+        ));
         assert_eq!(parsed.parse_errors, 0);
+    }
+
+    #[test]
+    fn text_archive_members_with_blank_components_use_source_channel() {
+        for (index, component) in ["", " \t"].into_iter().enumerate() {
+            let content = format!(
+                r#"<![LOG[Archive text record]LOG]!><time="08:00:00.000+000" date="01-01-2024" component="{component}" context="" type="1" thread="100" file="">"#
+            );
+            let source = format!("bundle.zip::logs/blank-{index}.log");
+            let parsed = parse_text_member(content.into_bytes(), &source, usize::MAX)
+                .expect("blank component should parse");
+
+            assert_eq!(parsed.records.len(), 1);
+            assert!(parsed.records[0].provider.is_empty());
+            assert_eq!(parsed.records[0].channel, source);
+        }
+    }
+    #[test]
+    fn text_archive_parser_bounds_line_materialization() {
+        let line = r#"<![LOG[Archive text record]LOG]!><time="08:00:00.000+000" date="01-01-2024" component="ArchiveText" context="" type="1" thread="100" file="">"#;
+        let mut content = String::new();
+        for _ in 0..=MAX_ARCHIVE_TEXT_RECORDS {
+            content.push_str(line);
+            content.push('\n');
+        }
+
+        let parsed = parse_text_member(
+            content.into_bytes(),
+            "bundle.zip::logs/large.log",
+            usize::MAX,
+        )
+        .expect("bounded text member should parse");
+
+        assert_eq!(parsed.records.len(), MAX_ARCHIVE_TEXT_RECORDS);
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Limit
+                && gap.reason.contains("later records were not parsed")
+        }));
     }
     #[test]
     fn archive_routes_text_members_into_the_timeline_with_provenance() {
@@ -1185,10 +1639,7 @@ mod tests {
             .sha256
             .as_deref()
             .is_some_and(|digest| digest.len() == 64));
-        assert_eq!(
-            parsed.metadata[0].outcome,
-            EvtxArchiveMemberOutcome::Parsed
-        );
+        assert_eq!(parsed.metadata[0].outcome, EvtxArchiveMemberOutcome::Parsed);
         fs::remove_file(path).expect("remove archive fixture");
     }
 }

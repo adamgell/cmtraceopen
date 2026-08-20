@@ -26,7 +26,7 @@ import type {
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
 import type { LogEntry } from "../../types/log";
-import type { UnifiedTimeline } from "./unified-timeline";
+import { assertUnifiedTimelineShape, type UnifiedTimeline } from "./unified-timeline";
 
 type EvtxClearStatusResult =
   | { status: "cleared" | "cancelled" | "empty" }
@@ -56,44 +56,167 @@ type ServerFilter = EventQueryFilterSubset & {
   eventIds?: EvtxEventIdSelector[];
   eventIdMode?: "include";
 };
+function decimalIdParts(record: EvtxRecord): {
+  valid: boolean;
+  digits: string;
+  raw: string;
+} {
+  const rawText = record.eventRecordIdText?.trim() ?? "";
+  if (/^\d+$/.test(rawText) && !/^0+$/.test(rawText)) {
+    return { valid: true, digits: rawText.replace(/^0+(?=\d)/, ""), raw: rawText };
+  }
+  if (!rawText && Number.isSafeInteger(record.eventRecordId) && record.eventRecordId !== 0) {
+    const raw = String(record.eventRecordId);
+    if (/^\d+$/.test(raw)) return { valid: true, digits: raw, raw };
+  }
+  return { valid: false, digits: "", raw: rawText };
+}
+
+function compareDecimalRecordIds(a: EvtxRecord, b: EvtxRecord): number {
+  const aId = decimalIdParts(a);
+  const bId = decimalIdParts(b);
+  if (aId.valid !== bId.valid) return aId.valid ? -1 : 1;
+  if (aId.valid) {
+    if (aId.digits.length !== bId.digits.length) {
+      return aId.digits.length < bId.digits.length ? -1 : 1;
+    }
+    const numericComparison = aId.digits < bId.digits ? -1 : aId.digits > bId.digits ? 1 : 0;
+    if (numericComparison !== 0) return numericComparison;
+  }
+  return aId.raw.localeCompare(bId.raw);
+}
+
 function compareStoredRecords(a: EvtxRecord, b: EvtxRecord): number {
-  const aTextId = a.eventRecordIdText?.trim();
-  const bTextId = b.eventRecordIdText?.trim();
-  const aId = aTextId && !/^0+$/.test(aTextId) ? aTextId : String(a.eventRecordId);
-  const bId = bTextId && !/^0+$/.test(bTextId) ? bTextId : String(b.eventRecordId);
   return (
     a.timestampEpoch - b.timestampEpoch ||
     a.sourceLabel.localeCompare(b.sourceLabel) ||
     a.channel.localeCompare(b.channel) ||
-    (aId < bId ? -1 : aId > bId ? 1 : 0) ||
+    compareDecimalRecordIds(a, b) ||
     a.eventId - b.eventId
   );
 }
-function recordKey(record: EvtxRecord): string {
-  const textId = record.eventRecordIdText?.trim();
-  const recordId =
-    textId && !/^0+$/.test(textId)
-      ? `text:${record.eventRecordIdText}`
-      : record.eventRecordId !== 0
-        ? `number:${String(record.eventRecordId)}`
-        : `missing:${record.rawXml || [
-            record.provider,
-            record.eventId,
-            record.timestampEpoch,
-            record.computer,
-            record.message,
-          ].join("\u0000")}`;
-  return `${record.sourceLabel}\u0000${record.channel}\u0000${recordId}`;
+function recordKey(record: EvtxRecord): string | null {
+  const identity = decimalIdParts(record);
+  if (!identity.valid) return null;
+  return `${record.sourceLabel}\u0000${record.channel}\u0000decimal:${identity.digits}`;
 }
-function appendUniqueRecords(existing: EvtxRecord[], incoming: EvtxRecord[]): EvtxRecord[] {
-  const keys = new Set(existing.map(recordKey));
-  const unique = incoming.filter((record) => {
+
+/**
+ * Producer-less records cannot be deduplicated safely: two events can have the same visible
+ * fields. Selection still needs a refresh-local address, so use a full row fingerprint plus its
+ * occurrence among equivalent rows. The occurrence makes identical rows distinct without turning
+ * this fallback into a canonical deduplication key.
+ */
+const producerlessFingerprintCache = new WeakMap<EvtxRecord, string>();
+
+function producerlessFingerprint(record: EvtxRecord): string {
+  const cached = producerlessFingerprintCache.get(record);
+  if (cached !== undefined) return cached;
+
+  const fingerprint = JSON.stringify([
+    record.sourceLabel,
+    record.channel,
+    record.timestampEpoch,
+    record.provider,
+    record.eventId,
+    record.level,
+    record.computer,
+    record.message,
+    record.eventData.map((field) => [field.name, field.value]),
+    record.rawXml,
+  ]);
+  producerlessFingerprintCache.set(record, fingerprint);
+  return fingerprint;
+}
+
+function selectionKeyForIndex(records: EvtxRecord[], index: number): string | null {
+  const record = records[index];
+  if (!record) return null;
+  const stableKey = recordKey(record);
+  if (stableKey !== null) return `stable:${stableKey}`;
+  const fingerprint = producerlessFingerprint(record);
+  let occurrence = 0;
+  for (let current = 0; current < index; current++) {
+    if (producerlessFingerprint(records[current]) === fingerprint) occurrence++;
+  }
+  return `transient:${fingerprint}\u0000${occurrence}`;
+}
+
+function findSelectionIndex(records: EvtxRecord[], key: string): number {
+  const occurrences = new Map<string, number>();
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index];
+    const stableKey = recordKey(record);
+    if (stableKey !== null) {
+      if (`stable:${stableKey}` === key) return index;
+      continue;
+    }
+    const fingerprint = producerlessFingerprint(record);
+    const occurrence = occurrences.get(fingerprint) ?? 0;
+    occurrences.set(fingerprint, occurrence + 1);
+    if (`transient:${fingerprint}\u0000${occurrence}` === key) return index;
+  }
+  return -1;
+}
+
+function appendUniqueRecords(
+  existing: EvtxRecord[],
+  incoming: EvtxRecord[],
+  options: { deduplicateProducerless?: boolean } = {}
+): { records: EvtxRecord[]; droppedAgainstExisting: number } {
+  const existingKeys = new Set(
+    existing.map(recordKey).filter((key): key is string => key !== null)
+  );
+  const keys = new Set(existingKeys);
+  const existingRecordSet = new Set(existing);
+  const seenRecords = new Set(existing);
+  const existingProducerlessFingerprints = options.deduplicateProducerless
+    ? new Set(
+        existing
+          .filter((record) => recordKey(record) === null)
+          .map(producerlessFingerprint)
+      )
+    : null;
+  const producerlessFingerprints = existingProducerlessFingerprints
+    ? new Set(existingProducerlessFingerprints)
+    : null;
+  const unique: EvtxRecord[] = [];
+  let droppedAgainstExisting = 0;
+  for (const record of incoming) {
     const key = recordKey(record);
-    if (keys.has(key)) return false;
+    if (key === null) {
+      // Stream reconciliation can present the same logical record as distinct objects in the
+      // live batch and terminal reply. Only that boundary has enough context to compare fallback
+      // fingerprints; ordinary merges must keep equivalent producer-less rows separate.
+      if (seenRecords.has(record)) {
+        if (existingRecordSet.has(record)) droppedAgainstExisting++;
+        continue;
+      }
+      if (producerlessFingerprints !== null) {
+        const fingerprint = producerlessFingerprint(record);
+        if (producerlessFingerprints.has(fingerprint)) {
+          if (existingProducerlessFingerprints?.has(fingerprint)) {
+            droppedAgainstExisting++;
+          }
+          continue;
+        }
+        producerlessFingerprints.add(fingerprint);
+      }
+      seenRecords.add(record);
+      unique.push(record);
+      continue;
+    }
+    if (keys.has(key)) {
+      if (existingKeys.has(key)) droppedAgainstExisting++;
+      continue;
+    }
     keys.add(key);
-    return true;
-  });
-  return [...existing, ...unique];
+    unique.push(record);
+  }
+  return {
+    records: [...existing, ...unique],
+    droppedAgainstExisting,
+  };
 }
 let preservedSelectedRecordKey: string | null = null;
 
@@ -118,6 +241,70 @@ type TailStopOutcome = {
   status?: EvtxTailStatus;
   error?: string;
 };
+
+// A stale cleanup failure stays visible until that exact request/channel stop succeeds. The key is
+// intentionally request-scoped so a retry cannot remove a current tail's unrelated gap.
+const staleTailStopFailures = new Map<string, string>();
+const tailStopGapOwners = new Map<string, Set<string>>();
+
+function rememberTailStopGapOwner(gap: string, owner: string): void {
+  let owners = tailStopGapOwners.get(gap);
+  if (!owners) {
+    owners = new Set<string>();
+    tailStopGapOwners.set(gap, owners);
+  }
+  owners.add(owner);
+}
+
+function forgetTailStopGapOwner(gap: string, owner: string): boolean {
+  const owners = tailStopGapOwners.get(gap);
+  if (!owners?.delete(owner)) return false;
+  if (owners.size === 0) tailStopGapOwners.delete(gap);
+  return owners.size === 0;
+}
+
+function canUpdateStaleTailGap(requestId: string): boolean {
+  const state = useEvtxStore.getState();
+  return (
+    (state.tailRequestId === null || state.tailRequestId === requestId) &&
+    (activeTailRequestId === null || activeTailRequestId === requestId)
+  );
+}
+
+function reportStaleTailStopOutcome(outcome: TailStopOutcome): void {
+  if (!isLatestTailStop(outcome)) return;
+  const failureKey = tailSequenceKey(outcome.requestId, outcome.channel);
+  if (outcome.error) {
+    const gap = `${outcome.channel}: live tail stop failed (${outcome.error})`;
+    const previousGap = staleTailStopFailures.get(failureKey);
+    if (previousGap !== undefined && previousGap !== gap) {
+      forgetTailStopGapOwner(previousGap, failureKey);
+    }
+    staleTailStopFailures.set(failureKey, gap);
+    rememberTailStopGapOwner(gap, failureKey);
+    if (!canUpdateStaleTailGap(outcome.requestId)) return;
+    useEvtxStore.setState((state) => ({
+      tailCoverageGaps: mergeCoverageGaps(
+        state.tailCoverageGaps.filter((currentGap) => currentGap !== previousGap),
+        [gap]
+      ),
+    }));
+    return;
+  }
+
+  const gap = staleTailStopFailures.get(failureKey);
+  if (!gap) return;
+  staleTailStopFailures.delete(failureKey);
+  if (!forgetTailStopGapOwner(gap, failureKey)) return;
+  if (!canUpdateStaleTailGap(outcome.requestId)) return;
+  useEvtxStore.setState((state) => ({
+    tailCoverageGaps: state.tailCoverageGaps.filter((currentGap) => currentGap !== gap),
+  }));
+}
+
+function observeStaleTailStop(requestId: string, channel: string): void {
+  void stopTailRequest(requestId, channel).then(reportStaleTailStopOutcome);
+}
 
 // A failed stop belongs to the backend request that could not be stopped, not to whichever load
 // happens to be current when the rejection arrives. Keeping this retry state outside the Zustand
@@ -227,7 +414,7 @@ function cleanupStaleTailStart(
   if (isCurrentTailStart(requestId, sourceRequestId)) return;
   for (const channel of channels) {
     captureTailSequenceSnapshot(requestId, channel);
-    void stopTailRequest(requestId, channel);
+    observeStaleTailStop(requestId, channel);
   }
 }
 
@@ -245,7 +432,7 @@ function supersedeActiveTailStart(): void {
     // race the backend registration and leave the newly-created worker orphaned.
     if (pendingTailStarts.get(staleRequestId)?.has(channel)) continue;
     captureTailSequenceSnapshot(staleRequestId, channel);
-    void stopTailRequest(staleRequestId, channel);
+    observeStaleTailStop(staleRequestId, channel);
   }
 }
 
@@ -257,7 +444,7 @@ function retryPendingTailStops(): void {
     ) {
       continue;
     }
-    for (const channel of channels) void stopTailRequest(requestId, channel);
+    for (const channel of channels) observeStaleTailStop(requestId, channel);
   }
 }
 
@@ -286,8 +473,18 @@ function beginRequest(): string {
   activeTailSourceRequestId = null;
   activeTailChannels = new Set<string>();
   activeRequestId = `event-log-${++requestGeneration}`;
+  // A new request supersedes every stale tail cleanup represented above. Remove its old failure
+  // records before clearing the gap-owner index, otherwise a later stop completion can retain
+  // request-scoped state that no longer has a visible owner.
+  for (const requestId of cleanupRequests.keys()) {
+    const prefix = `${requestId}\u0000`;
+    for (const failureKey of staleTailStopFailures.keys()) {
+      if (failureKey.startsWith(prefix)) staleTailStopFailures.delete(failureKey);
+    }
+  }
   // Drop the visible tail identity before any asynchronous stale-stop completion can observe it.
   // Some load paths (notably channel enumeration) do not otherwise rewrite these fields.
+  tailStopGapOwners.clear();
   useEvtxStore.setState({
     tailMode: null,
     tailRequestId: null,
@@ -295,7 +492,7 @@ function beginRequest(): string {
     tailCoverageGaps: [],
   });
   for (const [requestId, channels] of cleanupRequests) {
-    for (const channel of channels) void stopTailRequest(requestId, channel);
+    for (const channel of channels) observeStaleTailStop(requestId, channel);
   }
   // A superseded load can be waiting for a terminal event that will never arrive. Resolve those
   // waiters before dropping the map so stale callers can observe the new request and return.
@@ -324,38 +521,58 @@ function invokeEventQuery<T>(
       requestId,
     });
   }
+
   return invoke<T>("evtx_query_channels", { channels, maxEvents, filter, requestId });
 }
 function mergeRecordsPreservingSelection(
   existing: EvtxRecord[],
   selectedRecordId: number | null,
   incoming: EvtxRecord[],
-  selectedKey = preservedSelectedRecordKey
+  options: { preserveMissingSelection?: boolean } = {}
 ): { records: EvtxRecord[]; selectedRecordId: number | null } {
+  const selectedKey = preservedSelectedRecordKey;
   const selected =
     selectedKey === null
       ? selectedRecordId === null
         ? null
         : existing.find((record) => record.id === selectedRecordId) ?? null
-      : existing.find((record) => recordKey(record) === selectedKey) ??
-        incoming.find((record) => recordKey(record) === selectedKey) ??
-        null;
-  const records = appendUniqueRecords(existing, incoming);
+      : (() => {
+          const existingIndex = findSelectionIndex(existing, selectedKey);
+          if (existingIndex >= 0) return existing[existingIndex];
+          const incomingIndex = findSelectionIndex(incoming, selectedKey);
+          return incomingIndex >= 0 ? incoming[incomingIndex] : null;
+        })();
+  const records = appendUniqueRecords(existing, incoming).records;
   records.sort(compareStoredRecords);
   for (let index = 0; index < records.length; index++) records[index].id = index;
+  const selectedIdentity =
+    selected === null
+      ? null
+      : selectedKey !== null
+        ? selectedKey
+        : selectionKeyForIndex(existing, existing.indexOf(selected));
   const remappedSelectedRecordId =
     selected === null
       ? null
-      : records.findIndex((record) => recordKey(record) === recordKey(selected));
-  if (selected !== null || selectedKey === null) preservedSelectedRecordKey = null;
-  return { records, selectedRecordId: remappedSelectedRecordId };
+      : selectedIdentity === null
+        ? records.findIndex((record) => record === selected)
+        : findSelectionIndex(records, selectedIdentity);
+  if (selected !== null || selectedKey === null || !options.preserveMissingSelection) {
+    preservedSelectedRecordKey = null;
+  }
+  return {
+    records,
+    selectedRecordId:
+      remappedSelectedRecordId !== null && remappedSelectedRecordId >= 0
+        ? remappedSelectedRecordId
+        : null,
+  };
 }
 function captureSelectedRecord(records: EvtxRecord[], selectedRecordId: number | null): void {
-  const selected =
-    selectedRecordId === null
-      ? null
-      : records.find((record) => record.id === selectedRecordId) ?? null;
-  preservedSelectedRecordKey = selected === null ? null : recordKey(selected);
+  const selectedIndex =
+    selectedRecordId === null ? -1 : records.findIndex((record) => record.id === selectedRecordId);
+  preservedSelectedRecordKey =
+    selectedIndex < 0 ? null : selectionKeyForIndex(records, selectedIndex);
 }
 /** Builds the backend-owned merged timeline for the records currently shown in this workspace. */
 export function buildUnifiedTimeline(
@@ -376,10 +593,10 @@ export function buildUnifiedTimeline(
     ...record,
     eventRecordId: record.eventRecordIdText ?? String(record.eventRecordId),
   }));
-  return invoke<UnifiedTimeline>("evtx_build_unified_timeline", {
+  return invoke<unknown>("evtx_build_unified_timeline", {
     entries,
     records: transportRecords,
-  });
+  }).then(assertUnifiedTimelineShape);
 }
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
@@ -530,6 +747,32 @@ function hasUsableChannelData(
 ): boolean {
   return !streamIncomplete && (gapCount === 0 || recordCount > 0 || eventCount > 0);
 }
+function hasStructuredEvtxBasename(value: string, channel: string): boolean {
+  const lowerValue = value.toLowerCase();
+  const lowerBasename = `${channel}.evtx`.toLowerCase();
+  for (let start = 0; start <= lowerValue.length - lowerBasename.length; start++) {
+    if (start > 0 && value[start - 1] !== "/" && value[start - 1] !== "\\") continue;
+    if (!lowerValue.startsWith(lowerBasename, start)) continue;
+    const end = start + lowerBasename.length;
+    const suffix = value[end];
+    if (suffix === undefined || suffix === ":" || suffix.trim() === "") return true;
+  }
+  return false;
+}
+
+function coverageBelongsToChannel(
+  value: string,
+  channel: string,
+  remoteMachine: string | null
+): boolean {
+  const source = remoteMachine ? `${remoteMachine}/${channel}` : channel;
+  if (value === source || value.startsWith(`${source}:`)) return true;
+
+  // Structured file coverage keeps the source path (for example
+  // `/logs/Application.evtx`) rather than the live channel banner. Match only an exact
+  // basename, not arbitrary channel substrings such as `App` in `Application.evtx`.
+  return hasStructuredEvtxBasename(value, channel);
+}
 
 function applyParseResult(
   result: EvtxParseResult,
@@ -632,11 +875,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       records: [],
       channels: [],
       sourceMode: null,
+      sourcePaths: [],
       remoteMachine: null,
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
       coverageGaps: [],
+      coverageDetails: [],
       archiveMembers: [],
+      sourceManifest: null,
       tailMode: null,
       tailRequestId: null,
       tailChannels: new Set<string>(),
@@ -666,7 +912,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     } catch (error) {
       if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message, timeWindow: previousTimeWindow });
+      set({
+        isLoading: false,
+        loadError: message,
+        sourceManifest: null,
+        coverageDetails: [],
+        timeWindow: previousTimeWindow,
+      });
     }
   },
 
@@ -724,6 +976,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         isLoading: false,
         loadError: message,
         sourceManifest: manifest,
+        coverageGaps: sourceCoverageMessages(manifest.coverage),
         timeWindow: previousTimeWindow,
       });
     }
@@ -738,6 +991,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       loadGeneration: generation,
       isLoading: true,
       loadError: null,
+      sourceManifest: null,
+      coverageDetails: [],
+      archiveMembers: [],
       timeWindow:
         get().sourceMode === null && get().timeWindow === "all" ? "24h" : get().timeWindow,
     });
@@ -775,6 +1031,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         channels: updatedChannels,
         sourceMode: "live",
         sourcePaths: [],
+        remoteMachine,
+        sourceManifest: null,
         isLoading: true,
         loadError: null,
         coverageGaps: emptyRemoteGaps,
@@ -915,7 +1173,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       channels: [],
       records: [],
       sourceMode: null,
+      sourceManifest: null,
       coverageGaps: [],
+      coverageDetails: [],
+      archiveMembers: [],
       selectedChannels: new Set<string>(),
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
@@ -929,7 +1190,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       channels: [],
       records: [],
       sourceMode: null,
+      sourceManifest: null,
       coverageGaps: [],
+      coverageDetails: [],
+      archiveMembers: [],
       selectedChannels: new Set<string>(),
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
@@ -949,7 +1213,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       channels: [],
       records: [],
       sourceMode: null,
+      sourceManifest: null,
       coverageGaps: [],
+      coverageDetails: [],
+      archiveMembers: [],
       selectedChannels: new Set<string>(),
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
@@ -965,6 +1232,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     set({
       isLoading: true,
       loadError: null,
+      sourceManifest: null,
+      archiveMembers: [],
       selectedRecordId: null,
       loadGeneration: generation,
       tailMode: null,
@@ -1061,15 +1330,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         );
         if (channelHasUsableData) newLoaded.add(channel);
         else newLoaded.delete(channel);
-        const channelGaps = `${context}:`;
-        const priorGaps = state.coverageGaps.filter((gap) => !gap.startsWith(channelGaps));
+        const priorGaps = state.coverageGaps.filter(
+          (gap) => !coverageBelongsToChannel(gap, channel, remoteMachine)
+        );
         set({
           ...merged,
           channels: updatedChannels,
           loadedChannels: newLoaded,
           coverageGaps: mergeCoverageGaps(priorGaps, reportedGaps),
           coverageDetails: mergeStructuredCoverageGaps(
-            state.coverageDetails,
+            state.coverageDetails.filter((detail) =>
+              !coverageBelongsToChannel(detail.source, channel, remoteMachine)
+            ),
             checked.coverageGaps
           ),
         });
@@ -1097,8 +1369,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         loadedChannels: new Set(
           [...s.loadedChannels].filter((channel) => !refreshChannels.includes(channel))
         ),
+        sourceManifest: null,
         coverageGaps: s.coverageGaps.filter(
-          (gap) => !refreshChannels.some((channel) => gap.startsWith(`${channel}:`))
+          (gap) =>
+            !refreshChannels.some((channel) =>
+              coverageBelongsToChannel(gap, channel, s.remoteMachine)
+            )
+        ),
+        coverageDetails: s.coverageDetails.filter(
+          (detail) =>
+            !refreshChannels.some((channel) =>
+              coverageBelongsToChannel(detail.source, channel, s.remoteMachine)
+            )
         ),
       }));
       void get().queryChannels(refreshChannels, maxEvents);
@@ -1128,6 +1410,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       records: [],
       loadedChannels: new Set<string>(),
       selectedRecordId: null,
+      sourceManifest: null,
       loadGeneration: generation,
       isLoading: true,
       loadError: null,
@@ -1242,6 +1525,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (state.sourceMode !== "live") return [];
     const channels = [...state.loadedChannels];
     if (channels.length === 0) return [];
+    tailStopGapOwners.clear();
     set({ tailCoverageGaps: [] });
 
     const sourceRequestId = activeRequestId;
@@ -1349,17 +1633,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     }
 
     const successfulChannels = new Set<string>();
+    const clearedGaps: string[] = [];
     const finalGaps: string[] = [];
     for (const outcome of outcomes) {
       if (!isLatestTailStop(outcome)) continue;
       if (outcome.error) {
-        finalGaps.push(
-          `${outcome.channel}: live tail stop failed (${outcome.error})`
-        );
+        const gap = `${outcome.channel}: live tail stop failed (${outcome.error})`;
+        rememberTailStopGapOwner(gap, tailSequenceKey(requestId, outcome.channel));
+        finalGaps.push(gap);
         continue;
       }
       successfulChannels.add(outcome.channel);
-      tailSequenceSnapshots.delete(tailSequenceKey(requestId, outcome.channel));
+      const failureKey = tailSequenceKey(requestId, outcome.channel);
+      const previousGap = staleTailStopFailures.get(failureKey);
+      if (previousGap) {
+        staleTailStopFailures.delete(failureKey);
+        if (forgetTailStopGapOwner(previousGap, failureKey)) {
+          clearedGaps.push(previousGap);
+        }
+      }
+      tailSequenceSnapshots.delete(failureKey);
       if (!outcome.status) continue;
       const received = sequenceSnapshots.get(outcome.channel) ?? new Set<number>();
       const missingSequences = Array.from(
@@ -1379,6 +1672,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         .filter((outcome) => isLatestTailStop(outcome) && outcome.error)
         .map((outcome) => outcome.channel)
     );
+    const clearedGapSet = new Set(clearedGaps);
     const remainingChannels = new Set(
       channels.filter((channel) => !successfulChannels.has(channel) || failedChannels.has(channel))
     );
@@ -1387,14 +1681,20 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         tailMode: current.tailMode,
         tailRequestId: requestId,
         tailChannels: remainingChannels,
-        tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, finalGaps),
+        tailCoverageGaps: mergeCoverageGaps(
+          current.tailCoverageGaps.filter((gap) => !clearedGapSet.has(gap)),
+          finalGaps
+        ),
       }));
     } else {
       set((current) => ({
         tailMode: null,
         tailRequestId: null,
         tailChannels: new Set<string>(),
-        tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, finalGaps),
+        tailCoverageGaps: mergeCoverageGaps(
+          current.tailCoverageGaps.filter((gap) => !clearedGapSet.has(gap)),
+          finalGaps
+        ),
       }));
     }
   },
@@ -1413,6 +1713,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       if (activeTailRequestId === requestId) activeTailChannels.delete(channel);
       const outcome = await stopTailRequest(requestId, channel);
       if (outcome.error) {
+        const gap = `${channel}: live tail stop failed (${outcome.error})`;
+        rememberTailStopGapOwner(gap, tailSequenceKey(requestId, channel));
         if (
           isLatestTailStop(outcome) &&
           get().tailRequestId === requestId &&
@@ -1421,9 +1723,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           activeTailSourceRequestId === sourceRequestId
         ) {
           set((current) => ({
-            tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, [
-              `${channel}: live tail stop failed (${outcome.error})`,
-            ]),
+            tailCoverageGaps: mergeCoverageGaps(current.tailCoverageGaps, [gap]),
           }));
         }
         if (
@@ -1504,7 +1804,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           channels: current.channels.map((info) =>
             info.name === channel ? { ...info, eventCount: 0 } : info
           ),
-          coverageGaps: current.coverageGaps.filter((gap) => !gap.startsWith(`${channel}:`)),
+          sourceManifest: null,
+          coverageGaps: current.coverageGaps.filter(
+            (gap) => !coverageBelongsToChannel(gap, channel, current.remoteMachine)
+          ),
+          coverageDetails: current.coverageDetails.filter(
+            (detail) => !coverageBelongsToChannel(detail.source, channel, current.remoteMachine)
+          ),
           tailCoverageGaps: current.tailCoverageGaps.filter(
             (gap) => !gap.startsWith(`${channel}:`)
           ),
@@ -1605,9 +1911,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
   reset: () => {
     const loadGeneration = get().loadGeneration + 1;
+    staleTailStopFailures.clear();
     preservedSelectedRecordKey = null;
     const requestId = beginRequest();
     invalidateAllStreamedRecords(requestId);
+    tailStopGapOwners.clear();
     set({
       records: [],
       channels: [],
@@ -1670,6 +1978,7 @@ interface PendingStream {
   channel: string;
   requestId: string;
   records: EvtxRecord[];
+  receivedRecordCount: number;
   sequences: Set<number>;
   terminal?: { sequenceCount: number; totalRecords: number };
   terminalSynthetic: boolean;
@@ -1693,12 +2002,12 @@ const activeRequestIds = new Map<string, string>();
 function streamKey(channel: string, requestId: string): string {
   return `${requestId}\u0000${channel}`;
 }
-
 function createPendingStream(channel: string, requestId: string): PendingStream {
   const pending: PendingStream = {
     channel,
     requestId,
     records: [],
+    receivedRecordCount: 0,
     sequences: new Set<number>(),
     terminalSynthetic: false,
     consumerAcknowledged: false,
@@ -1811,7 +2120,6 @@ type StreamReconciliation = {
   recordShortfall: boolean;
   gaps: string[];
 };
-
 function reconcileStreamedResult(
   channel: string,
   requestId: string,
@@ -1820,7 +2128,10 @@ function reconcileStreamedResult(
 ): StreamReconciliation {
   const checked = assertParseResultShape(result);
   const streamed = drainStreamedRecords(channel, requestId);
-  const records = appendUniqueRecords(streamed.records, result.records);
+  const appended = appendUniqueRecords(streamed.records, result.records, {
+    deduplicateProducerless: true,
+  });
+  const records = appended.records;
   const gaps = [...checked.errorMessages, ...checked.coverageGaps.map(formatCoverageGap)];
   if (streamed.missingSequences.length > 0) {
     gaps.push(
@@ -1828,11 +2139,19 @@ function reconcileStreamedResult(
     );
   }
   const pending = pendingFor(channel, requestId);
-  const expected =
+  const expectedRaw =
     checked.totalRecords ??
     (pending?.terminal && pending.terminal.totalRecords > 0
       ? pending.terminal.totalRecords
       : null);
+  // The stream and invoke reply can carry the same logical record. The backend count reflects
+  // transport records, while the view owns the canonical identity set, so discount duplicates
+  // observed across those two transport legs before deciding that records are missing.
+  const duplicateRecordCount = appended.droppedAgainstExisting;
+  const expected =
+    expectedRaw === null
+      ? null
+      : Math.max(records.length, expectedRaw - duplicateRecordCount);
   const recordShortfall = expected !== null && records.length < expected;
   if (recordShortfall) {
     gaps.push(`${context}: ${expected - records.length} of ${expected} events did not reach the view`);
@@ -1864,7 +2183,8 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
     if (pending.consumerAcknowledged || pending.sequences.has(sequence)) return;
 
     pending.sequences.add(sequence);
-    pending.records = appendUniqueRecords(pending.records, records);
+    pending.receivedRecordCount += records.length;
+    pending.records = appendUniqueRecords(pending.records, records).records;
 
     // Batches are visible while a request is running. Use the same identity-preserving merge as all
     // reply/refresh paths so a late, out-of-order batch cannot move the operator's selection.
@@ -1872,7 +2192,8 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
     const merged = mergeRecordsPreservingSelection(
       state.records,
       state.selectedRecordId,
-      records
+      records,
+      { preserveMissingSelection: true }
     );
     useEvtxStore.setState(merged);
 

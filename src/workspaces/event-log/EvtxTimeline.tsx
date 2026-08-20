@@ -8,7 +8,7 @@ import {
 import { useUiStore } from "../../stores/ui-store";
 import { useMarkerStore } from "../../stores/marker-store";
 import {
-  evtxMarkerLineId,
+  evtxMarkerKey,
   getEvtxMarker,
   loadEvtxMarkers,
   matchesEvtxQuickFilter,
@@ -58,6 +58,24 @@ function compareRecords(
       break;
   }
   return direction === "asc" ? cmp : -cmp;
+}
+function hasUsableRecordId(record: EvtxRecord): boolean {
+  const textId = record.eventRecordIdText?.trim() ?? "";
+  if (textId !== "") return /^\d+$/.test(textId) && !/^0+$/.test(textId);
+  return Number.isSafeInteger(record.eventRecordId) && record.eventRecordId > 0;
+}
+
+function evtxRowKeys(rows: readonly EvtxRow[]): string[] {
+  const occurrencesByFingerprint = new Map<string, number>();
+  return rows.map((row) => {
+    if (row.kind === "group") return `group:${row.key}`;
+    const key = `event:${evtxMarkerKey(row.record)}`;
+    if (hasUsableRecordId(row.record)) return key;
+
+    const occurrence = occurrencesByFingerprint.get(key) ?? 0;
+    occurrencesByFingerprint.set(key, occurrence + 1);
+    return `${key}:occurrence:${occurrence}`;
+  });
 }
 export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   const [liveNowEpoch, setLiveNowEpoch] = useState(() => Date.now());
@@ -143,10 +161,34 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
     [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
   );
-  const [activeRowIndex, setActiveRowIndex] = useState(0);
+  const uiRowKeys = useMemo(() => evtxRowKeys(rows), [rows]);
+  const uiRowIndexByKey = useMemo(
+    () => new Map(uiRowKeys.map((key, index) => [key, index])),
+    [uiRowKeys]
+  );
+  const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
+  const activeRowIndex = useMemo(() => {
+    if (rows.length === 0) return -1;
+    if (activeRowKey === null) return 0;
+    const index = uiRowIndexByKey.get(activeRowKey);
+    return index === undefined ? 0 : index;
+  }, [activeRowKey, rows.length, uiRowIndexByKey]);
+  const setActiveRowIndex = useCallback(
+    (index: number) => {
+      const key = uiRowKeys[index];
+      if (key) setActiveRowKey(key);
+    },
+    [uiRowKeys]
+  );
   useEffect(() => {
-    setActiveRowIndex((current) => Math.min(current, Math.max(0, rows.length - 1)));
-  }, [rows.length]);
+    if (rows.length === 0) {
+      if (activeRowKey !== null) setActiveRowKey(null);
+      return;
+    }
+    if (activeRowKey === null || !uiRowIndexByKey.has(activeRowKey)) {
+      setActiveRowKey(uiRowKeys[0]);
+    }
+  }, [activeRowKey, rows.length, uiRowIndexByKey, uiRowKeys]);
   const rowIndexByRecordId = useMemo(() => {
     const indexes = new Map<number, number>();
     rows.forEach((row, index) => {
@@ -158,7 +200,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     if (selectedRecordId === null) return;
     const selectedRowIndex = rowIndexByRecordId.get(selectedRecordId);
     if (selectedRowIndex !== undefined) setActiveRowIndex(selectedRowIndex);
-  }, [rowIndexByRecordId, selectedRecordId]);
+  }, [rowIndexByRecordId, selectedRecordId, setActiveRowIndex]);
   const sourceLabels = useMemo(
     () => [...new Set(records.map((record) => record.sourceLabel).filter(Boolean))],
     [records]
@@ -192,14 +234,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
       rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
-    getItemKey: (index) => {
-      const row = rows[index];
-      return row?.kind === "group"
-        ? `group:${row.key}`
-        : row?.record
-          ? `event:${evtxMarkerLineId(row.record)}`
-          : index;
-    },
+    getItemKey: (index) => uiRowKeys[index] ?? "row:empty",
     overscan: 10,
   });
   const measureRow = useCallback(
@@ -215,6 +250,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     },
     [virtualizer.measureElement]
   );
+
 
   // Persisted font-size and row-shape changes alter rendered row heights. Estimates remain correct
   // for offscreen rows, while connected rows must use their actual border-box height because
@@ -263,7 +299,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       };
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(focus);
     },
-    [virtualizer.scrollToIndex]
+    [setActiveRowIndex, virtualizer.scrollToIndex]
   );
 
   const handleKeyDown = useCallback(
@@ -348,14 +384,13 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       // A flat list is a listbox; once grouped it is a tree, because a group header is not an
       // option and a listbox may only own option and group children. Declaring the wrong one let
       role={groupBy.length > 0 ? "tree" : "listbox"}
-      tabIndex={groupBy.length > 0 ? -1 : 0}
+      tabIndex={-1}
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       style={{
         overflowY: "auto",
         height: "100%",
         padding: "0",
-        backgroundColor: tokens.colorNeutralBackground1,
         fontFamily: LOG_UI_FONT_FAMILY,
         outline: "none",
       }}
@@ -383,7 +418,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
             if (row.kind === "group") {
               return (
                 <div
-                  key={virtualRow.key}
+                  key={uiRowKeys[virtualRow.index] ?? virtualRow.key}
                   ref={measureRow}
                   data-index={virtualRow.index}
                   role="treeitem"
@@ -438,7 +473,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
               matchesEvtxQuickFilter(record, quickFilter, columnConfig.order, timeZoneMode);
             return (
               <EvtxTimelineRow
-                key={virtualRow.key}
+                key={uiRowKeys[virtualRow.index] ?? virtualRow.key}
                 ref={measureRow}
                 record={record}
                 dataIndex={virtualRow.index}
@@ -456,7 +491,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                 quickFilterMatch={quickFilterMatch}
                 grouped={groupBy.length > 0}
                 depth={row.depth}
-                tabIndex={groupBy.length > 0 ? (activeRowIndex === virtualRow.index ? 0 : -1) : 0}
+                tabIndex={activeRowIndex === virtualRow.index ? 0 : -1}
                 onFocus={() => setActiveRowIndex(virtualRow.index)}
                 onTag={handleTag}
                 onBookmark={handleBookmark}

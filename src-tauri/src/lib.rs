@@ -217,7 +217,11 @@ pub fn run() {
                     Ok(directory) => {
                         let mut loaded = event_log::provider_db::ProviderStore::default();
                         match loaded.load_directory(&directory) {
-                            Ok(outcome) if !outcome.loaded.is_empty() => {
+                            Ok(outcome)
+                                if event_log::provider_db::packaged_provider_load_is_complete(
+                                    &outcome,
+                                ) =>
+                            {
                                 {
                                     let state = app.state::<AppState>();
                                     let write_result = state.provider_store.write();
@@ -241,8 +245,9 @@ pub fn run() {
                             Ok(outcome) => {
                                 log::warn!(
                                     "event=packaged_provider_databases_unavailable \
-                                     reason=\"packaged directory contained no valid provider databases \
-                                     ({} failures)\"",
+                                     reason=\"packaged provider coverage was incomplete \
+                                     ({} loaded, {} failures)\"",
+                                    outcome.loaded.len(),
                                     outcome.failures.len()
                                 );
                             }
@@ -449,6 +454,8 @@ pub fn run() {
             event_log::commands::evtx_load_packaged_provider_databases,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_build_unified_timeline,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_diagnose_records,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

@@ -1,5 +1,8 @@
-use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "windows")]
+use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(target_os = "windows")]
 use std::ffi::c_void;
+#[cfg(target_os = "windows")]
 use std::hash::{Hash, Hasher};
 
 #[cfg(target_os = "windows")]
@@ -13,8 +16,8 @@ use std::time::Duration;
 
 use super::event_node::{extract_system_fields, parse_event_xml};
 use super::models::{
-    ChannelSourceType, EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode,
-    EvtxRecord, EvtxTailBatch, EvtxTailStatus,
+    ChannelSourceType, EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxRecord,
+    EvtxTailBatch, EvtxTailStatus,
 };
 use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 use cmtraceopen_parser::eventmap::MapRegistry;
@@ -22,17 +25,16 @@ use cmtraceopen_parser::eventmap::MapRegistry;
 #[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter};
 
-
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
-    EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata,
-    EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EvtSubscribe,
-    EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml, EvtSubscribeActionDeliver,
+    EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
+    EvtOpenPublisherMetadata, EvtOpenSession, EvtQuery, EvtQueryChannelPath,
+    EvtQueryReverseDirection, EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml,
+    EvtRpcLogin, EvtRpcLoginAuthDefault, EvtSubscribe, EvtSubscribeActionDeliver,
     EvtSubscribeActionError, EvtSubscribeToFutureEvents, EvtSubscribeTolerateQueryErrors,
-    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EvtRpcLogin,
-    EvtRpcLoginAuthDefault,
+    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION,
 };
 
 /// Event handles fetched per `EvtNext` call.
@@ -107,7 +109,6 @@ pub fn normalize_remote_machine_name(machine: &str) -> Result<String, String> {
         return Err("remote machine name must be a hostname or UNC computer name".to_string());
     }
     Ok(normalized)
-
 }
 #[cfg(target_os = "windows")]
 fn remote_login(server: &mut [u16]) -> EVT_RPC_LOGIN {
@@ -135,7 +136,9 @@ fn open_remote_session(machine: &str) -> Result<(OwnedEvtHandle, String), String
             None,
         )
     }
-    .map_err(|error| format_remote_error(&format!("cannot open remote session to {machine}"), &error))?;
+    .map_err(|error| {
+        format_remote_error(&format!("cannot open remote session to {machine}"), &error)
+    })?;
     Ok((OwnedEvtHandle::new(session), machine))
 }
 
@@ -151,10 +154,7 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 #[cfg(target_os = "windows")]
 pub fn enumerate_remote_channels(machine: &str) -> Result<Vec<EvtxChannelInfo>, String> {
     let (session, machine) = open_remote_session(machine)?;
-    enumerate_channels_for_session(
-        Some(session.raw()),
-        ChannelSourceType::Remote { machine },
-    )
+    enumerate_channels_for_session(Some(session.raw()), ChannelSourceType::Remote { machine })
 }
 
 #[cfg(target_os = "windows")]
@@ -178,7 +178,11 @@ fn enumerate_channels_for_session(
     let raw_handle = unsafe { EvtOpenChannelEnum(session.map(|h| h.0).unwrap_or(0), 0) };
     if raw_handle == 0 {
         let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
-        return Err(format_channel_code("EvtOpenChannelEnum", error, session.is_some()));
+        return Err(format_channel_code(
+            "EvtOpenChannelEnum",
+            error,
+            session.is_some(),
+        ));
     }
     let enum_handle = OwnedEvtHandle::new(EVT_HANDLE(raw_handle));
 
@@ -213,7 +217,11 @@ fn enumerate_channels_for_session(
                 // ERROR_INSUFFICIENT_BUFFER — resize and retry
                 buffer.resize(used as usize, 0);
             } else {
-                return Err(format_channel_code("EvtNextChannelPath", err, session.is_some()));
+                return Err(format_channel_code(
+                    "EvtNextChannelPath",
+                    err,
+                    session.is_some(),
+                ));
             }
         }
     }
@@ -744,7 +752,8 @@ fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<EvtxRec
             context.source_label.starts_with("Remote:"),
         )
     })?;
-    let parsed = parse_event_xml(&xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
+    let parsed =
+        parse_event_xml(&xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
     let system = extract_system_fields(&parsed);
     let rendered_message = match system.provider.as_deref() {
         Some(provider) => {
@@ -752,19 +761,15 @@ fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<EvtxRec
                 .publisher_metadata
                 .lock()
                 .map_err(|_| "publisher metadata lock was poisoned".to_string())?;
-            format_event_message(
-                event,
-                provider,
-                context.session,
-                &mut metadata,
-            )
-            .map_err(|error| {
-                format_source_error(
-                    "EvtFormatMessage",
-                    &error,
-                    context.source_label.starts_with("Remote:"),
-                )
-            })?
+            format_event_message(event, provider, context.session, &mut metadata).map_err(
+                |error| {
+                    format_source_error(
+                        "EvtFormatMessage",
+                        &error,
+                        context.source_label.starts_with("Remote:"),
+                    )
+                },
+            )?
         }
         None => None,
     };
@@ -802,7 +807,12 @@ unsafe extern "system" fn evt_subscribe_callback(
             let _ = EvtClose(event);
         }
         match result {
-            Ok(record) => emit_tail_batch(context, EvtxLiveMode::Subscription, vec![record], Vec::new()),
+            Ok(record) => emit_tail_batch(
+                context,
+                EvtxLiveMode::Subscription,
+                vec![record],
+                Vec::new(),
+            ),
             Err(error) => emit_tail_batch(
                 context,
                 EvtxLiveMode::Subscription,
@@ -815,7 +825,10 @@ unsafe extern "system" fn evt_subscribe_callback(
             context,
             EvtxLiveMode::Subscription,
             Vec::new(),
-            vec![format!("{}: subscription callback reported an error", context.channel)],
+            vec![format!(
+                "{}: subscription callback reported an error",
+                context.channel
+            )],
         );
     }
     0
@@ -833,7 +846,11 @@ fn clear_error_status(channel: &str, error: &Error, remote: bool) -> EvtxClearRe
     let code = win32_code(error);
     let detail = format_source_error("EvtClearLog", error, remote);
     let denied = code == 5
-        || (remote && matches!(remote_error_kind(code), "access denied" | "credentials rejected"));
+        || (remote
+            && matches!(
+                remote_error_kind(code),
+                "access denied" | "credentials rejected"
+            ));
     if denied {
         EvtxClearResult {
             channel: channel.to_string(),
@@ -866,6 +883,7 @@ fn clear_remote_session_error(channel: &str, detail: String) -> EvtxClearResult 
 /// The numeric field is a transport convenience, not a complete identity: it loses precision in
 /// JavaScript for large IDs and maps an absent EventRecordID to zero. Keep the lossless text and a
 /// bounded fingerprint of the event payload so distinct missing-ID records remain visible.
+#[cfg(target_os = "windows")]
 fn polling_record_identity(record: &EvtxRecord) -> (String, u64) {
     let id_text = record
         .event_record_id_text
@@ -898,7 +916,6 @@ fn polling_record_identity(record: &EvtxRecord) -> (String, u64) {
     (id_text, hasher.finish())
 }
 
-
 #[cfg(target_os = "windows")]
 fn start_polling_tail(
     app: AppHandle,
@@ -920,6 +937,7 @@ fn start_polling_tail(
     let worker_fallback_gap = fallback_gap.clone();
     let worker = thread::spawn(move || {
         let mut seen = HashSet::<(String, u64)>::new();
+        let mut seen_order = VecDeque::<(String, u64)>::new();
         let mut first_poll = true;
         while !worker_stop.load(Ordering::Acquire) {
             let outcome = if let Some(machine) = remote_machine.as_deref() {
@@ -946,11 +964,20 @@ fn start_polling_tail(
             match outcome {
                 Ok(scan) => {
                     let mut records = scan.records;
-                    records.retain(|record| seen.insert(polling_record_identity(record)));
+                    records.retain(|record| {
+                        let identity = polling_record_identity(record);
+                        if seen.insert(identity.clone()) {
+                            seen_order.push_back(identity);
+                            true
+                        } else {
+                            false
+                        }
+                    });
                     if seen.len() > 8192 {
-                        let mut identities = seen.iter().cloned().collect::<Vec<_>>();
-                        identities.sort_unstable();
-                        for identity in identities.into_iter().take(4096) {
+                        for _ in 0..4096 {
+                            let Some(identity) = seen_order.pop_front() else {
+                                break;
+                            };
                             seen.remove(&identity);
                         }
                     }
@@ -1137,7 +1164,11 @@ pub fn start_channel_tail(
         }
         Err(error) => {
             drop(context);
-            Err(format_source_error("EvtSubscribe", &error, remote_machine.is_some()))
+            Err(format_source_error(
+                "EvtSubscribe",
+                &error,
+                remote_machine.is_some(),
+            ))
         }
     }
 }
@@ -1204,7 +1235,8 @@ pub fn clear_channel(
         return EvtxClearResult {
             channel: channel.to_string(),
             result: EvtxClearStatus::Denied {
-                detail: "clearing an event channel requires the application to run elevated".to_string(),
+                detail: "clearing an event channel requires the application to run elevated"
+                    .to_string(),
             },
         };
     }
@@ -1221,14 +1253,7 @@ pub fn clear_channel(
     let session_handle = remote_session.as_ref().map(OwnedEvtHandle::raw);
     let channel_hstring = HSTRING::from(channel);
     let remote = remote_machine.is_some();
-    let result = unsafe {
-        EvtClearLog(
-            session_handle,
-            &channel_hstring,
-            PCWSTR::null(),
-            0,
-        )
-    };
+    let result = unsafe { EvtClearLog(session_handle, &channel_hstring, PCWSTR::null(), 0) };
     let result = match result {
         Ok(()) => EvtxClearResult {
             channel: channel.to_string(),
@@ -1313,7 +1338,6 @@ pub fn query_channel_streamed(
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
-
 #[cfg(not(target_os = "windows"))]
 pub fn query_remote_channel_streamed(
     _machine: &str,
@@ -1380,17 +1404,16 @@ fn format_event_message(
 ) -> Result<Option<String>, Error> {
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
-        let metadata = match unsafe {
-            EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0)
-        } {
-            Ok(handle) => PublisherMetadata::Open(OwnedEvtHandle::new(handle)),
-            Err(error) if is_publisher_metadata_not_found(&error) => PublisherMetadata::Missing,
-            Err(error) => {
-                let code = win32_code(&error);
-                cache.insert(provider_name.to_string(), PublisherMetadata::Failed(code));
-                return Err(error);
-            }
-        };
+        let metadata =
+            match unsafe { EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0) } {
+                Ok(handle) => PublisherMetadata::Open(OwnedEvtHandle::new(handle)),
+                Err(error) if is_publisher_metadata_not_found(&error) => PublisherMetadata::Missing,
+                Err(error) => {
+                    let code = win32_code(&error);
+                    cache.insert(provider_name.to_string(), PublisherMetadata::Failed(code));
+                    return Err(error);
+                }
+            };
         cache.insert(provider_name.to_string(), metadata);
     }
 
@@ -1453,7 +1476,10 @@ fn format_remote_error(context: &str, error: &Error) -> String {
     } else {
         message.trim().to_string()
     };
-    format!("{context}: {} ({detail}, error {code})", remote_error_kind(code))
+    format!(
+        "{context}: {} ({detail}, error {code})",
+        remote_error_kind(code)
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -1559,16 +1585,19 @@ mod tests {
         assert!(format_remote_code("EvtRender", 5).contains("access denied"));
         assert!(format_remote_code("EvtOpenPublisherMetadata", 53)
             .contains("remote source unavailable"));
-        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(5))));
-        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(15007))));
-        assert!(is_publisher_metadata_not_found(&Error::from_hresult(HRESULT::from_win32(15002))));
+        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(
+            HRESULT::from_win32(5)
+        )));
+        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(
+            HRESULT::from_win32(15007)
+        )));
+        assert!(is_publisher_metadata_not_found(&Error::from_hresult(
+            HRESULT::from_win32(15002)
+        )));
     }
     #[test]
     fn cached_publisher_metadata_failure_is_reused_without_rpc() {
-        let mut cache = HashMap::from([(
-            "provider".to_string(),
-            PublisherMetadata::Failed(5),
-        )]);
+        let mut cache = HashMap::from([("provider".to_string(), PublisherMetadata::Failed(5))]);
         let error = format_event_message(EVT_HANDLE(0), "provider", None, &mut cache)
             .expect_err("cached metadata failure must remain an error");
         assert_eq!(win32_code(&error), 5);
@@ -1613,9 +1642,11 @@ mod tests {
         assert_eq!(normalize_remote_machine_name(r"\\host").unwrap(), "host");
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn polling_identity_keeps_lossless_large_id_text() {
-        let mut first = identity_test_record(u64::MAX, Some(u64::MAX.to_string()), "<Event>A</Event>");
+        let mut first =
+            identity_test_record(u64::MAX, Some(u64::MAX.to_string()), "<Event>A</Event>");
         let mut second = first.clone();
         second.event_record_id_text = Some("18446744073709551616".to_string());
         assert_ne!(
@@ -1630,6 +1661,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn polling_identity_keeps_distinct_missing_id_xml_records() {
         let first = identity_test_record(0, Some("0".to_string()), "<Event>A</Event>");
@@ -1640,6 +1672,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     fn identity_test_record(
         event_record_id: u64,
         event_record_id_text: Option<String>,
@@ -1660,6 +1693,7 @@ mod tests {
             event_data: Vec::new(),
             raw_xml: raw_xml.to_string(),
             source_label: String::new(),
+            origin_kind: super::super::models::EvtxOriginKind::Event,
             task: None,
             opcode: None,
             process_id: None,
@@ -1836,7 +1870,10 @@ mod live_service_tests {
     }
     #[test]
     fn remote_login_uses_the_current_windows_credentials() {
-        let mut server: Vec<u16> = "lab-host".encode_utf16().chain(std::iter::once(0)).collect();
+        let mut server: Vec<u16> = "lab-host"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let login = remote_login(&mut server);
 
         assert!(!login.Server.0.is_null());
@@ -1873,21 +1910,29 @@ mod live_service_tests {
             }),
             "remote channels must retain normalized machine provenance"
         );
+        let mut received = Vec::new();
         let scan = query_remote_channel_streamed(
             &machine,
             CHANNEL,
             &EventQueryFilter::default(),
             &no_maps(),
             Some(10),
-            |_, _| Ok(()),
-            |_| Ok(()),
+            |_, _| {},
+            |batch| {
+                received.append(batch);
+                Ok(())
+            },
         )
         .expect("remote query succeeds");
-        if scan.records.is_empty() {
+        let records = if received.is_empty() {
+            scan.records
+        } else {
+            received
+        };
+        if records.is_empty() {
             assert_eq!(scan.delivered, 0, "empty remote channels must be explicit");
         } else {
-            assert!(scan
-                .records
+            assert!(records
                 .iter()
                 .all(|record| record.source_label == format!("Remote: {normalized}")));
         }
@@ -1913,25 +1958,33 @@ mod live_service_tests {
             .expect("set CMTRACE_REMOTE_MACHINE for the Windows cleanup scenario");
         let normalized = normalize_remote_machine_name(&machine).expect("valid remote machine");
         for _attempt in 0..3 {
+            let mut received = Vec::new();
             let scan = query_remote_channel_streamed(
                 &machine,
                 CHANNEL,
                 &EventQueryFilter::default(),
                 &no_maps(),
                 Some(10),
-                |_, _| Ok(()),
-                |_| Ok(()),
+                |_, _| {},
+                |batch| {
+                    received.append(batch);
+                    Ok(())
+                },
             )
             .expect("remote query succeeds");
+            let records = if received.is_empty() {
+                scan.records
+            } else {
+                received
+            };
             assert!(
-                scan.delivered >= scan.records.len(),
+                scan.delivered >= records.len(),
                 "streamed delivery count must include every returned record"
             );
-            if scan.records.is_empty() {
+            if records.is_empty() {
                 assert_eq!(scan.delivered, 0);
             } else {
-                assert!(scan
-                    .records
+                assert!(records
                     .iter()
                     .all(|record| record.source_label == format!("Remote: {normalized}")));
             }

@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -26,6 +27,9 @@ const MAX_SOURCE_INPUTS: usize = 256;
 const MAX_SOURCE_MANIFEST_DEPTH: usize = 32;
 const MAX_SOURCE_RECORDS: usize = 1_000_000;
 const MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+/// EVTX uses a fixed 4096-byte file header followed by 64 KiB chunks.
+const EVTX_FILE_HEADER_BYTES: usize = 4 * 1024;
+const EVTX_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Keeps the normalized manifest member path as the record's source identity.
 ///
@@ -96,9 +100,7 @@ fn is_wildcard_source(source: &str) -> bool {
     if is_vss_path(source) {
         return false;
     }
-    let pattern = source
-        .strip_prefix("\\\\?\\")
-        .unwrap_or(source);
+    let pattern = source.strip_prefix("\\\\?\\").unwrap_or(source);
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
@@ -128,6 +130,7 @@ pub fn build_source_manifest_for_selections(
         coverage: Vec::new(),
     };
     let mut inspected_work = 0usize;
+    let mut source_indices = HashMap::<String, usize>::new();
     'selections: for (index, selection) in sources.iter().enumerate() {
         if index >= MAX_SOURCE_INPUTS {
             manifest.coverage.push(SourceCoverage::LimitReached {
@@ -138,14 +141,18 @@ pub fn build_source_manifest_for_selections(
         }
         let source = &selection.path;
         let requested_kind = selection.kind;
-        let effective_kind = classify_source_kind(source, requested_kind);
-        if let Some(gap) = gated_source(source, effective_kind) {
+        let source_metadata = fs::symlink_metadata(source).ok();
+        let is_directory = source_metadata.as_ref().map(|metadata| metadata.is_dir());
+        let effective_kind =
+            classify_source_kind_with_directory(source, requested_kind, is_directory);
+        if let Some(gap) = gated_source(source, effective_kind, is_directory) {
             manifest.coverage.push(gap);
             continue;
         }
         let is_wildcard = is_wildcard_source(source)
-            && !fs::symlink_metadata(source)
-                .is_ok_and(|metadata| metadata.is_file() || metadata.is_dir());
+            && !source_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.is_file() || metadata.is_dir());
         let coverage_start = manifest.coverage.len();
         let paths = if is_wildcard {
             expand_wildcard(source, &mut manifest.coverage, &mut inspected_work)
@@ -153,7 +160,8 @@ pub fn build_source_manifest_for_selections(
             vec![PathBuf::from(source)]
         };
 
-        if is_wildcard && paths.is_empty()
+        if is_wildcard
+            && paths.is_empty()
             && !manifest.coverage[coverage_start..].iter().any(|coverage| {
                 matches!(
                     coverage,
@@ -175,7 +183,10 @@ pub fn build_source_manifest_for_selections(
             expand_path(
                 &path,
                 if is_wildcard
-                    && !matches!(effective_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
+                    && !matches!(
+                        effective_kind,
+                        EventLogSourceKind::Archive | EventLogSourceKind::Vss
+                    )
                 {
                     EventLogSourceKind::Wildcard
                 } else {
@@ -183,6 +194,7 @@ pub fn build_source_manifest_for_selections(
                 },
                 0,
                 &mut inspected_work,
+                &mut source_indices,
                 &mut manifest,
             )?;
         }
@@ -225,7 +237,10 @@ pub fn build_source_manifest_for_selections(
 fn deduplicate_coverage(coverage: &mut Vec<SourceCoverage>) {
     let mut seen = std::collections::HashSet::new();
     coverage.retain(|item| {
-        let key = (coverage_kind(item), coverage_identity_path(coverage_path(item)));
+        let key = (
+            coverage_kind(item),
+            coverage_identity_path(coverage_path(item)),
+        );
         seen.insert(key)
     });
 }
@@ -310,11 +325,7 @@ fn expand_wildcard(
     let mut root = PathBuf::new();
     for component in Path::new(&normalized).components() {
         let value = component.as_os_str().to_string_lossy();
-        if value == "**"
-            || value.contains('*')
-            || value.contains('?')
-            || value.contains('[')
-        {
+        if value == "**" || value.contains('*') || value.contains('?') || value.contains('[') {
             break;
         }
         root.push(component.as_os_str());
@@ -530,13 +541,8 @@ fn read_wildcard_children(
         }
     };
     let mut entries = Vec::new();
-    let mut entry_limit_reached = false;
     let mut work_exhausted = false;
     for entry in read_dir {
-        if entries.len() >= MAX_SOURCE_MANIFEST_ENTRIES {
-            entry_limit_reached = true;
-            break;
-        }
         *inspected_work = inspected_work.saturating_add(1);
         if *inspected_work > MAX_SOURCE_MANIFEST_WORK {
             work_exhausted = true;
@@ -562,6 +568,15 @@ fn read_wildcard_children(
             .then_with(|| left_name.cmp(&right_name))
             .then_with(|| left.cmp(right))
     });
+    let entry_limit_reached = entries.len() > MAX_SOURCE_MANIFEST_ENTRIES;
+    if work_exhausted {
+        // A partial directory prefix is not deterministic across filesystem enumeration orders.
+        // Fail closed with the explicit work-limit coverage instead of returning an arbitrary
+        // subset of children.
+        entries.clear();
+    } else if entry_limit_reached {
+        entries.truncate(MAX_SOURCE_MANIFEST_ENTRIES);
+    }
     if entry_limit_reached {
         coverage.push(SourceCoverage::LimitReached {
             path: directory.to_string_lossy().to_string(),
@@ -634,6 +649,7 @@ fn expand_path(
     requested_kind: EventLogSourceKind,
     depth: usize,
     inspected_work: &mut usize,
+    source_indices: &mut HashMap<String, usize>,
     manifest: &mut EventLogSourceManifest,
 ) -> Result<(), String> {
     *inspected_work = inspected_work.saturating_add(1);
@@ -651,39 +667,45 @@ fn expand_path(
     }
 
     let path_string = path.to_string_lossy().to_string();
-    let kind = classify_source_kind(&path_string, requested_kind);
-    // Archived and VSS paths are privileged source types even when wildcard expansion found the
-    // concrete path only after the initial selection-kind check.
-    if let Some(gap) = gated_source(&path_string, kind) {
-        manifest.coverage.push(gap);
-        return Ok(());
-    }
+    let initial_kind = classify_source_kind_with_directory(&path_string, requested_kind, None);
 
-    match first_reparse_component(path) {
-        Ok(Some(component)) => {
-            manifest.coverage.push(SourceCoverage::Unsupported {
-                path: path_string.clone(),
-                reason: format!(
-                    "symbolic link or reparse-point ancestor is not followed: {}",
-                    component.to_string_lossy()
-                ),
-            });
-            return Ok(());
+    // GLOBALROOT VSS paths are device handles, not filesystem trees. Windows metadata APIs may
+    // reject their synthetic ancestors, so do not walk those ancestors as a reparse check.
+    if !matches!(initial_kind, EventLogSourceKind::Vss) {
+        match first_reparse_component(path) {
+            Ok(Some(component)) => {
+                manifest.coverage.push(SourceCoverage::Unsupported {
+                    path: path_string.clone(),
+                    reason: format!(
+                        "symbolic link or reparse-point ancestor is not followed: {}",
+                        component.to_string_lossy()
+                    ),
+                });
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                manifest.coverage.push(SourceCoverage::AccessDenied {
+                    path: path_string.clone(),
+                    reason: "source ancestor metadata access was denied".to_string(),
+                });
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect source ancestors {path_string}: {error}"
+                ));
+            }
         }
-        Ok(None) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            manifest.coverage.push(SourceCoverage::AccessDenied {
-                path: path_string.clone(),
-                reason: "source ancestor metadata access was denied".to_string(),
-            });
-            return Ok(());
-        }
-        Err(error) => return Err(format!("cannot inspect source ancestors {path_string}: {error}")),
     }
 
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(gap) = gated_source(&path_string, initial_kind, None) {
+                manifest.coverage.push(gap);
+                return Ok(());
+            }
             manifest.coverage.push(SourceCoverage::Missing {
                 path: path_string,
                 reason: "source path does not exist".to_string(),
@@ -691,14 +713,45 @@ fn expand_path(
             return Ok(());
         }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            if let Some(gap) = gated_source(&path_string, initial_kind, None) {
+                manifest.coverage.push(gap);
+                return Ok(());
+            }
             manifest.coverage.push(SourceCoverage::AccessDenied {
                 path: path_string,
                 reason: "source metadata access was denied".to_string(),
             });
             return Ok(());
         }
-        Err(error) => return Err(format!("cannot inspect source {path_string}: {error}")),
+        Err(error) => {
+            if let Some(gap) = gated_source(&path_string, initial_kind, None) {
+                manifest.coverage.push(gap);
+                return Ok(());
+            }
+            return Err(format!("cannot inspect source {path_string}: {error}"));
+        }
     };
+
+    let kind =
+        classify_source_kind_with_directory(&path_string, requested_kind, Some(metadata.is_dir()));
+    if matches!(requested_kind, EventLogSourceKind::Archive)
+        && !matches!(kind, EventLogSourceKind::Vss)
+        && is_evtx_candidate(path)
+        && !is_archive_candidate(path)
+        && !is_archived_event_log_filename(&path_string)
+    {
+        manifest.coverage.push(SourceCoverage::Unsupported {
+            path: path_string.clone(),
+            reason: "archive sources must name an archive container, not an EVTX file".to_string(),
+        });
+        return Ok(());
+    }
+    // Archived and VSS paths are privileged source types even when wildcard expansion found the
+    // concrete path only after the initial selection-kind check.
+    if let Some(gap) = gated_source(&path_string, kind, Some(metadata.is_dir())) {
+        manifest.coverage.push(gap);
+        return Ok(());
+    }
 
     if is_reparse_or_symlink(&metadata) {
         manifest.coverage.push(SourceCoverage::Unsupported {
@@ -810,27 +863,28 @@ fn expand_path(
                 break;
             }
             let entry_path = Path::new(&entry.path);
-            let entry_kind =
-                if matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
-                {
-                    requested_kind
-                } else if is_archive_candidate(entry_path) {
-                    EventLogSourceKind::Archive
-                } else {
-                    EventLogSourceKind::Folder
-                };
+            let entry_kind = if matches!(requested_kind, EventLogSourceKind::Vss) {
+                EventLogSourceKind::Vss
+            } else if !entry.is_dir && is_archive_candidate(entry_path) {
+                EventLogSourceKind::Archive
+            } else if entry.is_dir {
+                EventLogSourceKind::Folder
+            } else {
+                EventLogSourceKind::File
+            };
             expand_path(
                 entry_path,
                 entry_kind,
                 depth + 1,
                 inspected_work,
+                source_indices,
                 manifest,
             )?;
         }
         return Ok(());
     }
 
-    if let Some(gap) = gated_source(&path_string, kind) {
+    if let Some(gap) = gated_source(&path_string, kind, Some(false)) {
         manifest.coverage.push(gap);
         return Ok(());
     }
@@ -847,24 +901,22 @@ fn expand_path(
 
     let normalized_path = normalize_source_path(path);
     let source_id = source_identity(&normalized_path);
-    if let Some(existing) = manifest
-        .entries
-        .iter_mut()
-        .find(|entry| entry.source_id == source_id)
-    {
+    if let Some(existing_index) = source_indices.get(&source_id).copied() {
+        let existing = &mut manifest.entries[existing_index];
         if source_kind_priority(kind) > source_kind_priority(existing.kind) {
             existing.kind = kind;
         }
         return Ok(());
     }
+    let entry_index = manifest.entries.len();
     manifest.entries.push(EventLogSource {
-        source_id,
+        source_id: source_id.clone(),
         path: normalized_path,
         kind,
     });
+    source_indices.insert(source_id, entry_index);
     Ok(())
 }
-
 
 fn record_manifest_limit(manifest: &mut EventLogSourceManifest, path: &Path, reason: &str) {
     if manifest
@@ -884,8 +936,7 @@ fn first_reparse_component(path: &Path) -> std::io::Result<Option<PathBuf>> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata)
-                if is_reparse_or_symlink(&metadata)
-                    && !is_platform_temp_alias(ancestor) =>
+                if is_reparse_or_symlink(&metadata) && !is_platform_temp_alias(ancestor) =>
             {
                 return Ok(Some(ancestor.to_path_buf()));
             }
@@ -922,20 +973,40 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
         return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
     }
+    #[cfg(not(target_os = "windows"))]
     false
 }
-
+#[cfg(test)]
 fn classify_source_kind(path: &str, requested_kind: EventLogSourceKind) -> EventLogSourceKind {
+    let is_directory = if is_archive_like_source(path, requested_kind) {
+        fs::metadata(path).ok().map(|metadata| metadata.is_dir())
+    } else {
+        None
+    };
+    classify_source_kind_with_directory(path, requested_kind, is_directory)
+}
+
+fn classify_source_kind_with_directory(
+    path: &str,
+    requested_kind: EventLogSourceKind,
+    is_directory: Option<bool>,
+) -> EventLogSourceKind {
     if is_vss_path(path) {
-        EventLogSourceKind::Vss
-    } else if !matches!(requested_kind, EventLogSourceKind::Archive | EventLogSourceKind::Vss)
-        && !fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
-        && is_archive_candidate(Path::new(path))
-    {
+        return EventLogSourceKind::Vss;
+    }
+    if is_archive_like_source(path, requested_kind) && is_directory != Some(true) {
         EventLogSourceKind::Archive
     } else {
         requested_kind
     }
+}
+
+fn is_archive_like_source(path: &str, requested_kind: EventLogSourceKind) -> bool {
+    is_archived_event_log_filename(path)
+        || (!matches!(
+            requested_kind,
+            EventLogSourceKind::Archive | EventLogSourceKind::Vss
+        ) && is_archive_candidate(Path::new(path)))
 }
 
 fn source_kind_priority(kind: EventLogSourceKind) -> u8 {
@@ -948,25 +1019,49 @@ fn source_kind_priority(kind: EventLogSourceKind) -> u8 {
     }
 }
 
-fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> {
-    if !matches!(kind, EventLogSourceKind::Vss) {
+fn is_archive_container_source(source: &EventLogSource, is_directory: bool) -> bool {
+    matches!(source.kind, EventLogSourceKind::Archive)
+        && !is_directory
+        && !is_archived_event_log_filename(&source.path)
+}
+
+fn gated_source(
+    path: &str,
+    kind: EventLogSourceKind,
+    is_directory: Option<bool>,
+) -> Option<SourceCoverage> {
+    let requires_windows = matches!(kind, EventLogSourceKind::Vss)
+        || (matches!(kind, EventLogSourceKind::Archive)
+            && is_archived_event_log_filename(path)
+            && is_directory != Some(true));
+    if !requires_windows {
         return None;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        let reason = if matches!(kind, EventLogSourceKind::Archive) {
+            "archived event-log sources are only available on Windows"
+        } else {
+            "VSS event-log sources are only available on Windows"
+        };
         Some(SourceCoverage::Unsupported {
             path: path.to_string(),
-            reason: "VSS event-log sources are only available on Windows".to_string(),
+            reason: reason.to_string(),
         })
     }
 
     #[cfg(target_os = "windows")]
     {
         if !crate::elevation::current_elevation_state().is_elevated {
+            let reason = if matches!(kind, EventLogSourceKind::Archive) {
+                "archived event-log sources require an elevated process"
+            } else {
+                "VSS event-log sources require an elevated process"
+            };
             Some(SourceCoverage::AccessDenied {
                 path: path.to_string(),
-                reason: "VSS event-log sources require an elevated process".to_string(),
+                reason: reason.to_string(),
             })
         } else {
             None
@@ -976,8 +1071,7 @@ fn gated_source(path: &str, kind: EventLogSourceKind) -> Option<SourceCoverage> 
 
 fn is_vss_path(path: &str) -> bool {
     let normalized = path.replace('/', "\\").to_lowercase();
-    let Some(rest) = normalized
-        .strip_prefix("\\\\?\\globalroot\\device\\harddiskvolumeshadowcopy")
+    let Some(rest) = normalized.strip_prefix("\\\\?\\globalroot\\device\\harddiskvolumeshadowcopy")
     else {
         return false;
     };
@@ -992,14 +1086,28 @@ fn is_evtx_candidate(path: &Path) -> bool {
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    lower.ends_with(".evtx")
-        || lower.contains(".evtx.")
-        || lower.ends_with(".evtx~")
+    lower.ends_with(".evtx") || lower.contains(".evtx.") || lower.ends_with(".evtx~")
 }
+fn is_archived_event_log_filename(path: &str) -> bool {
+    let Some(filename) = path.rsplit(['\\', '/']).next() else {
+        return false;
+    };
+    let lower = filename.to_ascii_lowercase();
+    lower.starts_with("archive-")
+        && !lower.ends_with(".zip")
+        && (lower.ends_with(".evtx") || lower.contains(".evtx.") || lower.ends_with(".evtx~"))
+}
+
 fn is_archive_candidate(path: &Path) -> bool {
     path.file_name()
-        .map(|name| name.to_string_lossy().eq_ignore_ascii_case("MDMDiagReport.zip")
-            || name.to_string_lossy().to_ascii_lowercase().ends_with(".zip"))
+        .map(|name| {
+            name.to_string_lossy()
+                .eq_ignore_ascii_case("MDMDiagReport.zip")
+                || name
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .ends_with(".zip")
+        })
         .unwrap_or(false)
 }
 fn normalize_source_path(path: &Path) -> String {
@@ -1019,7 +1127,9 @@ fn normalize_source_path(path: &Path) -> String {
     }
     #[cfg(not(windows))]
     if raw.contains('\\')
-        && raw.split('\\').any(|component| component == "." || component == "..")
+        && raw
+            .split('\\')
+            .any(|component| component == "." || component == "..")
     {
         let slash_normalized = raw.replace('\\', "/");
         return normalize_source_path(Path::new(&slash_normalized));
@@ -1080,10 +1190,7 @@ fn normalize_windows_path(raw: &str) -> String {
             })
     {
         3
-    } else if prefix == "\\\\?\\"
-        && rest.len() >= 2
-        && rest.as_bytes()[1] == b':'
-    {
+    } else if prefix == "\\\\?\\" && rest.len() >= 2 && rest.as_bytes()[1] == b':' {
         1
     } else {
         0
@@ -1160,36 +1267,57 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
             );
             break;
         }
-        let kind = classify_source_kind(&source.path, source.kind);
-        if let Some(gap) = gated_source(&source.path, kind) {
+        let source_metadata = if is_vss_path(&source.path) {
+            None
+        } else {
+            fs::symlink_metadata(path).ok()
+        };
+        let is_directory = source_metadata.as_ref().map(|metadata| metadata.is_dir());
+        let kind = classify_source_kind_with_directory(&source.path, source.kind, is_directory);
+        if matches!(source.kind, EventLogSourceKind::Archive)
+            && !matches!(kind, EventLogSourceKind::Vss)
+            && is_evtx_candidate(path)
+            && !is_archive_candidate(path)
+            && !is_archived_event_log_filename(&source.path)
+        {
+            validated.coverage.push(SourceCoverage::Unsupported {
+                path: source.path.clone(),
+                reason: "archive sources must name an archive container, not an EVTX file"
+                    .to_string(),
+            });
+            continue;
+        }
+        if let Some(gap) = gated_source(&source.path, kind, is_directory) {
             validated.coverage.push(gap);
             continue;
         }
-        match first_reparse_component(path) {
-            Ok(Some(component)) => {
-                validated.coverage.push(SourceCoverage::Unsupported {
-                    path: source.path.clone(),
-                    reason: format!(
-                        "symbolic link or reparse-point ancestor is not followed: {}",
-                        component.to_string_lossy()
-                    ),
-                });
-                continue;
-            }
-            Ok(None) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                validated.coverage.push(SourceCoverage::AccessDenied {
-                    path: source.path.clone(),
-                    reason: "source ancestor metadata access was denied".to_string(),
-                });
-                continue;
-            }
-            Err(_) => {
-                validated.coverage.push(SourceCoverage::Missing {
-                    path: source.path.clone(),
-                    reason: "source ancestor metadata could not be read".to_string(),
-                });
-                continue;
+        if !matches!(kind, EventLogSourceKind::Vss) {
+            match first_reparse_component(path) {
+                Ok(Some(component)) => {
+                    validated.coverage.push(SourceCoverage::Unsupported {
+                        path: source.path.clone(),
+                        reason: format!(
+                            "symbolic link or reparse-point ancestor is not followed: {}",
+                            component.to_string_lossy()
+                        ),
+                    });
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    validated.coverage.push(SourceCoverage::AccessDenied {
+                        path: source.path.clone(),
+                        reason: "source ancestor metadata access was denied".to_string(),
+                    });
+                    continue;
+                }
+                Err(_) => {
+                    validated.coverage.push(SourceCoverage::Missing {
+                        path: source.path.clone(),
+                        reason: "source ancestor metadata could not be read".to_string(),
+                    });
+                    continue;
+                }
             }
         }
         if !(is_evtx_candidate(path)
@@ -1204,7 +1332,11 @@ fn validate_source_manifest(input: &EventLogSourceManifest) -> EventLogSourceMan
         }
         let normalized_path = normalize_source_path(path);
         let source_id = source_identity(&normalized_path);
-        if validated.entries.iter().any(|entry| entry.source_id == source_id) {
+        if validated
+            .entries
+            .iter()
+            .any(|entry| entry.source_id == source_id)
+        {
             continue;
         }
         validated.entries.push(EventLogSource {
@@ -1256,12 +1388,14 @@ fn coverage_gap_from_source_coverage(coverage: &SourceCoverage) -> EvtxCoverageG
 fn coverage_gap_from_evtx_error(source: &str, error: &evtx::err::EvtxError) -> EvtxCoverageGap {
     match error {
         evtx::err::EvtxError::FailedToParseChunk { chunk_id, .. } => {
-            let mut gap = EvtxCoverageGap::new(source, EvtxCoverageGapKind::Chunk, error.to_string());
+            let mut gap =
+                EvtxCoverageGap::new(source, EvtxCoverageGapKind::Chunk, error.to_string());
             gap.chunk_id = Some(*chunk_id);
             gap
         }
         evtx::err::EvtxError::FailedToParseRecord { record_id, .. } => {
-            let mut gap = EvtxCoverageGap::new(source, EvtxCoverageGapKind::Record, error.to_string());
+            let mut gap =
+                EvtxCoverageGap::new(source, EvtxCoverageGapKind::Record, error.to_string());
             gap.event_record_id = Some(*record_id);
             gap
         }
@@ -1322,7 +1456,6 @@ fn aggregate_budget_gap_reason(total_source_records: usize, total_source_bytes: 
     }
 }
 
-
 fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
     let location = match (gap.chunk_id, gap.event_record_id) {
         (Some(chunk_id), _) => format!(" chunk {chunk_id}"),
@@ -1333,8 +1466,10 @@ fn format_coverage_gap(gap: &EvtxCoverageGap) -> String {
 }
 
 fn source_prefixed_message(source_path: &str, message: String) -> String {
-    let prefix = format!("{source_path}:");
-    if message.starts_with(&prefix) {
+    let already_prefixed = message.strip_prefix(source_path).is_some_and(|suffix| {
+        suffix.is_empty() || matches!(suffix.chars().next(), Some(':' | ' '))
+    });
+    if already_prefixed {
         message
     } else {
         format!("{source_path}: {message}")
@@ -1352,10 +1487,7 @@ fn bound_coverage_gaps(gaps: &mut Vec<EvtxCoverageGap>, source: &str) {
         format!("{omitted} additional recovery gaps were coalesced"),
     ));
 }
-fn bound_result_coverage(
-    gaps: &mut Vec<EvtxCoverageGap>,
-    messages: &mut Vec<String>,
-) {
+fn bound_result_coverage(gaps: &mut Vec<EvtxCoverageGap>, messages: &mut Vec<String>) {
     if gaps.len() > MAX_COVERAGE_GAPS_RESULT {
         let omitted = gaps.len() - (MAX_COVERAGE_GAPS_RESULT - 1);
         let omitted_sources: BTreeSet<&str> = gaps[MAX_COVERAGE_GAPS_RESULT - 1..]
@@ -1388,7 +1520,6 @@ fn bound_result_coverage(
         ));
     }
 }
-
 
 /// Parse source selections after bounded expansion into a deterministic manifest.
 pub fn parse_evtx_files(
@@ -1423,7 +1554,13 @@ pub fn parse_evtx_manifest(
     for (source_index, source) in manifest.entries.iter().enumerate() {
         let mut record_budget_gap_added = false;
         let path = Path::new(&source.path);
-        let source_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+        let source_metadata = fs::metadata(path).ok();
+        let source_bytes = source_metadata
+            .as_ref()
+            .map_or(0, |metadata| metadata.len());
+        let is_directory = source_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.is_dir());
         if total_source_bytes.saturating_add(source_bytes) > MAX_SOURCE_BYTES {
             parse_errors = parse_errors.saturating_add(1);
             error_messages.push(format!(
@@ -1442,7 +1579,7 @@ pub fn parse_evtx_manifest(
             break;
         }
         total_source_bytes = total_source_bytes.saturating_add(source_bytes);
-        if matches!(source.kind, EventLogSourceKind::Archive) {
+        if is_archive_container_source(source, is_directory) {
             match super::archive::parse_archive(
                 path,
                 maps,
@@ -1459,12 +1596,7 @@ pub fn parse_evtx_manifest(
                             archive.metadata.len().saturating_sub(remaining_metadata),
                         );
                     }
-                    archive_members.extend(
-                        archive
-                            .metadata
-                            .into_iter()
-                            .take(remaining_metadata),
-                    );
+                    archive_members.extend(archive.metadata.into_iter().take(remaining_metadata));
                     error_messages.extend(archive.messages);
                     for member in archive.members {
                         append_parsed_file(
@@ -1611,16 +1743,41 @@ fn append_parsed_file(
         gap.source = source_path.to_string();
         gap
     }));
+    let legacy_message_start = error_messages.len();
     error_messages.extend(
         file.messages
             .into_iter()
             .map(|message| source_prefixed_message(source_path, message)),
     );
-    error_messages.extend(
-        file.coverage_gaps
-            .iter()
-            .map(format_coverage_gap),
-    );
+    let legacy_message_end = error_messages.len();
+    let mut matched_legacy_messages = vec![false; legacy_message_end - legacy_message_start];
+    let mut legacy_message_indices = HashMap::<String, Vec<usize>>::new();
+    for (index, message) in error_messages[legacy_message_start..legacy_message_end]
+        .iter()
+        .enumerate()
+    {
+        legacy_message_indices
+            .entry(message.clone())
+            .or_default()
+            .push(index);
+    }
+    for gap in &file.coverage_gaps {
+        let message = format_coverage_gap(gap);
+        let matched = legacy_message_indices
+            .get_mut(&message)
+            .and_then(|indices| {
+                while let Some(index) = indices.pop() {
+                    if !matched_legacy_messages[index] {
+                        matched_legacy_messages[index] = true;
+                        return Some(index);
+                    }
+                }
+                None
+            });
+        if matched.is_none() {
+            error_messages.push(message);
+        }
+    }
 
     let mut channel_counts = std::collections::HashMap::<String, u64>::new();
     for record in &records {
@@ -1635,15 +1792,17 @@ fn append_parsed_file(
             },
         });
     } else {
-        channels.extend(channel_counts.into_iter().map(|(name, event_count)| {
-            EvtxChannelInfo {
-                name,
-                event_count,
-                source_type: ChannelSourceType::File {
-                    path: source_path.to_string(),
-                },
-            }
-        }));
+        channels.extend(
+            channel_counts
+                .into_iter()
+                .map(|(name, event_count)| EvtxChannelInfo {
+                    name,
+                    event_count,
+                    source_type: ChannelSourceType::File {
+                        path: source_path.to_string(),
+                    },
+                }),
+        );
     }
     all_records.extend(records);
 }
@@ -1658,8 +1817,195 @@ pub(crate) struct ParsedFile {
     pub(crate) messages: Vec<String>,
     pub(crate) coverage_gaps: Vec<EvtxCoverageGap>,
 }
+/// Finds zeroed chunks between non-empty chunks and a partial trailing chunk.
+///
+/// `evtx` intentionally skips zero-filled chunks while looking for the next usable chunk, and its
+/// calculated chunk count ignores a partial final chunk. Those are useful dirty-file recovery
+/// behaviours, but without this side-channel they look like a clean parse. Keep these diagnostics
+/// separate from parser errors so the readable records still flow through the normal iterator.
+fn detect_missing_chunk_gaps(bytes: &[u8], source: &str) -> Vec<EvtxCoverageGap> {
+    let payload = bytes.len().saturating_sub(EVTX_FILE_HEADER_BYTES);
+    let complete_chunks = payload / EVTX_CHUNK_BYTES;
+    let partial_bytes = payload % EVTX_CHUNK_BYTES;
+    let mut gaps = Vec::new();
 
+    if partial_bytes > 0 {
+        let mut gap = EvtxCoverageGap::new(
+            source,
+            EvtxCoverageGapKind::Chunk,
+            format!(
+                "chunk {complete_chunks} is truncated at the end of the source \
+                 ({partial_bytes} of {EVTX_CHUNK_BYTES} bytes present)"
+            ),
+        );
+        gap.chunk_id = Some(complete_chunks as u64);
+        gaps.push(gap);
+    }
 
+    let mut last_non_empty = None;
+    let mut empty_chunks = Vec::new();
+    for chunk_id in 0..complete_chunks {
+        let start = EVTX_FILE_HEADER_BYTES + chunk_id * EVTX_CHUNK_BYTES;
+        let end = start + EVTX_CHUNK_BYTES;
+        if bytes[start..end].iter().any(|byte| *byte != 0) {
+            last_non_empty = Some(chunk_id);
+        } else {
+            empty_chunks.push(chunk_id);
+        }
+    }
+    append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
+    gaps
+}
+
+fn append_missing_chunk_gaps(
+    gaps: &mut Vec<EvtxCoverageGap>,
+    source: &str,
+    empty_chunks: impl IntoIterator<Item = usize>,
+    last_non_empty: Option<usize>,
+) {
+    let Some(last_non_empty) = last_non_empty else {
+        return;
+    };
+    let mut omitted = 0usize;
+    for chunk_id in empty_chunks
+        .into_iter()
+        .take_while(|chunk_id| *chunk_id < last_non_empty)
+    {
+        if gaps.len() < MAX_COVERAGE_GAPS_PER_FILE.saturating_sub(1) {
+            let mut gap = EvtxCoverageGap::new(
+                source,
+                EvtxCoverageGapKind::Chunk,
+                format!(
+                    "chunk {chunk_id} is missing or zero-filled; readable records after \
+                     this region were retained"
+                ),
+            );
+            gap.chunk_id = Some(chunk_id as u64);
+            gaps.push(gap);
+        } else {
+            omitted = omitted.saturating_add(1);
+        }
+    }
+    if omitted > 0 {
+        gaps.push(EvtxCoverageGap::new(
+            source,
+            EvtxCoverageGapKind::Limit,
+            format!("{omitted} additional missing chunks were coalesced"),
+        ));
+    }
+}
+
+fn detect_missing_chunk_gaps_from_file(
+    path: &Path,
+    source: &str,
+) -> Result<Vec<EvtxCoverageGap>, Vec<EvtxCoverageGap>> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        vec![EvtxCoverageGap::new(
+            source,
+            EvtxCoverageGapKind::File,
+            format!("failed to inspect EVTX chunk boundaries: {error}"),
+        )]
+    })?;
+    let length = file
+        .metadata()
+        .map_err(|error| {
+            vec![EvtxCoverageGap::new(
+                source,
+                EvtxCoverageGapKind::File,
+                format!("failed to inspect EVTX chunk metadata: {error}"),
+            )]
+        })?
+        .len();
+    detect_missing_chunk_gaps_from_reader(&mut file, length, source)
+}
+
+fn detect_missing_chunk_gaps_from_reader<R: Read + Seek>(
+    file: &mut R,
+    length: u64,
+    source: &str,
+) -> Result<Vec<EvtxCoverageGap>, Vec<EvtxCoverageGap>> {
+    let payload = length.saturating_sub(EVTX_FILE_HEADER_BYTES as u64);
+    let complete_chunks = usize::try_from(payload / EVTX_CHUNK_BYTES as u64).unwrap_or(usize::MAX);
+    let partial_bytes = payload % EVTX_CHUNK_BYTES as u64;
+    let mut gaps = Vec::new();
+    if partial_bytes > 0 {
+        let mut gap = EvtxCoverageGap::new(
+            source,
+            EvtxCoverageGapKind::Chunk,
+            format!(
+                "chunk {complete_chunks} is truncated at the end of the source \
+                 ({} of {EVTX_CHUNK_BYTES} bytes present)",
+                partial_bytes
+            ),
+        );
+        gap.chunk_id = Some(complete_chunks as u64);
+        gaps.push(gap);
+    }
+    if complete_chunks == 0 {
+        return Ok(gaps);
+    }
+
+    let mut chunk = [0u8; EVTX_CHUNK_BYTES];
+    let mut last_non_empty = None;
+    let mut empty_chunks = Vec::new();
+    if let Err(error) = file.seek(SeekFrom::Start(EVTX_FILE_HEADER_BYTES as u64)) {
+        gaps.push(EvtxCoverageGap::new(
+            source,
+            EvtxCoverageGapKind::File,
+            format!("failed to seek EVTX chunks: {error}"),
+        ));
+        return Err(gaps);
+    }
+    for chunk_id in 0..complete_chunks {
+        if let Err(error) = file.read_exact(&mut chunk) {
+            append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
+            gaps.push(EvtxCoverageGap::new(
+                source,
+                EvtxCoverageGapKind::File,
+                format!("failed to inspect EVTX chunk {chunk_id}: {error}"),
+            ));
+            return Err(gaps);
+        }
+        if chunk.iter().any(|byte| *byte != 0) {
+            last_non_empty = Some(chunk_id);
+        } else {
+            empty_chunks.push(chunk_id);
+        }
+    }
+    append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
+    Ok(gaps)
+}
+
+fn attach_recovery_gaps(parsed: &mut ParsedFile, gaps: impl IntoIterator<Item = EvtxCoverageGap>) {
+    let gaps: Vec<_> = gaps.into_iter().collect();
+    if gaps.is_empty() {
+        return;
+    }
+    let source = gaps
+        .first()
+        .map(|gap| gap.source.clone())
+        .or_else(|| parsed.coverage_gaps.first().map(|gap| gap.source.clone()));
+    for gap in gaps {
+        parsed.messages.push(format_coverage_gap(&gap));
+        parsed.coverage_gaps.push(gap);
+    }
+    let before_bound = parsed.coverage_gaps.len();
+    if let Some(source) = source {
+        bound_coverage_gaps(&mut parsed.coverage_gaps, &source);
+    }
+    if parsed.coverage_gaps.len() < before_bound {
+        if let Some(limit) = parsed
+            .coverage_gaps
+            .last()
+            .filter(|gap| gap.kind == EvtxCoverageGapKind::Limit)
+        {
+            let message = format_coverage_gap(limit);
+            if !parsed.messages.iter().any(|existing| existing == &message) {
+                parsed.messages.push(message);
+            }
+        }
+    }
+}
 
 /// Parse a single .evtx file.
 ///
@@ -1680,7 +2026,17 @@ fn parse_single_file(
             format!("failed to open EVTX file: {error}"),
         )
     })?;
-    parse_evtx_parser(parser, &source_path, &source_label_for_path(path), maps, providers)
+    let mut parsed = parse_evtx_parser(
+        parser,
+        &source_path,
+        &source_label_for_path(path),
+        maps,
+        providers,
+    )?;
+    match detect_missing_chunk_gaps_from_file(path, &source_path) {
+        Ok(gaps) | Err(gaps) => attach_recovery_gaps(&mut parsed, gaps),
+    }
+    Ok(parsed)
 }
 
 pub(crate) fn parse_evtx_buffer(
@@ -1689,6 +2045,7 @@ pub(crate) fn parse_evtx_buffer(
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
 ) -> Result<ParsedFile, EvtxCoverageGap> {
+    let chunk_gaps = detect_missing_chunk_gaps(&bytes, source_label);
     let parser = EvtxParser::from_buffer(bytes).map_err(|error| {
         EvtxCoverageGap::new(
             source_label,
@@ -1696,7 +2053,9 @@ pub(crate) fn parse_evtx_buffer(
             format!("failed to parse EVTX member: {error}"),
         )
     })?;
-    parse_evtx_parser(parser, source_label, source_label, maps, providers)
+    let mut parsed = parse_evtx_parser(parser, source_label, source_label, maps, providers)?;
+    attach_recovery_gaps(&mut parsed, chunk_gaps);
+    Ok(parsed)
 }
 
 fn parse_evtx_parser<T>(
@@ -1709,7 +2068,6 @@ fn parse_evtx_parser<T>(
 where
     T: std::io::Read + std::io::Seek,
 {
-
     let source_path = source_path.to_string();
     let source_label = source_label.to_string();
 
@@ -1856,7 +2214,9 @@ where
                 let mut gap = EvtxCoverageGap::new(
                     &source_path,
                     EvtxCoverageGapKind::Provider,
-                    format!("provider metadata lookup failed for {provider} event {event_id}: {error}"),
+                    format!(
+                        "provider metadata lookup failed for {provider} event {event_id}: {error}"
+                    ),
                 );
                 gap.event_record_id = Some(event_record_id);
                 messages.push(format_coverage_gap(&gap));
@@ -1883,6 +2243,7 @@ where
             event_data: fields,
             raw_xml,
             source_label: source_label.clone(),
+            origin_kind: super::models::EvtxOriginKind::Event,
             task: system.task,
             opcode: system.opcode,
             process_id: system.process_id,
@@ -1890,7 +2251,10 @@ where
             user_sid: system.user_sid,
             keywords: system.keywords,
             activity_id: system.activity_id.clone().or(identity.activity_id),
-            related_activity_id: system.related_activity_id.clone().or(identity.related_activity_id),
+            related_activity_id: system
+                .related_activity_id
+                .clone()
+                .or(identity.related_activity_id),
             session_id: identity.session_id,
             device_id: identity.device_id,
             user_id: identity.user_id,
@@ -1905,9 +2269,7 @@ where
         let mut gap = EvtxCoverageGap::new(
             source_path.clone(),
             EvtxCoverageGapKind::Limit,
-            format!(
-                "reader stopped at {MAX_ENTRIES_PER_FILE} events; the source may contain more"
-            ),
+            format!("reader stopped at {MAX_ENTRIES_PER_FILE} events; the source may contain more"),
         );
         gap.event_record_id = records.last().map(|record| record.event_record_id);
         coverage_gaps.push(gap);
@@ -1978,8 +2340,34 @@ fn describe_event(
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
+
     use super::*;
 
+    struct FailAfterReads {
+        inner: Cursor<Vec<u8>>,
+        reads: usize,
+        fail_after: usize,
+    }
+
+    impl Read for FailAfterReads {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.reads >= self.fail_after {
+                return Err(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "injected read failure",
+                ));
+            }
+            self.reads += 1;
+            self.inner.read(buffer)
+        }
+    }
+
+    impl Seek for FailAfterReads {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
 
     #[cfg(not(windows))]
     #[test]
@@ -2042,6 +2430,48 @@ mod tests {
         assert_eq!(
             error_messages,
             vec!["bundle.zip::logs/app.log: text member is empty"]
+        );
+    }
+    #[test]
+    fn append_parsed_file_deduplicates_only_matching_coverage_messages() {
+        let source = "damaged.evtx";
+        let mut first_gap =
+            EvtxCoverageGap::new(source, EvtxCoverageGapKind::Chunk, "missing chunk");
+        first_gap.chunk_id = Some(1);
+        let mut second_gap =
+            EvtxCoverageGap::new(source, EvtxCoverageGapKind::Chunk, "missing chunk");
+        second_gap.chunk_id = Some(2);
+        let mut records = Vec::new();
+        let mut channels = Vec::new();
+        let mut parse_errors = 0;
+        let mut coverage_gaps = Vec::new();
+        let mut error_messages = Vec::new();
+        let mut total_source_records = 0;
+        let mut record_budget_gap_added = false;
+
+        append_parsed_file(
+            source,
+            ParsedFile {
+                records: Vec::new(),
+                parse_errors: 2,
+                messages: vec![format_coverage_gap(&first_gap)],
+                coverage_gaps: vec![first_gap.clone(), second_gap.clone()],
+            },
+            &mut records,
+            &mut channels,
+            &mut parse_errors,
+            &mut coverage_gaps,
+            &mut error_messages,
+            &mut total_source_records,
+            &mut record_budget_gap_added,
+        );
+
+        assert_eq!(
+            error_messages,
+            vec![
+                format_coverage_gap(&first_gap),
+                format_coverage_gap(&second_gap)
+            ]
         );
     }
     #[test]
@@ -2157,6 +2587,7 @@ mod tests {
             event_data: Vec::new(),
             raw_xml: String::new(),
             source_label: String::new(),
+            origin_kind: crate::event_log::models::EvtxOriginKind::Event,
             task: None,
             opcode: None,
             process_id: None,
@@ -2325,8 +2756,7 @@ mod tests {
         assert_eq!(result.total_records, 0);
         assert_eq!(result.parse_errors, 1);
         assert!(result.coverage_gaps.iter().any(|gap| {
-            gap.kind == EvtxCoverageGapKind::Unsupported
-                && gap.source == root.to_string_lossy()
+            gap.kind == EvtxCoverageGapKind::Unsupported && gap.source == root.to_string_lossy()
         }));
         std::fs::remove_file(root).expect("remove unsupported source");
     }
@@ -2378,7 +2808,9 @@ mod tests {
             gaps.last().map(|gap| gap.kind),
             Some(EvtxCoverageGapKind::Limit)
         );
-        assert!(gaps.last().is_some_and(|gap| gap.reason.contains("additional")));
+        assert!(gaps
+            .last()
+            .is_some_and(|gap| gap.reason.contains("additional")));
     }
 
     #[test]
@@ -2408,6 +2840,127 @@ mod tests {
         assert!(messages.last().is_some_and(|message| {
             message.contains("additional") && message.contains("/damaged/")
         }));
+    }
+    #[test]
+    fn a_later_chunk_read_failure_keeps_prior_recovery_gaps() {
+        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 3];
+        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES] = 1;
+        let claimed_length = (bytes.len() + 7) as u64;
+        let mut reader = FailAfterReads {
+            inner: Cursor::new(bytes),
+            reads: 0,
+            fail_after: 2,
+        };
+
+        let gaps = detect_missing_chunk_gaps_from_reader(&mut reader, claimed_length, "dirty.evtx")
+            .expect_err("the injected chunk read must be reported");
+
+        assert_eq!(gaps.len(), 3);
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gaps[0].chunk_id, Some(3));
+        assert!(gaps[0].reason.contains("truncated"));
+        assert_eq!(gaps[1].kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gaps[1].chunk_id, Some(0));
+        assert_eq!(gaps[2].kind, EvtxCoverageGapKind::File);
+        assert!(gaps[2].reason.contains("failed to inspect EVTX chunk 2"));
+    }
+
+    #[test]
+    fn truncated_tail_is_a_chunk_gap_with_source_identity() {
+        let bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + 7];
+
+        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].source, "dirty.evtx");
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gaps[0].chunk_id, Some(0));
+        assert!(gaps[0].reason.contains("truncated"));
+    }
+
+    #[test]
+    fn zero_filled_internal_chunk_is_reported_but_trailing_zeroes_are_not() {
+        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 3];
+        bytes[EVTX_FILE_HEADER_BYTES] = 1;
+        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 2] = 1;
+
+        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gaps[0].chunk_id, Some(1));
+        assert!(gaps[0].reason.contains("readable records after"));
+    }
+
+    #[test]
+    fn leading_zero_chunk_is_reported_before_a_readable_chunk() {
+        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 2];
+        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES] = 1;
+
+        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gaps[0].chunk_id, Some(0));
+        assert!(gaps[0].reason.contains("readable records after"));
+    }
+
+    #[test]
+    fn recovery_gap_attachment_preserves_records_after_a_damaged_region() {
+        let mut parsed = ParsedFile {
+            records: vec![budget_test_record()],
+            parse_errors: 0,
+            messages: Vec::new(),
+            coverage_gaps: Vec::new(),
+        };
+        let mut gap = EvtxCoverageGap::new(
+            "dirty.evtx",
+            EvtxCoverageGapKind::Record,
+            "record 2 could not be decoded",
+        );
+        gap.event_record_id = Some(2);
+
+        attach_recovery_gaps(&mut parsed, [gap]);
+
+        assert_eq!(parsed.records.len(), 1);
+        assert_eq!(
+            parsed.records[0].event_record_id,
+            budget_test_record().event_record_id
+        );
+        assert_eq!(parsed.parse_errors, 0);
+        assert_eq!(parsed.coverage_gaps.len(), 1);
+        assert_eq!(parsed.coverage_gaps[0].event_record_id, Some(2));
+        assert!(parsed.messages[0].contains("dirty.evtx"));
+    }
+
+    #[test]
+    fn recovery_gap_attachment_is_bounded_with_an_explicit_limit_gap() {
+        let mut parsed = ParsedFile {
+            records: Vec::new(),
+            parse_errors: 0,
+            messages: Vec::new(),
+            coverage_gaps: Vec::new(),
+        };
+        let gaps = (0..=MAX_COVERAGE_GAPS_PER_FILE)
+            .map(|chunk_id| {
+                let mut gap =
+                    EvtxCoverageGap::new("dirty.evtx", EvtxCoverageGapKind::Chunk, "missing");
+                gap.chunk_id = Some(chunk_id as u64);
+                gap
+            })
+            .collect::<Vec<_>>();
+
+        attach_recovery_gaps(&mut parsed, gaps);
+
+        assert_eq!(parsed.coverage_gaps.len(), MAX_COVERAGE_GAPS_PER_FILE);
+        assert_eq!(
+            parsed.coverage_gaps.last().map(|gap| gap.kind),
+            Some(EvtxCoverageGapKind::Limit)
+        );
+        assert!(parsed
+            .messages
+            .iter()
+            .any(|message| message.contains("additional recovery gaps")));
     }
 
     #[test]
@@ -2453,8 +3006,8 @@ mod tests {
         std::fs::write(nested.join("MDMDiagReport.zip"), b"archive")
             .expect("write nested diagnostic archive");
 
-        let manifest = build_source_manifest(&[root.to_string_lossy().to_string()])
-            .expect("build manifest");
+        let manifest =
+            build_source_manifest(&[root.to_string_lossy().to_string()]).expect("build manifest");
         let paths: Vec<String> = manifest
             .entries
             .iter()
@@ -2462,10 +3015,11 @@ mod tests {
             .collect();
         assert_eq!(paths.len(), 4);
         assert!(paths.windows(2).all(|pair| pair[0] <= pair[1]));
-        assert!(paths.iter().any(|path| path.ends_with("Application.evtx.1")));
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("Application.evtx.1")));
         assert!(manifest.entries.iter().any(|entry| {
-            entry.path.ends_with("MDMDiagReport.zip")
-                && entry.kind == EventLogSourceKind::Archive
+            entry.path.ends_with("MDMDiagReport.zip") && entry.kind == EventLogSourceKind::Archive
         }));
         assert!(manifest.coverage.is_empty());
 
@@ -2511,6 +3065,60 @@ mod tests {
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].path, normalize_source_path(&member));
         assert!(manifest.coverage.is_empty());
+        std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+
+    #[test]
+    fn zip_named_directories_recurse_as_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-zip-named-folder-{}",
+            std::process::id()
+        ));
+        let nested = root.join("captures.zip");
+        let member = nested.join("Application.evtx");
+        std::fs::create_dir_all(&nested).expect("create zip-named directory");
+        std::fs::write(&member, b"member").expect("write nested event log");
+
+        let manifest =
+            build_source_manifest(&[root.to_string_lossy().to_string()]).expect("build manifest");
+
+        assert!(manifest.entries.iter().any(|entry| {
+            entry.path == normalize_source_path(&member) && entry.kind == EventLogSourceKind::File
+        }));
+        assert!(manifest.coverage.is_empty());
+        std::fs::remove_dir_all(root).expect("remove source tree");
+    }
+    #[test]
+    fn archive_typed_and_wildcard_zip_directories_recurse_as_folders() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-zip-folder-{}",
+            std::process::id()
+        ));
+        let nested = root.join("captures.zip");
+        let member = nested.join("Application.evtx");
+        std::fs::create_dir_all(&nested).expect("create zip-named directory");
+        std::fs::write(&member, b"member").expect("write nested event log");
+
+        let explicit = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: nested.to_string_lossy().to_string(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build explicit archive manifest");
+        assert!(explicit.entries.iter().any(|entry| {
+            entry.path == normalize_source_path(&member) && entry.kind == EventLogSourceKind::File
+        }));
+        assert!(explicit.coverage.is_empty());
+
+        let wildcard = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: root.join("*.zip").to_string_lossy().to_string(),
+            kind: EventLogSourceKind::File,
+        }])
+        .expect("build wildcard archive manifest");
+        assert!(wildcard.entries.iter().any(|entry| {
+            entry.path == normalize_source_path(&member) && entry.kind == EventLogSourceKind::File
+        }));
+        assert!(wildcard.coverage.is_empty());
+
         std::fs::remove_dir_all(root).expect("remove source tree");
     }
 
@@ -2561,10 +3169,16 @@ mod tests {
             normalize_source_path(Path::new(r"\\?\C:\logs\..\Application.evtx")),
             r"C:\Application.evtx"
         );
-        assert!(!is_vss_path(r"C:\logs\harddiskvolumeshadowcopy1\Application.evtx"));
-        assert!(!is_vss_path(r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"));
+        assert!(!is_vss_path(
+            r"C:\logs\harddiskvolumeshadowcopy1\Application.evtx"
+        ));
+        assert!(!is_vss_path(
+            r"\\server\share\globalroot\device\harddiskvolumeshadowcopy1.evtx"
+        ));
         assert!(!is_wildcard_source(r"\\?\C:\logs\Application.evtx"));
-        assert!(!is_wildcard_source(r"\\?\UNC\server\share\logs\Application.evtx"));
+        assert!(!is_wildcard_source(
+            r"\\?\UNC\server\share\logs\Application.evtx"
+        ));
         assert_eq!(
             classify_source_kind(
                 r"C:\Windows\System32\winevt\Logs\MDMDiagReport.zip",
@@ -2573,6 +3187,124 @@ mod tests {
             EventLogSourceKind::Archive
         );
     }
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn archived_event_log_is_classified_and_gated() {
+        let path = r"C:\Windows\System32\winevt\Logs\Archive-Application-2026-08-19-21-00-00.evtx";
+        assert_eq!(
+            classify_source_kind(path, EventLogSourceKind::File),
+            EventLogSourceKind::Archive
+        );
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: path.to_string(),
+            kind: EventLogSourceKind::File,
+        }])
+        .expect("build manifest");
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.iter().any(|coverage| matches!(
+            coverage,
+            SourceCoverage::Unsupported { path: covered, reason }
+                if covered == path && reason.contains("archived event-log")
+        )));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn explicit_archived_event_log_archive_selection_is_gated() {
+        let path = r"C:\Windows\System32\winevt\Logs\Archive-Application-2026-08-19-21-00-00.evtx";
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: path.to_string(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build manifest");
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.iter().any(|coverage| matches!(
+            coverage,
+            SourceCoverage::Unsupported { path: covered, reason }
+                if covered == path && reason.contains("archived event-log")
+        )));
+
+        let validated = validate_source_manifest(&EventLogSourceManifest {
+            entries: vec![EventLogSource {
+                source_id: "archived-event-log".to_string(),
+                path: path.to_string(),
+                kind: EventLogSourceKind::Archive,
+            }],
+            coverage: Vec::new(),
+        });
+        assert!(validated.entries.is_empty());
+        assert!(validated.coverage.iter().any(|coverage| matches!(
+            coverage,
+            SourceCoverage::Unsupported { path: covered, reason }
+                if covered == path && reason.contains("archived event-log")
+        )));
+    }
+
+    #[test]
+    fn archive_dispatch_distinguishes_zip_containers_from_archived_event_logs() {
+        let archived_event_log = EventLogSource {
+            source_id: "archived-event-log".to_string(),
+            path: r"C:\Windows\System32\winevt\Logs\Archive-Application-2026-08-19-21-00-00.evtx"
+                .to_string(),
+            kind: EventLogSourceKind::Archive,
+        };
+        assert!(!is_archive_container_source(&archived_event_log, false));
+
+        let archive_container = EventLogSource {
+            source_id: "archive-container".to_string(),
+            path: r"C:\captures\MDMDiagReport.zip".to_string(),
+            kind: EventLogSourceKind::Archive,
+        };
+        assert!(is_archive_container_source(&archive_container, false));
+        let archive_container_with_evtx_name = EventLogSource {
+            source_id: "archive-container-with-evtx-name".to_string(),
+            path: r"C:\captures\Archive-Application.evtx.zip".to_string(),
+            kind: EventLogSourceKind::Archive,
+        };
+        assert!(is_archive_container_source(
+            &archive_container_with_evtx_name,
+            false
+        ));
+    }
+
+    #[test]
+    fn archive_named_evtx_zip_is_not_gated_as_archived_log() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-evtx-zip-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("Archive-Application.evtx.zip");
+        std::fs::write(&archive, b"archive").expect("write archive placeholder");
+
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: archive.to_string_lossy().into_owned(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build archive manifest");
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Archive);
+        assert!(manifest.coverage.is_empty());
+        std::fs::remove_dir_all(root).expect("remove archive root");
+    }
+
+    #[test]
+    fn directory_named_like_archived_event_log_is_not_classified_as_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-directory-{}",
+            std::process::id()
+        ));
+        let directory = root.join("Archive-logs.evtx");
+        std::fs::create_dir_all(&directory).expect("create archive-shaped directory");
+
+        assert_eq!(
+            classify_source_kind(&directory.to_string_lossy(), EventLogSourceKind::Folder),
+            EventLogSourceKind::Folder
+        );
+        std::fs::remove_dir_all(root).expect("remove archive-shaped directory");
+    }
+
     #[test]
     fn explicit_archive_wildcard_is_expanded_without_platform_gate() {
         let root = std::env::temp_dir().join(format!(
@@ -2592,6 +3324,52 @@ mod tests {
             SourceCoverage::Missing { path, .. } if path == &pattern
         )));
         std::fs::remove_dir_all(root).expect("remove archive wildcard root");
+    }
+
+    #[test]
+    fn explicit_archive_with_evtx_in_name_is_retained() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-archive-evtx-name-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("Application.evtx.zip");
+        std::fs::write(&archive, b"archive").expect("write archive placeholder");
+
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: archive.to_string_lossy().to_string(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build manifest");
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Archive);
+        assert!(manifest.coverage.is_empty());
+        std::fs::remove_dir_all(root).expect("remove archive root");
+    }
+
+    #[test]
+    fn validating_explicit_archive_with_evtx_in_name_keeps_archive_kind() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-validate-archive-evtx-name-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create archive root");
+        let archive = root.join("Application.evtx.zip");
+        std::fs::write(&archive, b"archive").expect("write archive placeholder");
+        let manifest = validate_source_manifest(&EventLogSourceManifest {
+            entries: vec![EventLogSource {
+                source_id: "archive".to_string(),
+                path: archive.to_string_lossy().into_owned(),
+                kind: EventLogSourceKind::Archive,
+            }],
+            coverage: Vec::new(),
+        });
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].kind, EventLogSourceKind::Archive);
+        assert!(manifest.coverage.is_empty());
+        std::fs::remove_dir_all(root).expect("remove archive root");
     }
     #[test]
     fn existing_glob_metacharacter_directory_is_treated_as_literal() {
@@ -2614,16 +3392,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlink_ancestor_is_rejected_before_following_outside_tree() {
-        let root = std::env::temp_dir().join(format!("cmtrace-event-symlink-root-{}", std::process::id()));
-        let outside = std::env::temp_dir().join(format!("cmtrace-event-symlink-outside-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("cmtrace-event-symlink-root-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!(
+            "cmtrace-event-symlink-outside-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).expect("create root");
         std::fs::create_dir_all(&outside).expect("create outside");
         std::fs::write(outside.join("Outside.evtx"), b"outside").expect("write outside");
         std::os::unix::fs::symlink(&outside, root.join("link")).expect("create symlink");
 
-        let manifest = build_source_manifest(&[
-            root.join("link").join("Outside.evtx").to_string_lossy().to_string(),
-        ])
+        let manifest = build_source_manifest(&[root
+            .join("link")
+            .join("Outside.evtx")
+            .to_string_lossy()
+            .to_string()])
         .expect("build manifest");
 
         assert!(manifest.entries.is_empty());
@@ -2631,9 +3415,11 @@ mod tests {
             manifest.coverage.as_slice(),
             [SourceCoverage::Unsupported { .. }]
         ));
-        let wildcard = build_source_manifest(&[
-            root.join("link").join("*.evtx").to_string_lossy().to_string(),
-        ])
+        let wildcard = build_source_manifest(&[root
+            .join("link")
+            .join("*.evtx")
+            .to_string_lossy()
+            .to_string()])
         .expect("build wildcard manifest");
         assert!(wildcard.entries.is_empty());
         assert!(wildcard
@@ -2704,7 +3490,10 @@ mod tests {
             &providers,
         )
         .expect("parse bounded manifest");
-        assert_eq!(result.parse_errors as usize, MAX_SOURCE_MANIFEST_ENTRIES + 1);
+        assert_eq!(
+            result.parse_errors as usize,
+            MAX_SOURCE_MANIFEST_ENTRIES + 1
+        );
         assert!(result
             .error_messages
             .iter()
@@ -2713,10 +3502,12 @@ mod tests {
 
     #[test]
     fn wildcard_matches_over_cap_report_limit_coverage() {
-        let root = std::env::temp_dir().join(format!("cmtrace-event-wildcard-cap-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("cmtrace-event-wildcard-cap-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create wildcard root");
         for index in 0..=MAX_SOURCE_MANIFEST_ENTRIES {
-            std::fs::write(root.join(format!("{index:04}.evtx")), b"evtx").expect("write wildcard member");
+            std::fs::write(root.join(format!("{index:04}.evtx")), b"evtx")
+                .expect("write wildcard member");
         }
         let pattern = root.join("*.evtx").to_string_lossy().to_string();
         let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
@@ -2726,6 +3517,66 @@ mod tests {
             .iter()
             .any(|coverage| matches!(coverage, SourceCoverage::LimitReached { .. })));
         std::fs::remove_dir_all(root).expect("remove wildcard root");
+    }
+
+    #[test]
+    fn wildcard_over_cap_keeps_lexically_first_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "cmtrace-event-wildcard-order-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create wildcard root");
+        for index in (0..=MAX_SOURCE_MANIFEST_ENTRIES).rev() {
+            std::fs::write(root.join(format!("{index:04}.evtx")), b"evtx")
+                .expect("write wildcard member");
+        }
+        let pattern = root.join("*.evtx").to_string_lossy().to_string();
+        let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
+        let names: Vec<String> = manifest
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                Path::new(&entry.path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .collect();
+        let first_name = format!("{:04}.evtx", 0);
+        let last_name = format!("{:04}.evtx", MAX_SOURCE_MANIFEST_ENTRIES - 1);
+        let omitted_name = format!("{:04}.evtx", MAX_SOURCE_MANIFEST_ENTRIES);
+        assert_eq!(names.first().map(String::as_str), Some(first_name.as_str()));
+        assert_eq!(names.last().map(String::as_str), Some(last_name.as_str()));
+        assert!(!names.iter().any(|name| name == &omitted_name));
+        std::fs::remove_dir_all(root).expect("remove wildcard root");
+    }
+
+    #[test]
+    fn wildcard_work_limit_fails_closed_without_a_partial_prefix() {
+        let temporary = tempfile::tempdir().expect("create wildcard root");
+        let root = temporary.path();
+        let leaves_per_branch = MAX_SOURCE_MANIFEST_ENTRIES / 2;
+        for branch in 0..4 {
+            let branch_root = root.join(format!("branch-{branch}"));
+            std::fs::create_dir(&branch_root).expect("create wildcard branch");
+            for leaf in 0..leaves_per_branch {
+                let leaf_root = branch_root.join(format!("leaf-{leaf:04}"));
+                std::fs::create_dir(&leaf_root).expect("create wildcard leaf");
+                std::fs::write(leaf_root.join("ignored.txt"), b"ignored")
+                    .expect("write nonmatching wildcard member");
+            }
+        }
+        let pattern = root.join("**").join("*.evtx").to_string_lossy().to_string();
+        let manifest = build_source_manifest(&[pattern]).expect("build wildcard manifest");
+        assert!(manifest.entries.is_empty());
+        assert!(
+            manifest.coverage.iter().any(|coverage| matches!(
+                coverage,
+                SourceCoverage::LimitReached { reason, .. }
+                    if reason.contains("source expansion work")
+            )),
+            "coverage={:?}",
+            manifest.coverage
+        );
     }
 
     #[test]
@@ -2755,7 +3606,10 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         {
-            assert!(manifest.entries.iter().any(|entry| entry.path.ends_with("Application.evtx")));
+            assert!(manifest
+                .entries
+                .iter()
+                .any(|entry| entry.path.ends_with("Application.evtx")));
             assert!(
                 manifest.entries.iter().any(|entry| entry.path.contains("Archive-"))
                     || manifest.coverage.iter().any(|coverage| {
@@ -2765,18 +3619,22 @@ mod tests {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            assert_eq!(manifest.entries.len(), 2);
+            assert_eq!(manifest.entries.len(), 1);
             assert!(manifest
                 .entries
                 .iter()
                 .all(|entry| entry.kind == EventLogSourceKind::Wildcard));
-            assert!(manifest.coverage.is_empty());
+            assert!(manifest.coverage.iter().any(|coverage| matches!(
+                coverage,
+                SourceCoverage::Unsupported { path, reason }
+                    if path.contains("Archive-") && reason.contains("archived event-log")
+            )));
         }
-
 
         std::fs::remove_dir_all(root).expect("remove source tree");
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn source_manifest_reports_vss_as_unsupported_on_non_windows() {
         let manifest = build_source_manifest(&[
@@ -2794,6 +3652,63 @@ mod tests {
                 SourceCoverage::Unsupported { .. }
             ));
         }
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn elevated_vss_manifest_does_not_walk_device_ancestors() {
+        let path = r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\winevt\Logs\Application.evtx";
+        let validated = validate_source_manifest(&EventLogSourceManifest {
+            entries: vec![EventLogSource {
+                source_id: "vss".to_string(),
+                path: path.to_string(),
+                kind: EventLogSourceKind::Vss,
+            }],
+            coverage: Vec::new(),
+        });
+
+        if crate::elevation::current_elevation_state().is_elevated {
+            assert_eq!(validated.coverage, Vec::new());
+            assert_eq!(validated.entries.len(), 1);
+            assert_eq!(validated.entries[0].kind, EventLogSourceKind::Vss);
+        } else {
+            assert!(validated.entries.is_empty());
+            assert!(matches!(
+                validated.coverage.as_slice(),
+                [SourceCoverage::AccessDenied { path: covered, .. }] if covered == path
+            ));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn archive_selection_preserves_vss_platform_coverage() {
+        let manifest = build_source_manifest_for_selections(&[EventLogSourceSelection {
+            path: r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\winevt\Logs\Application.evtx"
+                .to_string(),
+            kind: EventLogSourceKind::Archive,
+        }])
+        .expect("build archive-tagged vss manifest");
+
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.iter().any(|coverage| {
+            matches!(coverage, SourceCoverage::Unsupported { path, .. }
+                if path.contains("HarddiskVolumeShadowCopy1"))
+        }));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn vss_archive_named_file_keeps_vss_platform_reason() {
+        let path = r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows\System32\winevt\Logs\Archive-Application-2026-08-19-21-00-00.evtx";
+        let manifest = build_source_manifest(&[path.to_string()]).expect("build vss manifest");
+
+        assert!(manifest.entries.is_empty());
+        assert!(manifest.coverage.iter().any(|coverage| matches!(
+            coverage,
+            SourceCoverage::Unsupported { path: covered, reason }
+                if covered == path
+                    && reason.contains("VSS event-log")
+                    && !reason.contains("archived event-log")
+        )));
     }
 
     #[test]
@@ -3009,9 +3924,15 @@ mod tests {
             super::super::event_node::extract_event_identity(&extract_event_data(&root).fields);
 
         assert_eq!(system.activity_id.as_deref(), Some("{system}"));
-        assert_eq!(system.related_activity_id.as_deref(), Some("{related-system}"));
+        assert_eq!(
+            system.related_activity_id.as_deref(),
+            Some("{related-system}")
+        );
         assert_eq!(identity.activity_id.as_deref(), Some("{payload}"));
-        assert_eq!(identity.related_activity_id.as_deref(), Some("{related-payload}"));
+        assert_eq!(
+            identity.related_activity_id.as_deref(),
+            Some("{related-payload}")
+        );
         assert_eq!(
             system.activity_id.clone().or(identity.activity_id),
             Some("{system}".to_string())
@@ -3033,7 +3954,10 @@ mod tests {
         );
 
         assert_eq!(
-            fallback_system.activity_id.clone().or(fallback_identity.activity_id),
+            fallback_system
+                .activity_id
+                .clone()
+                .or(fallback_identity.activity_id),
             Some("{payload-only}".to_string())
         );
     }
@@ -3077,26 +4001,22 @@ mod description_tests {
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        assert!(
-            describe_event(
-                &empty_store(),
-                "Nobody-Has-This-Provider",
-                "Some-Channel",
-                1,
-                None,
-                &data
-            )
-            .expect("provider lookup succeeds")
-            .is_none()
-        );
+        assert!(describe_event(
+            &empty_store(),
+            "Nobody-Has-This-Provider",
+            "Some-Channel",
+            1,
+            None,
+            &data
+        )
+        .expect("provider lookup succeeds")
+        .is_none());
     }
 
     #[test]
     fn unresolved_provider_insertions_return_structured_coverage() {
+        use super::super::provider_db::{write_provider_database, CapturedProviderMetadata};
         use cmtraceopen_parser::provider::{ProviderEvent, ProviderMetadata};
-        use super::super::provider_db::{
-            write_provider_database, CapturedProviderMetadata,
-        };
         let directory = std::env::temp_dir().join("cmtraceopen-parser-provider-coverage");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("provider directory");
@@ -3120,7 +4040,9 @@ mod description_tests {
         .expect("write provider database");
 
         let mut store = ProviderStore::default();
-        store.load_directory(&directory).expect("load provider database");
+        store
+            .load_directory(&directory)
+            .expect("load provider database");
         let outcome = describe_event(
             &store,
             "Coverage-Provider",
@@ -3165,17 +4087,22 @@ mod description_tests {
         // The whole chain: SQLite on disk, gzip payload, provider metadata, insertion rendering.
         let store = loaded_store();
 
+        let provider = "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider";
+        let metadata = store
+            .provider(provider)
+            .expect("provider lookup succeeds")
+            .expect("the MDM provider is present in the captured database");
+        let channel = metadata
+            .events
+            .iter()
+            .find(|event| event.id == 2)
+            .and_then(|event| event.log_name.as_deref())
+            .expect("event 2 has a captured channel")
+            .to_string();
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        let described = describe_event(
-            &store,
-            "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
-            "Admin",
-            2,
-            None,
-            &data,
-        )
-        .expect("the MDM provider lookup succeeds")
-        .expect("the MDM provider defines event 2");
+        let described = describe_event(&store, provider, &channel, 2, None, &data)
+            .expect("the MDM provider lookup succeeds")
+            .expect("the MDM provider defines event 2");
         let DescriptionOutcome::Rendered(described) = described else {
             panic!("provider description should render completely");
         };
@@ -3195,17 +4122,15 @@ mod description_tests {
         let store = loaded_store();
 
         // A provider that genuinely is not in a Windows capture.
-        assert!(
-            describe_event(
-                &store,
-                "Definitely-Not-A-Real-Provider",
-                "Admin",
-                1,
-                None,
-                &insertions(&[("a", "b")]),
-            )
-            .expect("provider lookup succeeds")
-            .is_none()
-        );
+        assert!(describe_event(
+            &store,
+            "Definitely-Not-A-Real-Provider",
+            "Admin",
+            1,
+            None,
+            &insertions(&[("a", "b")]),
+        )
+        .expect("provider lookup succeeds")
+        .is_none());
     }
 }

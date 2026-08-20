@@ -10,21 +10,30 @@ import type { EvtxRecord } from "./types";
 import type { LogEntry, LogSource } from "../../types/log";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 
-function logEntryBelongsToSource(entry: LogEntry, source: LogSource | null): boolean {
+function logEntryBelongsToSource(
+  entry: LogEntry,
+  source: LogSource | null,
+): boolean {
   if (source === null) return false;
   const root = source.kind === "known" ? source.defaultPath : source.path;
   const normalize = (value: string) =>
-    value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+    value
+      .replace(/[\\/]+/g, "/")
+      .replace(/\/+$/, "")
+      .toLowerCase();
   const normalizedRoot = normalize(root);
   if (normalizedRoot === "" || normalizedRoot === "/") return true;
   const normalizedEntry = normalize(entry.filePath);
-  return normalizedEntry === normalizedRoot || normalizedEntry.startsWith(`${normalizedRoot}/`);
+  return (
+    normalizedEntry === normalizedRoot ||
+    normalizedEntry.startsWith(`${normalizedRoot}/`)
+  );
 }
 
 export function scopeLogEntries(
   entries: LogEntry[],
   source: LogSource | null,
-  mode: SourceOpenMode
+  mode: SourceOpenMode,
 ): LogEntry[] {
   return mode === "merged"
     ? entries
@@ -32,11 +41,7 @@ export function scopeLogEntries(
 }
 
 export type TimelineSeverity =
-  | "verbose"
-  | "info"
-  | "warning"
-  | "error"
-  | "critical";
+  "verbose" | "info" | "warning" | "error" | "critical";
 
 export type TimelineOrigin =
   | {
@@ -73,9 +78,18 @@ export type TimelineOrigin =
       recordId: number;
     };
 export function isEventOrigin(
-  origin: TimelineOrigin
+  origin: TimelineOrigin,
 ): origin is Extract<TimelineOrigin, { kind: "event" }> {
   return origin.kind === "event";
+}
+const utf8Encoder = new TextEncoder();
+function timelineKeyPart(value: string): string {
+  return `${utf8Encoder.encode(value).length}:${value}`;
+}
+
+export function timelineOriginId(origin: TimelineOrigin): string {
+  if (isEventOrigin(origin)) return origin.stableId;
+  return `log|${timelineKeyPart(origin.source)}|${timelineKeyPart(origin.file)}|${origin.line}|${origin.recordId}`;
 }
 export interface TimelineItem {
   timestampMs: number;
@@ -118,6 +132,18 @@ export interface TimelineCoverageGap {
   reason: string;
 }
 
+/**
+ * Reserved source identity for the bounded aggregate marker emitted when correlation gaps are
+ * truncated. Unlike an origin-backed gap, this marker must survive event-row filtering.
+ */
+export const CORRELATION_GAP_AGGREGATE_SOURCE = "correlation";
+/** Reserved source identity for malformed EventRecordID coverage emitted by diagnosis. */
+export const EVENT_RECORD_IDENTITY_GAP_SOURCE = "event-record-identity";
+
+export function isAggregateCoverageGap(gap: TimelineCoverageGap): boolean {
+  return gap.source === CORRELATION_GAP_AGGREGATE_SOURCE;
+}
+
 export interface TimelineCorrelationEdge {
   id: string;
   fromId: string;
@@ -141,7 +167,312 @@ export interface UnifiedTimeline {
   coverageGaps?: TimelineCoverageGap[];
 }
 
-const utf8Encoder = new TextEncoder();
+type TimelineRecord = Record<string, unknown>;
+
+function timelineRecord(value: unknown, path: string): TimelineRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Invalid unified timeline: ${path}`);
+  }
+  return value as TimelineRecord;
+}
+
+function timelineString(value: unknown, path: string): string {
+  if (typeof value !== "string")
+    throw new Error(`Invalid unified timeline: ${path}`);
+  return value;
+}
+
+function timelineNullableString(value: unknown, path: string): string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`Invalid unified timeline: ${path}`);
+  }
+  return value;
+}
+
+function timelineOptionalNullableString(
+  object: TimelineRecord,
+  field: string,
+  path: string,
+): string | null | undefined {
+  const value = object[field];
+  return value === undefined
+    ? undefined
+    : timelineNullableString(value, `${path}.${field}`);
+}
+
+function timelineNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Invalid unified timeline: ${path}`);
+  }
+  return value;
+}
+
+function timelineInteger(value: unknown, path: string): number {
+  const number = timelineNumber(value, path);
+  if (!Number.isInteger(number))
+    throw new Error(`Invalid unified timeline: ${path}`);
+  return number;
+}
+
+function timelineArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value))
+    throw new Error(`Invalid unified timeline: ${path}`);
+  return value;
+}
+
+const TIMELINE_SEVERITIES = [
+  "verbose",
+  "info",
+  "warning",
+  "error",
+  "critical",
+] as const;
+const TIMELINE_KEY_KINDS = [
+  "activityId",
+  "relatedActivityId",
+  "providerChannelEventRecord",
+  "processStart",
+  "sessionId",
+  "deviceId",
+  "userId",
+  "secondary",
+] as const;
+const TIMELINE_EDGE_STRENGTHS = ["exact", "candidate", "ambiguous"] as const;
+const TIMELINE_EDGE_CONFIDENCES = ["high", "low", "unknown"] as const;
+
+function timelineEnum<T extends string>(
+  value: unknown,
+  path: string,
+  allowed: readonly T[],
+): T {
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new Error(`Invalid unified timeline: ${path}`);
+  }
+  return value as T;
+}
+
+function decodeTimelineOrigin(value: unknown, path: string): TimelineOrigin {
+  const origin = timelineRecord(value, path);
+  const kind = origin.kind;
+  if (kind === "log") {
+    return {
+      kind,
+      file: timelineString(origin.file, `${path}.file`),
+      component: timelineNullableString(origin.component, `${path}.component`),
+      line: timelineInteger(origin.line, `${path}.line`),
+      source: timelineString(origin.source, `${path}.source`),
+      machine: timelineNullableString(origin.machine, `${path}.machine`),
+      bundle: timelineNullableString(origin.bundle, `${path}.bundle`),
+      recordId: timelineInteger(origin.recordId, `${path}.recordId`),
+    };
+  }
+  if (kind !== "event")
+    throw new Error(`Invalid unified timeline: ${path}.kind`);
+
+  const identityConflicts = origin.identityConflicts;
+  const decodedIdentityConflicts =
+    identityConflicts === undefined
+      ? undefined
+      : timelineArray(identityConflicts, `${path}.identityConflicts`).map(
+          (entry, index) =>
+            timelineString(entry, `${path}.identityConflicts[${index}]`),
+        );
+  const activityId = timelineOptionalNullableString(origin, "activityId", path);
+  const relatedActivityId = timelineOptionalNullableString(
+    origin,
+    "relatedActivityId",
+    path,
+  );
+  const sessionId = timelineOptionalNullableString(origin, "sessionId", path);
+  const deviceId = timelineOptionalNullableString(origin, "deviceId", path);
+  const userId = timelineOptionalNullableString(origin, "userId", path);
+  const processStartTime = timelineOptionalNullableString(
+    origin,
+    "processStartTime",
+    path,
+  );
+  const recordIdText = timelineOptionalNullableString(
+    origin,
+    "recordIdText",
+    path,
+  );
+  return {
+    kind,
+    stableId: timelineString(origin.stableId, `${path}.stableId`),
+    source: timelineString(origin.source, `${path}.source`),
+    machine: timelineNullableString(origin.machine, `${path}.machine`),
+    bundle: timelineNullableString(origin.bundle, `${path}.bundle`),
+    channel: timelineString(origin.channel, `${path}.channel`),
+    provider: timelineString(origin.provider, `${path}.provider`),
+    processId:
+      origin.processId == null
+        ? null
+        : timelineInteger(origin.processId, `${path}.processId`),
+    ...(activityId === undefined ? {} : { activityId }),
+    ...(relatedActivityId === undefined ? {} : { relatedActivityId }),
+    ...(sessionId === undefined ? {} : { sessionId }),
+    ...(deviceId === undefined ? {} : { deviceId }),
+    ...(userId === undefined ? {} : { userId }),
+    ...(processStartTime === undefined ? {} : { processStartTime }),
+    ...(decodedIdentityConflicts === undefined
+      ? {}
+      : { identityConflicts: decodedIdentityConflicts }),
+    eventId: timelineInteger(origin.eventId, `${path}.eventId`),
+    recordId: timelineInteger(origin.recordId, `${path}.recordId`),
+    ...(recordIdText === undefined ? {} : { recordIdText }),
+  };
+}
+
+function decodeTimelineCoverageGap(
+  value: unknown,
+  path: string,
+): TimelineCoverageGap {
+  const gap = timelineRecord(value, path);
+  return {
+    source: timelineString(gap.source, `${path}.source`),
+    reason: timelineString(gap.reason, `${path}.reason`),
+  };
+}
+
+function decodeTimelineKey(
+  value: unknown,
+  path: string,
+): TimelineCorrelationKey {
+  const key = timelineRecord(value, path);
+  return {
+    kind: timelineEnum(key.kind, `${path}.kind`, TIMELINE_KEY_KINDS),
+    value: timelineString(key.value, `${path}.value`),
+  };
+}
+
+function decodeTimelineEvidence(
+  value: unknown,
+  path: string,
+): TimelineCorrelationEvidence {
+  const evidence = timelineRecord(value, path);
+  return {
+    originId: timelineString(evidence.originId, `${path}.originId`),
+    field: timelineString(evidence.field, `${path}.field`),
+    value: timelineString(evidence.value, `${path}.value`),
+  };
+}
+
+function decodeTimelineEdge(
+  value: unknown,
+  path: string,
+): TimelineCorrelationEdge {
+  const edge = timelineRecord(value, path);
+  const candidateIds =
+    edge.candidateIds === undefined
+      ? []
+      : timelineArray(edge.candidateIds, `${path}.candidateIds`);
+  const evidence =
+    edge.evidence === undefined
+      ? []
+      : timelineArray(edge.evidence, `${path}.evidence`);
+  const coverage = timelineRecord(edge.coverage, `${path}.coverage`);
+  const state = timelineEnum(coverage.state, `${path}.coverage.state`, [
+    "covered",
+    "gap",
+  ] as const);
+  const gap = coverage.gap;
+  if (state === "gap" && (gap === undefined || gap === null)) {
+    throw new Error(
+      `Invalid unified timeline: ${path}.coverage.gap is required for gap state`,
+    );
+  }
+  if (state === "covered" && gap !== undefined && gap !== null) {
+    throw new Error(
+      `Invalid unified timeline: ${path}.coverage.gap is not allowed for covered state`,
+    );
+  }
+  return {
+    id: timelineString(edge.id, `${path}.id`),
+    fromId: timelineString(edge.fromId, `${path}.fromId`),
+    toId: edge.toId === null ? null : timelineString(edge.toId, `${path}.toId`),
+    key: decodeTimelineKey(edge.key, `${path}.key`),
+    strength: timelineEnum(
+      edge.strength,
+      `${path}.strength`,
+      TIMELINE_EDGE_STRENGTHS,
+    ),
+    confidence: timelineEnum(
+      edge.confidence,
+      `${path}.confidence`,
+      TIMELINE_EDGE_CONFIDENCES,
+    ),
+    candidateIds: candidateIds.map((entry, index) =>
+      timelineString(entry, `${path}.candidateIds[${index}]`),
+    ),
+    evidence: evidence.map((entry, index) =>
+      decodeTimelineEvidence(entry, `${path}.evidence[${index}]`),
+    ),
+    coverage: {
+      state,
+      ...(gap == null
+        ? {}
+        : { gap: decodeTimelineCoverageGap(gap, `${path}.coverage.gap`) }),
+    },
+  };
+}
+
+function decodeTimelineItem(value: unknown, path: string): TimelineItem {
+  const item = timelineRecord(value, path);
+  return {
+    timestampMs: timelineNumber(item.timestampMs, `${path}.timestampMs`),
+    severity: timelineEnum(
+      item.severity,
+      `${path}.severity`,
+      TIMELINE_SEVERITIES,
+    ),
+    message: timelineString(item.message, `${path}.message`),
+    origin: decodeTimelineOrigin(item.origin, `${path}.origin`),
+  };
+}
+
+function decodeUnplacedItem(value: unknown, path: string): UnplacedItem {
+  const item = timelineRecord(value, path);
+  return {
+    origin: decodeTimelineOrigin(item.origin, `${path}.origin`),
+    reason: timelineEnum(item.reason, `${path}.reason`, [
+      "missingTimestamp",
+    ] as const),
+  };
+}
+
+/**
+ * Decodes the value crossing the Tauri boundary into the shape consumed by the timeline UI.
+ *
+ * Optional correlation fields remain omitted when older backend producers omit them. Edge arrays
+ * retain their Rust defaults when an individual edge omits the serde-defaulted fields.
+ */
+export function assertUnifiedTimelineShape(value: unknown): UnifiedTimeline {
+  const timeline = timelineRecord(value, "timeline");
+  const items = timelineArray(timeline.items, "items").map((item, index) =>
+    decodeTimelineItem(item, `items[${index}]`),
+  );
+  const unplaced = timelineArray(timeline.unplaced, "unplaced").map(
+    (item, index) => decodeUnplacedItem(item, `unplaced[${index}]`),
+  );
+  const edges =
+    timeline.edges === undefined
+      ? undefined
+      : timelineArray(timeline.edges, "edges").map((edge, index) =>
+          decodeTimelineEdge(edge, `edges[${index}]`),
+        );
+  const coverageGaps =
+    timeline.coverageGaps === undefined
+      ? undefined
+      : timelineArray(timeline.coverageGaps, "coverageGaps").map((gap, index) =>
+          decodeTimelineCoverageGap(gap, `coverageGaps[${index}]`),
+        );
+  return {
+    items,
+    unplaced,
+    ...(edges === undefined ? {} : { edges }),
+    ...(coverageGaps === undefined ? {} : { coverageGaps }),
+  };
+}
 
 function missingRecordDigest(record: EvtxRecord): string {
   const input = `${record.timestampEpoch}|${record.eventId}|${record.provider}|${record.message}|${record.rawXml}`;
@@ -193,19 +524,16 @@ export function stableRecordIdentity(record: EvtxRecord): string {
   return stableRecordBase(record);
 }
 
-function canonicalRecordKeys(records: EvtxRecord[]): Map<EvtxRecord, string> {
-  const ordered = [...records].sort(
-    (left, right) =>
-      (left.timestampEpoch ?? 0) - (right.timestampEpoch ?? 0) ||
-      compareRustStrings(stableRecordBase(left), stableRecordBase(right)) ||
-      compareRustStrings(left.timestamp ?? "", right.timestamp ?? "") ||
-      compareRustStrings(left.message ?? "", right.message ?? "") ||
-      compareRustStrings(left.rawXml ?? "", right.rawXml ?? "")
-  );
+export function stableRecordIdentityMap(
+  records: readonly EvtxRecord[],
+): Map<EvtxRecord, string> {
+  const decorated = records.map((record) => ({
+    record,
+    base: stableRecordBase(record),
+  }));
   const occurrences = new Map<string, number>();
   const keys = new Map<EvtxRecord, string>();
-  for (const record of ordered) {
-    const base = stableRecordBase(record);
+  for (const { record, base } of decorated) {
     if (record.eventRecordId !== 0 || exactRecordIdText(record) !== null) {
       keys.set(record, base);
       continue;
@@ -215,16 +543,6 @@ function canonicalRecordKeys(records: EvtxRecord[]): Map<EvtxRecord, string> {
     keys.set(record, `${base}-${occurrence}`);
   }
   return keys;
-}
-function compareRustStrings(left: string, right: string): number {
-  const leftBytes = utf8Encoder.encode(left);
-  const rightBytes = utf8Encoder.encode(right);
-  const length = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = leftBytes[index] - rightBytes[index];
-    if (difference !== 0) return difference;
-  }
-  return leftBytes.length - rightBytes.length;
 }
 
 /**
@@ -236,11 +554,13 @@ function compareRustStrings(left: string, right: string): number {
 export function filterTimelineToRecords(
   timeline: UnifiedTimeline,
   records: EvtxRecord[],
-  allRecords: EvtxRecord[] = records
+  allRecords: EvtxRecord[] = records,
 ): UnifiedTimeline {
-  const canonicalKeys = canonicalRecordKeys(allRecords);
+  const canonicalKeys = stableRecordIdentityMap(allRecords);
   const keys = new Set(
-    records.map((record) => canonicalKeys.get(record) ?? stableRecordBase(record))
+    records.map(
+      (record) => canonicalKeys.get(record) ?? stableRecordBase(record),
+    ),
   );
   const unsafePrefixes = new Set(
     records
@@ -248,9 +568,9 @@ export function filterTimelineToRecords(
         (record) =>
           record.eventRecordId !== 0 &&
           exactRecordIdText(record) === null &&
-          !Number.isSafeInteger(record.eventRecordId)
+          !Number.isSafeInteger(record.eventRecordId),
       )
-      .map((record) => canonicalKeys.get(record) ?? stableRecordBase(record))
+      .map((record) => canonicalKeys.get(record) ?? stableRecordBase(record)),
   );
   const unsafeOriginCounts = new Map<string, number>();
   for (const item of [...timeline.items, ...timeline.unplaced]) {
@@ -265,24 +585,85 @@ export function filterTimelineToRecords(
     if (keys.has(origin.stableId)) return true;
     const marker = origin.stableId.lastIndexOf("|record");
     const prefix = origin.stableId.replace(/record\d+$/, "record");
-    return marker >= 0 && unsafePrefixes.has(prefix) && unsafeOriginCounts.get(prefix) === 1;
+    return (
+      marker >= 0 &&
+      unsafePrefixes.has(prefix) &&
+      unsafeOriginCounts.get(prefix) === 1
+    );
   };
   const items = timeline.items.filter((item) => keep(item.origin));
   const unplaced = timeline.unplaced.filter((item) => keep(item.origin));
-  const visibleIds = new Set(
-    [...items, ...unplaced].flatMap((item) =>
-      isEventOrigin(item.origin) ? [item.origin.stableId] : [],
-    ),
+  const visibleOriginIds = new Set(
+    [...items, ...unplaced].map((item) => timelineOriginId(item.origin)),
   );
-  const edges = (timeline.edges ?? []).filter(
-    (edge) =>
-      visibleIds.has(edge.fromId) &&
-      (edge.toId === null ||
-        visibleIds.has(edge.toId) ||
-        edge.candidateIds.some((candidate) => visibleIds.has(candidate))),
-  );
+  const edges = (timeline.edges ?? []).flatMap((edge) => {
+    const fromVisible = visibleOriginIds.has(edge.fromId);
+    const visibleEndpointId = fromVisible
+      ? edge.fromId
+      : edge.toId !== null && visibleOriginIds.has(edge.toId)
+        ? edge.toId
+        : null;
+    if (visibleEndpointId === null) return [];
+
+    const hiddenEndpointId =
+      edge.toId !== null && !visibleOriginIds.has(edge.toId)
+        ? edge.toId
+        : !fromVisible
+          ? edge.fromId
+          : null;
+    const hasHiddenEndpoint = hiddenEndpointId !== null;
+    if (
+      hasHiddenEndpoint &&
+      edge.strength !== "ambiguous" &&
+      edge.coverage.state !== "gap"
+    ) {
+      return [];
+    }
+
+    const candidateIds = edge.candidateIds.filter((candidate) =>
+      visibleOriginIds.has(candidate),
+    );
+    const evidence = edge.evidence.filter((entry) =>
+      visibleOriginIds.has(entry.originId),
+    );
+    const hiddenReferences = [
+      ...(hiddenEndpointId === null ? [] : [hiddenEndpointId]),
+      ...edge.candidateIds.filter(
+        (candidate) => !visibleOriginIds.has(candidate),
+      ),
+      ...edge.evidence
+        .filter((entry) => !visibleOriginIds.has(entry.originId))
+        .map((entry) => entry.originId),
+    ];
+    const hiddenCorrelation = hasHiddenEndpoint || hiddenReferences.length > 0;
+    const coverage =
+      hiddenCorrelation &&
+      (edge.strength === "ambiguous" || edge.coverage.state === "gap")
+        ? {
+            state: "gap" as const,
+            gap: {
+              source: visibleEndpointId,
+              reason: "correlation candidates are outside the current filter",
+            },
+          }
+        : edge.coverage;
+    return [
+      {
+        ...edge,
+        fromId: visibleEndpointId,
+        toId: hasHiddenEndpoint ? null : edge.toId,
+        candidateIds,
+        evidence,
+        coverage,
+      },
+    ];
+  });
   const coverageGaps = (timeline.coverageGaps ?? []).filter(
-    (gap) => gap.source.length === 0 || visibleIds.has(gap.source),
+    (gap) =>
+      isAggregateCoverageGap(gap) ||
+      gap.source === EVENT_RECORD_IDENTITY_GAP_SOURCE ||
+      gap.source.length === 0 ||
+      visibleOriginIds.has(gap.source),
   );
   return { items, unplaced, edges, coverageGaps };
 }
@@ -370,7 +751,9 @@ export function unplacedSummary(timeline: UnifiedTimeline): string | null {
   const total = timeline.unplaced.length;
   if (total === 0) return null;
 
-  const logs = timeline.unplaced.filter((item) => item.origin.kind === "log").length;
+  const logs = timeline.unplaced.filter(
+    (item) => item.origin.kind === "log",
+  ).length;
   const events = total - logs;
 
   const parts: string[] = [];

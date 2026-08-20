@@ -3,6 +3,7 @@
 [package]
 name = "cmtrace-open"
 version = "1.5.1"
+default-run = "cmtrace-open"
 description = "Free, open-source CMTrace replacement: Windows log viewer with ConfigMgr/SCCM, Intune, and Autopilot ESP diagnostics, DSRegCmd triage, and real-time tailing."
 authors = ["Adam Gell"]
 license = "MIT"

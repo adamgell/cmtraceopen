@@ -34,6 +34,7 @@ function correlationEdgeLabel(edge: TimelineCorrelationEdge): string {
 
 export interface UnifiedTimelineViewProps {
   timeline: UnifiedTimeline;
+  pending?: boolean;
 }
 
 /**
@@ -43,7 +44,7 @@ export interface UnifiedTimelineViewProps {
  * side of the merge a line came from. Without it the two blur together and the reader loses the
  * distinction that makes the correlation meaningful.
  */
-export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
+export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimelineViewProps) {
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
@@ -66,6 +67,9 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
   }, [correlationEdges]);
   const coverageGapCount = coverageGaps.length;
   const dropped = useMemo(() => unplacedSummary(timeline), [timeline]);
+  const unplacedCount = timeline.unplaced.length;
+  const unplacedPreview = timeline.unplaced.slice(0, UNPLACED_PREVIEW_LIMIT);
+  const unplacedOmittedCount = unplacedCount - unplacedPreview.length;
 
   const fontSize = metrics.fontSize;
   const smallFontSize = Math.max(9, fontSize - 3);
@@ -188,7 +192,7 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
         </div>
       )}
 
-      {timeline.items.length === 0 && timeline.unplaced.length === 0 ? (
+      {timeline.items.length === 0 ? (
         <div
           style={{
             padding: "24px",
@@ -199,7 +203,9 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
             overflowY: "auto",
           }}
         >
-          {timeline.unplaced.length === 0 ? (
+          {pending ? (
+            "Building the unified timeline..."
+          ) : timeline.unplaced.length === 0 ? (
             "Nothing to place on the timeline yet. Load a log file and an event source to correlate them."
           ) : (
             <>
@@ -215,7 +221,7 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                   textAlign: "left",
                 }}
               >
-                {timeline.unplaced.slice(0, UNPLACED_PREVIEW_LIMIT).map((entry, index) => (
+                {unplacedPreview.map((entry, index) => (
                   <div
                     key={`${originDetail(entry.origin)}-${index}`}
                     role="listitem"
@@ -268,11 +274,12 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                   </div>
                 ))}
               </div>
-              {timeline.unplaced.length > UNPLACED_PREVIEW_LIMIT && (
+              {unplacedOmittedCount > 0 && (
                 <div style={{ marginTop: "12px", fontSize: `${smallFontSize}px` }}>
-                  Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
-                  {timeline.unplaced.length.toLocaleString()} unplaced entries. Use the source
-                  details above to investigate the missing timestamps.
+                  Showing the first {unplacedPreview.length.toLocaleString()} of{" "}
+                  {unplacedCount.toLocaleString()} unplaced entries;{" "}
+                  {unplacedOmittedCount.toLocaleString()} omitted. Use the source details above to
+                  investigate the missing timestamps.
                 </div>
               )}
             </>
@@ -407,15 +414,22 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                 fontSize: `${smallFontSize}px`,
               }}
             >
-              {timeline.unplaced.map((unplaced, index) => (
+              {unplacedPreview.map((unplaced, index) => (
                 <div
                   key={`${originDetail(unplaced.origin)}-${index}`}
-                  title={originDetail(unplaced.origin)}
                   style={{ padding: "4px 0" }}
                 >
-                  Unplaced event: no timestamp · {originContext(unplaced.origin)}
+                  {isEventOrigin(unplaced.origin) ? "Unplaced event" : "Unplaced log"}: no timestamp ·{" "}
+                  {originContext(unplaced.origin)}
                 </div>
               ))}
+              {unplacedOmittedCount > 0 && (
+                <div style={{ padding: "4px 0" }}>
+                  Showing the first {unplacedPreview.length.toLocaleString()} of{" "}
+                  {unplacedCount.toLocaleString()} unplaced entries;{" "}
+                  {unplacedOmittedCount.toLocaleString()} omitted.
+                </div>
+              )}
             </div>
           )}
         </div>
