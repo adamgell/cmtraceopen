@@ -29,6 +29,15 @@ describe("project-controlled download link boundaries", () => {
     expect(stableReleaseWorkflow).toContain(
       "releaseBody: ${{ steps.notes.outputs.body }}",
     );
+    expect(stableReleaseWorkflow).toContain(
+      'sed -e "s|{{TAG}}|$TAG_NAME|g" -e "s|{{VERSION}}|$VERSION|g"',
+    );
+    expect(windowsReleaseWorkflow).toContain(
+      '$releaseNotes = $releaseNotes.Replace("{{TAG}}", $env:TAG_NAME)',
+    );
+    expect(windowsReleaseWorkflow).toContain(
+      '$releaseNotes = $releaseNotes.Replace("{{VERSION}}", $env:VERSION)',
+    );
     expect(windowsReleaseWorkflow).toContain(
       '$templatePath = ".github/release-notes/template.md"',
     );
@@ -71,6 +80,7 @@ describe("project-controlled download link boundaries", () => {
       nightlyChannelScript,
       windowsReleaseWorkflow,
       manifestPublisher,
+      updaterManifest,
     ]) {
       expect(updaterContent).not.toMatch(/download\.cmtraceopen\.com.*latest\.json/);
     }
