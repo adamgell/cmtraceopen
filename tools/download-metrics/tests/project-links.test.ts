@@ -57,7 +57,7 @@ describe("project-controlled download link boundaries", () => {
       "https://github.com/${repository}/releases/download/${tagName}/${encodeURIComponent(fileName)}",
     );
     expect(windowsReleaseWorkflow).toContain(
-      "gh release upload $env:TAG_NAME",
+      'gh release upload $env:TAG_NAME $env:FULL_EXE_PATH $env:LITE_EXE_PATH $env:MSI_PATH $env:NSIS_PATH "$($env:NSIS_PATH).sig" --clobber',
     );
     expect(manifestPublisher).toContain(
       'gh release upload "$TAG_NAME" latest.json --clobber',
