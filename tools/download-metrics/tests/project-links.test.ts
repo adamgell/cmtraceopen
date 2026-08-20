@@ -45,6 +45,7 @@ describe("project-controlled download link boundaries", () => {
     const manifestPublisher = read(
       ".github/actions/publish-updater-manifest/action.yml",
     );
+    const updaterManifest = read(".github/scripts/updater-manifest.mjs");
 
     expect(stableTauriConfig).toContain(
       "https://github.com/adamgell/cmtraceopen/releases/latest/download/latest.json",
@@ -60,6 +61,9 @@ describe("project-controlled download link boundaries", () => {
     );
     expect(manifestPublisher).toContain(
       'gh release upload "$TAG_NAME" latest.json --clobber',
+    );
+    expect(updaterManifest).toContain(
+      "https://github.com/${repository}/releases/download/${tagName}/${encodeURIComponent(fileName)}",
     );
 
     for (const updaterContent of [
