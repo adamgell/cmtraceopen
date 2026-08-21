@@ -13,13 +13,18 @@ import {
   graphCancelAuthentication,
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
+  diagnoseEventRecords,
+  openLogFile,
+  parseEventLogManifest,
+  expandEventLogSources,
   buildTimeline,
   listLogFolder,
-  openLogFile,
   parseFilesBatch,
   revealInFileManager,
   inspectEvidenceArtifact,
 } from "./commands";
+import type { EvtxRecord } from "../workspaces/event-log/types";
+
 import { readAccessDenied } from "./source-error";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -979,5 +984,725 @@ describe("Access Denied classification", () => {
     // are discarded and no elevation offer can be manufactured.
     expect(readAccessDenied(error)).toBeNull();
     expect(getterCalls).toBeGreaterThan(0);
+  });
+});
+
+describe("event-log manifest commands", () => {
+  const invokeMock = vi.mocked(invoke);
+  it("keeps expansion and parse commands on the event-log wire contract", async () => {
+    const manifest = {
+      entries: [
+        {
+          sourceId: "/logs/application.evtx",
+          path: "/logs/Application.evtx",
+          kind: "file" as const,
+        },
+      ],
+      coverage: [],
+    };
+    const result = {
+      records: [],
+      channels: [],
+      totalRecords: 0,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+    invokeMock.mockResolvedValueOnce(manifest).mockResolvedValueOnce(result);
+
+    const sources = [{ path: "/logs", kind: "file" as const }];
+    await expect(expandEventLogSources(sources)).resolves.toEqual(manifest);
+    await expect(parseEventLogManifest(manifest)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "evtx_expand_sources", {
+      sources,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "evtx_parse_manifest", {
+      manifest,
+    });
+  });
+
+  const validEventRecord = {
+    id: 1,
+    eventRecordId: 42,
+    timestamp: "2026-08-18T12:00:00Z",
+    timestampEpoch: 1_755_523_200_000,
+    provider: "Provider",
+    channel: "Application",
+    eventId: 75,
+    level: "Information",
+    computer: "WIN-TEST",
+    message: "Enrollment failed",
+    eventData: [],
+    rawXml: "",
+    sourceLabel: "Application.evtx",
+  };
+
+  it.each([
+    ["absent", {}],
+    ["null", { eventRecordIdText: null }],
+    ["string", { eventRecordIdText: "42" }],
+  ] as const)("accepts %s eventRecordIdText values", async (_label, identity) => {
+    const result = {
+      records: [{ ...validEventRecord, ...identity }],
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: "live" },
+      ],
+      totalRecords: 1,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).resolves.toEqual(
+      result,
+    );
+  });
+
+  it.each([[42], [true], [[]], [{ value: "42" }]])(
+    "rejects malformed eventRecordIdText type %s",
+    async (eventRecordIdText) => {
+      vi.mocked(invoke).mockResolvedValueOnce({
+        records: [{ ...validEventRecord, eventRecordIdText }],
+        channels: [
+          { name: "Application", eventCount: 1, sourceType: "live" },
+        ],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      });
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).rejects.toThrow(
+        "Command 'evtx_parse_manifest' returned an invalid response.",
+      );
+    },
+  );
+
+  it.each([
+    [null, "the event log reader returned an invalid source manifest"],
+    [
+      {
+        entries: [
+          { sourceId: "source", path: "Application.evtx", kind: "unknown" },
+        ],
+        coverage: [],
+      },
+      "the event log reader returned an invalid source manifest entry at index 0",
+    ],
+    [
+      {
+        entries: [],
+        coverage: [
+          { kind: "unknown", path: "Application.evtx", reason: "bad coverage" },
+        ],
+      },
+      "the event log reader returned an invalid source manifest coverage at index 0",
+    ],
+  ] as const)(
+    "rejects malformed expansion manifests at the command boundary (%s)",
+    async (reply, message) => {
+      vi.mocked(invoke).mockResolvedValueOnce(reply);
+
+      await expect(
+        expandEventLogSources([{ path: "/logs", kind: "file" }]),
+      ).rejects.toThrow(message);
+    },
+  );
+});
+
+type DiagnosisSummaryFixture = {
+  findings: Array<Record<string, unknown>>;
+  evidence: Array<Record<string, unknown>>;
+  coverageGaps: Array<Record<string, unknown>>;
+  correlations: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  overview: Record<string, unknown>;
+};
+
+function makeValidDiagnosisSummary(): DiagnosisSummaryFixture {
+  const coverageGap = {
+    id: "gap-1",
+    source: "Application.evtx",
+    state: "unknown",
+    detail: "The source was not available.",
+    evidence: [{ kind: "dsregcmdRaw", value: "gap evidence" }],
+  };
+  return {
+    findings: [
+      {
+        findingId: "finding-1",
+        class: "confirmedFailure",
+        severity: "error",
+        confidence: "high",
+        title: "Enrollment failed",
+        summary: "The event reports a failed enrollment.",
+        evidence: [{ kind: "dsregcmdRaw", value: "provider evidence" }],
+        coverageGaps: [coverageGap],
+        recommendedChecks: ["Check the source file."],
+      },
+    ],
+    evidence: [
+      { kind: "dsregcmdRaw", value: "summary evidence" },
+      { kind: "dsregcmdRaw", value: "provider evidence" },
+    ],
+    coverageGaps: [coverageGap],
+    correlations: [
+      {
+        left: "event-1",
+        right: "event-2",
+        basis: "candidateIdentifier",
+        status: "candidate",
+        candidateIds: ["event-2"],
+        evidence: [
+          { originId: "event-1", field: "provider", value: "Provider" },
+        ],
+      },
+    ],
+    events: [
+      {
+        evidence: [{ kind: "dsregcmdRaw", value: "event evidence" }],
+        family: "mdmEnrollment",
+        findings: [],
+        errorTokens: [
+          {
+            raw: "0x80070005",
+            decimal: null,
+            hex: "0x80070005",
+            malformed: false,
+            found: true,
+            description: "Access denied",
+            category: "hresult",
+          },
+        ],
+      },
+    ],
+    overview: {
+      outcome: "confirmedFailure",
+      headline: "Evidence contains confirmed operational failure(s).",
+      findingCount: 1,
+      coverageGapCount: 1,
+      evidenceCount: 2,
+      correlationCount: 1,
+    },
+  };
+}
+
+function withDiagnosisRecordChange(
+  summary: DiagnosisSummaryFixture,
+  key: "coverageGaps" | "correlations",
+  change: Record<string, unknown>,
+): DiagnosisSummaryFixture {
+  if (key === "coverageGaps") {
+    return {
+      ...summary,
+      coverageGaps: [{ ...summary.coverageGaps[0], ...change }],
+    };
+  }
+  return {
+    ...summary,
+    correlations: [{ ...summary.correlations[0], ...change }],
+  };
+}
+
+function withDiagnosisFindingChange(
+  summary: DiagnosisSummaryFixture,
+  change: Record<string, unknown>,
+): DiagnosisSummaryFixture {
+  return { ...summary, findings: [{ ...summary.findings[0], ...change }] };
+}
+
+function withDiagnosisTokenChange(
+  summary: DiagnosisSummaryFixture,
+  change: Record<string, unknown>,
+): DiagnosisSummaryFixture {
+  const event = summary.events[0];
+  const token = (event.errorTokens as Array<Record<string, unknown>>)[0];
+  return {
+    ...summary,
+    events: [{ ...event, errorTokens: [{ ...token, ...change }] }],
+  };
+}
+const malformedDiagnosisCases: Array<
+  [string, (summary: DiagnosisSummaryFixture) => DiagnosisSummaryFixture]
+> = [
+  [
+    "coverage gap state",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "coverageGaps", { state: "invalid" }),
+  ],
+  [
+    "coverage gap evidence",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "coverageGaps", { evidence: [{}] }),
+  ],
+  [
+    "correlation basis",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "correlations", { basis: "invalid" }),
+  ],
+  [
+    "correlation status",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "correlations", { status: "invalid" }),
+  ],
+  [
+    "correlation candidate",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "correlations", {
+        candidateIds: [42],
+      }),
+  ],
+  [
+    "correlation evidence",
+    (summary) =>
+      withDiagnosisRecordChange(summary, "correlations", { evidence: [{}] }),
+  ],
+  [
+    "error token raw",
+    (summary) => withDiagnosisTokenChange(summary, { raw: "" }),
+  ],
+  [
+    "error token decimal fraction",
+    (summary) => withDiagnosisTokenChange(summary, { decimal: 1.5 }),
+  ],
+  [
+    "error token decimal unsafe integer",
+    (summary) =>
+      withDiagnosisTokenChange(summary, {
+        decimal: Number.MAX_SAFE_INTEGER + 2,
+      }),
+  ],
+  [
+    "error token malformed",
+    (summary) => withDiagnosisTokenChange(summary, { malformed: "false" }),
+  ],
+  [
+    "error token found",
+    (summary) => withDiagnosisTokenChange(summary, { found: "true" }),
+  ],
+  [
+    "finding coverage gaps",
+    (summary) => withDiagnosisFindingChange(summary, { coverageGaps: [{}] }),
+  ],
+  [
+    "finding recommended checks",
+    (summary) =>
+      withDiagnosisFindingChange(summary, { recommendedChecks: [42] }),
+  ],
+];
+
+describe("event-log diagnosis IPC boundary", () => {
+  it.each(malformedDiagnosisCases)(
+    "rejects malformed diagnosis summary %s",
+    async (_caseName, mutateSummary) => {
+      vi.mocked(invoke).mockResolvedValueOnce(
+        mutateSummary(makeValidDiagnosisSummary()),
+      );
+
+      await expect(diagnoseEventRecords([])).rejects.toThrow(
+        "Command 'evtx_diagnose_records' returned an invalid response.",
+      );
+      expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
+        records: [],
+        coverageGaps: [],
+        timeline: null,
+        textEntries: [],
+      });
+    },
+  );
+  it("rejects unsafe numeric event identity that conflicts with recordIdText", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.evidence = [
+      ...summary.evidence,
+      {
+        kind: "event",
+        value: {
+          source: "Application.evtx",
+          provider: "Provider",
+          eventId: 75,
+          recordId: Number("9007199254740992"),
+          recordIdText: "0",
+          fallbackIdentity: "fallback",
+        },
+      },
+    ];
+    summary.overview.evidenceCount = summary.evidence.length;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+  it("rejects unsafe numeric event identity paired with a safe-range text id", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.evidence = [
+      ...summary.evidence,
+      {
+        kind: "event",
+        value: {
+          source: "Application.evtx",
+          provider: "Provider",
+          eventId: 75,
+          recordId: Number("9007199254740992"),
+          recordIdText: "42",
+          fallbackIdentity: "fallback",
+        },
+      },
+    ];
+    summary.overview.evidenceCount = summary.evidence.length;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+
+  it("accepts unsafe numeric event identity when lossless text is present", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.evidence = [
+      ...summary.evidence,
+      {
+        kind: "event",
+        value: {
+          source: "Application.evtx",
+          provider: "Provider",
+          eventId: 75,
+          recordId: Number("9007199254740992"),
+          recordIdText: "9007199254740993",
+          fallbackIdentity: null,
+        },
+      },
+    ];
+    summary.overview.evidenceCount = summary.evidence.length;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).resolves.toBe(summary);
+  });
+  it("rejects an unsafe numeric event identity with mismatched lossless text", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.evidence = [
+      ...summary.evidence,
+      {
+        kind: "event",
+        value: {
+          source: "Application.evtx",
+          provider: "Provider",
+          eventId: 75,
+          recordId: Number("9007199254740994"),
+          recordIdText: "9007199254740993",
+          fallbackIdentity: null,
+        },
+      },
+    ];
+    summary.overview.evidenceCount = summary.evidence.length;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+
+
+  it("rejects diagnosis overview counts that disagree with the summary arrays", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.overview.findingCount = 99;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+  it("rejects a malformed backend response instead of exposing it as a diagnosis", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+    });
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+
+  it("rejects event diagnostics without source evidence", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [
+        {
+          evidence: [],
+          family: "mdmEnrollment",
+          findings: [],
+          errorTokens: [],
+        },
+      ],
+    });
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+  it("rejects nested evidence references that omit required event identity", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [
+        {
+          findingId: "finding-1",
+          class: "confirmedFailure",
+          severity: "error",
+          confidence: "high",
+          title: "Enrollment failed",
+          summary: "The event reports a failed enrollment.",
+          evidence: [
+            {
+              kind: "event",
+              value: {
+                source: "Application.evtx",
+                provider: "Provider",
+                eventId: 75,
+              },
+            },
+          ],
+          coverageGaps: [],
+          recommendedChecks: [],
+        },
+      ],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+    });
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+
+  it("accepts valid findings whose source message is empty", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [
+        {
+          findingId: "finding-empty-summary",
+          class: "confirmedFailure",
+          severity: "error",
+          confidence: "medium",
+          title: "Event reports a failure",
+          summary: "",
+          evidence: [{ kind: "dsregcmdRaw", value: "provider evidence" }],
+          coverageGaps: [],
+          recommendedChecks: [],
+        },
+      ],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+      overview: {
+        outcome: "confirmedFailure",
+        headline: "Failure evidence is available.",
+        findingCount: 1,
+        coverageGapCount: 0,
+        evidenceCount: 0,
+        correlationCount: 0,
+      },
+    });
+
+    await expect(diagnoseEventRecords([])).resolves.toMatchObject({
+      findings: [{ findingId: "finding-empty-summary", summary: "" }],
+    });
+  });
+
+  it("rejects actionable findings without evidence or coverage", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [
+        {
+          findingId: "uncited-finding",
+          class: "confirmedFailure",
+          severity: "error",
+          confidence: "high",
+          title: "Uncited failure",
+          summary: "No source was supplied.",
+          evidence: [],
+          coverageGaps: [],
+          recommendedChecks: [],
+        },
+      ],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+    });
+
+    await expect(diagnoseEventRecords([])).rejects.toThrow(
+      "Command 'evtx_diagnose_records' returned an invalid response.",
+    );
+  });
+
+  it("transports unsafe EventRecordID values through their lossless decimal text", async () => {
+    const exactId = "9007199254740993";
+    const record: EvtxRecord = {
+      id: 1,
+      eventRecordId: Number(exactId),
+      eventRecordIdText: exactId,
+      timestamp: "2026-08-18T12:00:00Z",
+      timestampEpoch: 1_755_523_200_000,
+      provider: "Provider",
+      channel: "Application",
+      eventId: 75,
+      level: "Information",
+      computer: "WIN-TEST",
+      message: "Enrollment failed",
+      eventData: [],
+      rawXml: "",
+      sourceLabel: "Application.evtx",
+      originKind: "event",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+      overview: {
+        outcome: "noFindings",
+        headline: "No operational findings were identified.",
+        findingCount: 0,
+        coverageGapCount: 0,
+        evidenceCount: 0,
+        correlationCount: 0,
+      },
+    });
+
+    await expect(diagnoseEventRecords([record])).resolves.toEqual({
+      findings: [],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+      overview: {
+        outcome: "noFindings",
+        headline: "No operational findings were identified.",
+        findingCount: 0,
+        coverageGapCount: 0,
+        evidenceCount: 0,
+        correlationCount: 0,
+      },
+    });
+    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
+      records: [
+        {
+          ...record,
+          eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+        },
+      ],
+      coverageGaps: [],
+      timeline: null,
+      textEntries: [],
+    });
+  });
+  it("uses bounded numeric transport when decimal text exceeds u64", async () => {
+    const record: EvtxRecord = {
+      id: 1,
+      eventRecordId: Number("18446744073709551616"),
+      eventRecordIdText: "18446744073709551616",
+      timestamp: "2026-08-18T12:00:00Z",
+      timestampEpoch: 1_755_523_200_000,
+      provider: "Provider",
+      channel: "Application",
+      eventId: 75,
+      level: "Information",
+      computer: "WIN-TEST",
+      message: "Enrollment failed",
+      eventData: [],
+      rawXml: "",
+      sourceLabel: "Application.evtx",
+      originKind: "event",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce({
+      findings: [],
+      evidence: [],
+      coverageGaps: [],
+      correlations: [],
+      events: [],
+      overview: {
+        outcome: "noFindings",
+        headline: "No operational findings were identified.",
+        findingCount: 0,
+        coverageGapCount: 0,
+        evidenceCount: 0,
+        correlationCount: 0,
+      },
+    });
+
+    await expect(diagnoseEventRecords([record])).resolves.toMatchObject({
+      findings: [],
+    });
+    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
+      records: [
+        {
+          ...record,
+          eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+        },
+      ],
+      coverageGaps: [],
+      timeline: null,
+      textEntries: [],
+    });
+  });
+
+  it("rejects an unsafe EventRecordID paired with a safe-range transport text id", async () => {
+    const record: EvtxRecord = {
+      id: 1,
+      eventRecordId: Number("9007199254740992"),
+      eventRecordIdText: "42",
+      timestamp: "2026-08-18T12:00:00Z",
+      timestampEpoch: 1_755_523_200_000,
+      provider: "Provider",
+      channel: "Application",
+      eventId: 75,
+      level: "Information",
+      computer: "WIN-TEST",
+      message: "Enrollment failed",
+      eventData: [],
+      rawXml: "",
+      sourceLabel: "Application.evtx",
+      originKind: "event",
+    };
+
+    await expect(diagnoseEventRecords([record])).rejects.toThrow(
+      "EventRecordID text must preserve an unsafe numeric identity.",
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it("keeps malformed record identities in the diagnosis batch for backend coverage", async () => {
+    const record: EvtxRecord = {
+      id: 1,
+      eventRecordId: 42,
+      eventRecordIdText: "not-decimal",
+      timestamp: "2026-08-18T12:00:00Z",
+      timestampEpoch: 1_755_523_200_000,
+      provider: "Provider",
+      channel: "Application",
+      eventId: 75,
+      level: "Information",
+      computer: "WIN-TEST",
+      message: "Enrollment failed",
+      eventData: [],
+      rawXml: "",
+      sourceLabel: "Application.evtx",
+      originKind: "event",
+    };
+    const summary = makeValidDiagnosisSummary();
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([record])).resolves.toBe(summary);
+    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
+      records: [{ ...record, eventRecordId: 42 }],
+      coverageGaps: [],
+      timeline: null,
+      textEntries: [],
+    });
   });
 });

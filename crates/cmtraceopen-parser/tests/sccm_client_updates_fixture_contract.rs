@@ -2248,7 +2248,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
         0x1f83d9ab,
         0x5be0cd19,
     ];
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0.iter() {
         let mut words = [0u32; 64];
         for (index, word) in words.iter_mut().take(16).enumerate() {
             let offset = index * 4;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { tokens } from "@fluentui/react-components";
 import {
@@ -6,9 +6,18 @@ import {
   getLogListMetrics,
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { useMarkerStore } from "../../stores/marker-store";
+import {
+  evtxMarkerKey,
+  getEvtxMarker,
+  loadEvtxMarkers,
+  matchesEvtxQuickFilter,
+  toggleEvtxBookmark,
+  toggleEvtxTag,
+} from "./evtx-marker-adapter";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
-  parseEventIdFilter,
+  selectVisibleRecords,
   buildGroupedRows,
   type EvtxRow,
 } from "./evtx-filter";
@@ -50,52 +59,87 @@ function compareRecords(
   }
   return direction === "asc" ? cmp : -cmp;
 }
+function hasUsableRecordId(record: EvtxRecord): boolean {
+  const textId = record.eventRecordIdText?.trim() ?? "";
+  if (textId !== "") return /^\d+$/.test(textId) && !/^0+$/.test(textId);
+  return Number.isSafeInteger(record.eventRecordId) && record.eventRecordId > 0;
+}
 
-export function EvtxTimeline() {
+function evtxRowKeys(rows: readonly EvtxRow[]): string[] {
+  const occurrencesByFingerprint = new Map<string, number>();
+  return rows.map((row) => {
+    if (row.kind === "group") return `group:${row.key}`;
+    const key = `event:${evtxMarkerKey(row.record)}`;
+    if (hasUsableRecordId(row.record)) return key;
+
+    const occurrence = occurrencesByFingerprint.get(key) ?? 0;
+    occurrencesByFingerprint.set(key, occurrence + 1);
+    return `${key}:occurrence:${occurrence}`;
+  });
+}
+export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
+  const [liveNowEpoch, setLiveNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    if (nowEpoch !== undefined) return;
+    setLiveNowEpoch(Date.now());
+    const timer = window.setInterval(() => setLiveNowEpoch(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [nowEpoch]);
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
   const filterSearch = useEvtxStore((s) => s.filterSearch);
+  const quickFilter = useEvtxStore((s) => s.quickFilter);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const groupBy = useEvtxStore((s) => s.groupBy);
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
-
+  const markersByFile = useMarkerStore((s) => s.markersByFile);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
+
+  const currentNowEpoch = nowEpoch ?? liveNowEpoch;
   const metrics = useMemo(
     () => getLogListMetrics(logListFontSize),
     [logListFontSize]
   );
+  const recordRowExtra = columnConfig.order.includes("level") ? 6 : 2;
+  const rowEstimate = metrics.rowHeight + recordRowExtra;
 
-  const rowEstimate = metrics.rowHeight + 2;
 
-  const eventIdSet = useMemo(
-    () => parseEventIdFilter(filterEventIds),
-    [filterEventIds]
+  const filteredRecords = useMemo(
+    () =>
+      selectVisibleRecords({
+        records,
+        selectedChannels,
+        filterLevels,
+        filterEventIds,
+        filterSearch,
+        quickFilter,
+        visibleColumns: columnConfig.order,
+        timeZoneMode,
+        timeWindow,
+        nowEpoch: currentNowEpoch,
+      }),
+    [
+      records,
+      selectedChannels,
+      filterLevels,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      columnConfig.order,
+      timeZoneMode,
+      timeWindow,
+      currentNowEpoch,
+    ]
   );
-
-  const searchLower = useMemo(
-    () => filterSearch.trim().toLowerCase(),
-    [filterSearch]
-  );
-
-  const filteredRecords = useMemo(() => {
-    return records.filter((r) => {
-      if (!selectedChannels.has(r.channel)) return false;
-      if (!filterLevels.has(r.level)) return false;
-      if (eventIdSet && !eventIdSet.has(r.eventId)) return false;
-      if (searchLower && !r.message.toLowerCase().includes(searchLower) && !r.provider.toLowerCase().includes(searchLower)) {
-        return false;
-      }
-      return true;
-    });
-  }, [records, selectedChannels, filterLevels, eventIdSet, searchLower]);
 
   const sortedRecords = useMemo(() => {
     return [...filteredRecords].sort((a, b) =>
@@ -104,6 +148,7 @@ export function EvtxTimeline() {
   }, [filteredRecords, sortField, sortDirection]);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const rowElementsRef = useRef(new Set<HTMLElement>());
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
@@ -116,17 +161,62 @@ export function EvtxTimeline() {
     () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
     [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
   );
-
-  // Keyboard navigation moves between records, skipping headers, because a header is not a
-  // selectable event.
-  const recordRowIndexes = useMemo(
-    () =>
-      rows.reduce<number[]>((indexes, row, index) => {
-        if (row.kind === "record") indexes.push(index);
-        return indexes;
-      }, []),
-    [rows]
+  const uiRowKeys = useMemo(() => evtxRowKeys(rows), [rows]);
+  const uiRowIndexByKey = useMemo(
+    () => new Map(uiRowKeys.map((key, index) => [key, index])),
+    [uiRowKeys]
   );
+  const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
+  const activeRowIndex = useMemo(() => {
+    if (rows.length === 0) return -1;
+    if (activeRowKey === null) return 0;
+    const index = uiRowIndexByKey.get(activeRowKey);
+    return index === undefined ? 0 : index;
+  }, [activeRowKey, rows.length, uiRowIndexByKey]);
+  const setActiveRowIndex = useCallback(
+    (index: number) => {
+      const key = uiRowKeys[index];
+      if (key) setActiveRowKey(key);
+    },
+    [uiRowKeys]
+  );
+  useEffect(() => {
+    if (rows.length === 0) {
+      if (activeRowKey !== null) setActiveRowKey(null);
+      return;
+    }
+    if (activeRowKey === null || !uiRowIndexByKey.has(activeRowKey)) {
+      setActiveRowKey(uiRowKeys[0]);
+    }
+  }, [activeRowKey, rows.length, uiRowIndexByKey, uiRowKeys]);
+  const rowIndexByRecordId = useMemo(() => {
+    const indexes = new Map<number, number>();
+    rows.forEach((row, index) => {
+      if (row.kind === "record") indexes.set(row.record.id, index);
+    });
+    return indexes;
+  }, [rows]);
+  useEffect(() => {
+    if (selectedRecordId === null) return;
+    const selectedRowIndex = rowIndexByRecordId.get(selectedRecordId);
+    if (selectedRowIndex !== undefined) setActiveRowIndex(selectedRowIndex);
+  }, [rowIndexByRecordId, selectedRecordId, setActiveRowIndex]);
+  const sourceLabels = useMemo(
+    () => [...new Set(records.map((record) => record.sourceLabel).filter(Boolean))],
+    [records]
+  );
+
+  useEffect(() => {
+    loadEvtxMarkers(sourceLabels);
+  }, [sourceLabels]);
+
+  const handleTag = useCallback((record: EvtxRecord) => {
+    toggleEvtxTag(record);
+  }, []);
+  const handleBookmark = useCallback((record: EvtxRecord) => {
+    toggleEvtxBookmark(record);
+  }, []);
+
 
   // Checked against the rendered rows, not the filtered records. Filtering already dropped a
   // hidden selection, but collapsing a group leaves the record in sortedRecords while taking its
@@ -139,17 +229,50 @@ export function EvtxTimeline() {
     );
     if (!stillVisible) setSelectedRecordId(null);
   }, [rows, selectedRecordId, setSelectedRecordId]);
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowEstimate,
-    getItemKey: (index) => {
-      const row = rows[index];
-      return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
-    },
+    estimateSize: (index) =>
+      rows[index]?.kind === "group" ? metrics.rowHeight : rowEstimate,
+    getItemKey: (index) => uiRowKeys[index] ?? "row:empty",
     overscan: 10,
   });
+  const measureRow = useCallback(
+    (node: HTMLElement | null) => {
+      if (node) {
+        rowElementsRef.current.add(node);
+      } else {
+        for (const element of rowElementsRef.current) {
+          if (!element.isConnected) rowElementsRef.current.delete(element);
+        }
+      }
+      virtualizer.measureElement(node);
+    },
+    [virtualizer.measureElement]
+  );
+
+
+  // Persisted font-size and row-shape changes alter rendered row heights. Estimates remain correct
+  // for offscreen rows, while connected rows must use their actual border-box height because
+  // TanStack's no-entry measurement path may return the existing cache.
+  const measureConnectedRow = useCallback(
+    (element: HTMLElement) => {
+      const height = element.getBoundingClientRect().height;
+      if (height > 0) {
+        virtualizer.resizeItem(Number(element.dataset.index), height);
+      } else {
+        virtualizer.measureElement(element);
+      }
+    },
+    [virtualizer.measureElement, virtualizer.resizeItem]
+  );
+
+  useEffect(() => {
+    virtualizer.measure();
+    for (const element of rowElementsRef.current) {
+      if (element.isConnected) measureConnectedRow(element);
+    }
+  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
@@ -158,43 +281,71 @@ export function EvtxTimeline() {
   const monoFontSize = Math.max(10, fontSize - 1);
   const lineHeight = `${metrics.rowLineHeight}px`;
 
+  const focusRow = useCallback(
+    (index: number) => {
+      setActiveRowIndex(index);
+      virtualizer.scrollToIndex(index, { align: "auto" });
+      const element = [...rowElementsRef.current].find(
+        (candidate) => Number(candidate.dataset.index) === index
+      );
+      if (element) {
+        element.focus();
+        return;
+      }
+      const focus = () => {
+        [...rowElementsRef.current]
+          .find((candidate) => Number(candidate.dataset.index) === index)
+          ?.focus();
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(focus);
+    },
+    [setActiveRowIndex, virtualizer.scrollToIndex]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      const focusedElement =
+        e.target instanceof HTMLElement
+          ? e.target.closest<HTMLElement>("[data-index]")
+          : null;
+      const focusedIndex = focusedElement ? Number(focusedElement.dataset.index) : NaN;
+      const targetIndex =
+        groupBy.length > 0 &&
+        Number.isInteger(focusedIndex) &&
+        focusedIndex >= 0 &&
+        focusedIndex < rows.length
+          ? focusedIndex
+          : activeRowIndex;
+      const currentRow = rows[targetIndex];
+      if (
+        groupBy.length > 0 &&
+        currentRow?.kind === "group" &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight")
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "ArrowRight" && currentRow.collapsed) toggleGroup(currentRow.key);
+        if (e.key === "ArrowLeft" && !currentRow.collapsed) toggleGroup(currentRow.key);
+        return;
+      }
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Home" && e.key !== "End") return;
       e.preventDefault();
       e.stopPropagation();
+      if (rows.length === 0) return;
 
-      if (recordRowIndexes.length === 0) return;
+      const currentIndex = Math.min(targetIndex, rows.length - 1);
+      let nextIndex = currentIndex;
+      if (e.key === "ArrowDown") nextIndex = Math.min(rows.length - 1, currentIndex + 1);
+      if (e.key === "ArrowUp") nextIndex = Math.max(0, currentIndex - 1);
+      if (e.key === "Home") nextIndex = 0;
+      if (e.key === "End") nextIndex = rows.length - 1;
 
-      const currentPosition = selectedRecordId != null
-        ? recordRowIndexes.findIndex((rowIndex) => {
-            const row = rows[rowIndex];
-            return row.kind === "record" && row.record.id === selectedRecordId;
-          })
-        : -1;
-
-      let nextPosition: number;
-      if (e.key === "ArrowDown") {
-        nextPosition = currentPosition < recordRowIndexes.length - 1 ? currentPosition + 1 : currentPosition;
-      } else if (e.key === "ArrowUp") {
-        nextPosition = currentPosition > 0 ? currentPosition - 1 : 0;
-      } else if (e.key === "Home") {
-        nextPosition = 0;
-      } else {
-        nextPosition = recordRowIndexes.length - 1;
-      }
-
-      if (nextPosition < 0) nextPosition = 0;
-      const rowIndex = recordRowIndexes[nextPosition];
-      const row = rows[rowIndex];
-      if (row?.kind === "record") {
-        setSelectedRecordId(row.record.id);
-        virtualizer.scrollToIndex(rowIndex, { align: "auto" });
-        // Keep focus on the container so subsequent arrow keys work
-        parentRef.current?.focus();
-      }
+      setActiveRowIndex(nextIndex);
+      const row = rows[nextIndex];
+      if (row?.kind === "record") setSelectedRecordId(row.record.id);
+      focusRow(nextIndex);
     },
-    [selectedRecordId, rows, recordRowIndexes, setSelectedRecordId, virtualizer]
+    [activeRowIndex, focusRow, groupBy.length, rows, setSelectedRecordId, toggleGroup]
   );
 
   if (records.length === 0) {
@@ -218,8 +369,6 @@ export function EvtxTimeline() {
       <div
         style={{
           padding: "20px",
-          color: tokens.colorNeutralForeground3,
-          textAlign: "center",
           fontSize: `${fontSize}px`,
           fontFamily: LOG_UI_FONT_FAMILY,
         }}
@@ -234,16 +383,14 @@ export function EvtxTimeline() {
       ref={parentRef}
       // A flat list is a listbox; once grouped it is a tree, because a group header is not an
       // option and a listbox may only own option and group children. Declaring the wrong one let
-      // assistive technology drop the headers or stop treating the rows as a set.
       role={groupBy.length > 0 ? "tree" : "listbox"}
-      tabIndex={0}
+      tabIndex={-1}
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       style={{
         overflowY: "auto",
         height: "100%",
         padding: "0",
-        backgroundColor: tokens.colorNeutralBackground1,
         fontFamily: LOG_UI_FONT_FAMILY,
         outline: "none",
       }}
@@ -271,16 +418,20 @@ export function EvtxTimeline() {
             if (row.kind === "group") {
               return (
                 <div
-                  key={virtualRow.key}
-                  ref={virtualizer.measureElement}
+                  key={uiRowKeys[virtualRow.index] ?? virtualRow.key}
+                  ref={measureRow}
                   data-index={virtualRow.index}
                   role="treeitem"
                   aria-level={row.depth + 1}
                   // Focusable and activated by keyboard. It was reachable only by pointer, so a
                   // keyboard user could not expand or collapse a group at all.
-                  tabIndex={0}
+                  tabIndex={activeRowIndex === virtualRow.index ? 0 : -1}
                   aria-expanded={!row.collapsed}
-                  onClick={() => toggleGroup(row.key)}
+                  onFocus={() => setActiveRowIndex(virtualRow.index)}
+                  onClick={() => {
+                    setActiveRowIndex(virtualRow.index);
+                    toggleGroup(row.key);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
@@ -298,6 +449,7 @@ export function EvtxTimeline() {
                     gap: "6px",
                     paddingLeft: `${8 + row.depth * 16}px`,
                     height: `${metrics.rowHeight}px`,
+                    boxSizing: "border-box",
                     fontSize: `${smallFontSize}px`,
                     fontWeight: 600,
                     cursor: "pointer",
@@ -315,10 +467,14 @@ export function EvtxTimeline() {
             }
 
             const record = row.record;
+            const marker = getEvtxMarker(record, markersByFile);
+            const quickFilterMatch =
+              Boolean(quickFilter.query.trim()) &&
+              matchesEvtxQuickFilter(record, quickFilter, columnConfig.order, timeZoneMode);
             return (
               <EvtxTimelineRow
-                key={virtualRow.key}
-                ref={virtualizer.measureElement}
+                key={uiRowKeys[virtualRow.index] ?? virtualRow.key}
+                ref={measureRow}
                 record={record}
                 dataIndex={virtualRow.index}
                 isSelected={selectedRecordId === record.id}
@@ -330,6 +486,15 @@ export function EvtxTimeline() {
                 columns={columns}
                 timeZoneMode={timeZoneMode}
                 onSelect={setSelectedRecordId}
+                marker={marker}
+                quickFilter={quickFilter}
+                quickFilterMatch={quickFilterMatch}
+                grouped={groupBy.length > 0}
+                depth={row.depth}
+                tabIndex={activeRowIndex === virtualRow.index ? 0 : -1}
+                onFocus={() => setActiveRowIndex(virtualRow.index)}
+                onTag={handleTag}
+                onBookmark={handleBookmark}
               />
             );
           })}

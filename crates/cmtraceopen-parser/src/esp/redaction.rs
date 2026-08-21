@@ -1223,8 +1223,7 @@ fn redact_reference(value: &mut String, redaction: &ExportRedaction) {
     // an IPv4-mapped address cannot leak its dotted tail. Reference ids are
     // derived from artifact and source names, which routinely carry a host or
     // address.
-    let redacted =
-        azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = redact_ipv6_addresses(&redacted);

@@ -1,48 +1,74 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventLogSourceManifest } from "./types";
 
-const invoke = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => undefined),
+const expandEventLogSources = vi.hoisted(() => vi.fn());
+const listLogFolder = vi.hoisted(() => vi.fn());
+const parseManifest = vi.hoisted(() => vi.fn());
+const parseFiles = vi.hoisted(() => vi.fn());
+const setLoadError = vi.hoisted(() => vi.fn());
+
+vi.mock("../../lib/commands", () => ({ expandEventLogSources, listLogFolder }));
+vi.mock("./evtx-store", () => ({
+  useEvtxStore: {
+    getState: () => ({ parseManifest, parseFiles, setLoadError }),
+  },
 }));
 
-vi.mock("../../lib/commands", () => ({
-  listLogFolder: vi.fn(),
-}));
+// Dynamic import is intentional: Vitest mocks must be installed before this module evaluates.
+const { openEventLogSource, openEventLogSources } =
+  await import("./open-event-log-source");
+beforeEach(() => {
+  expandEventLogSources.mockReset();
+  listLogFolder.mockReset();
+  parseManifest.mockReset();
+  parseFiles.mockReset();
+  setLoadError.mockReset();
+});
 
-const { listLogFolder } = await import("../../lib/commands");
-const { openEventLogSource } = await import("./open-event-log-source");
-const { useEvtxStore } = await import("./evtx-store");
-const actualParseFiles = useEvtxStore.getState().parseFiles;
+describe("openEventLogSources provenance", () => {
+  it("keeps backend archive and VSS kinds when the picker reports a generic file", async () => {
+    const manifest: EventLogSourceManifest = {
+      entries: [
+        { sourceId: "archive", path: "Archive-Application.evtx", kind: "archive" },
+        { sourceId: "vss", path: "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Application.evtx", kind: "vss" },
+      ],
+      coverage: [],
+    };
+    expandEventLogSources.mockResolvedValue(manifest);
+
+    await openEventLogSources([
+      { kind: "file", path: "Archive-Application.evtx" },
+      { kind: "file", path: "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1\\Application.evtx" },
+    ]);
+
+    expect(parseManifest).toHaveBeenCalledWith(manifest);
+    expect(parseManifest.mock.calls[0][0].entries.map((entry: { kind: string }) => entry.kind)).toEqual([
+      "archive",
+      "vss",
+    ]);
+  });
+});
 
 describe("openEventLogSource", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    useEvtxStore.setState({
-      parseFiles: vi.fn(async () => undefined),
-      setLoadError: vi.fn(),
-    });
+    parseFiles.mockResolvedValue(undefined);
   });
 
   it("parses a single evtx file", async () => {
     await openEventLogSource({ kind: "file", path: "/tmp/Application.evtx" });
-    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([
-      "/tmp/Application.evtx",
-    ]);
+
+    expect(parseFiles).toHaveBeenCalledWith(["/tmp/Application.evtx"]);
   });
-  it("propagates file parse failures to the caller", async () => {
-    const parseFiles = actualParseFiles;
-    useEvtxStore.setState({
-      parseFiles,
-      setLoadError: vi.fn(),
-    });
-    invoke.mockRejectedValueOnce(new Error("not a file"));
+
+  it("propagates file parse failures and records the error", async () => {
+    parseFiles.mockRejectedValueOnce(new Error("not a file"));
 
     await expect(
-      openEventLogSource({ kind: "file", path: "/tmp/not-a-file" }),
+      openEventLogSource({ kind: "file", path: "/tmp/not-a-file" })
     ).rejects.toThrow("not a file");
-    expect(useEvtxStore.getState().loadError).toBe("not a file");
+    expect(setLoadError).toHaveBeenCalledWith("not a file");
   });
+
   it("parses a known file source using its default path", async () => {
     const defaultPath = "/tmp/Application.evtx";
 
@@ -53,20 +79,13 @@ describe("openEventLogSource", () => {
       pathKind: "file",
     });
 
-    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([defaultPath]);
+    expect(parseFiles).toHaveBeenCalledWith([defaultPath]);
     expect(listLogFolder).not.toHaveBeenCalled();
   });
 
   it("parses evtx files from a known folder source", async () => {
     const defaultPath = "/tmp/logs";
-    vi.mocked(listLogFolder).mockResolvedValue({
-      sourceKind: "folder",
-      source: {
-        kind: "known",
-        sourceId: "known-logs",
-        defaultPath,
-        pathKind: "folder",
-      },
+    listLogFolder.mockResolvedValue({
       entries: [
         {
           name: "SYSTEM.EVTX",
@@ -100,42 +119,28 @@ describe("openEventLogSource", () => {
     });
 
     expect(listLogFolder).toHaveBeenCalledWith(defaultPath);
-    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([
-      `${defaultPath}/SYSTEM.EVTX`,
-    ]);
+    expect(parseFiles).toHaveBeenCalledWith([`${defaultPath}/SYSTEM.EVTX`]);
   });
 
   it("rejects a known folder with no evtx files", async () => {
-    const defaultPath = "/tmp/empty";
-    vi.mocked(listLogFolder).mockResolvedValue({
-      sourceKind: "folder",
-      source: {
-        kind: "known",
-        sourceId: "known-empty",
-        defaultPath,
-        pathKind: "folder",
-      },
-      entries: [],
-    });
+    listLogFolder.mockResolvedValue({ entries: [] });
 
     await expect(
       openEventLogSource({
         kind: "known",
         sourceId: "known-empty",
-        defaultPath,
+        defaultPath: "/tmp/empty",
         pathKind: "folder",
-      }),
+      })
     ).rejects.toThrow("No .evtx files were found for that known source.");
-    expect(useEvtxStore.getState().setLoadError).toHaveBeenCalledWith(
-      "No .evtx files were found for that known source.",
+    expect(setLoadError).toHaveBeenCalledWith(
+      "No .evtx files were found for that known source."
     );
-    expect(useEvtxStore.getState().parseFiles).not.toHaveBeenCalled();
+    expect(parseFiles).not.toHaveBeenCalled();
   });
 
   it("parses evtx files from a folder and ignores other names", async () => {
-    vi.mocked(listLogFolder).mockResolvedValue({
-      sourceKind: "folder",
-      source: { kind: "folder", path: "/tmp/logs" },
+    listLogFolder.mockResolvedValue({
       entries: [
         {
           name: "Application.evtx",
@@ -162,23 +167,18 @@ describe("openEventLogSource", () => {
     });
 
     await openEventLogSource({ kind: "folder", path: "/tmp/logs" });
-    expect(useEvtxStore.getState().parseFiles).toHaveBeenCalledWith([
-      "/tmp/logs/Application.evtx",
-    ]);
+
+    expect(parseFiles).toHaveBeenCalledWith(["/tmp/logs/Application.evtx"]);
   });
 
   it("rejects a folder with no evtx files", async () => {
-    vi.mocked(listLogFolder).mockResolvedValue({
-      sourceKind: "folder",
-      source: { kind: "folder", path: "/tmp/empty" },
-      entries: [],
-    });
+    listLogFolder.mockResolvedValue({ entries: [] });
 
     await expect(
-      openEventLogSource({ kind: "folder", path: "/tmp/empty" }),
+      openEventLogSource({ kind: "folder", path: "/tmp/empty" })
     ).rejects.toThrow(/No \.evtx files/);
-    expect(useEvtxStore.getState().setLoadError).toHaveBeenCalledWith(
-      "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.",
+    expect(setLoadError).toHaveBeenCalledWith(
+      "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files."
     );
   });
 });

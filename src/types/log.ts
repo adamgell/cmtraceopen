@@ -104,10 +104,17 @@ export interface FolderEntry {
   modifiedUnixMs: number | null;
 }
 
+/** A path-specific diagnostic from folder or bundle traversal. */
+export interface PathDiagnostic {
+  path: string;
+  reason: string;
+}
+
 export interface FolderListingResult {
   sourceKind: LogSourceKind;
   source: LogSource;
   entries: FolderEntry[];
+  childErrors?: PathDiagnostic[];
   bundleMetadata?: EvidenceBundleMetadata | null;
 }
 
@@ -248,6 +255,7 @@ export interface AggregateParseResult {
   parseErrors: number;
   folderPath: string;
   files: AggregateParsedFileResult[];
+  childErrors?: PathDiagnostic[];
 }
 
 /** A bounded continuation suffix for an already-rendered logical record. */

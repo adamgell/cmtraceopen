@@ -369,21 +369,31 @@ fn load_registry_map(path: &Path, artifact_paths: &mut Vec<String>) -> RegistryK
 fn decode_reg_content(bytes: &[u8]) -> Option<String> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect::<Vec<u16>>();
         return Some(String::from_utf16_lossy(&units));
     }
 
     if bytes.starts_with(&[0xFE, 0xFF]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_be_bytes(*chunk))
             .collect::<Vec<u16>>();
         return Some(String::from_utf16_lossy(&units));
     }
 
-    String::from_utf8(bytes.to_vec()).ok()
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(content) => Some(content),
+        Err(_) => {
+            let (content, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+            Some(content.into_owned())
+        }
+    }
 }
 
 fn build_registry_snapshot_summary(registry: &RegistryKeyMap) -> RegistrySnapshotSummary {
@@ -727,6 +737,12 @@ mod tests {
         ];
         let decoded = decode_reg_content(&utf16).expect("decode utf16 reg export");
         assert_eq!(decoded, "Windows");
+    }
+
+    #[test]
+    fn decodes_windows_1252_reg_exports() {
+        let decoded = decode_reg_content(b"Windows\x80").expect("decode Windows-1252 reg export");
+        assert_eq!(decoded, "Windows€");
     }
 
     #[test]

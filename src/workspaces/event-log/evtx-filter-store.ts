@@ -26,6 +26,25 @@ interface SavedFilterState {
   importFilters: (imported: EvtxSavedFilter[]) => void;
   ordered: () => EvtxSavedFilter[];
 }
+export function migratePersistedSavedFilters(
+  persisted: unknown,
+  version: number | undefined
+): { savedFilters: EvtxSavedFilter[] } {
+  if (version == null || version < 2) return { savedFilters: [] };
+  if (version > 2) {
+    throw new Error(`Unsupported saved-filter schema version ${version}`);
+  }
+  const raw = persisted as { savedFilters?: unknown } | undefined;
+  if (!raw || !Array.isArray(raw.savedFilters)) {
+    throw new Error("Malformed saved-filter storage envelope");
+  }
+  const list = raw.savedFilters;
+  const savedFilters = list
+    .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
+    .filter((filter): filter is EvtxSavedFilter => filter !== null);
+  return { savedFilters };
+}
+
 
 function newId(): string {
   // crypto.randomUUID is unavailable in some webviews, so fall back rather than throwing.
@@ -87,17 +106,8 @@ export const useSavedFilterStore = create<SavedFilterState>()(
     }),
     {
       name: "cmtraceopen-evtx-saved-filters",
-      // Persisted data outlives the build that wrote it, so it is revalidated on load rather than
-      // trusted. A filter that no longer validates is dropped, not repaired into something the
-      // operator never chose.
-      merge: (persisted, current) => {
-        const raw = persisted as { savedFilters?: unknown } | undefined;
-        const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
-        const savedFilters = list
-          .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
-          .filter((filter): filter is EvtxSavedFilter => filter !== null);
-        return { ...current, savedFilters };
-      },
+      version: 2,
+      migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
     }
   )
 );

@@ -371,17 +371,14 @@ fn privacy_probes(
         .filter_map(|value| value.as_str())
         .collect();
     for probe in &probes {
-        failures.require(
-            must_not_contain.contains(&probe.as_str()),
-            || {
-                format!(
-                    "{scenario}: privacy probe {probe:?} is not covered by any \
+        failures.require(must_not_contain.contains(&probe.as_str()), || {
+            format!(
+                "{scenario}: privacy probe {probe:?} is not covered by any \
                      redactionMustNotContain assertion; the probe must be declared \
                      verbatim as a needle so the whole sensitive payload is proven \
                      redacted"
-                )
-            },
-        );
+            )
+        });
     }
     probes
 }
@@ -463,13 +460,12 @@ pub fn validate_descriptor_privacy(
                             .and_then(Value::as_array_mut)
                         {
                             entries.retain(|entry| {
-                                entry
-                                    .as_str()
-                                    .is_none_or(|needle| !probes.iter().any(|probe| probe == needle))
+                                entry.as_str().is_none_or(|needle| {
+                                    !probes.iter().any(|probe| probe == needle)
+                                })
                             });
                         }
-                        serde_json::to_string_pretty(&value)
-                            .expect("descriptor JSON reserializes")
+                        serde_json::to_string_pretty(&value).expect("descriptor JSON reserializes")
                     }
                     // Unparseable descriptors are scanned raw; other checks
                     // already report the parse failure itself.
@@ -714,7 +710,9 @@ fn validate_expected_coverage(
         .unwrap_or_default();
 
     let Some(coverage) = expected["coverage"].as_array() else {
-        failures.push(format!("{scenario}: expected.json must have a coverage array"));
+        failures.push(format!(
+            "{scenario}: expected.json must have a coverage array"
+        ));
         return;
     };
 
@@ -916,7 +914,19 @@ fn email_occurrences(contents: &str) -> Vec<(usize, String)> {
         c.is_whitespace()
             || matches!(
                 c,
-                '"' | '\'' | ',' | ';' | ':' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '='
+                '"' | '\''
+                    | ','
+                    | ';'
+                    | ':'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '='
                     | '|'
             )
     }

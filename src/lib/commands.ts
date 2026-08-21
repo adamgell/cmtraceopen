@@ -3,12 +3,34 @@ import type {
   AggregateParseResult,
   FolderListingResult,
   KnownSourceMetadata,
+  LogEntry,
   LogFormat,
   LogSource,
   ParseResult,
   ParserKind,
   WorkspaceId,
 } from "../types/log";
+import type {
+  DiagnosisCorrelationEdge,
+  DiagnosisCoverageGap,
+  DiagnosisErrorToken,
+  DiagnosisEvidence,
+  DiagnosisFinding,
+  DiagnosisSummary,
+  EventDiagnosis,
+  EventLogSourceCoverage,
+  EventLogSourceKind,
+  EventLogSourceManifest,
+  EventLogSourceManifestEntry,
+  EventLogSourceSelection,
+  DiagnosisOverview,
+  EvtxCoverageGap,
+  EvtxChannelInfo,
+  EvtxParseResult,
+  EvtxRecord,
+} from "../workspaces/event-log/types";
+import { assertParseResultShape } from "../workspaces/event-log/evtx-coverage";
+import type { UnifiedTimeline } from "../workspaces/event-log/unified-timeline";
 import type {
   EvidenceArtifactPreview,
   EvidenceBundleDetails,
@@ -50,6 +72,7 @@ import type {
   SccmAdvancedCaptureCapability,
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
+import type { Marker, MarkerCategory, MarkerFile } from "../types/markers";
 import type { SignalKind, TimelineBundle } from "../types/timeline";
 
 export interface FileAssociationPromptStatus {
@@ -305,6 +328,151 @@ async function invokeCommand(
 
 function isCommandRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonNegativeCommandCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isEvtxFieldResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.value === "string"
+  );
+}
+
+function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
+  if (
+    !isCommandRecord(value) ||
+    !isFiniteCommandNumber(value.id) ||
+    !isFiniteCommandNumber(value.eventRecordId) ||
+    !(
+      value.eventRecordIdText === undefined ||
+      isNullableCommandString(value.eventRecordIdText)
+    ) ||
+    typeof value.timestamp !== "string" ||
+    !isFiniteCommandNumber(value.timestampEpoch) ||
+    typeof value.provider !== "string" ||
+    typeof value.channel !== "string" ||
+    !isFiniteCommandNumber(value.eventId) ||
+    !(
+      value.level === "Critical" ||
+      value.level === "Error" ||
+      value.level === "Warning" ||
+      value.level === "Information" ||
+      value.level === "Verbose"
+    ) ||
+    typeof value.computer !== "string" ||
+    typeof value.message !== "string" ||
+    !Array.isArray(value.eventData) ||
+    !value.eventData.every(isEvtxFieldResponse) ||
+    typeof value.rawXml !== "string" ||
+    typeof value.sourceLabel !== "string"
+  ) {
+    return false;
+  }
+  return (
+    value.originKind === undefined ||
+    value.originKind === "event" ||
+    value.originKind === "log"
+  ) && (
+    value.task === undefined ||
+    value.task === null ||
+    isFiniteCommandNumber(value.task)
+  ) && (
+    value.opcode === undefined ||
+    value.opcode === null ||
+    isFiniteCommandNumber(value.opcode)
+  ) && (
+    value.processId === undefined ||
+    value.processId === null ||
+    isFiniteCommandNumber(value.processId)
+  ) && (
+    value.activityId === undefined ||
+    value.activityId === null ||
+    typeof value.activityId === "string"
+  ) && (
+    value.relatedActivityId === undefined ||
+    value.relatedActivityId === null ||
+    typeof value.relatedActivityId === "string"
+  ) && (
+    value.sessionId === undefined ||
+    value.sessionId === null ||
+    typeof value.sessionId === "string"
+  ) && (
+    value.deviceId === undefined ||
+    value.deviceId === null ||
+    typeof value.deviceId === "string"
+  ) && (
+    value.userId === undefined ||
+    value.userId === null ||
+    typeof value.userId === "string"
+  ) && (
+    value.processStartTime === undefined ||
+    value.processStartTime === null ||
+    typeof value.processStartTime === "string"
+  ) && (
+    value.threadId === undefined ||
+    value.threadId === null ||
+    isFiniteCommandNumber(value.threadId)
+  ) && (
+    value.userSid === undefined ||
+    value.userSid === null ||
+    typeof value.userSid === "string"
+  ) && (
+    value.keywords === undefined ||
+    value.keywords === null ||
+    typeof value.keywords === "string"
+  ) && (
+    value.mapped === undefined ||
+    (Array.isArray(value.mapped) &&
+      value.mapped.every(
+        (mapped) =>
+          isCommandRecord(mapped) &&
+          typeof mapped.property === "string" &&
+          typeof mapped.text === "string" &&
+          typeof mapped.complete === "boolean",
+      ))
+  );
+}
+
+function isEvtxChannelSourceType(value: unknown): boolean {
+  if (value === "live") return true;
+  if (!isCommandRecord(value)) return false;
+  if (isCommandRecord(value.remote)) {
+    return typeof value.remote.machine === "string";
+  }
+  if (isCommandRecord(value.file)) {
+    return typeof value.file.path === "string";
+  }
+  return false;
+}
+
+function isEvtxChannelInfoResponse(value: unknown): value is EvtxChannelInfo {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    isNonNegativeCommandCount(value.eventCount) &&
+    isEvtxChannelSourceType(value.sourceType)
+  );
+}
+function assertEvtxRecordArray(
+  records: unknown[],
+  commandName: string,
+): asserts records is EvtxRecord[] {
+  if (!records.every(isEvtxRecordResponse)) {
+    invalidCommandResponse(commandName);
+  }
+}
+
+function assertEvtxChannelArray(
+  channels: unknown[],
+  commandName: string,
+): asserts channels is EvtxChannelInfo[] {
+  if (!channels.every(isEvtxChannelInfoResponse)) {
+    invalidCommandResponse(commandName);
+  }
 }
 
 function isFiniteCommandNumber(value: unknown): value is number {
@@ -803,6 +971,117 @@ function decodeFolderListingResult(
   }
   return value;
 }
+function isMarkerObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isMarkerString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isMarkerTimestamp(value: unknown): value is string {
+  if (!isMarkerString(value)) return false;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      value,
+    );
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] =
+    match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day &&
+    calendar.getUTCHours() === hour &&
+    calendar.getUTCMinutes() === minute &&
+    calendar.getUTCSeconds() === second &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function decodeMarker(value: unknown): Marker {
+  if (
+    !isMarkerObject(value) ||
+    typeof value.lineId !== "number" ||
+    !Number.isSafeInteger(value.lineId) ||
+    value.lineId < 0 ||
+    (value.identity !== undefined && !isMarkerString(value.identity)) ||
+    !isMarkerString(value.category) ||
+    !isMarkerString(value.color) ||
+    !isMarkerTimestamp(value.added)
+  ) {
+    throw new Error("load_markers returned an invalid marker");
+  }
+  return {
+    lineId: value.lineId,
+    ...(value.identity === undefined ? {} : { identity: value.identity }),
+    category: value.category,
+    color: value.color,
+    added: value.added,
+  };
+}
+
+function decodeMarkerCategory(value: unknown): MarkerCategory {
+  if (
+    !isMarkerObject(value) ||
+    !isMarkerString(value.id) ||
+    !isMarkerString(value.label) ||
+    !isMarkerString(value.color)
+  ) {
+    throw new Error("load_markers returned an invalid marker category");
+  }
+  return {
+    id: value.id,
+    label: value.label,
+    color: value.color,
+  };
+}
+
+function decodeMarkerFile(value: unknown): MarkerFile | null {
+  if (value === null) return null;
+  if (
+    !isMarkerObject(value) ||
+    typeof value.version !== "number" ||
+    !Number.isFinite(value.version) ||
+    !Number.isInteger(value.version) ||
+    !isMarkerString(value.sourcePath) ||
+    typeof value.sourceSize !== "number" ||
+    !Number.isSafeInteger(value.sourceSize) ||
+    value.sourceSize < 0 ||
+    !isMarkerTimestamp(value.created) ||
+    !isMarkerTimestamp(value.modified) ||
+    !Array.isArray(value.markers) ||
+    !Array.isArray(value.categories)
+  ) {
+    throw new Error("load_markers returned an invalid marker file");
+  }
+  const markers = value.markers.map(decodeMarker);
+  const categories = value.categories.map(decodeMarkerCategory);
+  return {
+    version: value.version,
+    sourcePath: value.sourcePath,
+    sourceSize: value.sourceSize,
+    created: value.created,
+    modified: value.modified,
+    markers,
+    categories,
+  };
+}
+
+export async function loadMarkerFile(
+  filePath: string,
+): Promise<MarkerFile | null> {
+  return invokeCommand("load_markers", { filePath });
+}
 
 export async function openLogFile(path: string): Promise<ParseResult> {
   return invokeCommand("open_log_file", { path });
@@ -834,6 +1113,527 @@ export async function buildTimeline(
   sources: { path: string; displayName?: string }[],
 ): Promise<TimelineBundle> {
   return invokeCommand("build_timeline_cmd", { sources });
+}
+
+const EVENT_LOG_SOURCE_KINDS: readonly EventLogSourceKind[] = [
+  "file",
+  "folder",
+  "wildcard",
+  "archive",
+  "vss",
+];
+const EVENT_LOG_SOURCE_COVERAGE_KINDS: readonly EventLogSourceCoverage["kind"][] =
+  [
+    "unsupported",
+    "accessDenied",
+    "missing",
+    "empty",
+    "invalidPattern",
+    "limitReached",
+  ];
+
+function isManifestEntry(value: unknown): value is EventLogSourceManifestEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Partial<EventLogSourceManifestEntry>;
+  return (
+    typeof entry.sourceId === "string" &&
+    typeof entry.path === "string" &&
+    typeof entry.kind === "string" &&
+    EVENT_LOG_SOURCE_KINDS.includes(entry.kind as EventLogSourceKind)
+  );
+}
+
+function isSourceCoverage(value: unknown): value is EventLogSourceCoverage {
+  if (typeof value !== "object" || value === null) return false;
+  const coverage = value as Partial<EventLogSourceCoverage>;
+  return (
+    typeof coverage.path === "string" &&
+    typeof coverage.reason === "string" &&
+    typeof coverage.kind === "string" &&
+    EVENT_LOG_SOURCE_COVERAGE_KINDS.includes(
+      coverage.kind as EventLogSourceCoverage["kind"],
+    )
+  );
+}
+
+function assertEventLogSourceManifest(
+  value: unknown,
+): asserts value is EventLogSourceManifest {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("the event log reader returned an invalid source manifest");
+  }
+  const manifest = value as Partial<EventLogSourceManifest>;
+
+  if (!Array.isArray(manifest.entries)) {
+    throw new Error(
+      "the event log reader returned an invalid source manifest entries list",
+    );
+  }
+  const invalidEntryIndex = manifest.entries.findIndex(
+    (entry) => !isManifestEntry(entry),
+  );
+  if (invalidEntryIndex >= 0) {
+    throw new Error(
+      `the event log reader returned an invalid source manifest entry at index ${invalidEntryIndex}`,
+    );
+  }
+
+  if (!Array.isArray(manifest.coverage)) {
+    throw new Error(
+      "the event log reader returned an invalid source manifest coverage list",
+    );
+  }
+  const invalidCoverageIndex = manifest.coverage.findIndex(
+    (coverage) => !isSourceCoverage(coverage),
+  );
+  if (invalidCoverageIndex >= 0) {
+    throw new Error(
+      `the event log reader returned an invalid source manifest coverage at index ${invalidCoverageIndex}`,
+    );
+  }
+}
+
+function decodeEventLogSourceManifest(
+  value: unknown,
+  _commandName: string,
+): EventLogSourceManifest {
+  assertEventLogSourceManifest(value);
+  return value;
+}
+
+function decodeEventLogParseResult(
+  value: unknown,
+  commandName: string,
+): EvtxParseResult {
+  const shape = assertParseResultShape(value);
+  const reply = value as Record<string, unknown>;
+  const totalRecords = shape.totalRecords;
+  const parseErrors = reply.parseErrors;
+  if (
+    totalRecords === null ||
+    !isNonNegativeCommandCount(totalRecords) ||
+    !isNonNegativeCommandCount(parseErrors)
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  assertEvtxRecordArray(shape.records, commandName);
+  assertEvtxChannelArray(shape.channels, commandName);
+  const result: EvtxParseResult = {
+    records: shape.records,
+    channels: shape.channels,
+    totalRecords,
+    parseErrors,
+    errorMessages: shape.errorMessages,
+  };
+  if (reply.coverageGaps !== undefined) result.coverageGaps = shape.coverageGaps;
+  if (reply.coverage !== undefined) result.coverage = shape.coverage;
+  if (reply.archiveMembers !== undefined) result.archiveMembers = shape.archiveMembers;
+  return result;
+
+}
+export async function expandEventLogSources(
+  sources: EventLogSourceSelection[],
+): Promise<EventLogSourceManifest> {
+  return invokeCommand("evtx_expand_sources", {
+    sources,
+  });
+}
+
+
+export async function parseEventLogManifest(
+  manifest: EventLogSourceManifest,
+): Promise<EvtxParseResult> {
+  return invokeCommand("evtx_parse_manifest", { manifest });
+}
+const DIAGNOSIS_COVERAGE_STATES = new Set([
+  "covered",
+  "unknown",
+  "absent",
+  "accessDenied",
+  "capped",
+  "skipped",
+  "unsupported",
+  "malformed",
+  "parseFailed",
+]);
+const DIAGNOSIS_FINDING_CLASSES = new Set([
+  "confirmedFailure",
+  "likelyContributor",
+  "symptom",
+  "recovered",
+  "contradictoryEvidence",
+  "coverageGap",
+  "unknown",
+]);
+const DIAGNOSIS_FINDING_SEVERITIES = new Set([
+  "info",
+  "warning",
+  "error",
+  "critical",
+]);
+const DIAGNOSIS_FINDING_CONFIDENCES = new Set([
+  "unknown",
+  "low",
+  "medium",
+  "high",
+]);
+const DIAGNOSIS_EVENT_FAMILIES = new Set([
+  "autopilot",
+  "esp",
+  "mdmEnrollment",
+  "configMgrClient",
+  "other",
+]);
+const DIAGNOSIS_OVERVIEW_OUTCOMES = new Set([
+  "confirmedFailure",
+  "contradictoryEvidence",
+  "symptomsOnly",
+  "insufficientEvidence",
+  "noFindings",
+]);
+const DIAGNOSIS_CORRELATION_BASES = new Set([
+  "exactIdentifier",
+  "candidateIdentifier",
+  "timestampOnly",
+]);
+const DIAGNOSIS_CORRELATION_STATUSES = new Set([
+  "exact",
+  "candidate",
+  "ambiguous",
+  "coverageBlocked",
+  "notCausal",
+]);
+
+const MAX_DIAGNOSIS_U64 = 18_446_744_073_709_551_615n;
+
+function isDiagnosisRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isDiagnosisIdentityString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isDiagnosisU64Number(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+  );
+}
+
+function isDiagnosisInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && typeof value === "number" && value >= 0;
+}
+function isDiagnosisEvidence(value: unknown): value is DiagnosisEvidence {
+  if (!isDiagnosisRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "dsregcmdRaw") {
+    return isDiagnosisIdentityString(value.value);
+  }
+  if (!isDiagnosisRecord(value.value)) return false;
+  const evidence = value.value;
+  switch (value.kind) {
+    case "intune":
+    case "esp":
+      return (
+        isDiagnosisIdentityString(evidence.evidenceId) &&
+        isDiagnosisIdentityString(evidence.sourceArtifactId)
+      );
+    case "sccm":
+      return (
+        isDiagnosisIdentityString(evidence.artifactId) &&
+        isDiagnosisIdentityString(evidence.entryId)
+      );
+    case "textLog":
+      return (
+        isDiagnosisIdentityString(evidence.source) &&
+        isDiagnosisIdentityString(evidence.filePath) &&
+        isDiagnosisInteger(evidence.lineNumber) &&
+        evidence.lineNumber > 0 &&
+        isDiagnosisInteger(evidence.entryId)
+      );
+    case "event": {
+      if (
+        !isDiagnosisIdentityString(evidence.source) ||
+        !isDiagnosisIdentityString(evidence.provider) ||
+        !isDiagnosisInteger(evidence.eventId) ||
+        !isDiagnosisU64Number(evidence.recordId)
+      ) {
+        return false;
+      }
+      const recordIdText = evidence.recordIdText;
+      let normalizedRecordIdText: string | null = null;
+      if (recordIdText !== undefined && recordIdText !== null) {
+        if (
+          !isDiagnosisIdentityString(recordIdText) ||
+          !/^\d+$/.test(recordIdText.trim())
+        ) {
+          return false;
+        }
+        normalizedRecordIdText = recordIdText.trim();
+        const numericRecordIdIsSafe = Number.isSafeInteger(evidence.recordId);
+        const parsedRecordIdText = BigInt(normalizedRecordIdText);
+        if (parsedRecordIdText > MAX_DIAGNOSIS_U64) {
+          return false;
+        }
+        if (
+          numericRecordIdIsSafe &&
+          parsedRecordIdText !== BigInt(evidence.recordId)
+        ) {
+          return false;
+        }
+        if (
+          !numericRecordIdIsSafe &&
+          evidence.recordId !== Number(parsedRecordIdText)
+        ) {
+          return false;
+        }
+      } else if (!Number.isSafeInteger(evidence.recordId)) {
+        return false;
+      }
+      return (
+        (normalizedRecordIdText !== null
+          ? !/^0+$/.test(normalizedRecordIdText)
+          : evidence.recordId > 0) ||
+        isDiagnosisIdentityString(evidence.fallbackIdentity)
+      );
+    }
+    default:
+      return false;
+  }
+}
+
+function isDiagnosisEvidenceArray(
+  value: unknown,
+): value is DiagnosisEvidence[] {
+  return Array.isArray(value) && value.every(isDiagnosisEvidence);
+}
+
+function isOptionalNullableString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isOptionalNullableNumber(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
+}
+
+function isDiagnosisCoverageGap(value: unknown): value is DiagnosisCoverageGap {
+  if (!isDiagnosisRecord(value)) return false;
+  return (
+    isDiagnosisIdentityString(value.id) &&
+    isDiagnosisIdentityString(value.source) &&
+    typeof value.state === "string" &&
+    DIAGNOSIS_COVERAGE_STATES.has(value.state) &&
+    isDiagnosisIdentityString(value.detail) &&
+    isDiagnosisEvidenceArray(value.evidence)
+  );
+}
+
+function isDiagnosisFinding(value: unknown): value is DiagnosisFinding {
+  if (
+    !isDiagnosisRecord(value) ||
+    !isDiagnosisEvidenceArray(value.evidence) ||
+    !Array.isArray(value.coverageGaps)
+  ) {
+    return false;
+  }
+  const evidence = Array.isArray(value.evidence) ? value.evidence : [];
+  const coverageGaps = Array.isArray(value.coverageGaps)
+    ? value.coverageGaps
+    : [];
+  const hasSupportingData =
+    value.class === "coverageGap"
+      ? coverageGaps.length > 0
+      : evidence.length > 0;
+  return (
+    isDiagnosisIdentityString(value.findingId) &&
+    typeof value.class === "string" &&
+    DIAGNOSIS_FINDING_CLASSES.has(value.class) &&
+    typeof value.severity === "string" &&
+    DIAGNOSIS_FINDING_SEVERITIES.has(value.severity) &&
+    typeof value.confidence === "string" &&
+    DIAGNOSIS_FINDING_CONFIDENCES.has(value.confidence) &&
+    isDiagnosisIdentityString(value.title) &&
+    typeof value.summary === "string" &&
+    hasSupportingData &&
+    value.coverageGaps.every(isDiagnosisCoverageGap) &&
+    isStringArray(value.recommendedChecks)
+  );
+}
+
+function isDiagnosisErrorToken(value: unknown): value is DiagnosisErrorToken {
+  if (!isDiagnosisRecord(value)) return false;
+  return (
+    isDiagnosisIdentityString(value.raw) &&
+    isOptionalNullableNumber(value.decimal) &&
+    isOptionalNullableString(value.hex) &&
+    typeof value.malformed === "boolean" &&
+    typeof value.found === "boolean" &&
+    isOptionalNullableString(value.description) &&
+    isOptionalNullableString(value.category)
+  );
+}
+
+function isDiagnosisEvent(value: unknown): value is EventDiagnosis {
+  if (!isDiagnosisRecord(value)) return false;
+  const evidence = value.evidence;
+  const findings = value.findings;
+  const errorTokens = value.errorTokens;
+  return (
+    isDiagnosisEvidenceArray(evidence) &&
+    Array.isArray(evidence) &&
+    evidence.length > 0 &&
+    typeof value.family === "string" &&
+    DIAGNOSIS_EVENT_FAMILIES.has(value.family) &&
+    Array.isArray(findings) &&
+    findings.every(isDiagnosisFinding) &&
+    Array.isArray(errorTokens) &&
+    errorTokens.every(isDiagnosisErrorToken)
+  );
+}
+
+function isDiagnosisCorrelation(
+  value: unknown,
+): value is DiagnosisCorrelationEdge {
+  if (!isDiagnosisRecord(value)) return false;
+  return (
+    isDiagnosisIdentityString(value.left) &&
+    (value.right === null || isDiagnosisIdentityString(value.right)) &&
+    typeof value.basis === "string" &&
+    DIAGNOSIS_CORRELATION_BASES.has(value.basis) &&
+    typeof value.status === "string" &&
+    DIAGNOSIS_CORRELATION_STATUSES.has(value.status) &&
+    isStringArray(value.candidateIds) &&
+    value.candidateIds.every(isDiagnosisIdentityString) &&
+    Array.isArray(value.evidence) &&
+    value.evidence.every(
+      (item) =>
+        isDiagnosisRecord(item) &&
+        isDiagnosisIdentityString(item.originId) &&
+        isDiagnosisIdentityString(item.field) &&
+        isDiagnosisIdentityString(item.value),
+    )
+  );
+}
+
+function isDiagnosisOverview(value: unknown): value is DiagnosisOverview {
+  if (!isDiagnosisRecord(value)) return false;
+  const count = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0;
+  return (
+    typeof value.outcome === "string" &&
+    DIAGNOSIS_OVERVIEW_OUTCOMES.has(value.outcome) &&
+    isDiagnosisIdentityString(value.headline) &&
+    count(value.findingCount) &&
+    count(value.coverageGapCount) &&
+    count(value.evidenceCount) &&
+    count(value.correlationCount)
+  );
+}
+
+function isDiagnosisSummary(value: unknown): value is DiagnosisSummary {
+  if (!isDiagnosisRecord(value)) return false;
+  const { findings, evidence, coverageGaps, correlations, events, overview } =
+    value;
+  if (
+    !Array.isArray(findings) ||
+    !findings.every(isDiagnosisFinding) ||
+    !isDiagnosisEvidenceArray(evidence) ||
+    !Array.isArray(coverageGaps) ||
+    !coverageGaps.every(isDiagnosisCoverageGap) ||
+    !Array.isArray(correlations) ||
+    !correlations.every(isDiagnosisCorrelation) ||
+    !Array.isArray(events) ||
+    !events.every(isDiagnosisEvent) ||
+    !isDiagnosisOverview(overview)
+  ) {
+    return false;
+  }
+  return (
+    overview.findingCount === findings.length &&
+    overview.coverageGapCount === coverageGaps.length &&
+    overview.evidenceCount === evidence.length &&
+    overview.correlationCount === correlations.length
+  );
+}
+
+function decodeDiagnosisSummary(
+  value: unknown,
+  commandName: string,
+): DiagnosisSummary {
+  if (!isDiagnosisSummary(value)) {
+    throw new Error(`Command '${commandName}' returned an invalid response.`);
+  }
+  return value;
+}
+
+type DiagnosisTransportRecord = Omit<EvtxRecord, "eventRecordId"> & {
+  eventRecordId: number;
+};
+
+// Keep an unsafe numeric ID in the u64 transport range while the optional text field carries its
+// exact identity (or its malformed decimal text) for Rust diagnosis validation.
+const DIAGNOSIS_UNSAFE_EVENT_RECORD_ID_FALLBACK = Number.MAX_SAFE_INTEGER + 1;
+
+function diagnosisRecordForTransport(
+  record: EvtxRecord,
+): DiagnosisTransportRecord {
+  const numericId = record.eventRecordId;
+  if (
+    typeof numericId !== "number" ||
+    !Number.isFinite(numericId) ||
+    !Number.isInteger(numericId) ||
+    numericId < 0
+  ) {
+    throw new Error("EventRecordID must be a non-negative integer.");
+  }
+  const textId = record.eventRecordIdText?.trim() ?? "";
+  const textIsDecimal = textId.length > 0 && /^\d+$/.test(textId);
+  const decimalText = textIsDecimal ? BigInt(textId) : null;
+  if (
+    decimalText !== null &&
+    !Number.isSafeInteger(numericId) &&
+    decimalText <= BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new Error(
+      "EventRecordID text must preserve an unsafe numeric identity.",
+    );
+  }
+  const eventRecordId = Number.isSafeInteger(numericId)
+    ? numericId
+    : DIAGNOSIS_UNSAFE_EVENT_RECORD_ID_FALLBACK;
+  return { ...record, eventRecordId };
+}
+
+function transportDiagnosisRecords(
+  records: EvtxRecord[],
+): DiagnosisTransportRecord[] {
+  return records.map(diagnosisRecordForTransport);
+}
+
+export async function diagnoseEventRecords(
+  records: EvtxRecord[],
+  coverageGaps: EvtxCoverageGap[] = [],
+  timeline?: UnifiedTimeline,
+  textEntries: LogEntry[] = [],
+): Promise<DiagnosisSummary> {
+  const commandName = "evtx_diagnose_records";
+  return decodeDiagnosisSummary(
+    await invokeCommand(commandName, {
+      records: transportDiagnosisRecords(records),
+      coverageGaps,
+      timeline: timeline ?? null,
+      textEntries,
+    }),
+    commandName,
+  );
 }
 
 export async function inspectEvidenceBundle(
@@ -1668,6 +2468,10 @@ const COMMAND_DECODERS = {
   open_log_file: decodeParseResult,
   parse_files_batch: decodeParseResults,
   list_log_folder: decodeFolderListingResult,
+  load_markers: decodeMarkerFile,
+  evtx_expand_sources: decodeEventLogSourceManifest,
+  evtx_parse_manifest: decodeEventLogParseResult,
+  evtx_diagnose_records: decodeDiagnosisSummary,
   build_timeline_cmd: decodeTimelineBundle,
   inspect_evidence_bundle: (value, commandName) =>
     decodeRecordResponse<EvidenceBundleDetails>(value, commandName, {
