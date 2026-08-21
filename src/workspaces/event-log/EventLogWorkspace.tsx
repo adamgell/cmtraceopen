@@ -43,12 +43,14 @@ type DiagnosisPump = {
 
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const [nowEpoch, setNowEpoch] = useState(() => Date.now());
   useEffect(() => {
+    if (sourceMode !== "live" || timeWindow === "all") return;
     const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [sourceMode, timeWindow]);
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -63,7 +65,6 @@ export function EventLogWorkspace() {
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
-  const timeWindow = useEvtxStore((s) => s.timeWindow);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
   const visibleRecords = useMemo(
     () =>

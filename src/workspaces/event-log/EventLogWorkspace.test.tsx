@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const LEVEL_BADGE_PRESENT_OFFSET = 9;
+const LEVEL_BADGE_ABSENT_OFFSET = 5;
 const virtualizerState = vi.hoisted(() => ({
   measured: [] as HTMLElement[],
   measuredSizes: new Map<number, number>(),
@@ -15,12 +17,13 @@ const virtualizerState = vi.hoisted(() => ({
   recalculate: () => undefined,
   measureElementSize: (element: HTMLElement) => {
     const hasLevelBadge = Array.from(element.children).some(
-      (child) => (child as HTMLElement).style.padding === "2px 6px"
+      (child) => (child as HTMLElement).hasAttribute("data-evtx-level-badge"),
     );
     return element.getAttribute("role") === "treeitem" &&
       !element.hasAttribute("data-evtx-marker-key")
       ? Number.parseFloat(element.style.height)
-      : Number.parseFloat(element.style.lineHeight) + (hasLevelBadge ? 9 : 5);
+      : Number.parseFloat(element.style.lineHeight) +
+          (hasLevelBadge ? LEVEL_BADGE_PRESENT_OFFSET : LEVEL_BADGE_ABSENT_OFFSET);
   },
   resizeItem: (index: number, size: number) => {
     virtualizerState.resizeItemCalls += 1;
@@ -280,11 +283,11 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRow);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: smallList.rowHeight + 6,
+      size: smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
       start: smallList.rowHeight,
     });
     expect(virtualizerState.totalSize).toBe(
-      smallList.rowHeight + smallList.rowHeight + 6
+      smallList.rowHeight + smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
     );
     expect(groupRow.style.boxSizing).toBe("border-box");
     expect(groupRow.style.height).toBe(`${smallList.rowHeight}px`);
@@ -346,12 +349,12 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
       index: 1,
-      size: largeList.rowHeight + 6,
+      size: largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
       start: largeList.rowHeight,
     });
     const groupRowLarge = screen.getAllByRole("treeitem")[0];
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 6
+      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
     );
     groupRowLarge.focus();
     fireEvent.keyDown(groupRowLarge, { key: "ArrowDown" });
@@ -397,7 +400,9 @@ describe("event-viewer shared font metrics", () => {
     const recordRow = recordTreeItems(timeline.container)[0];
     const initialMeasureCalls = virtualizerState.measureCalls;
     const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
-    expect(virtualizerState.initialItems[1].size).toBe(smallList.rowHeight + 6);
+    expect(virtualizerState.initialItems[1].size).toBe(
+      smallList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+    );
 
     expect(channelInput.style.fontSize).toBe(`${MIN_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(
@@ -422,10 +427,12 @@ describe("event-viewer shared font metrics", () => {
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
-    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(
+      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+    );
     expect(virtualizerState.items[1].start).toBe(largeList.rowHeight);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 6
+      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
     );
   });
   it("updates connected rows while estimating offscreen rows after a font change", () => {
@@ -450,14 +457,17 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.totalSize = 0;
     virtualizerState.notifyResize();
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
-
     expect(virtualizerState.resizeItemCalls).toBeGreaterThan(initialResizeItemCalls);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
-    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
+
+    expect(virtualizerState.resizedSizes.get(1)).toBe(
+      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+    );
     expect(virtualizerState.resizedSizes.has(2)).toBe(false);
     expect(virtualizerState.items).toHaveLength(2);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + (largeList.rowHeight + 6) * 2
+      largeList.rowHeight +
+        (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2,
     );
   });
   it("remeasures a record after a group header shifts its row index", () => {
@@ -474,9 +484,10 @@ describe("event-viewer shared font metrics", () => {
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
-
+    expect(virtualizerState.resizedSizes.get(1)).toBe(
+      largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
+    );
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
-    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 6);
     timeline.unmount();
   });
   it("clears a measured row cache when that row becomes offscreen", () => {
@@ -502,7 +513,7 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.resizedSizes.has(1)).toBe(false);
     expect(virtualizerState.items).toHaveLength(1);
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + 6 + largeList.rowHeight + 6
+      (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2
     );
     timeline.unmount();
   });
@@ -544,16 +555,18 @@ describe("event-viewer shared font metrics", () => {
     const timeline = render(<EvtxTimeline />);
     expect(recordTreeItems(timeline.container)).toHaveLength(1);
     expect(virtualizerState.initialItems[1].size).toBe(
-      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowHeight + 2
+      getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
     );
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
 
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
-    expect(virtualizerState.resizedSizes.get(1)).toBe(largeList.rowHeight + 2);
+    expect(virtualizerState.resizedSizes.get(1)).toBe(
+      largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
+    );
     expect(virtualizerState.totalSize).toBe(
-      largeList.rowHeight + largeList.rowHeight + 2
+      largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
     );
   });
 });

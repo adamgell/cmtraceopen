@@ -807,11 +807,7 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
         .component
         .filter(|component| !component.trim().is_empty())
         .unwrap_or_default();
-    let channel = if provider.is_empty() {
-        source_label.to_string()
-    } else {
-        String::new()
-    };
+    let channel = source_label.to_string();
     EvtxRecord {
         id: 0,
         event_record_id,
@@ -1557,7 +1553,7 @@ mod tests {
             super::super::models::EvtxOriginKind::Log
         );
         assert_eq!(parsed.records[0].provider, "ArchiveText");
-        assert!(parsed.records[0].channel.is_empty());
+        assert_eq!(parsed.records[0].channel, "bundle.zip::logs/app.log");
         assert_eq!(parsed.records[0].event_id, 0);
         assert!(parsed.records[0].computer.is_empty());
         let timeline = super::super::timeline::build(&[], &parsed.records);

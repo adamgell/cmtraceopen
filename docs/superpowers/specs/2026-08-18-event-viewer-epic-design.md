@@ -12,7 +12,7 @@ The product differentiator remains an evidence-first event viewer that combines 
 
 ## Current baseline
 
-The isolated implementation worktree starts from local `main` at `5b979752` (`feat(event-log): implement infrastructure for provider metadata capture`). That commit adds `src-tauri/src/event_log/capture.rs` but leaves the event-log command surface scaffolded. The complete event-viewer command implementation and provider-database work are on `origin/feat/provider-capture` through `117a7d16`, with earlier provider database commits `be6e6c05` and `418a6829`.
+The isolated implementation worktree starts from local `main` at `5b979752` (`feat(event-log): implement infrastructure for provider metadata capture`). That commit adds `src-tauri/src/event_log/capture.rs` but leaves the event-log command surface scaffolded. The complete event-viewer command implementation and provider-database work are on the provider-capture history ending at commit `117a7d16`, with earlier provider database commits `be6e6c05` and `418a6829`.
 
 The first implementation lane reconciles these two states. Later lanes do not build on placeholder commands or silently discard the provider-capture work. The current root checkout on `qa/user-story-tracker` is unrelated user work and remains untouched.
 
@@ -120,7 +120,7 @@ Run four independent evidence tasks on the provisioned Windows host:
 
 The issue comment receives the corrected matrix, corpus manifest, measurement table, and interaction evidence. Uncontrolled comparisons remain labeled as such.
 
-### Provider metadata
+### Provider metadata lane
 
 Complete Windows provider traversal with `EvtOpenPublisherEnum`, `EvtOpenPublisherMetadata`, publisher metadata properties, and object-array properties. Persist event descriptions, message tables, levels, tasks, opcodes, keywords, channel names, templates, and source metadata. Add explicit unsupported behavior outside Windows.
 
@@ -208,7 +208,7 @@ For every code lane:
 1. Add a failing contract test for each new observable behavior.
 2. Implement the smallest end-to-end path.
 3. Run focused Rust or frontend tests and inspect the exact diff independently.
-4. Run applicable aggregate gates: Rust tests, strict Clippy, wasm32 check for parser changes, TypeScript check, and diff checks.
+4. Run applicable aggregate gates: `cargo test --locked --manifest-path src-tauri/Cargo.toml --features event-log`, `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`, `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`, `npx tsc --noEmit`, and `git diff --check`.
 5. Run Windows-lab scenarios for Windows APIs, capture, remote access, subscriptions, channel clearing, archive/VSS paths, and performance.
 6. Review the exact committed range with CodeRabbit and an independent reviewer before proposing integration.
 

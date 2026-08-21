@@ -714,7 +714,11 @@ fn nonzero_error_token(tokens: &[ErrorToken]) -> bool {
             .map(|value| value != 0)
             .or_else(|| {
                 token.hex.as_deref().and_then(|value| {
-                    i64::from_str_radix(value.trim_start_matches("0x"), 16)
+                    let digits = value
+                        .strip_prefix("0x")
+                        .or_else(|| value.strip_prefix("0X"))
+                        .unwrap_or(value);
+                    u128::from_str_radix(digits, 16)
                         .ok()
                         .map(|number| number != 0)
                 })
@@ -1411,6 +1415,7 @@ fn map_intune_confidence(value: IntuneFindingConfidence) -> FindingConfidence {
     }
 }
 
+/// Adapts an Intune finding as a `LikelyContributor`; it preserves source assertions without adding new semantics.
 pub fn adapt_intune_finding(value: &IntuneFinding) -> DiagnosisFinding {
     DiagnosisFinding {
         finding_id: value.finding_id.clone(),
@@ -1459,6 +1464,7 @@ fn map_esp_confidence(value: EspFindingConfidence) -> FindingConfidence {
     }
 }
 
+/// Adapts an ESP finding as a `LikelyContributor`; it preserves source assertions without adding new semantics.
 pub fn adapt_esp_finding(value: &EspDiagnosticFinding) -> DiagnosisFinding {
     DiagnosisFinding {
         finding_id: value.finding_id.clone(),
@@ -1519,6 +1525,7 @@ fn map_sccm_confidence(value: SccmConfidence) -> FindingConfidence {
     }
 }
 
+/// Adapts an SCCM finding while preserving its source classification without adding new semantics.
 pub fn adapt_sccm_finding(value: &SccmFinding) -> DiagnosisFinding {
     let mut evidence: Vec<EvidenceRef> = value
         .evidence
@@ -1567,6 +1574,7 @@ pub fn adapt_sccm_finding(value: &SccmFinding) -> DiagnosisFinding {
     }
 }
 
+/// Adapts a dsregcmd insight as a `LikelyContributor`; it preserves the insight without adding new semantics.
 pub fn adapt_dsregcmd_insight(
     value: &crate::dsregcmd::DsregcmdDiagnosticInsight,
 ) -> DiagnosisFinding {
@@ -1700,7 +1708,15 @@ pub struct DiagnosisSummary {
 
 fn redact_identifier(value: &str, machines: &BTreeMap<String, String>) -> String {
     let mut redacted = redact_diagnostic_xml(value);
-    for (machine, replacement) in machines {
+    let mut ordered = machines.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        right
+            .0
+            .len()
+            .cmp(&left.0.len())
+            .then_with(|| left.0.cmp(right.0))
+    });
+    for (machine, replacement) in ordered {
         redacted = redacted.replace(machine, replacement);
     }
     redacted
@@ -2031,6 +2047,7 @@ mod tests {
         adapt_event_entry_with_data_and_raw_xml, enrich_error_tokens, CoverageState,
         EventLogChannel, EventLogEntry, EventLogSeverity, FindingClass,
     };
+    use std::collections::BTreeMap;
 
     #[test]
     fn malformed_token_is_visible_without_normalized_value() {
@@ -2038,6 +2055,40 @@ mod tests {
         assert!(token.malformed);
         assert_eq!(token.hex, None);
         assert_eq!(token.decimal, None);
+    }
+
+    #[test]
+    fn nonzero_error_token_accepts_uppercase_and_wide_hex() {
+        let token = super::ErrorToken {
+            raw: "0X8000000000000000".into(),
+            decimal: None,
+            hex: Some("0X8000000000000000".into()),
+            malformed: false,
+            found: false,
+            description: None,
+            category: None,
+        };
+        assert!(super::nonzero_error_token(&[token]));
+
+        let token = super::ErrorToken {
+            raw: "0x10000000000000000000000000000000".into(),
+            decimal: None,
+            hex: Some("0x10000000000000000000000000000000".into()),
+            malformed: false,
+            found: false,
+            description: None,
+            category: None,
+        };
+        assert!(super::nonzero_error_token(&[token]));
+    }
+
+    #[test]
+    fn machine_redaction_prefers_longer_overlapping_names() {
+        let mut machines = BTreeMap::new();
+        machines.insert("HOST".to_string(), "<redacted>".to_string());
+        machines.insert("HOST-01".to_string(), "<redacted>".to_string());
+
+        assert_eq!(super::redact_identifier("HOST-01", &machines), "<redacted>");
     }
 
     #[test]

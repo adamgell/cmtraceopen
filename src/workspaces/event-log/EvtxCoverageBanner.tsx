@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -24,25 +24,32 @@ export function EvtxCoverageBanner() {
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
-  const gaps = [
-    ...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)]),
-  ];
-  const displayedArchiveMembers = archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS);
+  const gaps = useMemo(
+    () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
+    [legacyGaps, tailGaps, structuredGaps]
+  );
+  const displayedArchiveMembers = useMemo(
+    () => archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS),
+    [archiveMembers]
+  );
   const omittedArchiveMembers = archiveMembers.length - displayedArchiveMembers.length;
-  const archiveMemberMessages = [
-    ...displayedArchiveMembers.map(
-      ({ path, kind, outcome, sha256 }) =>
-        `${path}: ${kind} ${outcome}${sha256 ? ` (sha256:${sha256})` : ""}`
-    ),
-    ...(omittedArchiveMembers > 0
-      ? [`<archive member metadata: ${omittedArchiveMembers} omitted by display limit>`]
-      : []),
-  ];
+  const archiveMemberMessages = useMemo(
+    () => [
+      ...displayedArchiveMembers.map(
+        ({ path, kind, outcome, sha256 }) =>
+          `${path}: ${kind} ${outcome}${sha256 ? ` (sha256:${sha256})` : ""}`
+      ),
+      ...(omittedArchiveMembers > 0
+        ? [`<archive member metadata: ${omittedArchiveMembers} omitted by display limit>`]
+        : []),
+    ],
+    [displayedArchiveMembers, omittedArchiveMembers]
+  );
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
   const summary =
     gaps.length > 0
       ? summarizeCoverageGaps(gaps)
-      : `${archiveMemberMessages.length} archive members in this view`;
+      : `${archiveMemberMessages.length} archive member${archiveMemberMessages.length === 1 ? "" : "s"} in this view`;
 
   // The live region remains mounted so screen readers announce newly loaded gaps and member
   // provenance. An empty region stays unstyled and carries no children.

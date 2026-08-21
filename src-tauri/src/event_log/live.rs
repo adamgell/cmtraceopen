@@ -1042,7 +1042,7 @@ fn start_polling_tail(
     };
     active_tails()
         .lock()
-        .map_err(|_| "live tail state lock was poisoned".to_string())?
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(
             tail_key(&request_id, &channel),
             ActiveTail {
@@ -1117,6 +1117,7 @@ pub fn start_channel_tail(
     };
     match subscription {
         Ok(handle) => {
+            let handle = OwnedEvtHandle::new(handle);
             let status = EvtxTailStatus {
                 request_id: request_id.clone(),
                 channel: channel.clone(),
@@ -1127,7 +1128,7 @@ pub fn start_channel_tail(
             };
             active_tails()
                 .lock()
-                .map_err(|_| "live tail state lock was poisoned".to_string())?
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(
                     tail_key(&request_id, &channel),
                     ActiveTail {
@@ -1137,7 +1138,7 @@ pub fn start_channel_tail(
                         stop: Arc::new(AtomicBool::new(false)),
                         sequence,
                         coverage_gaps,
-                        subscription: Some(OwnedEvtHandle::new(handle)),
+                        subscription: Some(handle),
                         context: Some(context),
                         session: remote_session.map(|(session, _)| session),
                         worker: None,

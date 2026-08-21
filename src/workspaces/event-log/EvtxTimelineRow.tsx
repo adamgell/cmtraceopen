@@ -312,6 +312,7 @@ export const EvtxTimelineRow = memo(
             return (
               <div
                 key={column.id}
+                data-evtx-level-badge="true"
                 style={{
                   fontSize: `${smallFontSize}px`,
                   fontWeight: 700,

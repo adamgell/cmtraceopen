@@ -58,8 +58,8 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
   });
 
   const counts = useMemo(() => timelineCounts(timeline), [timeline]);
-  const correlationEdges = timeline.edges ?? [];
-  const coverageGaps = timeline.coverageGaps ?? [];
+  const correlationEdges = useMemo(() => timeline.edges ?? [], [timeline.edges]);
+  const coverageGaps = useMemo(() => timeline.coverageGaps ?? [], [timeline.coverageGaps]);
   const correlationCounts = useMemo(() => {
     const result = { exact: 0, candidate: 0, ambiguous: 0 };
     for (const edge of correlationEdges) result[edge.strength] += 1;
@@ -70,6 +70,8 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
   const unplacedCount = timeline.unplaced.length;
   const unplacedPreview = timeline.unplaced.slice(0, UNPLACED_PREVIEW_LIMIT);
   const unplacedOmittedCount = unplacedCount - unplacedPreview.length;
+  const correlationPreview = correlationEdges.slice(0, UNPLACED_PREVIEW_LIMIT);
+  const correlationOmittedCount = correlationEdges.length - correlationPreview.length;
 
   const fontSize = metrics.fontSize;
   const smallFontSize = Math.max(9, fontSize - 3);
@@ -148,7 +150,7 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
             flexShrink: 0,
           }}
         >
-          {correlationEdges.map((edge) => (
+          {correlationPreview.map((edge) => (
             <div
               key={edge.id}
               data-testid="correlation-edge"
@@ -172,11 +174,18 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
               {edge.candidateIds.length > 0 && (
                 <span>candidate IDs: {edge.candidateIds.join(", ")}</span>
               )}
-              {edge.evidence.map((evidence) => (
+              {edge.evidence.slice(0, UNPLACED_PREVIEW_LIMIT).map((evidence) => (
                 <span key={`${edge.id}-${evidence.originId}-${evidence.field}`}>
                   {evidence.field}: {evidence.value} ({evidence.originId})
                 </span>
               ))}
+              {edge.evidence.length > UNPLACED_PREVIEW_LIMIT && (
+                <span>
+                  Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
+                  {edge.evidence.length.toLocaleString()} evidence items;{" "}
+                  {(edge.evidence.length - UNPLACED_PREVIEW_LIMIT).toLocaleString()} omitted.
+                </span>
+              )}
               {edge.coverage.gap && (
                 <span>
                   coverage reason: {edge.coverage.gap.reason} ({edge.coverage.gap.source})
@@ -189,6 +198,13 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
               coverage: {gap.reason} ({gap.source})
             </div>
           ))}
+          {correlationOmittedCount > 0 && (
+            <div>
+              Showing the first {correlationPreview.length.toLocaleString()} of{" "}
+              {correlationEdges.length.toLocaleString()} correlations;{" "}
+              {correlationOmittedCount.toLocaleString()} omitted.
+            </div>
+          )}
         </div>
       )}
 

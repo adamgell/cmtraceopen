@@ -51,7 +51,7 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
         <Text size={200}>Evidence: {evidenceText(finding.evidence)}</Text>
       )}
       {finding.recommendedChecks.length > 0 && (
-        <Text size={200}>Next: {finding.recommendedChecks.join(" ")}</Text>
+        <Text size={200}>Next: {finding.recommendedChecks.join("; ")}</Text>
       )}
       {finding.coverageGaps.map((gap) => (
         <div key={gap.id} style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>

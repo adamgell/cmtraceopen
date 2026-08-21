@@ -601,18 +601,20 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     let mut child_errors: Vec<PathDiagnostic> = Vec::new();
     let mut candidates = Vec::new();
     let mut listing_work = 0usize;
-    let mut listing_truncated = false;
+    let mut entry_limit_reached = false;
+    let mut work_limit_reached = false;
+    let mut diagnostic_limit_reached = false;
     for entry_result in read_dir {
         listing_work += 1;
         if listing_work > MAX_FOLDER_LISTING_WORK {
-            listing_truncated = true;
+            work_limit_reached = true;
             break;
         }
         match entry_result {
             Ok(entry) => candidates.push(entry),
             Err(error) => push_folder_error(
                 &mut child_errors,
-                &mut listing_truncated,
+                &mut diagnostic_limit_reached,
                 &requested_path,
                 &format!("child directory entry could not be read: {error}"),
             ),
@@ -629,7 +631,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     });
     if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
         candidates.truncate(MAX_FOLDER_LISTING_ENTRIES);
-        listing_truncated = true;
+        entry_limit_reached = true;
     }
     for entry in candidates {
         let entry_path = entry.path();
@@ -638,7 +640,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             Err(error) => {
                 push_folder_error(
                     &mut child_errors,
-                    &mut listing_truncated,
+                    &mut diagnostic_limit_reached,
                     &entry_path,
                     &error.to_string(),
                 );
@@ -648,7 +650,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         if let Some(reason) = unsafe_reason {
             push_folder_error(
                 &mut child_errors,
-                &mut listing_truncated,
+                &mut diagnostic_limit_reached,
                 &entry_path,
                 reason,
             );
@@ -659,7 +661,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             Err(error) => {
                 push_folder_error(
                     &mut child_errors,
-                    &mut listing_truncated,
+                    &mut diagnostic_limit_reached,
                     &entry_path,
                     &format!("child metadata could not be read: {error}"),
                 );
@@ -678,19 +680,30 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             modified_unix_ms: metadata_modified_unix_ms(&metadata),
         });
     }
-    if listing_truncated {
+    if entry_limit_reached || work_limit_reached || diagnostic_limit_reached {
         if child_errors.len() >= MAX_FOLDER_LISTING_ERRORS {
             child_errors.truncate(MAX_FOLDER_LISTING_ERRORS - 1);
         }
-        push_folder_error(
-            &mut child_errors,
-            &mut listing_truncated,
-            &requested_path,
-            &format!(
-                "folder listing reached the {} entry/work limit",
-                MAX_FOLDER_LISTING_ENTRIES
-            ),
-        );
+        let mut causes = Vec::new();
+        if entry_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_ENTRIES}-entry limit"
+            ));
+        }
+        if work_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_WORK}-entry work limit"
+            ));
+        }
+        if diagnostic_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit"
+            ));
+        }
+        child_errors.push(PathDiagnostic {
+            path: normalize_path_string(&requested_path),
+            reason: causes.join("; "),
+        });
     }
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
@@ -736,7 +749,7 @@ pub(crate) fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> 
 
 fn push_folder_error(
     errors: &mut Vec<PathDiagnostic>,
-    truncated: &mut bool,
+    diagnostic_limit_reached: &mut bool,
     path: &Path,
     reason: &str,
 ) {
@@ -746,7 +759,7 @@ fn push_folder_error(
             reason: reason.to_string(),
         });
     } else {
-        *truncated = true;
+        *diagnostic_limit_reached = true;
     }
 }
 

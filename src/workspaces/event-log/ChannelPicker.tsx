@@ -8,6 +8,7 @@ import {
   DialogSurface,
   DialogTitle,
   Input,
+  Select,
   tokens,
 } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
@@ -282,10 +283,13 @@ export function ChannelPicker() {
                 )}
               </div>
               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <select
+                <Select
                   aria-label="Channel to clear"
                   value={clearTarget ?? ""}
-                  onChange={(event) => setClearTarget(event.target.value || null)}
+                  onChange={(_, data) => {
+                    setClearTarget(data.value || null);
+                    setClearError(null);
+                  }}
                   style={{ flex: 1, minWidth: 0, fontSize: `${metrics.fontSize}px` }}
                 >
                   <option value="">Select channel to clear…</option>
@@ -294,10 +298,13 @@ export function ChannelPicker() {
                       {channel}
                     </option>
                   ))}
-                </select>
+                </Select>
                 <Button
+                  disabled={!clearTarget || isLoading}
                   onClick={() => {
-                    if (clearTarget) setConfirmClear(true);
+                    if (!clearTarget) return;
+                    setClearError(null);
+                    setConfirmClear(true);
                   }}
                   style={{ fontSize: `${metrics.fontSize}px` }}
                 >
@@ -310,7 +317,8 @@ export function ChannelPicker() {
         <Dialog
           open={confirmClear}
           onOpenChange={(_, data) => {
-            if (!data.open) setConfirmClear(false);
+            setConfirmClear(data.open);
+            if (data.open) setClearError(null);
           }}
         >
           <DialogSurface>
@@ -336,10 +344,27 @@ export function ChannelPicker() {
                     if (!clearTarget) return;
                     const channel = clearTarget;
                     setConfirmClear(false);
-                    void clearChannel(channel, true).then((result) => {
-                      if (result.status === "cleared") setClearTarget(null);
-                      else if ("detail" in result) setClearError(result.detail);
-                    });
+                    void clearChannel(channel, true)
+                      .then((result) => {
+                        if (result.status === "cleared") {
+                          setClearTarget(null);
+                          setClearError(null);
+                        } else if ("detail" in result) {
+                          setClearError(result.detail);
+                          setConfirmClear(true);
+                        } else {
+                          setClearError(
+                            result.status === "cancelled"
+                              ? "Clear was cancelled."
+                              : `${channel} is already empty.`
+                          );
+                          setConfirmClear(true);
+                        }
+                      })
+                      .catch((error: unknown) => {
+                        setClearError(error instanceof Error ? error.message : String(error));
+                        setConfirmClear(true);
+                      });
                   }}
                 >
                   Clear channel

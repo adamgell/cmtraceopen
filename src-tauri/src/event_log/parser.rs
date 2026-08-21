@@ -949,11 +949,13 @@ fn first_reparse_component(path: &Path) -> std::io::Result<Option<PathBuf>> {
 }
 
 fn is_platform_temp_alias(path: &Path) -> bool {
-    #[cfg(unix)]
+    // macOS exposes /tmp and /var as OS-owned symlinks into /private. Other
+    // Unix platforms must keep the no-follow guard enabled for those paths.
+    #[cfg(target_os = "macos")]
     {
         path == Path::new("/var") || path == Path::new("/tmp")
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
         false

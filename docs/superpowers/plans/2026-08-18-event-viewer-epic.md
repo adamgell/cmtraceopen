@@ -61,7 +61,7 @@ Every code lane follows this sequence:
 
 **Steps:**
 
-- Compare local `main` at `5b979752` with `origin/feat/provider-capture` at `117a7d16`, `418a6829`, and `be6e6c05`. Preserve the capture entry point and restore the real parse, query, export, map, provider, and timeline command bodies.
+- Compare local `main` at `5b979752` with provider-capture commit `117a7d16` and earlier commits `418a6829` and `be6e6c05`. Preserve the capture entry point and restore the real parse, query, export, map, provider, and timeline command bodies.
 - Add a failing command-contract test that rejects unconditional empty parse/query results and zero-count exports.
 - Restore the command registration needed by the frontend, including provider capture, without adding deprecated aliases.
 - Make `EvtxParseResult`, coverage fields, and batch delivery match the current `evtx-store.ts` contract.
@@ -141,7 +141,7 @@ Every code lane follows this sequence:
 - Generate sanitized provider data covering MDM, Autopilot, ESP, AAD, ConfigMgr client, AppX, and Windows Update. Record source Windows build and provider version in the manifest.
 - Package the curated database through the existing Tauri resource mechanism. Do not add a second database format or silently discard unsupported provider rows.
 - Verify a sanitized EVTX fixture on macOS renders descriptions from the packaged database, including typed values and unresolved placeholders as explicit coverage gaps.
-- Run parser tests and the wasm32 check. Run the Windows capture and export/import scenario on the Parallels guest.
+- Run parser tests and `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`. Run the Windows capture and export/import scenario on the Parallels guest.
 
 **Acceptance:** The seven named provider families are represented, import/export preserves all rows, and a non-Windows sanitized fixture renders descriptions without a provider registry.
 
@@ -248,7 +248,7 @@ Every code lane follows this sequence:
 - Extend timeline origin/provenance to preserve source, machine, bundle, channel, provider, process, activity, and record identity.
 - Implement stable deterministic merge ordering and explicit unplaced items.
 - Update the view to show source and machine provenance and coverage without dropping records.
-- Run parser tests, frontend timeline tests, and the wasm32 check.
+- Run parser tests, frontend timeline tests, and `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`.
 
 **Acceptance:** A multi-source timeline is deterministic, provenance-preserving, appendable, and explicit about unplaced events.
 
@@ -300,7 +300,7 @@ Every code lane follows this sequence:
 - Build machine-scoped correlation edges with confidence, ambiguity, evidence references, and coverage gaps.
 - Reuse exact-first ordering from ESP without importing ESP-specific I/O or allowing timestamp-only causality.
 - Render ambiguous and unsupported correlations explicitly.
-- Run parser and frontend tests plus wasm32 validation.
+- Run parser and frontend tests plus `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`.
 
 **Acceptance:** Exact validated identifiers produce evidence-backed edges; ambiguous or timestamp-only relationships remain non-causal and visible.
 
@@ -416,7 +416,7 @@ Every code lane follows this sequence:
 
 - Modify: `src-tauri/src/event_log/live.rs`
 - Modify: `src-tauri/src/event_log/commands.rs`
-- Modify: `src-tauri/src/elevation.rs` only through existing elevation APIs
+- Modify: `src-tauri/src/commands/elevation.rs` only through existing elevation APIs
 - Modify: frontend event-log store, workspace, and confirmation UI
 - Test: Windows-gated subscription/clear tests and frontend transition tests
 
@@ -452,7 +452,7 @@ Every code lane follows this sequence:
 - Implement evidence-backed rules that emit finding severity, confidence, evidence references, next checks, and coverage gaps. Do not classify a coverage gap as healthy or failed.
 - Adapt `error_db` lookup to event fields while preserving raw, decimal, hexadecimal, unknown, and malformed values.
 - Build a cross-source summary over event findings, text-log findings, timeline edges, and coverage. Use explicit precedence and ambiguity rather than timestamp-only causality.
-- Run parser, wasm32, TypeScript, and fixture tests. Verify the summary preserves every source reference and gap.
+- Run parser, `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`, TypeScript, and fixture tests. Verify the summary preserves every source reference and gap.
 
 **Acceptance:** Device-management diagnosis is operational and evidence-backed, error fields remain lossless, and cross-source summaries never overclaim from missing coverage.
 
@@ -464,6 +464,6 @@ After all 26 acceptance tasks close:
 
 - Re-read issue #539 and mark only directly evidenced checklist items complete.
 - Update the issue with child PR links, branch SHAs, focused and aggregate commands, Windows guest evidence, and unresolved limitations.
-- Run the complete applicable Rust, parser wasm32, TypeScript, frontend test, and diff gates from a clean integration worktree.
+- Run the complete applicable Rust, parser `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`, TypeScript, frontend test, and `git diff --check` gates from a clean integration worktree.
 - Request CodeRabbit and independent review against the exact integration range.
 - Do not close #539 until every item has an observable acceptance record.

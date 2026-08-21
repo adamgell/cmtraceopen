@@ -1,4 +1,4 @@
-# Task 4 fix report — provider database distribution and import/export
+# Task 4 fix report: provider database distribution and import/export
 
 Date: 2026-08-18
 

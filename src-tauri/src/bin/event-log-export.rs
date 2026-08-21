@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::borrow::Borrow;
 #[cfg(test)]
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
@@ -1108,9 +1109,23 @@ where
     Ok(coverage_report(&cli.coverage, &stats.records.to_string()))
 }
 
+fn utf8_arguments<I>(args: I) -> Result<Vec<String>, String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    args.into_iter()
+        .map(|argument| {
+            argument.into_string().map_err(|argument| {
+                format!("command-line argument is not valid UTF-8: {argument:?}")
+            })
+        })
+        .collect()
+}
+
 fn run() -> Result<(), String> {
     let mut stdout = std::io::stdout().lock();
-    let report = run_with_args(std::env::args(), &mut stdout)?;
+    let arguments = utf8_arguments(std::env::args_os())?;
+    let report = run_with_args(arguments, &mut stdout)?;
     eprintln!("{report}");
     Ok(())
 }
@@ -1125,12 +1140,23 @@ fn main() {
 mod tests {
     use super::{
         displayed_timestamp, event_id_matches, filtered_records, parse_args,
-        parse_event_id_selectors, parse_event_ids, reject_source_destination, run_with_args, Cli,
-        EventIdSelector, Filter, QuickFilter, MAX_EVENT_ID_FILTER_SELECTORS,
+        parse_event_id_selectors, parse_event_ids, reject_source_destination, run_with_args,
+        utf8_arguments, Cli, EventIdSelector, Filter, QuickFilter, MAX_EVENT_ID_FILTER_SELECTORS,
     };
     use app_lib::event_log::export::{mapped_columns_iter, MAX_MAPPED_COLUMNS};
     use app_lib::event_log::maps::MappedColumn;
     use app_lib::event_log::models::{EvtxField, EvtxLevel, EvtxRecord};
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_cli_arguments_are_rejected() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid = OsString::from_vec(vec![b's', 0xff]);
+        let error = utf8_arguments([invalid]).expect_err("non-UTF-8 argument must be rejected");
+        assert!(error.contains("not valid UTF-8"));
+    }
 
     fn make_record() -> EvtxRecord {
         EvtxRecord {

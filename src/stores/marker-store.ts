@@ -59,6 +59,41 @@ function markersEqual(
     left?.added === right?.added
   );
 }
+type MarkerIdentityIndex = Map<string, [number, Marker]>;
+
+function buildMarkerIdentityIndex(fileMap: ReadonlyMap<number, Marker>): MarkerIdentityIndex {
+  const index: MarkerIdentityIndex = new Map();
+  for (const entry of fileMap) {
+    if (entry[1].identity !== undefined && !index.has(entry[1].identity)) {
+      index.set(entry[1].identity, entry);
+    }
+  }
+  return index;
+}
+
+function updateMarkerIdentityIndex(
+  index: MarkerIdentityIndex,
+  entry: [number, Marker]
+): void {
+  if (entry[1].identity !== undefined) index.set(entry[1].identity, entry);
+}
+
+function removeMarkerIdentityIndex(
+  index: MarkerIdentityIndex,
+  fileMap: ReadonlyMap<number, Marker>,
+  entry: [number, Marker]
+): void {
+  if (entry[1].identity === undefined || index.get(entry[1].identity)?.[0] !== entry[0]) {
+    return;
+  }
+  index.delete(entry[1].identity);
+  for (const candidate of fileMap) {
+    if (candidate[1].identity === entry[1].identity) {
+      index.set(entry[1].identity, candidate);
+      break;
+    }
+  }
+}
 
 export function mergeLoadedFileMarkers(
   loaded: Map<number, Marker>,
@@ -66,7 +101,9 @@ export function mergeLoadedFileMarkers(
   current: ReadonlyMap<number, Marker> | undefined,
 ): Map<number, Marker> {
   const merged = new Map(loaded);
+  const mergedIdentityIndex = buildMarkerIdentityIndex(merged);
   const currentMap = current ?? new Map<number, Marker>();
+  const currentIdentityIndex = buildMarkerIdentityIndex(currentMap);
   const matchedCurrentKeys = new Set<number>();
   const changedPairs: Array<{
     initialKey: number;
@@ -82,21 +119,25 @@ export function mergeLoadedFileMarkers(
       currentMap,
       initialKey,
       initialMarker,
+      currentIdentityIndex,
     );
     if (!currentEntry) {
       const loadedEntry = findMergeMarkerEntry(
         merged,
         initialKey,
         initialMarker,
+        mergedIdentityIndex,
       );
-      if (loadedEntry) merged.delete(loadedEntry[0]);
+      if (loadedEntry) {
+        merged.delete(loadedEntry[0]);
+        removeMarkerIdentityIndex(mergedIdentityIndex, merged, loadedEntry);
+      }
       continue;
     }
     matchedCurrentKeys.add(currentEntry[0]);
-
     if (markersEqual(initialMarker, currentEntry[1])) {
-      if (!findMergeMarkerEntry(merged, initialKey, initialMarker)) {
-        addMergedMarker(merged, currentEntry[1], currentEntry[0]);
+      if (!findMergeMarkerEntry(merged, initialKey, initialMarker, mergedIdentityIndex)) {
+        addMergedMarker(merged, currentEntry[1], currentEntry[0], mergedIdentityIndex);
       }
       continue;
     }
@@ -108,11 +149,21 @@ export function mergeLoadedFileMarkers(
   }
 
   for (const { initialKey, initialMarker, currentMarker } of changedPairs) {
-    const loadedEntry = findMergeMarkerEntry(merged, initialKey, initialMarker);
+    const loadedEntry = findMergeMarkerEntry(
+      merged,
+      initialKey,
+      initialMarker,
+      mergedIdentityIndex,
+    );
     if (loadedEntry) {
-      merged.set(loadedEntry[0], { ...currentMarker, lineId: loadedEntry[0] });
+      const updatedEntry: [number, Marker] = [
+        loadedEntry[0],
+        { ...currentMarker, lineId: loadedEntry[0] },
+      ];
+      merged.set(updatedEntry[0], updatedEntry[1]);
+      updateMarkerIdentityIndex(mergedIdentityIndex, updatedEntry);
     } else {
-      addMergedMarker(merged, currentMarker);
+      addMergedMarker(merged, currentMarker, currentMarker.lineId, mergedIdentityIndex);
     }
   }
 
@@ -120,7 +171,7 @@ export function mergeLoadedFileMarkers(
   // to use the same line ID. Allocate a free storage key instead.
   for (const [currentKey, currentMarker] of currentMap) {
     if (matchedCurrentKeys.has(currentKey)) continue;
-    addMergedMarker(merged, currentMarker, currentKey);
+    addMergedMarker(merged, currentMarker, currentKey, mergedIdentityIndex);
   }
 
   return merged;
@@ -130,9 +181,10 @@ function findMergeMarkerEntry(
   fileMap: ReadonlyMap<number, Marker>,
   lineId: number,
   marker: Marker,
+  identityIndex?: MarkerIdentityIndex,
 ): [number, Marker] | undefined {
   if (marker.identity !== undefined) {
-    return findMarkerEntry(fileMap, lineId, marker.identity);
+    return findMarkerEntry(fileMap, lineId, marker.identity, identityIndex);
   }
   const candidate = fileMap.get(lineId);
   return candidate !== undefined && candidate.identity === undefined
@@ -144,10 +196,13 @@ function addMergedMarker(
   merged: Map<number, Marker>,
   marker: Marker,
   preferredLineId = marker.lineId,
+  identityIndex?: MarkerIdentityIndex,
 ): void {
-  const existing = findMergeMarkerEntry(merged, preferredLineId, marker);
+  const existing = findMergeMarkerEntry(merged, preferredLineId, marker, identityIndex);
   if (existing) {
-    merged.set(existing[0], { ...marker, lineId: existing[0] });
+    const updatedEntry: [number, Marker] = [existing[0], { ...marker, lineId: existing[0] }];
+    merged.set(updatedEntry[0], updatedEntry[1]);
+    if (identityIndex) updateMarkerIdentityIndex(identityIndex, updatedEntry);
     return;
   }
   if (
@@ -161,18 +216,27 @@ function addMergedMarker(
   while (merged.has(storageLineId)) {
     storageLineId = (storageLineId + 1) >>> 0;
   }
-  merged.set(storageLineId, { ...marker, lineId: storageLineId });
+  const storedEntry: [number, Marker] = [
+    storageLineId,
+    { ...marker, lineId: storageLineId },
+  ];
+  merged.set(storedEntry[0], storedEntry[1]);
+  if (identityIndex) updateMarkerIdentityIndex(identityIndex, storedEntry);
 }
 function findMarkerEntry(
   fileMap: ReadonlyMap<number, Marker>,
   lineId: number,
   identity?: string,
+  identityIndex?: MarkerIdentityIndex,
 ): [number, Marker] | undefined {
   if (identity !== undefined) {
-    const exact = [...fileMap.entries()].find(
-      ([, marker]) => marker.identity === identity,
-    );
-    if (exact) return exact;
+    const indexed = identityIndex?.get(identity);
+    if (indexed) return indexed;
+    if (!identityIndex) {
+      for (const entry of fileMap) {
+        if (entry[1].identity === identity) return entry;
+      }
+    }
   }
   const candidate = fileMap.get(lineId);
   if (

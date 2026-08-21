@@ -184,6 +184,7 @@ pub enum UnplacedReason {
 ///
 /// Exact keys are explicit provider/event identities. `Secondary` is deliberately weaker and can
 /// only produce a candidate edge; it is never promoted to causal evidence.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineCorrelationKeyKind {
@@ -216,6 +217,7 @@ pub struct TimelineCorrelationObservation {
     pub coverage_gaps: Vec<TimelineCoverageGap>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineCorrelationStrength {
@@ -224,6 +226,7 @@ pub enum TimelineCorrelationStrength {
     Ambiguous,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineCorrelationConfidence {
@@ -305,6 +308,7 @@ pub fn coverage_state(reason: &str) -> TimelineCoverageState {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimelineCorrelationCoverageState {

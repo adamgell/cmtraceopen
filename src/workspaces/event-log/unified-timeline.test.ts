@@ -636,8 +636,15 @@ describe("filterTimelineToRecords", () => {
       [record],
     );
     expect(filtered.items).toEqual([]);
-  });
+    expect(filtered.coverageGaps).toEqual([
+      {
+        source: EVENT_RECORD_IDENTITY_GAP_SOURCE,
+        reason:
+          "unsafe EventRecordID identity is ambiguous: 2 timeline origins share source4:Live|machine4:HOST|channel8:Security|record and cannot be matched uniquely",
+      },
+    ]);
 
+  });
   it("filters a large event list without recomputing each record per item", () => {
     const records = Array.from({ length: 512 }, (_, index) => ({
       sourceLabel: "Live",

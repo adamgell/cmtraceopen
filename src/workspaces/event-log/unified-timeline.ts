@@ -580,6 +580,11 @@ export function filterTimelineToRecords(
     const prefix = item.origin.stableId.replace(/record\d+$/, "record");
     unsafeOriginCounts.set(prefix, (unsafeOriginCounts.get(prefix) ?? 0) + 1);
   }
+  const ambiguousUnsafePrefixes = new Map(
+    [...unsafeOriginCounts].filter(
+      ([prefix, count]) => unsafePrefixes.has(prefix) && count > 1,
+    ),
+  );
   const keep = (origin: TimelineOrigin) => {
     if (origin.kind === "log") return true;
     if (keys.has(origin.stableId)) return true;
@@ -658,13 +663,19 @@ export function filterTimelineToRecords(
       },
     ];
   });
-  const coverageGaps = (timeline.coverageGaps ?? []).filter(
-    (gap) =>
-      isAggregateCoverageGap(gap) ||
-      gap.source === EVENT_RECORD_IDENTITY_GAP_SOURCE ||
-      gap.source.length === 0 ||
-      visibleOriginIds.has(gap.source),
-  );
+  const coverageGaps = [
+    ...(timeline.coverageGaps ?? []).filter(
+      (gap) =>
+        isAggregateCoverageGap(gap) ||
+        gap.source === EVENT_RECORD_IDENTITY_GAP_SOURCE ||
+        gap.source.length === 0 ||
+        visibleOriginIds.has(gap.source),
+    ),
+    ...[...ambiguousUnsafePrefixes].map(([prefix, count]) => ({
+      source: EVENT_RECORD_IDENTITY_GAP_SOURCE,
+      reason: `unsafe EventRecordID identity is ambiguous: ${count} timeline origins share ${prefix} and cannot be matched uniquely`,
+    })),
+  ];
   return { items, unplaced, edges, coverageGaps };
 }
 

@@ -93,28 +93,36 @@ export function findCorrelatedEntries(
   const targetTs = targetEntry.timestamp;
   const results: CorrelatedEntry[] = [];
 
-  // Binary search for window start
+  // Null-timestamp entries sort after timestamped entries. Keep the binary
+  // search and scan inside the timestamped prefix.
+  const firstUntimestamped = entries.findIndex((entry) => entry.timestamp == null);
+  const timestampedEnd = firstUntimestamped === -1 ? entries.length : firstUntimestamped;
   const windowStart = targetTs - windowMs;
   const windowEnd = targetTs + windowMs;
   let lo = 0;
-  let hi = entries.length;
+  let hi = timestampedEnd;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if ((entries[mid].timestamp ?? 0) < windowStart) lo = mid + 1;
-    else hi = mid;
+    const timestamp = entries[mid].timestamp;
+    if (timestamp == null || timestamp >= windowStart) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
   }
 
   // Scan from window start to window end
-  for (let i = lo; i < entries.length; i++) {
+  for (let i = lo; i < timestampedEnd; i++) {
     const entry = entries[i];
-    if (entry.timestamp == null) continue;
-    if (entry.timestamp > windowEnd) break;
+    const timestamp = entry.timestamp;
+    if (timestamp == null) break;
+    if (timestamp > windowEnd) break;
     if (entry.filePath === targetEntry.filePath) continue;
     if (entry.id === targetEntry.id) continue;
 
     results.push({
       entry,
-      deltaMs: entry.timestamp - targetTs,
+      deltaMs: timestamp - targetTs,
       fileColor: colorAssignments[entry.filePath] ?? "#888",
     });
   }

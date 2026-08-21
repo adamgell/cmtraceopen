@@ -170,18 +170,11 @@ pub struct EvidenceArtifactPreview {
 /// File extensions that are binary / non-parseable as text logs.
 /// Event-log exports are retained because the event-log source path parses them.
 const BINARY_EXTENSIONS: &[&str] = &["etl", "dat", "zip", "cab", "tmp", "dir", "que"];
+
 fn is_binary_bundle_member(path: &Path) -> bool {
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
         return false;
     };
-    if extension.eq_ignore_ascii_case("zip")
-        && path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("MDMDiagReport.zip"))
-    {
-        return false;
-    }
     BINARY_EXTENSIONS
         .iter()
         .any(|binary| binary.eq_ignore_ascii_case(extension))
@@ -196,19 +189,6 @@ const MAX_BUNDLE_ERRORS: usize = 4096;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum size of an individual file included in batch aggregate parsing.
 const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
-const BUNDLE_DIAGNOSTIC_ARCHIVE_MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
-
-fn bundle_file_size_limit(path: &Path) -> u64 {
-    if path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("MDMDiagReport.zip"))
-    {
-        BUNDLE_DIAGNOSTIC_ARCHIVE_MAX_FILE_SIZE
-    } else {
-        BUNDLE_BATCH_MAX_FILE_SIZE
-    }
-}
 
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
@@ -361,7 +341,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                 continue;
             }
             let size = metadata.len();
-            let file_size_limit = bundle_file_size_limit(&entry_path);
+            let file_size_limit = BUNDLE_BATCH_MAX_FILE_SIZE;
             if size > file_size_limit {
                 skipped_large += 1;
                 push_collection_error(
@@ -455,29 +435,37 @@ pub(crate) fn unsafe_ancestor_reason(path: &Path) -> std::io::Result<Option<&'st
 }
 
 fn is_platform_temp_alias(path: &Path) -> bool {
-    #[cfg(unix)]
+    // macOS exposes /tmp and /var as OS-owned symlinks into /private. Other
+    // Unix platforms must keep the no-follow guard enabled for those paths.
+    #[cfg(target_os = "macos")]
     {
         path == Path::new("/tmp") || path == Path::new("/var")
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
         false
     }
 }
 
+/// `FILE_ATTRIBUTE_REPARSE_POINT`.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
 fn unsafe_entry_metadata(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
-    if metadata.file_type().is_symlink() {
-        return true;
+    {
+        metadata.file_type().is_symlink()
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        return metadata.file_attributes() & 0x400 != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
-    #[cfg(not(target_os = "windows"))]
-    false
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
 }
 
 pub(crate) fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
@@ -1207,9 +1195,8 @@ fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundle_file_size_limit, collect_files_recursive, describe_parser_selection,
-        inspect_evidence_artifact, inspect_evidence_bundle, EvidenceArtifactIntakeKind,
-        BUNDLE_BATCH_MAX_FILE_SIZE, BUNDLE_DIAGNOSTIC_ARCHIVE_MAX_FILE_SIZE,
+        collect_files_recursive, describe_parser_selection, inspect_evidence_artifact,
+        inspect_evidence_bundle, EvidenceArtifactIntakeKind,
     };
     #[cfg(feature = "collector")]
     use crate::collector::artifacts::{collect_logs, CollectorContext};
@@ -1232,20 +1219,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn recursive_collection_retains_nested_diagnostic_zip_only() {
+    fn recursive_collection_skips_diagnostic_archives_as_event_sources() {
         let root = create_temp_dir("bundle-ops-nested-diagnostic-zip");
         let nested = root.join("nested");
         fs::create_dir_all(&nested).expect("create nested directory");
-        let diagnostic = nested.join("MDMDiagReport.zip");
-        let diagnostic_file = fs::File::create(&diagnostic).expect("create diagnostic archive");
-        diagnostic_file
-            .set_len(BUNDLE_BATCH_MAX_FILE_SIZE + 1)
-            .expect("grow diagnostic archive fixture");
+        fs::write(nested.join("MDMDiagReport.zip"), b"diagnostic archive")
+            .expect("write diagnostic archive");
         fs::write(nested.join("unrelated.zip"), b"zip").expect("write unrelated archive");
 
         let collected = collect_files_recursive(&root);
 
-        assert!(collected
+        assert!(!collected
             .entries
             .iter()
             .any(|entry| entry.path.ends_with("MDMDiagReport.zip")));
@@ -1253,19 +1237,11 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.path.ends_with("unrelated.zip")));
+        assert!(collected.child_errors.iter().any(|error| {
+            error.path.ends_with("MDMDiagReport.zip")
+                && error.reason.contains("binary bundle member")
+        }));
         fs::remove_dir_all(root).expect("remove bundle fixture");
-    }
-
-    #[test]
-    fn diagnostic_archives_use_the_event_log_member_limit() {
-        assert_eq!(
-            bundle_file_size_limit(PathBuf::from("MDMDiagReport.zip").as_path()),
-            BUNDLE_DIAGNOSTIC_ARCHIVE_MAX_FILE_SIZE
-        );
-        assert_eq!(
-            bundle_file_size_limit(PathBuf::from("ordinary.log").as_path()),
-            BUNDLE_BATCH_MAX_FILE_SIZE
-        );
     }
 
     #[test]

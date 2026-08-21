@@ -87,34 +87,6 @@ pub fn capture_providers_to_db(_db_path: &Path) -> Result<(), CaptureError> {
     Err(CaptureError::unsupported())
 }
 
-#[cfg(test)]
-fn expand_windows_environment(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut remainder = value;
-    while let Some(start) = remainder.find('%') {
-        output.push_str(&remainder[..start]);
-        let after_start = &remainder[start + 1..];
-        let Some(end) = after_start.find('%') else {
-            output.push_str(&remainder[start..]);
-            return output;
-        };
-        let name = &after_start[..end];
-        output.push_str(&std::env::var(name).unwrap_or_else(|_| format!("%{name}%")));
-        remainder = &after_start[end + 1..];
-    }
-    output.push_str(remainder);
-    output
-}
-
-#[cfg(test)]
-fn provider_file_paths(value: &str) -> Vec<String> {
-    value
-        .split(';')
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(expand_windows_environment)
-        .collect()
-}
 #[cfg(any(target_os = "windows", test))]
 fn category_message_text(
     message_id: Option<u32>,
@@ -619,7 +591,7 @@ mod windows_capture {
                 "metadata property size {size} exceeds bounded buffer"
             ));
         }
-        let words = (size + std::mem::size_of::<u64>() - 1) / std::mem::size_of::<u64>();
+        let words = size.div_ceil(std::mem::size_of::<u64>());
         let mut buffer = vec![0u64; words];
         let destination = buffer.as_mut_ptr() as *mut EVT_VARIANT;
         let mut used = 0u32;
@@ -757,7 +729,12 @@ mod windows_capture {
         }
         let units = usize::try_from(used)
             .map_err(|_| format!("message {message_id} buffer size overflow"))?;
-        if units == 0 || units > MAX_BUFFER_BYTES / 2 {
+        if units <= 1 {
+            return Err(format!(
+                "message {message_id} formatted text is unavailable (code 1813)"
+            ));
+        }
+        if units > MAX_BUFFER_BYTES / 2 {
             return Err(format!("message {message_id} exceeds bounded buffer"));
         }
         let mut buffer = vec![0u16; units];
@@ -1587,30 +1564,6 @@ pub use windows_capture::capture_providers_to_db;
 mod tests {
     use super::*;
 
-    #[test]
-    fn provider_file_paths_split_and_trim_semicolon_lists() {
-        assert_eq!(
-            provider_file_paths(" first.dll ; ;second.dll "),
-            vec!["first.dll".to_string(), "second.dll".to_string()]
-        );
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn provider_file_paths_preserve_unresolved_windows_variables() {
-        assert_eq!(
-            provider_file_paths("%CMTRACEOPEN_MISSING_ENV%/messages.dll"),
-            vec!["%CMTRACEOPEN_MISSING_ENV%/messages.dll".to_string()]
-        );
-    }
-
-    #[test]
-    fn unmatched_environment_variable_preserves_literal_remainder() {
-        assert_eq!(
-            expand_windows_environment("prefix/%MISSING%/suffix/%UNMATCHED"),
-            "prefix/%MISSING%/suffix/%UNMATCHED"
-        );
-    }
     #[test]
     fn absent_event_message_id_stays_absent_even_for_empty_text() {
         assert_eq!(event_message_text(None, Some(String::new())), None);

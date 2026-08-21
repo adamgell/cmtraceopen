@@ -202,14 +202,19 @@ export function EvtxFilterBar() {
     const nowEpoch = Date.now();
     const records = sortRecords(
       selectVisibleRecords({
-        ...state,
+        records: state.records,
+        selectedChannels: state.selectedChannels,
+        filterLevels: state.filterLevels,
+        filterEventIds: state.filterEventIds,
+        filterSearch: state.filterSearch,
+        quickFilter: state.quickFilter,
         timeWindow: state.timeWindow,
         visibleColumns,
         timeZoneMode: state.timeZoneMode,
         nowEpoch,
       }),
       state.sortField,
-      state.sortDirection
+      state.sortDirection,
     );
     if (records.length === 0) {
       setExportState("Nothing to export");
@@ -550,6 +555,7 @@ export function EvtxFilterBar() {
       <Dropdown
         button={{ style: { fontSize: controlFontSize } }}
         size="small"
+        aria-label="Quick filter matching grammar"
         value={QUICK_FILTER_MODE_LABELS[quickFilter.mode]}
         selectedOptions={[quickFilter.mode]}
         title="Quick filter matching grammar"
@@ -575,6 +581,7 @@ export function EvtxFilterBar() {
       <Dropdown
         button={{ style: { fontSize: controlFontSize } }}
         size="small"
+        aria-label="Quick filter column scope"
         value={QUICK_FILTER_SCOPE_LABELS[quickFilter.scope]}
         selectedOptions={[quickFilter.scope]}
         title="Quick filter column scope"
@@ -600,6 +607,7 @@ export function EvtxFilterBar() {
       <Dropdown
         button={{ style: { fontSize: controlFontSize } }}
         size="small"
+        aria-label="Quick filter show or hide behavior"
         value={QUICK_FILTER_ACTION_LABELS[quickFilter.action]}
         selectedOptions={[quickFilter.action]}
         title="Quick filter show or hide behavior"

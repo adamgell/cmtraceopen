@@ -25,6 +25,7 @@ import type {
   EventLogSourceSelection,
   DiagnosisOverview,
   EvtxCoverageGap,
+  EvtxChannelInfo,
   EvtxParseResult,
   EvtxRecord,
 } from "../workspaces/event-log/types";
@@ -327,6 +328,149 @@ async function invokeCommand(
 
 function isCommandRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonNegativeCommandCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isEvtxFieldResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.value === "string"
+  );
+}
+
+function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
+  if (
+    !isCommandRecord(value) ||
+    !isFiniteCommandNumber(value.id) ||
+    !isFiniteCommandNumber(value.eventRecordId) ||
+    (value.eventRecordIdText === undefined ||
+      isNullableCommandString(value.eventRecordIdText)) ||
+    typeof value.timestamp !== "string" ||
+    !isFiniteCommandNumber(value.timestampEpoch) ||
+    typeof value.provider !== "string" ||
+    typeof value.channel !== "string" ||
+    !isFiniteCommandNumber(value.eventId) ||
+    !(
+      value.level === "Critical" ||
+      value.level === "Error" ||
+      value.level === "Warning" ||
+      value.level === "Information" ||
+      value.level === "Verbose"
+    ) ||
+    typeof value.computer !== "string" ||
+    typeof value.message !== "string" ||
+    !Array.isArray(value.eventData) ||
+    !value.eventData.every(isEvtxFieldResponse) ||
+    typeof value.rawXml !== "string" ||
+    typeof value.sourceLabel !== "string"
+  ) {
+    return false;
+  }
+  return (
+    value.originKind === undefined ||
+    value.originKind === "event" ||
+    value.originKind === "log"
+  ) && (
+    value.task === undefined ||
+    value.task === null ||
+    isFiniteCommandNumber(value.task)
+  ) && (
+    value.opcode === undefined ||
+    value.opcode === null ||
+    isFiniteCommandNumber(value.opcode)
+  ) && (
+    value.processId === undefined ||
+    value.processId === null ||
+    isFiniteCommandNumber(value.processId)
+  ) && (
+    value.activityId === undefined ||
+    value.activityId === null ||
+    typeof value.activityId === "string"
+  ) && (
+    value.relatedActivityId === undefined ||
+    value.relatedActivityId === null ||
+    typeof value.relatedActivityId === "string"
+  ) && (
+    value.sessionId === undefined ||
+    value.sessionId === null ||
+    typeof value.sessionId === "string"
+  ) && (
+    value.deviceId === undefined ||
+    value.deviceId === null ||
+    typeof value.deviceId === "string"
+  ) && (
+    value.userId === undefined ||
+    value.userId === null ||
+    typeof value.userId === "string"
+  ) && (
+    value.processStartTime === undefined ||
+    value.processStartTime === null ||
+    typeof value.processStartTime === "string"
+  ) && (
+    value.threadId === undefined ||
+    value.threadId === null ||
+    isFiniteCommandNumber(value.threadId)
+  ) && (
+    value.userSid === undefined ||
+    value.userSid === null ||
+    typeof value.userSid === "string"
+  ) && (
+    value.keywords === undefined ||
+    value.keywords === null ||
+    typeof value.keywords === "string"
+  ) && (
+    value.mapped === undefined ||
+    (Array.isArray(value.mapped) &&
+      value.mapped.every(
+        (mapped) =>
+          isCommandRecord(mapped) &&
+          typeof mapped.property === "string" &&
+          typeof mapped.text === "string" &&
+          typeof mapped.complete === "boolean",
+      ))
+  );
+}
+
+function isEvtxChannelSourceType(value: unknown): boolean {
+  if (value === "live") return true;
+  if (!isCommandRecord(value)) return false;
+  if (isCommandRecord(value.remote)) {
+    return typeof value.remote.machine === "string";
+  }
+  if (isCommandRecord(value.file)) {
+    return typeof value.file.path === "string";
+  }
+  return false;
+}
+
+function isEvtxChannelInfoResponse(value: unknown): value is EvtxChannelInfo {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    isNonNegativeCommandCount(value.eventCount) &&
+    isEvtxChannelSourceType(value.sourceType)
+  );
+}
+function assertEvtxRecordArray(
+  records: unknown[],
+  commandName: string,
+): asserts records is EvtxRecord[] {
+  if (!records.every(isEvtxRecordResponse)) {
+    invalidCommandResponse(commandName);
+  }
+}
+
+function assertEvtxChannelArray(
+  channels: unknown[],
+  commandName: string,
+): asserts channels is EvtxChannelInfo[] {
+  if (!channels.every(isEvtxChannelInfoResponse)) {
+    invalidCommandResponse(commandName);
+  }
 }
 
 function isFiniteCommandNumber(value: unknown): value is number {
@@ -1059,21 +1203,42 @@ function decodeEventLogSourceManifest(
 
 function decodeEventLogParseResult(
   value: unknown,
-  _commandName: string,
+  commandName: string,
 ): EvtxParseResult {
-  assertParseResultShape(value);
-  return value as EvtxParseResult;
-}
+  const shape = assertParseResultShape(value);
+  const reply = value as Record<string, unknown>;
+  const totalRecords = shape.totalRecords;
+  const parseErrors = reply.parseErrors;
+  if (
+    totalRecords === null ||
+    !isNonNegativeCommandCount(totalRecords) ||
+    !isNonNegativeCommandCount(parseErrors)
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  assertEvtxRecordArray(shape.records, commandName);
+  assertEvtxChannelArray(shape.channels, commandName);
+  const result: EvtxParseResult = {
+    records: shape.records,
+    channels: shape.channels,
+    totalRecords,
+    parseErrors,
+    errorMessages: shape.errorMessages,
+  };
+  if (reply.coverageGaps !== undefined) result.coverageGaps = shape.coverageGaps;
+  if (reply.coverage !== undefined) result.coverage = shape.coverage;
+  if (reply.archiveMembers !== undefined) result.archiveMembers = shape.archiveMembers;
+  return result;
 
+}
 export async function expandEventLogSources(
   sources: EventLogSourceSelection[],
 ): Promise<EventLogSourceManifest> {
-  const manifest = await invokeCommand("evtx_expand_sources", {
+  return invokeCommand("evtx_expand_sources", {
     sources,
   });
-  assertEventLogSourceManifest(manifest);
-  return manifest;
 }
+
 
 export async function parseEventLogManifest(
   manifest: EventLogSourceManifest,

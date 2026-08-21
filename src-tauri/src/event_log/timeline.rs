@@ -6,6 +6,7 @@
 //!
 //! The log side needs no adapter because `LogEntry` already lives in the parser crate.
 
+use cmtraceopen_parser::eventmap::EventNode;
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
     correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem, TimelineOrigin,
@@ -18,6 +19,7 @@ use super::models::{EvtxLevel, EvtxOriginKind, EvtxRecord};
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
 /// decoded form. Information is the resting state, matching how the decoder treats a level it does
 /// not recognise.
+///
 fn severity_of(level: EvtxLevel) -> TimelineSeverity {
     match level {
         EvtxLevel::Critical => TimelineSeverity::Critical,
@@ -103,10 +105,7 @@ fn stable_event_base_from_id(stable_id: &str) -> &str {
         stable_id
     }
 }
-fn raw_correlation_ids(xml: &str) -> (Option<String>, Option<String>) {
-    let Ok(root) = parse_event_xml(xml) else {
-        return (None, None);
-    };
+fn raw_correlation_ids(root: &EventNode) -> (Option<String>, Option<String>) {
     if root.name != "Event" {
         return (None, None);
     }
@@ -130,13 +129,13 @@ fn raw_correlation_ids(xml: &str) -> (Option<String>, Option<String>) {
     (value("ActivityID"), value("RelatedActivityID"))
 }
 
-fn identity_conflicts_for(record: &EvtxRecord) -> Vec<String> {
+fn identity_conflicts_for(record: &EvtxRecord, root: Option<&EventNode>) -> Vec<String> {
     let identity = extract_event_identity(&record.event_data);
     let mut conflicts = identity.conflicts;
-    let Ok(root) = parse_event_xml(&record.raw_xml) else {
+    let Some(root) = root else {
         return conflicts;
     };
-    let system = extract_system_fields(&root);
+    let system = extract_system_fields(root);
     for (label, system_value, data_value) in [
         (
             "activityId",
@@ -195,7 +194,11 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         };
     }
 
-    let (raw_activity_id, raw_related_activity_id) = raw_correlation_ids(&record.raw_xml);
+    let parsed_xml = parse_event_xml(&record.raw_xml).ok();
+    let (raw_activity_id, raw_related_activity_id) = parsed_xml
+        .as_ref()
+        .map(raw_correlation_ids)
+        .unwrap_or((None, None));
     TimelineOrigin::Event {
         stable_id: stable_event_id_with_occurrence(record, occurrence),
         source: record.source_label.clone(),
@@ -222,7 +225,7 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         device_id: record.device_id.clone(),
         user_id: record.user_id.clone().or_else(|| record.user_sid.clone()),
         process_start_time: record.process_start_time.clone(),
-        identity_conflicts: identity_conflicts_for(record),
+        identity_conflicts: identity_conflicts_for(record, parsed_xml.as_ref()),
         event_id: record.event_id,
         record_id: record.event_record_id,
         record_id_text: record_id_text(record),

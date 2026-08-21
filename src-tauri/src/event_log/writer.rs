@@ -77,6 +77,47 @@ fn create_staging_file(path: &Path) -> io::Result<std::fs::File> {
     options.mode(0o600);
     options.open(path)
 }
+fn write_to_staged_destination<F>(path: &Path, write: F) -> Result<ExportStats, String>
+where
+    F: FnOnce(&mut std::fs::File) -> Result<ExportStats, String>,
+{
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("events");
+    let mut temporary = None;
+    let mut file = None;
+    for attempt in 0..100u32 {
+        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
+        match create_staging_file(&candidate) {
+            Ok(handle) => {
+                temporary = Some(candidate);
+                file = Some(handle);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create temporary output: {error}")),
+        }
+    }
+    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
+    let mut file = file.expect("temporary file handle");
+    let result = write(&mut file);
+    drop(file);
+    match result {
+        Ok(stats) => match replace_destination(&temporary, path) {
+            Ok(()) => Ok(stats),
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                Err(format!("cannot replace {}: {error}", path.display()))
+            }
+        },
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
 
 fn io_other(error: serde_json::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
@@ -670,43 +711,10 @@ pub fn write_records_to_destination(
     }
 
     let path = destination.expect("destination checked above");
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("events");
-    let mut temporary = None;
-    let mut file = None;
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
-        match create_staging_file(&candidate) {
-            Ok(handle) => {
-                temporary = Some(candidate);
-                file = Some(handle);
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cannot create temporary output: {error}")),
-        }
-    }
-    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
-    let mut file = file.expect("temporary file handle");
-    let result = write_records(&mut file, format, records)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()));
-    drop(file);
-    match result {
-        Ok(stats) => match replace_destination(&temporary, path) {
-            Ok(()) => Ok(stats),
-            Err(error) => {
-                let _ = fs::remove_file(&temporary);
-                Err(format!("cannot replace {}: {error}", path.display()))
-            }
-        },
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            Err(error)
-        }
-    }
+    write_to_staged_destination(path, |file| {
+        write_records(file, format, records)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))
+    })
 }
 pub fn write_record_stream_to_writer<W, I, R>(
     output: &mut W,
@@ -787,43 +795,10 @@ where
     }
 
     let path = destination.expect("destination checked above");
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("events");
-    let mut temporary = None;
-    let mut file = None;
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
-        match create_staging_file(&candidate) {
-            Ok(handle) => {
-                temporary = Some(candidate);
-                file = Some(handle);
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cannot create temporary output: {error}")),
-        }
-    }
-    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
-    let mut file = file.expect("temporary file handle");
-    let result = write_record_stream(&mut file, format, records, mapped_columns)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()));
-    drop(file);
-    match result {
-        Ok(stats) => match replace_destination(&temporary, path) {
-            Ok(()) => Ok(stats),
-            Err(error) => {
-                let _ = fs::remove_file(&temporary);
-                Err(format!("cannot replace {}: {error}", path.display()))
-            }
-        },
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            Err(error)
-        }
-    }
+    write_to_staged_destination(path, |file| {
+        write_record_stream(file, format, records, mapped_columns)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))
+    })
 }
 #[cfg(test)]
 fn record(message: &str) -> EvtxRecord {
