@@ -681,16 +681,17 @@ struct PendingTailBatch {
 
 #[cfg(target_os = "windows")]
 impl PendingTailBatch {
-    fn is_ready(&self) -> bool {
+    fn is_full(&self) -> bool {
         self.records.len() >= EVENT_FETCH_BATCH
     }
 
-    fn push_record(&mut self, record: EvtxRecord) -> Result<bool, EvtxRecord> {
-        if self.records.len() >= EVENT_FETCH_BATCH {
-            return Err(record);
-        }
+    fn is_ready(&self) -> bool {
+        self.is_full()
+    }
+
+    fn push_record(&mut self, record: EvtxRecord) -> bool {
         self.records.push(record);
-        Ok(self.is_ready())
+        self.is_ready()
     }
 
     fn take(&mut self) -> (Vec<EvtxRecord>, Vec<String>) {
@@ -715,27 +716,22 @@ struct TailBatcher {
 #[cfg(target_os = "windows")]
 impl TailBatcher {
     fn push_record(&self, record: EvtxRecord) {
-        let mut record = record;
         loop {
-            let result = {
-                let mut pending = self
-                    .pending
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                pending.push_record(record)
-            };
-            match result {
-                Ok(should_flush) => {
-                    if should_flush {
-                        self.flush();
-                    }
-                    return;
-                }
-                Err(unaccepted_record) => {
-                    record = unaccepted_record;
-                    self.flush();
-                }
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending.is_full() {
+                drop(pending);
+                self.flush();
+                continue;
             }
+            let should_flush = pending.push_record(record);
+            drop(pending);
+            if should_flush {
+                self.flush();
+            }
+            return;
         }
     }
 
@@ -1841,13 +1837,13 @@ mod tests {
     fn subscription_pending_batch_is_bounded_and_drains_at_fetch_limit() {
         let mut pending = PendingTailBatch::default();
         for event_record_id in 0..EVENT_FETCH_BATCH {
-            assert!(pending
-                .push_record(identity_test_record(
-                    event_record_id as u64,
-                    None,
-                    "<Event/>",
-                ))
-                .is_ok());
+            assert!(!pending.is_full());
+            let should_flush = pending.push_record(identity_test_record(
+                event_record_id as u64,
+                None,
+                "<Event/>",
+            ));
+            assert_eq!(should_flush, event_record_id + 1 == EVENT_FETCH_BATCH);
         }
 
         assert!(pending.is_ready());
@@ -1862,24 +1858,21 @@ mod tests {
     fn subscription_pending_record_is_retried_after_batch_drain() {
         let mut pending = PendingTailBatch::default();
         for event_record_id in 0..EVENT_FETCH_BATCH {
-            assert!(pending
-                .push_record(identity_test_record(
-                    event_record_id as u64,
-                    None,
-                    "<Event/>",
-                ))
-                .is_ok());
+            assert!(!pending.is_full());
+            pending.push_record(identity_test_record(
+                event_record_id as u64,
+                None,
+                "<Event/>",
+            ));
         }
 
+        assert!(pending.is_full());
         let next_record = identity_test_record(EVENT_FETCH_BATCH as u64, None, "<Event/>");
-        let next_record = match pending.push_record(next_record) {
-            Ok(_) => panic!("a full pending batch must reject until it is drained"),
-            Err(record) => record,
-        };
         let (records, gaps) = pending.take();
         assert_eq!(records.len(), EVENT_FETCH_BATCH);
         assert!(gaps.is_empty());
-        assert!(pending.push_record(next_record).is_ok());
+        assert!(!pending.is_full());
+        assert!(!pending.push_record(next_record));
         assert_eq!(pending.records.len(), 1);
     }
 
