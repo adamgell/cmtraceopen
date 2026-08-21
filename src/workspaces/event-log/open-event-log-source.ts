@@ -1,7 +1,7 @@
 import { expandEventLogSources, listLogFolder } from "../../lib/commands";
 import type { FolderEntry, LogSource } from "../../types/log";
 import { useEvtxStore } from "./evtx-store";
-import type { EventLogSourceSelection } from "./types";
+import type { EventLogSourceManifest, EventLogSourceSelection } from "./types";
 
 export type EventLogOpenSource =
   | { kind: "file"; path: string }
@@ -21,7 +21,15 @@ function evtxPathsFromFolderEntries(entries: FolderEntry[]): string[] {
 export async function openEventLogSources(
   sources: EventLogSourceSelection[],
 ): Promise<void> {
-  const manifest = await expandEventLogSources(sources);
+  let manifest: EventLogSourceManifest;
+  try {
+    manifest = await expandEventLogSources(sources);
+  } catch (error) {
+    useEvtxStore.getState().setLoadError(
+      error instanceof Error ? error.message : String(error)
+    );
+    throw error;
+  }
   await useEvtxStore.getState().parseManifest(manifest);
 }
 

@@ -347,8 +347,10 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     !isCommandRecord(value) ||
     !isFiniteCommandNumber(value.id) ||
     !isFiniteCommandNumber(value.eventRecordId) ||
-    (value.eventRecordIdText === undefined ||
-      isNullableCommandString(value.eventRecordIdText)) ||
+    !(
+      value.eventRecordIdText === undefined ||
+      isNullableCommandString(value.eventRecordIdText)
+    ) ||
     typeof value.timestamp !== "string" ||
     !isFiniteCommandNumber(value.timestampEpoch) ||
     typeof value.provider !== "string" ||

@@ -1019,6 +1019,65 @@ describe("event-log manifest commands", () => {
       manifest,
     });
   });
+
+  const validEventRecord = {
+    id: 1,
+    eventRecordId: 42,
+    timestamp: "2026-08-18T12:00:00Z",
+    timestampEpoch: 1_755_523_200_000,
+    provider: "Provider",
+    channel: "Application",
+    eventId: 75,
+    level: "Information",
+    computer: "WIN-TEST",
+    message: "Enrollment failed",
+    eventData: [],
+    rawXml: "",
+    sourceLabel: "Application.evtx",
+  };
+
+  it.each([
+    ["absent", {}],
+    ["null", { eventRecordIdText: null }],
+    ["string", { eventRecordIdText: "42" }],
+  ] as const)("accepts %s eventRecordIdText values", async (_label, identity) => {
+    const result = {
+      records: [{ ...validEventRecord, ...identity }],
+      channels: [
+        { name: "Application", eventCount: 1, sourceType: "live" },
+      ],
+      totalRecords: 1,
+      parseErrors: 0,
+      errorMessages: [],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).resolves.toEqual(
+      result,
+    );
+  });
+
+  it.each([42, true, [], { value: "42" }])(
+    "rejects malformed eventRecordIdText type %s",
+    async (eventRecordIdText) => {
+      vi.mocked(invoke).mockResolvedValueOnce({
+        records: [{ ...validEventRecord, eventRecordIdText }],
+        channels: [
+          { name: "Application", eventCount: 1, sourceType: "live" },
+        ],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      });
+
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).rejects.toThrow(
+        "Command 'evtx_parse_manifest' returned an invalid response.",
+      );
+    },
+  );
+
   it.each([
     [null, "the event log reader returned an invalid source manifest"],
     [

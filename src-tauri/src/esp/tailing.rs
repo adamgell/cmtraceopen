@@ -726,12 +726,16 @@ fn drop_leading_partial_record(bytes: &[u8], hint: EncodingHint) -> usize {
             .position(|byte| *byte == b'\n')
             .map_or(bytes.len(), |index| index + 1),
         EncodingHint::Utf16Le => bytes
-            .chunks_exact(2)
-            .position(|pair| pair == [b'\n', 0])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .position(|pair| *pair == [b'\n', 0])
             .map_or(bytes.len(), |index| (index + 1) * 2),
         EncodingHint::Utf16Be => bytes
-            .chunks_exact(2)
-            .position(|pair| pair == [0, b'\n'])
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .position(|pair| *pair == [0, b'\n'])
             .map_or(bytes.len(), |index| (index + 1) * 2),
     }
 }

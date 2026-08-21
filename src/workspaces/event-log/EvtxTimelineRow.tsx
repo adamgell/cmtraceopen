@@ -1,4 +1,4 @@
-import { Fragment, memo, forwardRef } from "react";
+import { Fragment, memo, forwardRef, type KeyboardEvent, type MouseEvent } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -79,6 +79,141 @@ function highlightValue(
       <Fragment key={`${part}-${index}`}>{part}</Fragment>
     );
   });
+}
+
+export function EvtxMarkerControls({
+  record,
+  marker,
+  markerAddressable,
+  fontSize,
+  variant,
+  onTag,
+  onBookmark,
+}: {
+  record: EvtxRecord;
+  marker: Marker | null;
+  markerAddressable: boolean;
+  fontSize: number;
+  variant: "detail" | "timeline";
+  onTag?: (record: EvtxRecord) => void;
+  onBookmark?: (record: EvtxRecord) => void;
+}) {
+  const bookmark = isEvtxBookmark(marker);
+  const compact = variant === "timeline";
+  const stopPropagation = compact
+    ? (event: MouseEvent<HTMLButtonElement>) => event.stopPropagation()
+    : undefined;
+  const stopKeyPropagation = compact
+    ? (event: KeyboardEvent<HTMLButtonElement>) => event.stopPropagation()
+    : undefined;
+
+  const controls = (
+    <>
+      <button
+        type="button"
+        disabled={!markerAddressable}
+        tabIndex={compact ? -1 : undefined}
+        aria-label={
+          markerAddressable
+            ? marker && !bookmark
+              ? "Remove event tag"
+              : "Tag event"
+            : "EventRecordID unavailable; tagging is disabled"
+        }
+        aria-pressed={compact ? undefined : Boolean(marker && !bookmark)}
+        title={
+          markerAddressable
+            ? marker && !bookmark
+              ? compact
+                ? `Remove ${marker.category} tag`
+                : "Remove event tag"
+              : "Tag event"
+            : "EventRecordID unavailable; tagging is disabled"
+        }
+        onClick={(event) => {
+          stopPropagation?.(event);
+          onTag?.(record);
+        }}
+        onKeyDown={stopKeyPropagation}
+        style={{
+          border: compact ? 0 : `1px solid ${tokens.colorNeutralStroke1}`,
+          borderRadius: compact ? "3px" : "4px",
+          padding: compact ? "1px 4px" : "3px 7px",
+          cursor: compact
+            ? markerAddressable
+              ? "pointer"
+              : "not-allowed"
+            : "pointer",
+          color: compact
+            ? !markerAddressable
+              ? tokens.colorNeutralForeground4
+              : marker && !bookmark
+                ? marker.color
+                : tokens.colorNeutralForeground3
+            : tokens.colorNeutralForeground1,
+          background: "transparent",
+          fontSize: `${fontSize}px`,
+        }}
+      >
+        {compact ? (marker && !bookmark ? "Tagged" : "Tag") : marker && !bookmark ? `Tagged: ${marker.category}` : "Tag"}
+      </button>
+      <button
+        type="button"
+        disabled={!markerAddressable}
+        tabIndex={compact ? -1 : undefined}
+        aria-label={
+          markerAddressable
+            ? bookmark
+              ? "Remove bookmark"
+              : "Bookmark event"
+            : "EventRecordID unavailable; bookmarking is disabled"
+        }
+        aria-pressed={bookmark}
+        title={
+          markerAddressable
+            ? bookmark
+              ? "Remove bookmark"
+              : "Bookmark event"
+            : "EventRecordID unavailable; bookmarking is disabled"
+        }
+        onClick={(event) => {
+          stopPropagation?.(event);
+          onBookmark?.(record);
+        }}
+        onKeyDown={stopKeyPropagation}
+        style={{
+          border: compact ? 0 : `1px solid ${tokens.colorNeutralStroke1}`,
+          borderRadius: compact ? "3px" : "4px",
+          padding: compact ? "1px 4px" : "3px 7px",
+          cursor: compact
+            ? markerAddressable
+              ? "pointer"
+              : "not-allowed"
+            : "pointer",
+          color: compact
+            ? !markerAddressable
+              ? tokens.colorNeutralForeground4
+              : bookmark
+                ? "#8b5cf6"
+                : tokens.colorNeutralForeground3
+            : bookmark
+              ? "#8b5cf6"
+              : tokens.colorNeutralForeground1,
+          background: "transparent",
+          fontSize: `${fontSize}px`,
+        }}
+      >
+        {bookmark ? "Bookmarked" : "Bookmark"}
+      </button>
+    </>
+  );
+  return compact ? (
+    controls
+  ) : (
+    <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
+      {controls}
+    </div>
+  );
 }
 
 export interface EvtxTimelineRowProps {
@@ -224,85 +359,15 @@ export const EvtxTimelineRow = memo(
               Match
             </span>
           )}
-          <button
-            type="button"
-            disabled={!markerAddressable}
-            tabIndex={-1}
-            aria-label={
-              markerAddressable
-                ? marker && !bookmark
-                  ? "Remove event tag"
-                  : "Tag event"
-                : "EventRecordID unavailable; tagging is disabled"
-            }
-            title={
-              markerAddressable
-                ? marker && !bookmark
-                  ? `Remove ${marker.category} tag`
-                  : "Tag event"
-                : "EventRecordID unavailable; tagging is disabled"
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              onTag?.(record);
-            }}
-            onKeyDown={(event) => event.stopPropagation()}
-            style={{
-              border: 0,
-              borderRadius: "3px",
-              padding: "1px 4px",
-              cursor: markerAddressable ? "pointer" : "not-allowed",
-              color: !markerAddressable
-                ? tokens.colorNeutralForeground4
-                : marker && !bookmark
-                  ? marker.color
-                  : tokens.colorNeutralForeground3,
-              background: "transparent",
-              fontSize: `${smallFontSize}px`,
-            }}
-          >
-            {marker && !bookmark ? "Tagged" : "Tag"}
-          </button>
-          <button
-            type="button"
-            disabled={!markerAddressable}
-            tabIndex={-1}
-            aria-label={
-              markerAddressable
-                ? bookmark
-                  ? "Remove bookmark"
-                  : "Bookmark event"
-                : "EventRecordID unavailable; bookmarking is disabled"
-            }
-            aria-pressed={bookmark}
-            title={
-              markerAddressable
-                ? bookmark
-                  ? "Remove bookmark"
-                  : "Bookmark event"
-                : "EventRecordID unavailable; bookmarking is disabled"
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              onBookmark?.(record);
-            }}
-            onKeyDown={(event) => event.stopPropagation()}
-            style={{
-              border: 0,
-              borderRadius: "3px",
-              padding: "1px 4px",
-              cursor: markerAddressable ? "pointer" : "not-allowed",
-              color: !markerAddressable
-                ? tokens.colorNeutralForeground4
-                : bookmark
-                  ? "#8b5cf6"
-                  : tokens.colorNeutralForeground3,
-              background: "transparent",
-              fontSize: `${smallFontSize}px`,
-            }}
-          >
-            {bookmark ? "Bookmarked" : "Bookmark"}
-          </button>
+          <EvtxMarkerControls
+            record={record}
+            marker={marker}
+            markerAddressable={markerAddressable}
+            fontSize={smallFontSize}
+            variant="timeline"
+            onTag={onTag}
+            onBookmark={onBookmark}
+          />
         </div>
         {columns.map((column) => {
           const width = columnWidth(columnConfig, column);

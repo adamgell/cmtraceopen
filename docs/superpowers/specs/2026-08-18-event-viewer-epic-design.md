@@ -208,7 +208,7 @@ For every code lane:
 1. Add a failing contract test for each new observable behavior.
 2. Implement the smallest end-to-end path.
 3. Run focused Rust or frontend tests and inspect the exact diff independently.
-4. Run applicable aggregate gates: `cargo test --locked --manifest-path src-tauri/Cargo.toml --features event-log`, `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`, `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`, `npx tsc --noEmit`, and `git diff --check`.
+4. Run applicable aggregate gates: `cargo check --locked --manifest-path src-tauri/Cargo.toml --features event-log`, `cargo test --locked --manifest-path src-tauri/Cargo.toml --features event-log`, `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --features event-log -- -D warnings`, `cargo check --locked --manifest-path crates/cmtraceopen-parser/Cargo.toml --target wasm32-unknown-unknown`, `npx tsc --noEmit`, and `git diff --check`.
 5. Run Windows-lab scenarios for Windows APIs, capture, remote access, subscriptions, channel clearing, archive/VSS paths, and performance.
 6. Review the exact committed range with CodeRabbit and an independent reviewer before proposing integration.
 

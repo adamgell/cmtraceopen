@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
-import type { Marker } from "../../types/markers";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -18,94 +17,7 @@ import {
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
-import type { EvtxRecord } from "./types";
-
-function DetailMarkerControls({
-  record,
-  marker,
-  markerAddressable,
-  fontSize,
-  onTag,
-  onBookmark,
-}: {
-  record: EvtxRecord;
-  marker: Marker | null;
-  markerAddressable: boolean;
-  fontSize: number;
-  onTag: (record: EvtxRecord) => void;
-  onBookmark: (record: EvtxRecord) => void;
-}) {
-  return (
-    <div role="group" aria-label="Selected event markers" style={{ display: "flex", gap: "6px" }}>
-      <button
-        type="button"
-        disabled={!markerAddressable}
-        aria-label={
-          markerAddressable
-            ? marker?.category === "bookmark"
-              ? "Tag event"
-              : marker
-                ? "Remove event tag"
-                : "Tag event"
-            : "EventRecordID unavailable; tagging is disabled"
-        }
-        aria-pressed={Boolean(marker && marker.category !== "bookmark")}
-        title={
-          markerAddressable
-            ? marker?.category === "bookmark"
-              ? "Tag event"
-              : marker
-                ? "Remove event tag"
-                : "Tag event"
-            : "EventRecordID unavailable; tagging is disabled"
-        }
-        onClick={() => onTag(record)}
-        style={{
-          border: `1px solid ${tokens.colorNeutralStroke1}`,
-          borderRadius: "4px",
-          padding: "3px 7px",
-          cursor: "pointer",
-          background: "transparent",
-          color: tokens.colorNeutralForeground1,
-          fontSize: `${fontSize}px`,
-        }}
-      >
-        {marker && marker.category !== "bookmark" ? `Tagged: ${marker.category}` : "Tag"}
-      </button>
-      <button
-        type="button"
-        disabled={!markerAddressable}
-        aria-label={
-          markerAddressable
-            ? marker?.category === "bookmark"
-              ? "Remove bookmark"
-              : "Bookmark event"
-            : "EventRecordID unavailable; bookmarking is disabled"
-        }
-        aria-pressed={marker?.category === "bookmark"}
-        title={
-          markerAddressable
-            ? marker?.category === "bookmark"
-              ? "Remove bookmark"
-              : "Bookmark event"
-            : "EventRecordID unavailable; bookmarking is disabled"
-        }
-        onClick={() => onBookmark(record)}
-        style={{
-          border: `1px solid ${tokens.colorNeutralStroke1}`,
-          borderRadius: "4px",
-          padding: "3px 7px",
-          cursor: "pointer",
-          background: "transparent",
-          color: marker?.category === "bookmark" ? "#8b5cf6" : tokens.colorNeutralForeground1,
-          fontSize: `${fontSize}px`,
-        }}
-      >
-        {marker?.category === "bookmark" ? "Bookmarked" : "Bookmark"}
-      </button>
-    </div>
-  );
-}
+import { EvtxMarkerControls } from "./EvtxTimelineRow";
 
 export function EvtxDetailPane() {
   const markersByFile = useMarkerStore((s) => s.markersByFile);
@@ -203,11 +115,12 @@ export function EvtxDetailPane() {
         >
           {record.level}
         </span>
-        <DetailMarkerControls
+        <EvtxMarkerControls
           record={record}
           marker={marker}
           markerAddressable={markerAddressable}
           fontSize={fontSize}
+          variant="detail"
           onTag={toggleEvtxTag}
           onBookmark={toggleEvtxBookmark}
         />
