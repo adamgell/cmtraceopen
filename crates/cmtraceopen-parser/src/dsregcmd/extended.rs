@@ -336,7 +336,7 @@ pub fn build_active_diagnostics_rules(
                 "Service Connection Point not found in Active Directory",
                 "The device is domain-joined but no SCP was found for hybrid join configuration. This prevents automatic tenant discovery.",
                 vec![
-                    format!("SCP found: NO"),
+                    "SCP found: NO".to_string(),
                     format!("Error: {}", scp.error.as_deref().unwrap_or("(none)")),
                 ],
                 vec![

@@ -2191,18 +2191,20 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
 
     pending.sequences.add(sequence);
     pending.receivedRecordCount += records.length;
-    pending.records = appendUniqueRecords(pending.records, records).records;
+    if (records.length > 0) {
+      pending.records = appendUniqueRecords(pending.records, records).records;
 
-    // Batches are visible while a request is running. Use the same identity-preserving merge as all
-    // reply/refresh paths so a late, out-of-order batch cannot move the operator's selection.
-    const state = useEvtxStore.getState();
-    const merged = mergeRecordsPreservingSelection(
-      state.records,
-      state.selectedRecordId,
-      records,
-      { preserveMissingSelection: true }
-    );
-    useEvtxStore.setState(merged);
+      // Batches are visible while a request is running. Use the same identity-preserving merge as all
+      // reply/refresh paths so a late, out-of-order batch cannot move the operator's selection.
+      const state = useEvtxStore.getState();
+      const merged = mergeRecordsPreservingSelection(
+        state.records,
+        state.selectedRecordId,
+        records,
+        { preserveMissingSelection: true }
+      );
+      useEvtxStore.setState(merged);
+    }
 
     // A terminal can race the final batch. Keep the pending state until the consumer acknowledges
     // the drain; the records above remain available even after reconciliation has resolved.

@@ -2122,6 +2122,7 @@ mod tests {
     fn rejects_record_vectors_over_the_deserialization_budget() {
         #[derive(Debug, serde::Deserialize)]
         struct BoundedRecords {
+            #[allow(dead_code)]
             #[serde(deserialize_with = "super::deserialize_bounded_records")]
             records: Vec<serde_json::Value>,
         }

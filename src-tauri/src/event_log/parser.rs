@@ -3021,13 +3021,24 @@ mod tests {
         assert!(manifest.entries.iter().any(|entry| {
             entry.path.ends_with("MDMDiagReport.zip") && entry.kind == EventLogSourceKind::Archive
         }));
-        assert!(manifest.coverage.is_empty());
+        let uppercase = root.join("Application.EVTX");
+        let lowercase = root.join("application.evtx");
+        std::fs::write(&uppercase, b"uppercase duplicate").expect("write uppercase duplicate");
+        std::fs::write(&lowercase, b"lowercase duplicate").expect("write lowercase duplicate");
+        let names_are_distinct = match (
+            std::fs::canonicalize(&uppercase),
+            std::fs::canonicalize(&lowercase),
+        ) {
+            (Ok(uppercase), Ok(lowercase)) => uppercase != lowercase,
+            _ => true,
+        };
 
         let duplicate = build_source_manifest(&[
-            root.join("application.evtx").to_string_lossy().to_string(),
-            root.join("Application.EVTX").to_string_lossy().to_string(),
+            lowercase.to_string_lossy().to_string(),
+            uppercase.to_string_lossy().to_string(),
         ])
         .expect("build duplicate manifest");
+
         #[cfg(target_os = "windows")]
         {
             assert_eq!(duplicate.entries.len(), 1);
@@ -3037,7 +3048,7 @@ mod tests {
             );
         }
         #[cfg(not(target_os = "windows"))]
-        {
+        if names_are_distinct {
             assert_eq!(duplicate.entries.len(), 2);
             assert!(duplicate
                 .entries

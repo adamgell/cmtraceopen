@@ -3,7 +3,7 @@ use cmtraceopen_parser::diagnosis::{
     adapt_event_entry_with_data_and_raw_xml, adapt_intune_finding, adapt_log_entry,
     enrich_error_tokens, finding_for_coverage, redacted_display_projection, summarize_cross_source,
     CorrelationBasis, CorrelationEdge, CorrelationStatus, CoverageState, EventEvidenceRef,
-    EvidenceRef, FindingClass, FindingConfidence, TextLogEvidenceRef,
+    EvidenceRef, FindingClass, TextLogEvidenceRef,
 };
 use cmtraceopen_parser::esp::{
     EspDiagnosticFinding, EspEvidenceRef, EspFindingConfidence, EspFindingSeverity,
@@ -176,7 +176,7 @@ fn success_status_and_zero_error_code_are_not_failures() {
 fn missing_record_ids_include_raw_xml_in_content_identity() {
     let mut first = event_entry("same event");
     first.id = 0;
-    let mut second = first.clone();
+    let second = first.clone();
     let first_id = adapt_event_entry_with_data_and_raw_xml(
         first,
         &[],
