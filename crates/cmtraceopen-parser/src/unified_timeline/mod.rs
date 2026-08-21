@@ -388,7 +388,7 @@ impl UnifiedTimeline {
     }
 }
 
-fn normalized_identity(value: &str) -> Option<String> {
+fn identity_value(value: &str) -> Option<&str> {
     let value = value.trim().trim_end_matches('.');
     if value.is_empty()
         || matches!(
@@ -396,20 +396,18 @@ fn normalized_identity(value: &str) -> Option<String> {
             "unknown" | "n/a" | "na" | "none" | "null" | "not available" | "not_applicable"
         )
     {
-        return None;
+        None
+    } else {
+        Some(value)
     }
-    Some(value.to_ascii_lowercase())
 }
+
+fn normalized_identity(value: &str) -> Option<String> {
+    identity_value(value).map(str::to_ascii_lowercase)
+}
+
 fn source_identity(value: &str) -> Option<String> {
-    let value = value.trim().trim_end_matches('.');
-    if value.is_empty()
-        || matches!(
-            value.to_ascii_lowercase().as_str(),
-            "unknown" | "n/a" | "na" | "none" | "null" | "not available" | "not_applicable"
-        )
-    {
-        return None;
-    }
+    let value = identity_value(value)?;
     #[cfg(target_os = "windows")]
     {
         Some(value.to_ascii_lowercase())

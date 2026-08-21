@@ -463,11 +463,14 @@ fn query_channel_inner(
                         win32_code(&error),
                         error.code().0 as u32
                     );
-                    gaps.push(format!(
-                        "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
-                        produced,
-                        format_source_error("EvtNext", &error, remote),
-                    ));
+                    push_bounded_tail_coverage_gap(
+                        &mut gaps,
+                        format!(
+                            "{coverage_channel}: stopped after {} events, the channel could not be read further ({})",
+                            produced,
+                            format_source_error("EvtNext", &error, remote),
+                        ),
+                    );
                     break;
                 }
             }
@@ -500,10 +503,13 @@ fn query_channel_inner(
                 Ok(xml) => xml,
                 Err(error) => {
                     unrenderable += 1;
-                    gaps.push(format!(
-                        "{coverage_channel}: event could not be rendered ({})",
-                        format_source_error("EvtRender", &error, remote)
-                    ));
+                    push_bounded_tail_coverage_gap(
+                        &mut gaps,
+                        format!(
+                            "{coverage_channel}: event could not be rendered ({})",
+                            format_source_error("EvtRender", &error, remote)
+                        ),
+                    );
                     if unrenderable == 1 {
                         log::warn!(
                             "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
@@ -550,10 +556,13 @@ fn query_channel_inner(
                     Err(error) => {
                         message_failures += 1;
                         if metadata_failures.insert(provider.to_string()) {
-                            gaps.push(format!(
-                                "{coverage_channel}: event message could not be formatted ({})",
-                                format_source_error("EvtFormatMessage", &error, remote)
-                            ));
+                            push_bounded_tail_coverage_gap(
+                                &mut gaps,
+                                format!(
+                                    "{coverage_channel}: event message could not be formatted ({})",
+                                    format_source_error("EvtFormatMessage", &error, remote)
+                                ),
+                            );
                         }
                         log::warn!(
                             "event=evtx_metadata_failed channel=\"{channel}\" error=\"{}\"",
@@ -590,9 +599,12 @@ fn query_channel_inner(
         // Counted and reported rather than passed over. Events that never arrived look exactly like
         // evidence that the thing being investigated did not happen.
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unparsable={unparsable}");
-        gaps.push(format!(
-            "{coverage_channel}: {unparsable} events could not be read and are missing from this view"
-        ));
+        push_bounded_tail_coverage_gap(
+            &mut gaps,
+            format!(
+                "{coverage_channel}: {unparsable} events could not be read and are missing from this view"
+            ),
+        );
     }
     // Render and message failures already append one classified gap per failed event above.
     // Keep the counters in logs only so one failure cannot appear twice in coverage UI.
@@ -620,15 +632,179 @@ fn query_channel_inner(
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
 
 #[cfg(target_os = "windows")]
-struct TailContext {
+const SUBSCRIPTION_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(target_os = "windows")]
+const MAX_TAIL_COVERAGE_GAPS: usize = 256;
+
+#[cfg(target_os = "windows")]
+const TAIL_COVERAGE_SUMMARY_PREFIX: &str = "<live tail coverage>: ";
+
+#[cfg(target_os = "windows")]
+const TAIL_COVERAGE_SUMMARY_SUFFIX: &str = " additional live tail diagnostics were coalesced";
+
+#[cfg(target_os = "windows")]
+fn push_bounded_tail_coverage_gap(gaps: &mut Vec<String>, gap: String) {
+    if gaps.len() < MAX_TAIL_COVERAGE_GAPS - 1 {
+        gaps.push(gap);
+        return;
+    }
+    if gaps.len() == MAX_TAIL_COVERAGE_GAPS - 1 {
+        gaps.push(format!(
+            "{TAIL_COVERAGE_SUMMARY_PREFIX}1{TAIL_COVERAGE_SUMMARY_SUFFIX}"
+        ));
+        return;
+    }
+
+    let Some(summary) = gaps.last_mut() else {
+        return;
+    };
+    let Some(omitted) = summary
+        .strip_prefix(TAIL_COVERAGE_SUMMARY_PREFIX)
+        .and_then(|summary| summary.strip_suffix(TAIL_COVERAGE_SUMMARY_SUFFIX))
+        .and_then(|count| count.parse::<usize>().ok())
+    else {
+        *summary = format!("{TAIL_COVERAGE_SUMMARY_PREFIX}2{TAIL_COVERAGE_SUMMARY_SUFFIX}");
+        return;
+    };
+    *summary = format!(
+        "{TAIL_COVERAGE_SUMMARY_PREFIX}{}{TAIL_COVERAGE_SUMMARY_SUFFIX}",
+        omitted.saturating_add(1)
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct PendingTailBatch {
+    records: Vec<EvtxRecord>,
+    coverage_gaps: Vec<String>,
+}
+
+#[cfg(target_os = "windows")]
+impl PendingTailBatch {
+    fn is_ready(&self) -> bool {
+        self.records.len() >= EVENT_FETCH_BATCH
+    }
+
+    fn push_record(&mut self, record: EvtxRecord) -> Result<bool, EvtxRecord> {
+        if self.records.len() >= EVENT_FETCH_BATCH {
+            return Err(record);
+        }
+        self.records.push(record);
+        Ok(self.is_ready())
+    }
+
+    fn take(&mut self) -> (Vec<EvtxRecord>, Vec<String>) {
+        (
+            std::mem::take(&mut self.records),
+            std::mem::take(&mut self.coverage_gaps),
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct TailBatcher {
     app: AppHandle,
     request_id: String,
+    channel: String,
+    sequence: Arc<AtomicU64>,
+    coverage_gaps: Arc<Mutex<Vec<String>>>,
+    pending: Mutex<PendingTailBatch>,
+    emission: Mutex<()>,
+}
+
+#[cfg(target_os = "windows")]
+impl TailBatcher {
+    fn push_record(&self, record: EvtxRecord) {
+        let mut record = record;
+        loop {
+            let result = {
+                let mut pending = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                pending.push_record(record)
+            };
+            match result {
+                Ok(should_flush) => {
+                    if should_flush {
+                        self.flush();
+                    }
+                    return;
+                }
+                Err(unaccepted_record) => {
+                    record = unaccepted_record;
+                    self.flush();
+                }
+            }
+        }
+    }
+
+    fn push_gap(&self, gap: String) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        push_bounded_tail_coverage_gap(&mut pending.coverage_gaps, gap);
+    }
+
+    fn flush(&self) {
+        let _emission = self
+            .emission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some((records, gaps, sequence)) = ({
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending.records.is_empty() && pending.coverage_gaps.is_empty() {
+                None
+            } else {
+                let (records, gaps) = pending.take();
+                let sequence = self.sequence.fetch_add(1, Ordering::AcqRel);
+                Some((records, gaps, sequence))
+            }
+        }) else {
+            return;
+        };
+        emit_tail_event(
+            &self.app,
+            self.coverage_gaps.as_ref(),
+            EvtxTailBatch {
+                request_id: self.request_id.clone(),
+                channel: self.channel.clone(),
+                sequence,
+                mode: EvtxLiveMode::Subscription,
+                records,
+                coverage_gaps: gaps,
+            },
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn subscription_flush_worker(
+    batcher: Arc<TailBatcher>,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Acquire) {
+            thread::sleep(SUBSCRIPTION_FLUSH_INTERVAL);
+            batcher.flush();
+        }
+        // EvtClose waits for callbacks already in flight. Flush anything they queued before the
+        // worker exits so stopping a tail does not silently discard rendered records.
+        batcher.flush();
+    })
+}
+
+#[cfg(target_os = "windows")]
+struct TailContext {
     channel: String,
     source_label: String,
     session: Option<EVT_HANDLE>,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
-    sequence: Arc<AtomicU64>,
-    coverage_gaps: Arc<Mutex<Vec<String>>>,
+    batcher: Arc<TailBatcher>,
     publisher_metadata: Mutex<HashMap<String, PublisherMetadata>>,
 }
 
@@ -653,6 +829,9 @@ impl Drop for ActiveTail {
         // EvtClose waits for callbacks that are already in flight. Keeping the context boxed until
         // after this point prevents a late service callback from dereferencing freed state.
         self.subscription.take();
+        if let Some(context) = self.context.as_ref() {
+            context.batcher.flush();
+        }
         self.context.take();
         self.session.take();
         if let Some(worker) = self.worker.take() {
@@ -675,7 +854,7 @@ fn merge_tail_coverage_gaps(stored: &Mutex<Vec<String>>, gaps: &mut Vec<String>)
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     for gap in pending.iter() {
         if !gaps.iter().any(|existing| existing == gap) {
-            gaps.push(gap.clone());
+            push_bounded_tail_coverage_gap(gaps, gap.clone());
         }
     }
 }
@@ -687,7 +866,7 @@ fn remember_tail_coverage_gaps(stored: &Mutex<Vec<String>>, gaps: &[String]) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     for gap in gaps {
         if !pending.iter().any(|existing| existing == gap) {
-            pending.push(gap.clone());
+            push_bounded_tail_coverage_gap(&mut pending, gap.clone());
         }
     }
 }
@@ -720,28 +899,6 @@ fn emit_tail_event(app: &AppHandle, stored_gaps: &Mutex<Vec<String>>, mut batch:
     } else {
         clear_tail_coverage_gaps(stored_gaps);
     }
-}
-
-#[cfg(target_os = "windows")]
-fn emit_tail_batch(
-    context: &TailContext,
-    mode: EvtxLiveMode,
-    records: Vec<EvtxRecord>,
-    gaps: Vec<String>,
-) {
-    let sequence = context.sequence.fetch_add(1, Ordering::AcqRel);
-    emit_tail_event(
-        &context.app,
-        context.coverage_gaps.as_ref(),
-        EvtxTailBatch {
-            request_id: context.request_id.clone(),
-            channel: context.channel.clone(),
-            sequence,
-            mode,
-            records,
-            coverage_gaps: gaps,
-        },
-    );
 }
 
 #[cfg(target_os = "windows")]
@@ -808,29 +965,16 @@ unsafe extern "system" fn evt_subscribe_callback(
             let _ = EvtClose(event);
         }
         match result {
-            Ok(record) => emit_tail_batch(
-                context,
-                EvtxLiveMode::Subscription,
-                vec![record],
-                Vec::new(),
-            ),
-            Err(error) => emit_tail_batch(
-                context,
-                EvtxLiveMode::Subscription,
-                Vec::new(),
-                vec![format!("{}: {error}", context.channel)],
-            ),
+            Ok(record) => context.batcher.push_record(record),
+            Err(error) => context
+                .batcher
+                .push_gap(format!("{}: {error}", context.channel)),
         }
     } else if action == EvtSubscribeActionError {
-        emit_tail_batch(
-            context,
-            EvtxLiveMode::Subscription,
-            Vec::new(),
-            vec![format!(
-                "{}: subscription callback reported an error",
-                context.channel
-            )],
-        );
+        context.batcher.push_gap(format!(
+            "{}: subscription callback reported an error",
+            context.channel
+        ));
     }
     0
 }
@@ -964,6 +1108,7 @@ fn start_polling_tail(
 
             match outcome {
                 Ok(scan) => {
+                    let saturated = scan.delivered >= EVENT_FETCH_BATCH;
                     let mut records = scan.records;
                     records.retain(|record| {
                         let identity = polling_record_identity(record);
@@ -983,8 +1128,18 @@ fn start_polling_tail(
                         }
                     }
                     let mut gaps = scan.gaps;
+                    if saturated {
+                        push_bounded_tail_coverage_gap(
+                            &mut gaps,
+                            format!(
+                                "{}: the polling window returned its full {EVENT_FETCH_BATCH}-record \
+                                 batch; events written between polls may be missing",
+                                worker_channel
+                            ),
+                        );
+                    }
                     if first_poll && !worker_fallback_gap.is_empty() {
-                        gaps.push(worker_fallback_gap.clone());
+                        push_bounded_tail_coverage_gap(&mut gaps, worker_fallback_gap.clone());
                     }
                     merge_tail_coverage_gaps(worker_coverage_gaps.as_ref(), &mut gaps);
                     first_poll = false;
@@ -1091,15 +1246,22 @@ pub fn start_channel_tail(
     let query_hstring = HSTRING::from(compiled.as_str());
     let sequence = Arc::new(AtomicU64::new(0));
     let coverage_gaps = Arc::new(Mutex::new(Vec::new()));
-    let context = Box::new(TailContext {
+    let stop = Arc::new(AtomicBool::new(false));
+    let batcher = Arc::new(TailBatcher {
         app,
         request_id: request_id.clone(),
+        channel: channel.clone(),
+        sequence: Arc::clone(&sequence),
+        coverage_gaps: Arc::clone(&coverage_gaps),
+        pending: Mutex::new(PendingTailBatch::default()),
+        emission: Mutex::new(()),
+    });
+    let context = Box::new(TailContext {
         channel: channel.clone(),
         source_label,
         session: session_handle,
         maps,
-        sequence: Arc::clone(&sequence),
-        coverage_gaps: Arc::clone(&coverage_gaps),
+        batcher: Arc::clone(&batcher),
         publisher_metadata: Mutex::new(HashMap::new()),
     });
     let context_ptr = (&*context) as *const TailContext as *const c_void;
@@ -1119,6 +1281,7 @@ pub fn start_channel_tail(
     match subscription {
         Ok(handle) => {
             let handle = OwnedEvtHandle::new(handle);
+            let worker = subscription_flush_worker(Arc::clone(&batcher), Arc::clone(&stop));
             let status = EvtxTailStatus {
                 request_id: request_id.clone(),
                 channel: channel.clone(),
@@ -1136,13 +1299,13 @@ pub fn start_channel_tail(
                         request_id,
                         channel,
                         mode: EvtxLiveMode::Subscription,
-                        stop: Arc::new(AtomicBool::new(false)),
+                        stop,
                         sequence,
                         coverage_gaps,
                         subscription: Some(handle),
                         context: Some(context),
                         session: remote_session.map(|(session, _)| session),
-                        worker: None,
+                        worker: Some(worker),
                     },
                 );
             Ok(status)
@@ -1175,14 +1338,13 @@ pub fn start_channel_tail(
     }
 }
 
-#[cfg(target_os = "windows")]
 /// Stop a tail and synchronously release its subscription/session resources.
 #[cfg(target_os = "windows")]
 pub fn stop_channel_tail(request_id: &str, channel: &str) -> Result<EvtxTailStatus, String> {
     let key = tail_key(request_id, channel);
     let tail = active_tails()
         .lock()
-        .map_err(|_| "live tail state lock was poisoned".to_string())?
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&key)
         .ok_or_else(|| format!("live tail {channel} for request {request_id} was not found"))?;
     let status_request_id = tail.request_id.clone();
@@ -1642,6 +1804,83 @@ mod tests {
         assert!(normalize_remote_machine_name("host\0suffix").is_err());
         assert!(normalize_remote_machine_name("host\nsuffix").is_err());
         assert_eq!(normalize_remote_machine_name(r"\\host").unwrap(), "host");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn subscription_coverage_gaps_are_bounded_and_coalesced() {
+        let mut gaps = Vec::new();
+        for index in 0..MAX_TAIL_COVERAGE_GAPS {
+            push_bounded_tail_coverage_gap(&mut gaps, format!("gap-{index}"));
+        }
+
+        assert_eq!(gaps.len(), MAX_TAIL_COVERAGE_GAPS);
+        assert_eq!(gaps[0], "gap-0");
+        assert_eq!(
+            gaps.last().expect("coalesced gap"),
+            "<live tail coverage>: 1 additional live tail diagnostics were coalesced"
+        );
+
+        push_bounded_tail_coverage_gap(&mut gaps, "overflow".to_string());
+        assert_eq!(
+            gaps.last().expect("updated coalesced gap"),
+            "<live tail coverage>: 2 additional live tail diagnostics were coalesced"
+        );
+        let mut full = (0..MAX_TAIL_COVERAGE_GAPS)
+            .map(|index| format!("raw-{index}"))
+            .collect();
+        push_bounded_tail_coverage_gap(&mut full, "raw-overflow".to_string());
+        assert_eq!(
+            full.last().expect("raw coalesced gap"),
+            "<live tail coverage>: 2 additional live tail diagnostics were coalesced"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn subscription_pending_batch_is_bounded_and_drains_at_fetch_limit() {
+        let mut pending = PendingTailBatch::default();
+        for event_record_id in 0..EVENT_FETCH_BATCH {
+            assert!(pending
+                .push_record(identity_test_record(
+                    event_record_id as u64,
+                    None,
+                    "<Event/>",
+                ))
+                .is_ok());
+        }
+
+        assert!(pending.is_ready());
+        let (records, gaps) = pending.take();
+        assert_eq!(records.len(), EVENT_FETCH_BATCH);
+        assert!(gaps.is_empty());
+        assert!(pending.records.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn subscription_pending_record_is_retried_after_batch_drain() {
+        let mut pending = PendingTailBatch::default();
+        for event_record_id in 0..EVENT_FETCH_BATCH {
+            assert!(pending
+                .push_record(identity_test_record(
+                    event_record_id as u64,
+                    None,
+                    "<Event/>",
+                ))
+                .is_ok());
+        }
+
+        let next_record = identity_test_record(EVENT_FETCH_BATCH as u64, None, "<Event/>");
+        let next_record = match pending.push_record(next_record) {
+            Ok(_) => panic!("a full pending batch must reject until it is drained"),
+            Err(record) => record,
+        };
+        let (records, gaps) = pending.take();
+        assert_eq!(records.len(), EVENT_FETCH_BATCH);
+        assert!(gaps.is_empty());
+        assert!(pending.push_record(next_record).is_ok());
+        assert_eq!(pending.records.len(), 1);
     }
 
     #[cfg(target_os = "windows")]

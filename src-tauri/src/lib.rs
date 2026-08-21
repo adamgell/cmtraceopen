@@ -222,25 +222,23 @@ pub fn run() {
                                     &outcome,
                                 ) =>
                             {
-                                {
-                                    let state = app.state::<AppState>();
-                                    let write_result = state.provider_store.write();
-                                    match write_result {
-                                        Ok(mut store) => {
-                                            *store = loaded;
-                                            log::info!(
-                                                "event=packaged_provider_databases_loaded count={}",
-                                                outcome.loaded.len()
-                                            );
-                                        }
-                                        Err(_) => {
-                                            log::warn!(
-                                                "event=packaged_provider_databases_unavailable \
-                                                 reason=\"provider store lock was poisoned during startup\""
-                                            );
-                                        }
+                                let state = app.state::<AppState>();
+                                let write_result = state.provider_store.write();
+                                match write_result {
+                                    Ok(mut store) => {
+                                        *store = loaded;
+                                        log::info!(
+                                            "event=packaged_provider_databases_loaded count={}",
+                                            outcome.loaded.len()
+                                        );
                                     }
-                                };
+                                    Err(_) => {
+                                        log::warn!(
+                                            "event=packaged_provider_databases_unavailable \
+                                             reason=\"provider store lock was poisoned during startup\""
+                                        );
+                                    }
+                                }
                             }
                             Ok(outcome) => {
                                 log::warn!(

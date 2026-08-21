@@ -93,6 +93,20 @@ pub fn record_from_parts(
         insertions: _,
     } = extract_event_data(parsed);
     let identity = extract_event_identity(&event_data);
+    // Derived conflict markers are useful in the detail surface, but they are not event data and
+    // must not become the fallback row message when no real field has a value.
+    let fallback_message = build_event_data_summary(&event_data);
+
+    // Keep a conflict visible even though the conflicting value is intentionally not promoted.
+    // `event_data` is already the record's wire-level detail surface and carries derived
+    // `EventPayload` values, so this preserves the existing `EvtxRecord` shape while making an
+    // ambiguous identity distinguishable from an absent one.
+    for conflict in &identity.conflicts {
+        event_data.push(EvtxField {
+            name: "IdentityConflict".to_string(),
+            value: conflict.clone(),
+        });
+    }
 
     // Trace-backed channels carry their message as a hex blob rather than as EventData, so without
     // this the row reads as a wall of hex digits. Surfaced as a field of its own because the raw
@@ -113,7 +127,7 @@ pub fn record_from_parts(
     let message = rendered_message
         .map(sanitize_control_chars)
         .or(payload)
-        .unwrap_or_else(|| build_event_data_summary(&event_data));
+        .unwrap_or(fallback_message);
 
     let mapped = super::maps::apply_registered(maps, channel, &provider, event_id, parsed);
 
@@ -252,6 +266,30 @@ mod tests {
         assert_eq!(
             record.process_start_time.as_deref(),
             Some("2026-08-18T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn conflicting_identity_aliases_are_reported_without_promoting_a_value() {
+        let xml = r#"<Event>
+  <System><Provider Name='Provider'/><EventID>7</EventID></System>
+  <EventData>
+    <Data Name='ActivityId'>activity-a</Data>
+    <Data Name='CorrelationID'>activity-b</Data>
+  </EventData>
+</Event>"#;
+        let record = record_for(xml, "Application");
+        assert!(!record.message.contains("IdentityConflict"));
+
+        assert_eq!(record.activity_id, None);
+        assert_eq!(
+            record
+                .event_data
+                .iter()
+                .filter(|field| field.name == "IdentityConflict")
+                .map(|field| field.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["activityId"]
         );
     }
 

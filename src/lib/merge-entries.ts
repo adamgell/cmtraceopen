@@ -95,8 +95,17 @@ export function findCorrelatedEntries(
 
   // Null-timestamp entries sort after timestamped entries. Keep the binary
   // search and scan inside the timestamped prefix.
-  const firstUntimestamped = entries.findIndex((entry) => entry.timestamp == null);
-  const timestampedEnd = firstUntimestamped === -1 ? entries.length : firstUntimestamped;
+  let prefixLo = 0;
+  let prefixHi = entries.length;
+  while (prefixLo < prefixHi) {
+    const mid = (prefixLo + prefixHi) >>> 1;
+    if (entries[mid].timestamp == null) {
+      prefixHi = mid;
+    } else {
+      prefixLo = mid + 1;
+    }
+  }
+  const timestampedEnd = prefixLo;
   const windowStart = targetTs - windowMs;
   const windowEnd = targetTs + windowMs;
   let lo = 0;

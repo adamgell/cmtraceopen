@@ -53,7 +53,7 @@ fn evidence_identity_round_trips_without_flattening_native_refs() {
         EvidenceRef::from_esp(esp.clone()),
         EvidenceRef::from_sccm(sccm.clone()),
         EvidenceRef::from_dsreg_raw("Client ErrorCode: 0x80070005"),
-        EvidenceRef::TextLog(TextLogEvidenceRef {
+        EvidenceRef::from_text_log(TextLogEvidenceRef {
             source: "PolicyAgent.log".into(),
             file_path: "C:/evidence/PolicyAgent.log".into(),
             line_number: 42,

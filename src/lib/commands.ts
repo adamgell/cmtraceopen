@@ -1080,9 +1080,7 @@ function decodeMarkerFile(value: unknown): MarkerFile | null {
 export async function loadMarkerFile(
   filePath: string,
 ): Promise<MarkerFile | null> {
-  return decodeMarkerFile(
-    await invokeCommand("load_markers", { filePath }),
-  );
+  return invokeCommand("load_markers", { filePath });
 }
 
 export async function openLogFile(path: string): Promise<ParseResult> {

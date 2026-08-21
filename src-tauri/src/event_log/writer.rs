@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::export::{self, ExportFormat};
 use super::models::EvtxRecord;
@@ -77,6 +77,60 @@ fn create_staging_file(path: &Path) -> io::Result<std::fs::File> {
     options.mode(0o600);
     options.open(path)
 }
+struct StagedFile {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    cleanup: bool,
+}
+
+impl StagedFile {
+    fn file_mut(&mut self) -> &mut std::fs::File {
+        self.file.as_mut().expect("staged file handle")
+    }
+
+    fn close(&mut self) {
+        self.file.take();
+    }
+
+    fn disarm_cleanup(&mut self) {
+        self.cleanup = false;
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn create_staged_file<F>(
+    directory: &Path,
+    candidate_name: F,
+    create_error: &str,
+    exhausted_error: &str,
+) -> Result<StagedFile, String>
+where
+    F: Fn(u32) -> String,
+{
+    for attempt in 0..100u32 {
+        let candidate = directory.join(candidate_name(attempt));
+        match create_staging_file(&candidate) {
+            Ok(handle) => {
+                return Ok(StagedFile {
+                    path: candidate,
+                    file: Some(handle),
+                    cleanup: true,
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("{create_error}: {error}")),
+        }
+    }
+    Err(exhausted_error.to_owned())
+}
+
 fn write_to_staged_destination<F>(path: &Path, write: F) -> Result<ExportStats, String>
 where
     F: FnOnce(&mut std::fs::File) -> Result<ExportStats, String>,
@@ -86,36 +140,23 @@ where
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("events");
-    let mut temporary = None;
-    let mut file = None;
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".{name}.tmp-{}-{attempt}", std::process::id()));
-        match create_staging_file(&candidate) {
-            Ok(handle) => {
-                temporary = Some(candidate);
-                file = Some(handle);
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cannot create temporary output: {error}")),
-        }
-    }
-    let temporary = temporary.ok_or_else(|| "cannot allocate temporary output path".to_owned())?;
-    let mut file = file.expect("temporary file handle");
-    let result = write(&mut file);
-    drop(file);
+    let mut staged = create_staged_file(
+        parent,
+        |attempt| format!(".{name}.tmp-{}-{attempt}", std::process::id()),
+        "cannot create temporary output",
+        "cannot allocate temporary output path",
+    )?;
+    let result = write(staged.file_mut());
+    staged.close();
     match result {
-        Ok(stats) => match replace_destination(&temporary, path) {
-            Ok(()) => Ok(stats),
-            Err(error) => {
-                let _ = fs::remove_file(&temporary);
-                Err(format!("cannot replace {}: {error}", path.display()))
+        Ok(stats) => match replace_destination(&staged.path, path) {
+            Ok(()) => {
+                staged.disarm_cleanup();
+                Ok(stats)
             }
+            Err(error) => Err(format!("cannot replace {}: {error}", path.display())),
         },
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-            Err(error)
-        }
+        Err(error) => Err(error),
     }
 }
 
@@ -498,11 +539,39 @@ fn validate_optional_raw_xml(record: &EvtxRecord) -> io::Result<()> {
     }
 }
 
+fn validate_raw_xml_record(record: &EvtxRecord, format: ExportFormat) -> io::Result<()> {
+    match format {
+        ExportFormat::Json => validate_optional_raw_xml(record),
+        ExportFormat::Xml | ExportFormat::RawXml => required_raw_xml(record).map(|_| ()),
+        ExportFormat::Csv | ExportFormat::Tsv | ExportFormat::Html => Ok(()),
+    }
+}
+
+/// Streams records without per-record raw-XML validation.
+///
+/// Before calling this helper, callers must validate the complete input with
+/// [`validate_raw_xml`] or [`validate_raw_xml_iter`] using the same `format`;
+/// `records` must then yield exactly that validated input. Unlike
+/// [`write_record_stream`], this helper intentionally skips validation.
+pub(super) fn write_record_stream_unchecked<W, I, R>(
+    writer: &mut W,
+    format: ExportFormat,
+    records: I,
+    mapped_columns: &[String],
+) -> io::Result<ExportStats>
+where
+    W: Write + ?Sized,
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    write_record_stream_inner(writer, format, records, mapped_columns, |_, _| Ok(()))
+}
+
 /// Streams records directly to `writer`, applying the export redaction projection
 /// one record at a time.
 ///
-/// `mapped_columns` is supplied by the caller because a delimited header must
-/// be emitted before the first record. It contains names only, never records,
+/// `mapped_columns` is supplied by the caller because a delimited header must be
+/// emitted before the first record. It contains names only, never records,
 /// so a large export still has bounded writer state.
 pub fn write_record_stream<W, I, R>(
     writer: &mut W,
@@ -514,6 +583,28 @@ where
     W: Write + ?Sized,
     I: IntoIterator<Item = R>,
     R: Borrow<EvtxRecord>,
+{
+    write_record_stream_inner(
+        writer,
+        format,
+        records,
+        mapped_columns,
+        validate_raw_xml_record,
+    )
+}
+
+fn write_record_stream_inner<W, I, R, V>(
+    writer: &mut W,
+    format: ExportFormat,
+    records: I,
+    mapped_columns: &[String],
+    mut validate: V,
+) -> io::Result<ExportStats>
+where
+    W: Write + ?Sized,
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+    V: FnMut(&EvtxRecord, ExportFormat) -> io::Result<()>,
 {
     let mut writer = CountingWriter {
         inner: writer,
@@ -546,7 +637,7 @@ where
             writer.write_all(b"[")?;
             let mut first = true;
             for item in records {
-                validate_optional_raw_xml(item.borrow())?;
+                validate(item.borrow(), format)?;
                 if !first {
                     writer.write_all(b",")?;
                 }
@@ -560,7 +651,7 @@ where
         ExportFormat::Xml => {
             writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Events>\n")?;
             for item in records {
-                required_raw_xml(item.borrow())?;
+                validate(item.borrow(), format)?;
                 let redacted = export::redact_record(item.borrow());
                 writer
                     .write_all(export::strip_xml_declaration(redacted.raw_xml.trim()).as_bytes())?;
@@ -571,7 +662,7 @@ where
         }
         ExportFormat::RawXml => {
             for item in records {
-                required_raw_xml(item.borrow())?;
+                validate(item.borrow(), format)?;
                 let redacted = export::redact_record(item.borrow());
                 writer.write_all(redacted.raw_xml.trim().as_bytes())?;
                 writer.write_all(b"\n")?;
@@ -615,18 +706,8 @@ where
     I: IntoIterator<Item = R>,
     R: Borrow<EvtxRecord>,
 {
-    match format {
-        ExportFormat::Json => {
-            for record in records {
-                validate_optional_raw_xml(record.borrow())?;
-            }
-        }
-        ExportFormat::Xml | ExportFormat::RawXml => {
-            for record in records {
-                required_raw_xml(record.borrow())?;
-            }
-        }
-        _ => {}
+    for record in records {
+        validate_raw_xml_record(record.borrow(), format)?;
     }
     Ok(())
 }
@@ -694,7 +775,7 @@ pub fn write_records<W: Write + ?Sized>(
 ) -> io::Result<ExportStats> {
     validate_raw_xml(records, format)?;
     let mapped = super::export::mapped_columns(records).map_err(io::Error::other)?;
-    write_record_stream(writer, format, records.iter(), &mapped)
+    write_record_stream_unchecked(writer, format, records.iter(), &mapped)
 }
 
 /// Writes to a path, or to stdout when `destination` is `None` or `-`.
@@ -703,7 +784,6 @@ pub fn write_records_to_destination(
     format: ExportFormat,
     destination: Option<&Path>,
 ) -> Result<ExportStats, String> {
-    validate_raw_xml(records, format).map_err(|error| error.to_string())?;
     if destination.is_some_and(|path| path.as_os_str() == "-") || destination.is_none() {
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
@@ -728,52 +808,39 @@ where
     R: Borrow<EvtxRecord>,
 {
     let temp_dir = std::env::temp_dir();
-    let mut temporary = None;
-    let mut file = None;
-    for attempt in 0..100u32 {
-        let candidate = temp_dir.join(format!(
-            "cmtraceopen-event-export-{}-{attempt}.tmp",
-            std::process::id()
-        ));
-        match create_staging_file(&candidate) {
-            Ok(handle) => {
-                temporary = Some(candidate);
-                file = Some(handle);
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("cannot create temporary stdout output: {error}")),
-        }
-    }
-    let temporary =
-        temporary.ok_or_else(|| "cannot allocate temporary stdout output path".to_owned())?;
-    let mut file = file.expect("temporary stdout file handle");
-    let result = write_record_stream(&mut file, format, records, mapped_columns);
-    drop(file);
-    let result = match result {
+    let mut staged = create_staged_file(
+        &temp_dir,
+        |attempt| {
+            format!(
+                "cmtraceopen-event-export-{}-{attempt}.tmp",
+                std::process::id()
+            )
+        },
+        "cannot create temporary stdout output",
+        "cannot allocate temporary stdout output path",
+    )?;
+    let result = write_record_stream(staged.file_mut(), format, records, mapped_columns)
+        .map_err(|error| error.to_string());
+    staged.close();
+    match result {
         Ok(stats) => {
-            let copy_result = (|| {
-                let mut staged = fs::File::open(&temporary)
-                    .map_err(|error| format!("cannot reopen temporary stdout output: {error}"))?;
-                let copied = io::copy(&mut staged, output)
-                    .map_err(|error| format!("cannot write stdout: {error}"))?;
-                output
-                    .flush()
-                    .map_err(|error| format!("cannot flush stdout: {error}"))?;
-                if copied != stats.bytes {
-                    return Err(format!(
-                        "stdout byte count mismatch: staged {} bytes, copied {copied}",
-                        stats.bytes
-                    ));
-                }
-                Ok(stats)
-            })();
-            copy_result
+            let mut staged_output = fs::File::open(&staged.path)
+                .map_err(|error| format!("cannot reopen temporary stdout output: {error}"))?;
+            let copied = io::copy(&mut staged_output, output)
+                .map_err(|error| format!("cannot write stdout: {error}"))?;
+            output
+                .flush()
+                .map_err(|error| format!("cannot flush stdout: {error}"))?;
+            if copied != stats.bytes {
+                return Err(format!(
+                    "stdout byte count mismatch: staged {} bytes, copied {copied}",
+                    stats.bytes
+                ));
+            }
+            Ok(stats)
         }
-        Err(error) => Err(error.to_string()),
-    };
-    let _ = fs::remove_file(&temporary);
-    result
+        Err(error) => Err(error),
+    }
 }
 
 /// Streams an iterator to a destination while retaining the same atomic replacement and

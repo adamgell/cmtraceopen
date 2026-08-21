@@ -711,7 +711,8 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         // directory tree so that every nested artifact is loaded.
         let collected = collect_files_recursive(&requested_path);
         entries = collected.entries;
-        child_errors = collected.child_errors;
+        child_errors =
+            merge_bundle_diagnostics(child_errors, collected.child_errors, &requested_path);
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
@@ -761,6 +762,41 @@ fn push_folder_error(
     } else {
         *diagnostic_limit_reached = true;
     }
+}
+
+fn merge_bundle_diagnostics(
+    first_pass: Vec<PathDiagnostic>,
+    recursive_pass: Vec<PathDiagnostic>,
+    root: &Path,
+) -> Vec<PathDiagnostic> {
+    let capacity = first_pass
+        .len()
+        .saturating_add(recursive_pass.len())
+        .min(MAX_FOLDER_LISTING_ERRORS);
+    let mut merged = Vec::with_capacity(capacity);
+    let mut omitted = false;
+    // Identical path/reason pairs from both passes remain distinct: the duplicate carries
+    // provenance that each traversal observed the child and must not be silently discarded.
+    for diagnostic in first_pass.into_iter().chain(recursive_pass) {
+        if merged.len() < MAX_FOLDER_LISTING_ERRORS {
+            merged.push(diagnostic);
+        } else {
+            omitted = true;
+        }
+    }
+    if omitted {
+        if merged.len() == MAX_FOLDER_LISTING_ERRORS {
+            merged.pop();
+        }
+        merged.push(PathDiagnostic {
+            path: normalize_path_string(root),
+            reason: format!(
+                "combined folder listing diagnostics exceeded the \
+                 {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit; later diagnostics were omitted"
+            ),
+        });
+    }
+    merged
 }
 
 fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
@@ -1190,6 +1226,43 @@ mod tests {
         fs::remove_dir_all(&outside).expect("remove target");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bundle_listing_preserves_first_pass_child_diagnostics() {
+        use std::os::unix::fs::symlink;
+
+        let bundle_dir = create_temp_dir("file-ops-bundle-preserve-diagnostics");
+        let outside = create_temp_dir("file-ops-bundle-preserve-target");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        let linked = bundle_dir.join("linked.log");
+        symlink(outside.join("outside.log"), &linked).expect("create file symlink");
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        let linked_path = linked.to_string_lossy();
+        let expected_reason = "symbolic link or reparse point is not followed";
+        assert!(result
+            .child_errors
+            .iter()
+            .any(|error| { error.path == linked_path && error.reason == expected_reason }));
+        let linked_reasons: Vec<&str> = result
+            .child_errors
+            .iter()
+            .filter(|error| error.path == linked_path)
+            .map(|error| error.reason.as_str())
+            .collect();
+        assert_eq!(
+            linked_reasons,
+            vec![expected_reason, expected_reason],
+            "the first-pass and recursive traversal diagnostics must both survive"
+        );
+
+        fs::remove_dir_all(&bundle_dir).expect("remove bundle");
+        fs::remove_dir_all(&outside).expect("remove target");
+    }
+
     fn create_temp_dir(prefix: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1209,11 +1282,11 @@ mod tests {
         "caseReference": "case-123",
         "summary": "Curated endpoint evidence bundle.",
         "device": {
-            "deviceName": "GELL-VM-5879648",
-            "primaryUser": "AzureAD\\AdamGell",
+            "deviceName": "SYNTHETIC-DEVICE-001",
+            "primaryUser": "AzureAD\\synthetic.user@example.invalid",
             "platform": "Windows",
             "osVersion": "Windows 11",
-            "tenant": "CDWWorkspaceLab"
+            "tenant": "synthetic-tenant.example.invalid"
         }
     },
     "collection": {
@@ -1305,7 +1378,7 @@ mod tests {
         "bundleLabel": "intune-endpoint-evidence",
         "createdUtc": "2026-03-12T16:00:54Z",
         "device": {
-            "deviceName": "GELL-VM-5879648",
+            "deviceName": "SYNTHETIC-DEVICE-002",
             "platform": "Windows"
         }
     },

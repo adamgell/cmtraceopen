@@ -19,14 +19,13 @@ fn is_unavailable_message_error(code: u32) -> bool {
     matches!(code, 15007 | 15027 | 15028 | 15029 | 15030 | 15033)
 }
 #[cfg(any(target_os = "windows", test))]
-fn is_unavailable_provider_error(message: &str) -> bool {
-    message.contains("0x80070002")
-        || message.contains("0x8007000D")
-        || message.contains("0x80070715")
-        || message.contains("0x80073AAF")
-        || message.contains("0x80073B01")
-        || message.contains("code 15007")
-        || message.contains("code 1813")
+fn is_unavailable_provider_error(code: u32) -> bool {
+    matches!(code, 2 | 1813 | 15007 | 15023 | 15105)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn is_unavailable_publisher_metadata_error(code: u32) -> bool {
+    code == 13 || is_unavailable_provider_error(code)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,6 +125,7 @@ mod windows_capture {
     const MAX_CAPTURED_METADATA_ITEMS: usize = 4_000_000;
     const MAX_OBJECT_ARRAY_ITEMS: usize = 100_000;
     const BUFFER_RETRY: usize = 256;
+    const PUBLISHER_NAME_RETRY_LIMIT: usize = 256;
     const LOCALE_NEUTRAL: u32 = 0;
 
     struct EvtHandle(EVT_HANDLE);
@@ -142,6 +142,45 @@ mod windows_capture {
 
     fn win32_code(error: &windows::core::Error) -> u32 {
         (error.code().0 as u32) & 0xFFFF
+    }
+    #[derive(Debug)]
+    struct ProviderCaptureError {
+        code: Option<u32>,
+        message: String,
+    }
+
+    impl ProviderCaptureError {
+        fn message(message: impl Into<String>) -> Self {
+            Self {
+                code: None,
+                message: message.into(),
+            }
+        }
+
+        fn win32(code: u32, message: impl Into<String>) -> Self {
+            Self {
+                code: Some(code),
+                message: message.into(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for ProviderCaptureError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(&self.message)
+        }
+    }
+
+    impl From<String> for ProviderCaptureError {
+        fn from(message: String) -> Self {
+            Self::message(message)
+        }
+    }
+
+    impl From<&str> for ProviderCaptureError {
+        fn from(message: &str) -> Self {
+            Self::message(message)
+        }
     }
 
     fn wide(value: &str) -> Vec<u16> {
@@ -585,11 +624,11 @@ mod windows_capture {
     unsafe fn read_variant(
         size: usize,
         mut read: impl FnMut(*mut EVT_VARIANT, u32, &mut u32) -> windows::core::Result<()>,
-    ) -> Result<OwnedVariant, String> {
+    ) -> Result<OwnedVariant, ProviderCaptureError> {
         if size == 0 || size > MAX_BUFFER_BYTES {
-            return Err(format!(
+            return Err(ProviderCaptureError::message(format!(
                 "metadata property size {size} exceeds bounded buffer"
-            ));
+            )));
         }
         let words = size.div_ceil(std::mem::size_of::<u64>());
         let mut buffer = vec![0u64; words];
@@ -598,32 +637,32 @@ mod windows_capture {
         read(
             destination,
             u32::try_from(buffer.len() * std::mem::size_of::<u64>())
-                .map_err(|_| "metadata buffer size overflow".to_string())?,
+                .map_err(|_| ProviderCaptureError::message("metadata buffer size overflow"))?,
             &mut used,
         )
-        .map_err(|error| error.to_string())?;
-        decode_variant(&*destination).ok_or_else(|| "unsupported EVT_VARIANT type".to_string())
+        .map_err(|error| ProviderCaptureError::win32(win32_code(&error), error.to_string()))?;
+        decode_variant(&*destination)
+            .ok_or_else(|| ProviderCaptureError::message("unsupported EVT_VARIANT type"))
     }
-
     unsafe fn get_publisher_variant(
         metadata: EVT_HANDLE,
         property: EVT_PUBLISHER_METADATA_PROPERTY_ID,
-    ) -> Result<Option<OwnedVariant>, String> {
+    ) -> Result<Option<OwnedVariant>, ProviderCaptureError> {
         let mut used = 0u32;
         let first = EvtGetPublisherMetadataProperty(metadata, property, 0, 0, None, &mut used);
         if let Err(error) = first {
             let code = win32_code(&error);
             if code != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!(
-                    "property {} query failed (code {}): {}",
-                    property.0, code, error
+                return Err(ProviderCaptureError::win32(
+                    code,
+                    format!("property {} query failed: {}", property.0, error),
                 ));
             }
         } else {
             return Ok(None);
         }
-        let size =
-            usize::try_from(used).map_err(|_| "metadata property size overflow".to_string())?;
+        let size = usize::try_from(used)
+            .map_err(|_| ProviderCaptureError::message("metadata property size overflow"))?;
         read_variant(size, |destination, buffer_size, used| {
             EvtGetPublisherMetadataProperty(
                 metadata,
@@ -639,15 +678,15 @@ mod windows_capture {
     unsafe fn optional_publisher_variant(
         metadata: EVT_HANDLE,
         property: EVT_PUBLISHER_METADATA_PROPERTY_ID,
-    ) -> Result<(Option<OwnedVariant>, bool), String> {
+    ) -> Result<(Option<OwnedVariant>, bool), ProviderCaptureError> {
         match get_publisher_variant(metadata, property) {
             Ok(value) => Ok((value, false)),
             Err(error)
-                if error.contains(&format!(
-                    "code {}",
-                    ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0
-                )) || error.contains(&format!("code {}", ERROR_EVT_CHANNEL_NOT_FOUND.0))
-                    || error.contains(&format!("code {}", ERROR_NOT_FOUND.0)) =>
+                if error.code.is_some_and(|code| {
+                    code == ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND.0
+                        || code == ERROR_EVT_CHANNEL_NOT_FOUND.0
+                        || code == ERROR_NOT_FOUND.0
+                }) =>
             {
                 Ok((None, true))
             }
@@ -657,20 +696,25 @@ mod windows_capture {
     unsafe fn get_event_variant(
         metadata: EVT_HANDLE,
         property: EVT_EVENT_METADATA_PROPERTY_ID,
-    ) -> Result<OwnedVariant, String> {
+    ) -> Result<OwnedVariant, ProviderCaptureError> {
         let mut used = 0u32;
         let first = EvtGetEventMetadataProperty(metadata, property, 0, 0, None, &mut used);
         if let Err(error) = first {
-            if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!(
-                    "event property {} query failed: {}",
-                    property.0, error
+            let code = win32_code(&error);
+            if code != ERROR_INSUFFICIENT_BUFFER.0 {
+                return Err(ProviderCaptureError::win32(
+                    code,
+                    format!("event property {} query failed: {}", property.0, error),
                 ));
             }
         } else {
-            return Err(format!("event property {} is empty", property.0));
+            return Err(ProviderCaptureError::message(format!(
+                "event property {} is empty",
+                property.0
+            )));
         }
-        let size = usize::try_from(used).map_err(|_| "event property size overflow".to_string())?;
+        let size = usize::try_from(used)
+            .map_err(|_| ProviderCaptureError::message("event property size overflow"))?;
         read_variant(size, |destination, buffer_size, used| {
             EvtGetEventMetadataProperty(metadata, property, 0, buffer_size, Some(destination), used)
         })
@@ -680,18 +724,24 @@ mod windows_capture {
         array_handle: isize,
         index: u32,
         property: u32,
-    ) -> Result<OwnedVariant, String> {
+    ) -> Result<OwnedVariant, ProviderCaptureError> {
         let mut used = 0u32;
         let first = EvtGetObjectArrayProperty(array_handle, property, index, 0, 0, None, &mut used);
         if let Err(error) = first {
-            if win32_code(&error) != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!("object property {property} query failed: {error}"));
+            let code = win32_code(&error);
+            if code != ERROR_INSUFFICIENT_BUFFER.0 {
+                return Err(ProviderCaptureError::win32(
+                    code,
+                    format!("object property {property} query failed: {error}"),
+                ));
             }
         } else {
-            return Err(format!("object property {property} is empty"));
+            return Err(ProviderCaptureError::message(format!(
+                "object property {property} is empty"
+            )));
         }
-        let size =
-            usize::try_from(used).map_err(|_| "object property size overflow".to_string())?;
+        let size = usize::try_from(used)
+            .map_err(|_| ProviderCaptureError::message("object property size overflow"))?;
         read_variant(size, |destination, buffer_size, used| {
             EvtGetObjectArrayProperty(
                 array_handle,
@@ -707,7 +757,7 @@ mod windows_capture {
     unsafe fn format_message(
         metadata: EVT_HANDLE,
         message_id: u32,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, ProviderCaptureError> {
         let mut used = 0u32;
         let initial = EvtFormatMessage(
             Some(metadata),
@@ -724,18 +774,22 @@ mod windows_capture {
                 return Ok(None);
             }
             if code != ERROR_INSUFFICIENT_BUFFER.0 {
-                return Err(format!("message {message_id} query failed: {error}"));
+                return Err(ProviderCaptureError::win32(
+                    code,
+                    format!("message {message_id} query failed: {error}"),
+                ));
             }
         }
-        let units = usize::try_from(used)
-            .map_err(|_| format!("message {message_id} buffer size overflow"))?;
+        let units = usize::try_from(used).map_err(|_| {
+            ProviderCaptureError::message(format!("message {message_id} buffer size overflow"))
+        })?;
         if units <= 1 {
-            return Err(format!(
-                "message {message_id} formatted text is unavailable (code 1813)"
-            ));
+            return Ok(None);
         }
         if units > MAX_BUFFER_BYTES / 2 {
-            return Err(format!("message {message_id} exceeds bounded buffer"));
+            return Err(ProviderCaptureError::message(format!(
+                "message {message_id} exceeds bounded buffer"
+            )));
         }
         let mut buffer = vec![0u16; units];
         if let Err(error) = EvtFormatMessage(
@@ -751,10 +805,15 @@ mod windows_capture {
             if is_unavailable_message_error(code) {
                 return Ok(None);
             }
-            return Err(format!("message {message_id} read failed: {error}"));
+            return Err(ProviderCaptureError::win32(
+                code,
+                format!("message {message_id} read failed: {error}"),
+            ));
         }
         let length = usize::try_from(used)
-            .map_err(|_| format!("message {message_id} length overflow"))?
+            .map_err(|_| {
+                ProviderCaptureError::message(format!("message {message_id} length overflow"))
+            })?
             .min(buffer.len());
         Ok(Some(
             String::from_utf16_lossy(&buffer[..length])
@@ -762,12 +821,11 @@ mod windows_capture {
                 .to_string(),
         ))
     }
-
     unsafe fn collect_messages(
         metadata: EVT_HANDLE,
         ids: &mut BTreeMap<u64, ProviderMessage>,
-    ) -> Result<(), String> {
-        let mut add = |value: OwnedVariant| -> Result<(), String> {
+    ) -> Result<(), ProviderCaptureError> {
+        let mut add = |value: OwnedVariant| -> Result<(), ProviderCaptureError> {
             if let Some(raw_id) = optional_message_id(value)? {
                 let short_id = short_message_id(raw_id);
                 let text = format_message(metadata, raw_id)?;
@@ -793,40 +851,52 @@ mod windows_capture {
 
     unsafe fn channel_names(
         metadata: EVT_HANDLE,
-    ) -> Result<(BTreeMap<u32, ChannelReference>, bool), String> {
+    ) -> Result<(BTreeMap<u32, ChannelReference>, bool), ProviderCaptureError> {
         let (channel_value, unavailable) =
             optional_publisher_variant(metadata, EvtPublisherMetadataChannelReferences)?;
         let Some(channel_value) = channel_value else {
             return Ok((BTreeMap::new(), unavailable));
         };
         let OwnedVariant::Handle(array_handle) = channel_value else {
-            return Err("channel references metadata has an invalid type".to_string());
+            return Err(ProviderCaptureError::message(
+                "channel references metadata has an invalid type",
+            ));
         };
         let array_handle = EvtHandle(array_handle);
         let mut count = 0u32;
-        EvtGetObjectArraySize(array_handle.0 .0, &mut count)
-            .map_err(|error| format!("channel reference array size failed: {error}"))?;
-        let count =
-            usize::try_from(count).map_err(|_| "channel reference size overflow".to_string())?;
+        EvtGetObjectArraySize(array_handle.0 .0, &mut count).map_err(|error| {
+            ProviderCaptureError::win32(
+                win32_code(&error),
+                format!("channel reference array size failed: {error}"),
+            )
+        })?;
+        let count = usize::try_from(count)
+            .map_err(|_| ProviderCaptureError::message("channel reference size overflow"))?;
         if count > MAX_OBJECT_ARRAY_ITEMS {
-            return Err("channel reference array exceeds bound".to_string());
+            return Err(ProviderCaptureError::message(
+                "channel reference array exceeds bound",
+            ));
         }
         let mut names = BTreeMap::new();
         for index in 0..count {
-            let index =
-                u32::try_from(index).map_err(|_| "channel reference index overflow".to_string())?;
+            let index = u32::try_from(index)
+                .map_err(|_| ProviderCaptureError::message("channel reference index overflow"))?;
             let channel_id = number(object_property(
                 array_handle.0 .0,
                 index,
                 EvtPublisherMetadataChannelReferenceID.0 as u32,
             )?)
-            .ok_or_else(|| "channel reference ID has an invalid type".to_string())?;
+            .ok_or_else(|| {
+                ProviderCaptureError::message("channel reference ID has an invalid type")
+            })?;
             let path = string(object_property(
                 array_handle.0 .0,
                 index,
                 EvtPublisherMetadataChannelReferencePath.0 as u32,
             )?)
-            .ok_or_else(|| "channel reference path has an invalid type".to_string())?;
+            .ok_or_else(|| {
+                ProviderCaptureError::message("channel reference path has an invalid type")
+            })?;
             let message_id = optional_message_id(object_property(
                 array_handle.0 .0,
                 index,
@@ -857,7 +927,7 @@ mod windows_capture {
         publisher_name: &str,
         metadata_handle: EVT_HANDLE,
         source_os_build: Option<u32>,
-    ) -> Result<ProviderMetadata, String> {
+    ) -> Result<ProviderMetadata, ProviderCaptureError> {
         let mut metadata = ProviderMetadata {
             provider_name: publisher_name.to_string(),
             source_os_build,
@@ -936,24 +1006,30 @@ mod windows_capture {
                 continue;
             };
             let OwnedVariant::Handle(array_handle) = array_value else {
-                return Err(format!(
+                return Err(ProviderCaptureError::message(format!(
                     "metadata array {} has an invalid type",
                     array_property.0
-                ));
+                )));
             };
             let array_handle = EvtHandle(array_handle);
             let mut count = 0u32;
             EvtGetObjectArraySize(array_handle.0 .0, &mut count).map_err(|error| {
-                format!("metadata array {} size failed: {error}", array_property.0)
+                ProviderCaptureError::win32(
+                    win32_code(&error),
+                    format!("metadata array {} size failed: {error}", array_property.0),
+                )
             })?;
-            let count =
-                usize::try_from(count).map_err(|_| "metadata array size overflow".to_string())?;
+            let count = usize::try_from(count)
+                .map_err(|_| ProviderCaptureError::message("metadata array size overflow"))?;
             if count > MAX_OBJECT_ARRAY_ITEMS {
-                return Err(format!("metadata array {} exceeds bound", array_property.0));
+                return Err(ProviderCaptureError::message(format!(
+                    "metadata array {} exceeds bound",
+                    array_property.0
+                )));
             }
             for index in 0..count {
                 let index = u32::try_from(index)
-                    .map_err(|_| "metadata array index overflow".to_string())?;
+                    .map_err(|_| ProviderCaptureError::message("metadata array index overflow"))?;
                 let name = string(object_property(
                     array_handle.0 .0,
                     index,
@@ -1018,8 +1094,12 @@ mod windows_capture {
             }
         }
 
-        let event_enum = EvtOpenEventMetadataEnum(metadata_handle, 0)
-            .map_err(|error| format!("event metadata enumeration failed: {error}"))?;
+        let event_enum = EvtOpenEventMetadataEnum(metadata_handle, 0).map_err(|error| {
+            ProviderCaptureError::win32(
+                win32_code(&error),
+                format!("event metadata enumeration failed: {error}"),
+            )
+        })?;
         let event_enum = EvtHandle(event_enum);
         let mut exhausted = false;
         for _ in 0..MAX_EVENTS_PER_PROVIDER {
@@ -1029,7 +1109,12 @@ mod windows_capture {
                     exhausted = true;
                     break;
                 }
-                Err(error) => return Err(format!("event metadata enumeration failed: {error}")),
+                Err(error) => {
+                    return Err(ProviderCaptureError::win32(
+                        win32_code(&error),
+                        format!("event metadata enumeration failed: {error}"),
+                    ));
+                }
             };
             let id = optional_number(get_event_variant(event_handle.0, EventMetadataEventID)?)?
                 .ok_or_else(|| "event metadata is missing EventID".to_string())?
@@ -1097,7 +1182,9 @@ mod windows_capture {
             });
         }
         if !exhausted {
-            return Err("event metadata enumeration exceeded bound".to_string());
+            return Err(ProviderCaptureError::message(
+                "event metadata enumeration exceeded bound",
+            ));
         }
         metadata.messages = messages.into_values().collect();
         Ok(metadata)
@@ -1134,6 +1221,7 @@ mod windows_capture {
         for _ in 0..MAX_PUBLISHERS {
             let mut publisher_buffer = vec![0u16; BUFFER_RETRY];
             let mut used = 0u32;
+            let mut retries = 0usize;
             let publisher_name = loop {
                 match unsafe {
                     EvtNextPublisherId(publisher_enum.0, Some(&mut publisher_buffer), &mut used)
@@ -1167,6 +1255,15 @@ mod windows_capture {
                             });
                             break String::new();
                         }
+                        if retries >= PUBLISHER_NAME_RETRY_LIMIT {
+                            hit_safety_bound = false;
+                            failures.push(ProviderCaptureFailure {
+                                provider_name: "<publisher enumeration>".to_string(),
+                                error: "publisher name buffer retry budget exhausted".to_string(),
+                            });
+                            break String::new();
+                        }
+                        retries += 1;
                         publisher_buffer.resize(required + 1, 0);
                     }
                     Err(error) => {
@@ -1220,7 +1317,7 @@ mod windows_capture {
                             );
                         }
                         Err(error) => {
-                            if is_unavailable_provider_error(&error) {
+                            if error.code.is_some_and(is_unavailable_provider_error) {
                                 log::warn!(
                                     "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
                                     publisher_name,
@@ -1229,24 +1326,25 @@ mod windows_capture {
                             } else {
                                 failures.push(ProviderCaptureFailure {
                                     provider_name: publisher_name.clone(),
-                                    error,
+                                    error: error.to_string(),
                                 });
                             }
                         }
                     }
                 }
                 Err(error) => {
-                    let error = format!("cannot open publisher metadata: {error}");
-                    if is_unavailable_provider_error(&error) {
+                    let code = win32_code(&error);
+                    let message = format!("cannot open publisher metadata: {error}");
+                    if is_unavailable_publisher_metadata_error(code) {
                         log::warn!(
                             "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
                             publisher_name,
-                            error
+                            message
                         );
                     } else {
                         failures.push(ProviderCaptureFailure {
                             provider_name: publisher_name.clone(),
-                            error,
+                            error: message,
                         });
                     }
                 }
@@ -1604,24 +1702,14 @@ mod tests {
 
     #[test]
     fn unavailable_provider_resources_are_skipped_but_unexpected_errors_fail() {
-        assert!(is_unavailable_provider_error(
-            "cannot open publisher metadata: The system cannot find the file specified. (0x80070002)"
-        ));
-        assert!(is_unavailable_provider_error(
-            "property 5 query failed (code 1813): resource type is unavailable"
-        ));
-        assert!(is_unavailable_provider_error(
-            "publisher metadata unavailable (0x80073AAF)"
-        ));
-        assert!(is_unavailable_provider_error(
-            "message query failed: MUI entry is missing (0x80073B01)"
-        ));
-        assert!(is_unavailable_provider_error(
-            "cannot open publisher metadata: The data is invalid. (0x8007000D)"
-        ));
-        assert!(!is_unavailable_provider_error(
-            "metadata array 16 exceeds bound"
-        ));
+        for code in [2, 1813, 15007, 15023, 15105] {
+            assert!(is_unavailable_provider_error(code), "code {code}");
+        }
+        assert!(!is_unavailable_provider_error(13));
+        assert!(is_unavailable_publisher_metadata_error(13));
+        for code in [0, 5, 15031, 15032] {
+            assert!(!is_unavailable_provider_error(code), "code {code}");
+        }
     }
 
     #[cfg(not(target_os = "windows"))]

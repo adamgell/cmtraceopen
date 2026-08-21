@@ -719,7 +719,15 @@ pub(crate) fn parse_archive(
 fn is_evtx_name(name: &str) -> bool {
     name.rsplit('/').next().is_some_and(|file| {
         let lower = file.to_ascii_lowercase();
-        lower.ends_with(".evtx") || lower.contains(".evtx.") || lower.ends_with(".evtx~")
+        if lower.ends_with(".evtx") {
+            return true;
+        }
+        let Some((stem, rotation)) = lower.rsplit_once(".evtx.") else {
+            return false;
+        };
+        !stem.is_empty()
+            && !rotation.is_empty()
+            && rotation.bytes().all(|byte| byte.is_ascii_digit())
     })
 }
 fn is_text_name(name: &str) -> bool {
@@ -1114,10 +1122,10 @@ mod tests {
         parse_evtx_manifest, EventLogSource, EventLogSourceKind, EventLogSourceManifest,
     };
     use super::{
-        account_archive_bytes, archive_budget_allows, archive_member_count,
+        account_archive_bytes, archive_budget_allows, archive_member_count, archive_member_kind,
         archive_record_budget_allows, archive_text_parser_admission_allows, bounded_member_indices,
-        parse_archive, parse_text_member, push_existing_gap, text_parse_error_is_limit,
-        validate_member_name, ArchiveParseResult, MemberReadError,
+        is_evtx_name, parse_archive, parse_text_member, push_existing_gap,
+        text_parse_error_is_limit, validate_member_name, ArchiveParseResult, MemberReadError,
         MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES, MAX_ARCHIVE_COVERAGE, MAX_ARCHIVE_MEMBERS,
         MAX_ARCHIVE_TEXT_PARSE_BYTES, MAX_ARCHIVE_TEXT_RECORDS, MAX_ARCHIVE_TOTAL_BYTES,
     };
@@ -1125,6 +1133,41 @@ mod tests {
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::RwLock;
+    #[test]
+    fn evtx_member_names_require_a_real_extension_or_numeric_rotation() {
+        for name in [
+            "logs/Application.evtx",
+            "logs/Application.EVTX",
+            "logs/Application.evtx.1",
+            "logs/Application.evtx.001",
+        ] {
+            assert!(is_evtx_name(name), "{name} should be an EVTX member");
+            assert_eq!(
+                archive_member_kind(name),
+                EvtxArchiveMemberKind::Evtx,
+                "{name} should be classified as EVTX"
+            );
+        }
+
+        for name in [
+            "logs/Application.evtx.gz",
+            "logs/Application.evtx.txt",
+            "logs/Application.evtx.zip",
+            "logs/Application.evtx~",
+            "logs/Application.evtx.1~",
+        ] {
+            assert!(!is_evtx_name(name), "{name} should not be an EVTX member");
+        }
+
+        assert_eq!(
+            archive_member_kind("logs/Application.evtx.txt"),
+            EvtxArchiveMemberKind::Text
+        );
+        assert_eq!(
+            archive_member_kind("logs/Application.evtx.zip"),
+            EvtxArchiveMemberKind::Binary
+        );
+    }
 
     #[test]
     fn componentless_archive_text_members_use_source_qualified_channels() {

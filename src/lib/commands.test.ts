@@ -1057,7 +1057,7 @@ describe("event-log manifest commands", () => {
     );
   });
 
-  it.each([42, true, [], { value: "42" }])(
+  it.each([[42], [true], [[]], [{ value: "42" }]])(
     "rejects malformed eventRecordIdText type %s",
     async (eventRecordIdText) => {
       vi.mocked(invoke).mockResolvedValueOnce({

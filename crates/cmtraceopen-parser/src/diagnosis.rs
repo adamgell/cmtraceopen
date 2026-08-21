@@ -32,6 +32,7 @@ fn redact_labeled_value(label: &str, value: &str) -> String {
 /// A source reference retained without flattening the source-specific evidence contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum EvidenceRef {
     Intune(IntuneEvidenceRef),
     Esp(EspEvidenceRef),
@@ -42,22 +43,31 @@ pub enum EvidenceRef {
 }
 
 impl EvidenceRef {
+    /// Wraps an Intune-native evidence reference.
     pub fn from_intune(value: IntuneEvidenceRef) -> Self {
         Self::Intune(value)
     }
 
+    /// Wraps an ESP-native evidence reference.
     pub fn from_esp(value: EspEvidenceRef) -> Self {
         Self::Esp(value)
     }
 
+    /// Wraps an SCCM-native evidence reference.
     pub fn from_sccm(value: SccmEvidenceRef) -> Self {
         Self::Sccm(value)
     }
 
+    /// Wraps a raw dsregcmd evidence reference.
     pub fn from_dsreg_raw(value: impl Into<String>) -> Self {
         Self::DsregcmdRaw(value.into())
     }
+    /// Wraps a normalized text-log evidence reference.
+    pub fn from_text_log(value: TextLogEvidenceRef) -> Self {
+        Self::TextLog(value)
+    }
 
+    /// Creates an event evidence reference from its stable source coordinates.
     pub fn from_event(
         source: impl Into<String>,
         provider: impl Into<String>,
@@ -154,6 +164,7 @@ pub struct EventEvidenceRef {
 }
 
 impl EventEvidenceRef {
+    /// Returns the deterministic ID used for deduplication and UI navigation.
     pub fn stable_id(&self) -> String {
         let fallback_record_id = self.record_id.to_string();
         let record_id = self
@@ -177,6 +188,7 @@ impl EventEvidenceRef {
 /// Coverage is separate from an assertion about a source's health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum CoverageState {
     Covered,
     Unknown,
@@ -202,6 +214,7 @@ pub struct CoverageGap {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum FindingClass {
     ConfirmedFailure,
     LikelyContributor,
@@ -214,6 +227,7 @@ pub enum FindingClass {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum FindingSeverity {
     Info,
     Warning,
@@ -223,6 +237,7 @@ pub enum FindingSeverity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum FindingConfidence {
     Unknown,
     Low,
@@ -291,6 +306,7 @@ pub struct ErrorToken {
 }
 
 impl ErrorToken {
+    /// Parses a raw token through the shared error database.
     pub fn from_raw(raw: impl Into<String>) -> Self {
         let raw = raw.into();
         let lookup = lookup_error_code(&raw);
@@ -389,6 +405,7 @@ pub fn enrich_error_tokens(message: &str) -> Vec<ErrorToken> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum EventFamily {
     Autopilot,
     Esp,
@@ -1340,7 +1357,7 @@ pub fn adapt_event_entry_with_data_and_raw_xml(
 }
 /// Adapts an existing normalized text-log entry without asserting that neutral lines are failures.
 pub fn adapt_log_entry(entry: LogEntry) -> Option<DiagnosisFinding> {
-    let evidence = EvidenceRef::TextLog(TextLogEvidenceRef {
+    let evidence = EvidenceRef::from_text_log(TextLogEvidenceRef {
         source: entry
             .source_file
             .clone()
@@ -1602,6 +1619,7 @@ pub fn adapt_dsregcmd_insight(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum CorrelationBasis {
     ExactIdentifier,
     CandidateIdentifier,
@@ -1610,6 +1628,7 @@ pub enum CorrelationBasis {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum CorrelationStatus {
     Exact,
     Candidate,

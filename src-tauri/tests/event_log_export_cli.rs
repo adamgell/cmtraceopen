@@ -13,7 +13,7 @@ fn manifest(directory: &tempfile::TempDir, raw_xml: &str, message: &str) -> std:
             "channel": "Application",
             "eventId": 326,
             "level": "Error",
-            "computer": "DESKTOP-JOHN",
+            "computer": "TESTHOST-01",
             "message": message,
             "eventData": [],
             "rawXml": raw_xml,
@@ -51,6 +51,8 @@ fn binary_exports_stdout_and_reports_coverage_to_stderr() {
     assert!(stdout.starts_with('['));
     assert!(!stdout.contains("hunter2"));
     assert!(!stdout.contains("DESKTOP-JOHN"));
+    assert!(!stdout.contains("TESTHOST-01"));
+    assert!(stdout.contains("[sensitive:ComputerName]"));
     assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=1 parseErrors=1 gaps=1"));
     assert!(stderr.contains("coverage-gap: damaged.evtx: truncated"));
 }

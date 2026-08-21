@@ -122,57 +122,10 @@ fn redact_mapped_property(property: &str) -> String {
     redacted
 }
 fn mapped_property_label(property: &str) -> &str {
-    const ASSIGNMENT_LABELS: &[&str] = &[
-        "ComputerName",
-        "DeviceHardwareData",
-        "SubjectDomainName",
-        "UserPrincipalName",
-        "HardwareHash",
-        "TargetUserName",
-        "CredentialData",
-        "ClientSecret",
-        "RefreshToken",
-        "BearerToken",
-        "AccessToken",
-        "PrivateKey",
-        "SerialNumber",
-        "DeviceName",
-        "MachineName",
-        "Computer",
-        "HostName",
-        "SubjectUserName",
-        "RemoteHost",
-        "DeviceId",
-        "UserName",
-        "RunAsUser",
-        "UserId",
-        "Account",
-        "TenantId",
-        "AADTenantId",
-        "Password",
-        "Passphrase",
-        "ApiKey",
-        "ApiSecret",
-        "Token",
-        "SecretKey",
-        "Secret",
-        "LicenseKey",
-        "ProductKey",
-        "Credential",
-        "Credentials",
-        "Authorization",
-        "Pwd",
-        "Serial",
-    ];
     property
         .split(['=', ':'])
         .map(str::trim)
-        .find_map(|segment| {
-            ASSIGNMENT_LABELS.iter().find_map(|known| {
-                let suffix = segment.get(segment.len().checked_sub(known.len())?..)?;
-                suffix.eq_ignore_ascii_case(known).then_some(suffix)
-            })
-        })
+        .find_map(canonical_sensitive_label)
         .or_else(|| {
             property
                 .char_indices()
@@ -527,16 +480,6 @@ fn cdata_event_data_pattern() -> &'static Regex {
     })
 }
 
-fn labeled_xml_field_pattern() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(
-            r#"(?is)(?P<open><(?:[\w.-]+:)?(?P<label>Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|AADTenantId|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\b[^>]*>)(?P<value>[^<]*)(?P<close></(?:[\w.-]+:)?(?:Computer|ComputerName|DeviceName|MachineName|HostName|SubjectUserName|SubjectDomainName|RemoteHost|SerialNumber|DeviceId|HardwareHash|DeviceHardwareData|AADTenantId|TargetUserName|UserName|RunAsUser|UserId|TenantId|Password|ApiKey|ApiSecret|AccessToken|Token|Secret|ClientSecret|Credential|CredentialData)\s*>)"#,
-        )
-        .expect("labeled XML field redaction pattern must compile")
-    })
-}
-
 fn xml_name_attribute(tag: &str) -> Option<String> {
     static CELL: OnceLock<Regex> = OnceLock::new();
     let value = CELL
@@ -569,80 +512,51 @@ fn xml_tag_name(tag: &str) -> Option<String> {
     (!name.is_empty()).then(|| xml_local_name(name).to_owned())
 }
 
-fn sensitive_xml_label(name: &str) -> Option<&'static str> {
-    if safe_xml_element(name) {
-        return None;
-    }
-    const LABELS: &[&str] = &[
-        "Computer",
-        "ComputerName",
-        "DeviceName",
-        "MachineName",
-        "HostName",
-        "SubjectUserName",
-        "SubjectDomainName",
-        "RemoteHost",
-        "SerialNumber",
-        "Serial",
-        "DeviceId",
-        "HardwareHash",
-        "DeviceHardwareData",
-        "TargetUserName",
-        "UserName",
-        "UserPrincipalName",
-        "RunAsUser",
-        "UserId",
-        "Account",
-        "AADTenantId",
-        "TenantId",
-        "Password",
-        "Pwd",
-        "Passphrase",
-        "ApiKey",
-        "ApiSecret",
-        "AccessToken",
-        "RefreshToken",
-        "BearerToken",
-        "Token",
-        "Secret",
-        "SecretKey",
-        "PrivateKey",
-        "LicenseKey",
-        "ProductKey",
-        "ClientSecret",
-        "Credential",
-        "Credentials",
-        "CredentialData",
-        "Authorization",
-    ];
-    if let Some(label) = LABELS
-        .iter()
-        .copied()
-        .find(|label| label.eq_ignore_ascii_case(name))
-    {
-        return Some(if label.eq_ignore_ascii_case("Computer") {
-            "ComputerName"
-        } else if label.eq_ignore_ascii_case("Pwd") {
-            "Password"
-        } else if label.eq_ignore_ascii_case("Serial") {
-            "SerialNumber"
-        } else {
-            label
-        });
-    }
-    // Keep the two short aliases aligned with `mapped_property_label`: provider schemas commonly
-    // prefix these labels (for example, `FooPwd`) without a word boundary.
-    for (alias, canonical) in [("Pwd", "Password"), ("Serial", "SerialNumber")] {
-        if name.len() > alias.len() && name[name.len() - alias.len()..].eq_ignore_ascii_case(alias)
-        {
-            return Some(canonical);
-        }
-    }
+const SENSITIVE_XML_LABELS: &[&str] = &[
+    "Computer",
+    "ComputerName",
+    "DeviceName",
+    "MachineName",
+    "HostName",
+    "SubjectUserName",
+    "SubjectDomainName",
+    "RemoteHost",
+    "SerialNumber",
+    "Serial",
+    "DeviceId",
+    "HardwareHash",
+    "DeviceHardwareData",
+    "TargetUserName",
+    "UserName",
+    "UserPrincipalName",
+    "RunAsUser",
+    "UserId",
+    "Account",
+    "AADTenantId",
+    "TenantId",
+    "Password",
+    "Pwd",
+    "Passphrase",
+    "ApiKey",
+    "ApiSecret",
+    "AccessToken",
+    "RefreshToken",
+    "BearerToken",
+    "Token",
+    "Secret",
+    "SecretKey",
+    "PrivateKey",
+    "LicenseKey",
+    "ProductKey",
+    "ClientSecret",
+    "Credential",
+    "Credentials",
+    "CredentialData",
+    "Authorization",
+];
 
-    let lower = name.to_ascii_lowercase();
-    [
-        "account",
-        "auth",
+fn has_sensitive_xml_fragment(name: &str) -> bool {
+    const FRAGMENTS: &[&str] = &[
         "credential",
         "key",
         "passphrase",
@@ -651,10 +565,68 @@ fn sensitive_xml_label(name: &str) -> Option<&'static str> {
         "token",
         "userprincipal",
         "username",
-    ]
-    .iter()
-    .any(|fragment| lower.contains(fragment))
-    .then_some("SensitiveXmlValue")
+    ];
+    let bytes = name.as_bytes();
+    let mut part_start = 0;
+    let mut index = 0;
+    while index <= bytes.len() {
+        let at_end = index == bytes.len();
+        let separator = !at_end && matches!(bytes[index], b'_' | b'-' | b'.');
+        let case_boundary = !at_end
+            && index > part_start
+            && bytes[index].is_ascii_uppercase()
+            && (bytes[index - 1].is_ascii_lowercase()
+                || (bytes[index - 1].is_ascii_uppercase()
+                    && bytes
+                        .get(index + 1)
+                        .is_some_and(|byte| byte.is_ascii_lowercase())));
+        if at_end || separator || case_boundary {
+            if part_start < index
+                && FRAGMENTS
+                    .iter()
+                    .any(|fragment| name[part_start..index].eq_ignore_ascii_case(fragment))
+            {
+                return true;
+            }
+            part_start = if separator { index + 1 } else { index };
+        }
+        index += 1;
+    }
+    false
+}
+
+fn canonical_sensitive_label(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("SensitiveXmlValue") {
+        return Some("SensitiveXmlValue");
+    }
+    SENSITIVE_XML_LABELS
+        .iter()
+        .copied()
+        .find_map(|label| {
+            let matches = label.eq_ignore_ascii_case(name)
+                || (name.len() > label.len()
+                    && name
+                        .get(name.len() - label.len()..)
+                        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(label)));
+            matches.then_some(if label.eq_ignore_ascii_case("Computer") {
+                "ComputerName"
+            } else if label.eq_ignore_ascii_case("Pwd") {
+                "Password"
+            } else if label.eq_ignore_ascii_case("Serial") {
+                "SerialNumber"
+            } else {
+                label
+            })
+        })
+        .or_else(|| has_sensitive_xml_fragment(name).then_some("SensitiveXmlValue"))
+}
+
+fn sensitive_xml_label(name: &str) -> Option<&'static str> {
+    if safe_xml_element(name) {
+        None
+    } else {
+        canonical_sensitive_label(name)
+    }
 }
 
 fn safe_xml_element(name: &str) -> bool {
@@ -849,20 +821,6 @@ fn redact_raw_xml(xml: &str) -> String {
         )
     });
     let labeled =
-        labeled_xml_field_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
-            let label = if captures["label"].eq_ignore_ascii_case("Computer") {
-                "ComputerName"
-            } else {
-                &captures["label"]
-            };
-            format!(
-                "{}{}{}",
-                &captures["open"],
-                redact_xml_value(label, &captures["value"]),
-                &captures["close"],
-            )
-        });
-    let labeled =
         cdata_event_data_pattern().replace_all(&labeled, |captures: &regex::Captures<'_>| {
             format!(
                 "{}{}<![CDATA[{}]]>{}{}",
@@ -993,7 +951,7 @@ pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<St
     super::writer::validate_raw_xml(records, format).map_err(|error| error.to_string())?;
     let mapped = mapped_columns(records)?;
     let mut output = Vec::new();
-    super::writer::write_record_stream(&mut output, format, records.iter(), &mapped)
+    super::writer::write_record_stream_unchecked(&mut output, format, records.iter(), &mapped)
         .map_err(|error| error.to_string())?;
     String::from_utf8(output).map_err(|error| error.to_string())
 }
@@ -1483,6 +1441,45 @@ mod tests {
                 assert!(output.contains("FooSerial"), "{format:?}: {output}");
             }
         }
+    }
+
+    #[test]
+    fn generic_key_fragment_does_not_redact_keyboard_layout() {
+        assert_eq!(sensitive_xml_label("KeyboardLayout"), None);
+        assert_eq!(
+            canonical_sensitive_label("EncryptionKey"),
+            Some("SensitiveXmlValue")
+        );
+        assert_eq!(sensitive_xml_label("AuthenticationPackageName"), None);
+        assert_eq!(sensitive_xml_label("AccountStatus"), None);
+        assert_eq!(
+            canonical_sensitive_label("MyTokenBlob"),
+            Some("SensitiveXmlValue")
+        );
+        assert_eq!(canonical_sensitive_label("Monkey"), None);
+        assert_eq!(
+            canonical_sensitive_label("My_Key_Blob"),
+            Some("SensitiveXmlValue")
+        );
+        assert_eq!(
+            sensitive_xml_label("SensitiveXmlValue"),
+            Some("SensitiveXmlValue")
+        );
+        assert_eq!(
+            redact_xml_value("MyTokenBlob", "secret"),
+            "[sensitive:SensitiveXmlValue]"
+        );
+        assert_eq!(canonical_sensitive_label("éFoo"), None);
+
+        let mut event = record("safe");
+        event.event_data = vec![crate::event_log::models::EvtxField {
+            name: "KeyboardLayout".into(),
+            value: "us".into(),
+        }];
+        event.raw_xml = "<Event><Message>us</Message></Event>".into();
+
+        let output = export_records(&[event], ExportFormat::Json).expect("export");
+        assert!(output.contains("\"value\":\"us\""));
     }
 
     #[test]
