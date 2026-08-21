@@ -973,7 +973,7 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(target_os = "windows"))]
     false
@@ -3027,6 +3027,7 @@ mod tests {
         let lowercase = root.join("application.evtx");
         std::fs::write(&uppercase, b"uppercase duplicate").expect("write uppercase duplicate");
         std::fs::write(&lowercase, b"lowercase duplicate").expect("write lowercase duplicate");
+        #[cfg(not(target_os = "windows"))]
         let names_are_distinct = match (
             std::fs::canonicalize(&uppercase),
             std::fs::canonicalize(&lowercase),

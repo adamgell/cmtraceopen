@@ -714,7 +714,7 @@ mod windows_capture {
             None,
             message_id,
             None,
-            EvtFormatMessageId.0 as u32,
+            EvtFormatMessageId.0,
             None,
             &mut used,
         );
@@ -743,7 +743,7 @@ mod windows_capture {
             None,
             message_id,
             None,
-            EvtFormatMessageId.0 as u32,
+            EvtFormatMessageId.0,
             Some(&mut buffer),
             &mut used,
         ) {

@@ -373,6 +373,7 @@ pub fn query_remote_channel_streamed(
 /// Security was 286,401 of 404,769 events and 191.8 seconds of 267, so a caller waiting for this
 /// function to return waits three minutes with nothing to show.
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 fn query_channel_inner(
     channel: &str,
     filter: &EventQueryFilter,
