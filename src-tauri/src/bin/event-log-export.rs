@@ -1138,10 +1138,12 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::utf8_arguments;
     use super::{
         displayed_timestamp, event_id_matches, filtered_records, parse_args,
-        parse_event_id_selectors, parse_event_ids, reject_source_destination, run_with_args,
-        utf8_arguments, Cli, EventIdSelector, Filter, QuickFilter, MAX_EVENT_ID_FILTER_SELECTORS,
+        parse_event_id_selectors, parse_event_ids, reject_source_destination, run_with_args, Cli,
+        EventIdSelector, Filter, QuickFilter, MAX_EVENT_ID_FILTER_SELECTORS,
     };
     use app_lib::event_log::export::{mapped_columns_iter, MAX_MAPPED_COLUMNS};
     use app_lib::event_log::maps::MappedColumn;
