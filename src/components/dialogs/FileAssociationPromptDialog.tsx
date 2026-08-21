@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   associateLogFilesWithApp,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
 import { tokens } from "@fluentui/react-components";
+import { useModalFocus } from "../../hooks/use-modal-focus";
 
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
@@ -24,6 +25,13 @@ export function FileAssociationPromptDialog({
 }: FileAssociationPromptDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(
+    isOpen,
+    dialogRef,
+    undefined,
+    isSubmitting ? "submitting" : "idle",
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -95,6 +103,11 @@ export function FileAssociationPromptDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Associate log files with CMTrace Open?"
+        tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,
@@ -117,9 +130,9 @@ export function FileAssociationPromptDialog({
         </div>
 
         <div style={{ fontSize: "12px", lineHeight: 1.5, marginBottom: "12px" }}>
-          This standalone copy of CMTrace Open can associate <strong>.log</strong>{" "}
-          and <strong>.lo_</strong> files so they open directly in the app, similar
-          to classic CMTrace.exe.
+          This standalone copy of CMTrace Open can associate <strong>.log</strong>,{" "}
+          <strong>.log_</strong>, <strong>.lo_</strong>, and <strong>.cmtlog</strong>{" "}
+          files so they open directly in the app, similar to classic CMTrace.exe.
         </div>
 
         <div

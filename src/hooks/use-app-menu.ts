@@ -11,6 +11,7 @@ const MENU_EVENT_APP_ACTION = "app-menu-action";
 
 let appMenuSyncQueue: Promise<void> = Promise.resolve();
 let appMenuSyncWarningShown = false;
+let alwaysOnTopToggleQueue: Promise<void> = Promise.resolve();
 
 interface AppMenuActionPayload {
   version: number;
@@ -216,9 +217,13 @@ export function useAppMenu() {
             toggleInfoPane();
             return;
           case "toggle_always_on_top": {
-            const next = !useUiStore.getState().alwaysOnTop;
-            useUiStore.getState().setAlwaysOnTop(next);
-            await invoke("set_always_on_top", { enabled: next });
+            const nextToggle = alwaysOnTopToggleQueue.then(async () => {
+              const next = !useUiStore.getState().alwaysOnTop;
+              await invoke("set_always_on_top", { enabled: next });
+              useUiStore.getState().setAlwaysOnTop(next);
+            });
+            alwaysOnTopToggleQueue = nextToggle.catch(() => undefined);
+            await nextToggle;
             return;
           }
           case "increase_text_size":
@@ -363,33 +368,25 @@ export function useAppMenu() {
             if (!folder || Array.isArray(folder)) return;
             const folderPath = folder as string;
             try {
-              const { listLogFolder } = await import("../lib/commands");
-              const listing = await listLogFolder(folderPath);
-              const childPaths = listing.entries
-                .filter((entry) => !entry.isDir)
-                .map((entry) => entry.path);
-              const sources: { path: string }[] = childPaths.map((path) => ({ path }));
-              // If the folder contains IME logs, add the folder itself as a source
-              // so the backend can detect and apply IME-specialised parsing.
-              const hasIme = childPaths.some((p) => {
-                const lower = p.toLowerCase();
-                return (
-                  lower.endsWith("agentexecutor.log") ||
-                  lower.endsWith("intunemanagementextension.log")
-                );
-              });
-              if (hasIme) sources.push({ path: folderPath });
-              if (sources.length === 0) return;
-              const { buildTimelineFromSources } = await import(
-                "../components/timeline/hooks/useTimelineBundle"
+              const { replaceTimelineSource } = await import(
+                "../workspaces/timeline/open-timeline-source"
               );
-              await buildTimelineFromSources(sources);
-              useUiStore.getState().ensureWorkspaceVisible("timeline", "native-menu.timeline-new-from-folder");
+              useUiStore.getState().ensureWorkspaceVisible(
+                "timeline",
+                "native-menu.timeline-new-from-folder",
+              );
+              await replaceTimelineSource({ kind: "folder", path: folderPath });
             } catch (error) {
               console.error("[app-menu] failed to build timeline from folder", {
                 folderPath,
                 error,
               });
+              const { useTimelineStore } = await import(
+                "../stores/timeline-store"
+              );
+              useTimelineStore.getState().setLoadError(
+                error instanceof Error ? error.message : String(error),
+              );
             }
             return;
           }

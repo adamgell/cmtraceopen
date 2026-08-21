@@ -372,8 +372,8 @@ export function useAppActions(): AppActionHandlers {
       useFilterStore.getState().clearFilter();
 
       try {
-        await loadLogSource(source);
-        return true;
+        const result = await loadLogSource(source);
+        return result !== null;
       } catch (error) {
         console.error("[app-actions] failed to load source", {
           source,
@@ -414,16 +414,38 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
-      if (isIntuneWorkspace(activeWorkspace)) {
+      const workspaceDefinition = getWorkspace(activeWorkspace);
+      if (workspaceDefinition.onOpenPath) {
+        await workspaceDefinition.onOpenPath(path);
+        return;
+      }
+      if (workspaceDefinition.onOpenSource) {
         const pathKind = await inferPathKind(path);
-        const source: LogSource =
-          pathKind === "folder"
-            ? { kind: "folder", path }
-            : { kind: "file", path };
-        await getWorkspace(activeWorkspace).onOpenSource!(
-          source,
-          "drag-drop.path-open",
-        );
+        if (pathKind === "folder") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            "drag-drop.path-open",
+          );
+          return;
+        }
+        if (pathKind === "file") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            "drag-drop.path-open",
+          );
+          return;
+        }
+        try {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            "drag-drop.path-open",
+          );
+        } catch {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            "drag-drop.path-open",
+          );
+        }
         return;
       }
 
@@ -437,10 +459,10 @@ export function useAppActions(): AppActionHandlers {
 
       useUiStore.getState().ensureLogViewVisible("drag-drop.path-open");
       useFilterStore.getState().clearFilter();
-      await loadPathAsLogSource(path, {
+      const result = await loadPathAsLogSource(path, {
         fallbackToFolder: true,
       });
-      if (isRecordableWorkspace(activeWorkspace)) {
+      if (result !== null && isRecordableWorkspace(activeWorkspace)) {
         void recordRecentPath(path, activeWorkspace);
       }
     },

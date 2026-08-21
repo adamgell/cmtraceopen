@@ -325,6 +325,8 @@ export function EvtxFilterBar() {
             key={level}
             size="small"
             appearance={active ? "primary" : "outline"}
+            aria-label={`Toggle ${level} events`}
+            aria-pressed={active}
             onClick={() => toggleFilterLevel(level)}
             style={{
               minWidth: "auto",
@@ -350,6 +352,7 @@ export function EvtxFilterBar() {
 
       <Input
         input={{ style: { fontSize: controlFontSize } }}
+        aria-label="Event IDs"
         value={filterEventIds}
         onChange={(_, data) => setFilterEventIds(data.value)}
         placeholder="Event IDs (comma sep.)"
@@ -640,6 +643,7 @@ export function EvtxFilterBar() {
 
       <Input
         input={{ style: { fontSize: controlFontSize } }}
+        aria-label="Search events"
         value={filterSearch}
         onChange={(_, data) => setFilterSearch(data.value)}
         placeholder="Search..."
@@ -679,6 +683,7 @@ export function EvtxFilterBar() {
         <Button
           size="small"
           appearance="subtle"
+          aria-label={`Sort ${sortDirection === "asc" ? "ascending" : "descending"}`}
           onClick={() =>
             setSortDirection(
               sortDirection === "asc" ? "desc" : "asc"

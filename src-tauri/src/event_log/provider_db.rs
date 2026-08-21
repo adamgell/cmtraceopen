@@ -946,10 +946,9 @@ fn validate_packaged_provider_database(
             .providers
             .iter()
             .any(|provider| provider.trim().is_empty())
-        || entry.provider_count != entry.providers.len() as u64
     {
         return Err(format!(
-            "packaged provider manifest database {} has inconsistent providerCount/providers metadata",
+            "packaged provider manifest database {} has inconsistent providers metadata",
             entry.file
         ));
     }
@@ -2264,6 +2263,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some("b"), Some("a")]
         );
+    }
+
+    #[test]
+    fn packaged_validation_accepts_multiple_versions_for_one_provider() {
+        let root = temp_dir("packaged-multiple-versions");
+        let directory = root.join(PACKAGED_PROVIDER_DATABASE_DIRECTORY);
+        std::fs::create_dir_all(&directory).expect("provider package directory");
+        let path = directory.join("multiple-versions.db");
+        build_db(
+            &path,
+            &[
+                ("Repeated-Provider", 20348, EVENTS),
+                ("Repeated-Provider", 20348, EVENTS),
+            ],
+        );
+
+        let entry = PackagedProviderDatabase {
+            file: "multiple-versions.db".into(),
+            source_windows_build: 20348,
+            sha256: sha256_file(&path).expect("database hash"),
+            provider_count: 2,
+            providers: vec!["Repeated-Provider".into()],
+        };
+
+        validate_packaged_provider_database(&directory, &entry)
+            .expect("row count and distinct provider names are independent");
     }
 
     #[test]

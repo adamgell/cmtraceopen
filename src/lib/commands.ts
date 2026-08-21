@@ -7,6 +7,7 @@ import type {
   LogFormat,
   LogSource,
   ParseResult,
+  ParserKind,
   WorkspaceId,
 } from "../types/log";
 import type {
@@ -27,6 +28,7 @@ import type {
   EvtxParseResult,
   EvtxRecord,
 } from "../workspaces/event-log/types";
+import { assertParseResultShape } from "../workspaces/event-log/evtx-coverage";
 import type { UnifiedTimeline } from "../workspaces/event-log/unified-timeline";
 import type {
   EvidenceArtifactPreview,
@@ -70,6 +72,7 @@ import type {
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
 import type { Marker, MarkerCategory, MarkerFile } from "../types/markers";
+import type { SignalKind, TimelineBundle } from "../types/timeline";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -298,15 +301,529 @@ function normalizeCommandInvokeError(
   return normalizedError;
 }
 
-async function invokeCommand<T>(
-  commandName: string,
+type CommandDecoder<T> = (value: unknown, commandName: string) => T;
+
+async function invokeCommand<Name extends CommandName>(
+  commandName: Name,
   args?: Record<string, unknown>,
-): Promise<T> {
+): Promise<CommandResponse<Name>>;
+async function invokeCommand(
+  commandName: CommandName,
+  args?: Record<string, unknown>,
+): Promise<CommandResponse<CommandName>> {
+  let response: unknown;
   try {
-    return await invoke<T>(commandName, args);
+    response = await invoke<unknown>(commandName, args);
   } catch (error) {
     throw normalizeCommandInvokeError(commandName, error);
   }
+
+  const decoder = COMMAND_DECODERS[commandName];
+  if (!decoder) {
+    throw new Error(`No response decoder registered for '${commandName}'.`);
+  }
+  return decoder(response, commandName);
+}
+
+function isCommandRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFiniteCommandNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNullableCommandNumber(value: unknown): value is number | null {
+  return value === null || isFiniteCommandNumber(value);
+}
+
+function isNullableCommandString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isParserSelectionResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.parser === "string" &&
+    typeof value.implementation === "string" &&
+    typeof value.provenance === "string" &&
+    typeof value.parseQuality === "string" &&
+    typeof value.recordFraming === "string" &&
+    isNullableCommandString(value.dateOrder) &&
+    (value.specialization === undefined ||
+      isNullableCommandString(value.specialization))
+  );
+}
+
+function isLogEntryResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.id) &&
+    isFiniteCommandNumber(value.lineNumber) &&
+    typeof value.message === "string" &&
+    isNullableCommandString(value.component) &&
+    isNullableCommandNumber(value.timestamp) &&
+    isNullableCommandString(value.timestampDisplay) &&
+    typeof value.severity === "string" &&
+    isNullableCommandNumber(value.thread) &&
+    isNullableCommandString(value.threadDisplay) &&
+    isNullableCommandString(value.sourceFile) &&
+    typeof value.format === "string" &&
+    typeof value.filePath === "string" &&
+    isNullableCommandNumber(value.timezoneOffset)
+  );
+}
+
+function isParseResultResponse(value: unknown): value is ParseResult {
+  return (
+    isCommandRecord(value) &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isLogEntryResponse) &&
+    typeof value.formatDetected === "string" &&
+    isParserSelectionResponse(value.parserSelection) &&
+    isFiniteCommandNumber(value.totalLines) &&
+    isFiniteCommandNumber(value.parseErrors) &&
+    typeof value.filePath === "string" &&
+    isFiniteCommandNumber(value.fileSize) &&
+    isFiniteCommandNumber(value.byteOffset)
+  );
+}
+
+function isLogSourceKind(value: unknown): boolean {
+  return value === "file" || value === "folder" || value === "known";
+}
+
+function isLogSourceResponse(value: unknown): boolean {
+  if (!isCommandRecord(value) || !isLogSourceKind(value.kind)) {
+    return false;
+  }
+  if (value.kind === "file" || value.kind === "folder") {
+    return typeof value.path === "string";
+  }
+  return (
+    typeof value.sourceId === "string" &&
+    typeof value.defaultPath === "string" &&
+    (value.pathKind === "file" || value.pathKind === "folder")
+  );
+}
+
+function isFolderEntryResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.path === "string" &&
+    typeof value.isDir === "boolean" &&
+    isNullableCommandNumber(value.sizeBytes) &&
+    isNullableCommandNumber(value.modifiedUnixMs)
+  );
+}
+
+function isFolderListingResponse(value: unknown): value is FolderListingResult {
+  return (
+    isCommandRecord(value) &&
+    isLogSourceKind(value.sourceKind) &&
+    isLogSourceResponse(value.source) &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isFolderEntryResponse) &&
+    (value.bundleMetadata === undefined ||
+      value.bundleMetadata === null ||
+      isCommandRecord(value.bundleMetadata))
+  );
+}
+const TIMELINE_PARSER_KIND_MEMBERS = {
+  ccm: true,
+  simple: true,
+  timestamped: true,
+  plain: true,
+  iisW3c: true,
+  panther: true,
+  cbs: true,
+  dism: true,
+  reportingEvents: true,
+  msi: true,
+  psadtLegacy: true,
+  intuneMacOs: true,
+  intuneDeviceInventory: true,
+  dhcp: true,
+  burn: true,
+  patchMyPcDetection: true,
+  registry: true,
+  secureBootLog: true,
+  dnsDebug: true,
+  dnsAudit: true,
+  cmtLog: true,
+  companyPortal: true,
+} satisfies Record<ParserKind, true>;
+
+const TIMELINE_PARSER_KINDS = new Set(Object.keys(TIMELINE_PARSER_KIND_MEMBERS));
+
+const TIMELINE_SIGNAL_KIND_MEMBERS = {
+  errorSeverity: true,
+  knownErrorCode: true,
+  imeFailed: true,
+} satisfies Record<SignalKind, true>;
+
+const TIMELINE_SIGNAL_KINDS = new Set(Object.keys(TIMELINE_SIGNAL_KIND_MEMBERS));
+
+function isTimelineSourceKind(value: unknown): boolean {
+  if (value === "intuneEvents") return true;
+  if (!isCommandRecord(value) || !isCommandRecord(value.logFile)) {
+    return false;
+  }
+  return (
+    typeof value.logFile.parserKind === "string" &&
+    TIMELINE_PARSER_KINDS.has(value.logFile.parserKind)
+  );
+}
+
+function isTimelineSourceMeta(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.idx) &&
+    isTimelineSourceKind(value.kind) &&
+    typeof value.path === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.color === "string" &&
+    isFiniteCommandNumber(value.entryCount)
+  );
+}
+
+function isTimelineIncident(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.id) &&
+    isFiniteCommandNumber(value.tsStartMs) &&
+    isFiniteCommandNumber(value.tsEndMs) &&
+    isFiniteCommandNumber(value.signalCount) &&
+    isFiniteCommandNumber(value.sourceCount) &&
+    isFiniteCommandNumber(value.confidence) &&
+    (value.anchorEventRef === undefined ||
+      value.anchorEventRef === null ||
+      (Array.isArray(value.anchorEventRef) &&
+        value.anchorEventRef.length === 2 &&
+        value.anchorEventRef.every(isFiniteCommandNumber))) &&
+    (value.anchorGuid === undefined ||
+      value.anchorGuid === null ||
+      typeof value.anchorGuid === "string") &&
+    typeof value.summary === "string"
+  );
+}
+
+function isTimelineError(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.message === "string"
+  );
+}
+
+function isTimelineTunables(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.overlapWindowMs) &&
+    isFiniteCommandNumber(value.minSourceCount) &&
+    isFiniteCommandNumber(value.maxIncidentSpanMs) &&
+    Array.isArray(value.enabledSignalKinds) &&
+    value.enabledSignalKinds.every(
+      (kind) => typeof kind === "string" && TIMELINE_SIGNAL_KINDS.has(kind),
+    )
+  );
+}
+
+function isTimelineBundleResponse(value: unknown): value is TimelineBundle {
+  return (
+    isCommandRecord(value) &&
+    typeof value.id === "string" &&
+    Array.isArray(value.sources) &&
+    value.sources.every(isTimelineSourceMeta) &&
+    Array.isArray(value.timeRangeMs) &&
+    value.timeRangeMs.length === 2 &&
+    value.timeRangeMs.every(isFiniteCommandNumber) &&
+    isFiniteCommandNumber(value.totalEntries) &&
+    Array.isArray(value.incidents) &&
+    value.incidents.every(isTimelineIncident) &&
+    isStringArray(value.deniedGuids) &&
+    Array.isArray(value.errors) &&
+    value.errors.every(isTimelineError) &&
+    isTimelineTunables(value.tunables)
+  );
+}
+
+function decodeTimelineBundle(
+  value: unknown,
+  commandName: string,
+): TimelineBundle {
+  if (!isTimelineBundleResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function invalidCommandResponse(commandName: string): never {
+  throw new Error(`Command '${commandName}' returned an invalid response.`);
+}
+
+type CommandFieldValidator = (value: unknown) => boolean;
+
+function hasCommandFields(
+  value: Record<string, unknown>,
+  fields: Record<string, CommandFieldValidator>,
+): boolean {
+  return Object.entries(fields).every(([key, validator]) =>
+    validator(value[key]),
+  );
+}
+
+function decodeRecordResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T {
+  if (!isCommandRecord(value) || !hasCommandFields(value, fields)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value as T;
+}
+
+function decodeRecordArrayResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) => isCommandRecord(item) && hasCommandFields(item, fields),
+    )
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  return value as T;
+}
+
+function decodeStringArrayResponse(
+  value: unknown,
+  commandName: string,
+): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeStringResponse(value: unknown, commandName: string): string {
+  if (typeof value !== "string") return invalidCommandResponse(commandName);
+  return value;
+}
+
+function decodeBooleanResponse(value: unknown, commandName: string): boolean {
+  if (typeof value !== "boolean") return invalidCommandResponse(commandName);
+  return value;
+}
+
+function decodeNullableRecordResponse<T>(
+  value: unknown,
+  commandName: string,
+  fields: Record<string, CommandFieldValidator> = {},
+): T | null {
+  if (value === null) return null;
+  return decodeRecordResponse<T>(value, commandName, fields);
+}
+
+function decodeUnitResponse(value: unknown, commandName: string): void {
+  if (value !== null && value !== undefined) {
+    return invalidCommandResponse(commandName);
+  }
+}
+
+function decodeWorkspaceIdResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId {
+  if (!isWorkspaceIdValue(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeNullableWorkspaceIdResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId | null {
+  return value === null ? null : decodeWorkspaceIdResponse(value, commandName);
+}
+
+function decodePathKindResponse(
+  value: unknown,
+  commandName: string,
+): "file" | "folder" | "unknown" {
+  if (value !== "file" && value !== "folder" && value !== "unknown") {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+const WORKSPACE_IDS: Record<WorkspaceId, true> = {
+  log: true,
+  intune: true,
+  "new-intune": true,
+  dsregcmd: true,
+  "macos-diag": true,
+  "macos-jamf": true,
+  deployment: true,
+  "event-log": true,
+  "esp-diagnostics": true,
+  sccm: true,
+  secureboot: true,
+  sysmon: true,
+  timeline: true,
+  "dns-dhcp": true,
+};
+
+function isWorkspaceIdValue(value: unknown): value is WorkspaceId {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(WORKSPACE_IDS, value)
+  );
+}
+
+function decodeWorkspaceIdArrayResponse(
+  value: unknown,
+  commandName: string,
+): WorkspaceId[] {
+  if (!Array.isArray(value) || !value.every(isWorkspaceIdValue)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function isCommandRecordArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isCommandRecord);
+}
+
+function isNullableCommandRecord(value: unknown): boolean {
+  return value === null || isCommandRecord(value);
+}
+const EVIDENCE_ARTIFACT_INTAKE_KIND_MEMBERS = {
+  log: true,
+  registrySnapshot: true,
+  eventLogExport: true,
+  commandOutput: true,
+  screenshot: true,
+  export: true,
+  unknown: true,
+} satisfies Record<EvidenceArtifactIntakeKind, true>;
+
+function isEvidenceArtifactIntakeKind(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(
+      EVIDENCE_ARTIFACT_INTAKE_KIND_MEMBERS,
+      value,
+    )
+  );
+}
+
+function isRegistrySnapshotValuePreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.valueType === "string" &&
+    typeof value.value === "string"
+  );
+}
+
+function isRegistrySnapshotKeyPreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    isFiniteCommandNumber(value.valueCount) &&
+    Array.isArray(value.values) &&
+    value.values.every(isRegistrySnapshotValuePreview)
+  );
+}
+
+function isRegistrySnapshotSummary(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isFiniteCommandNumber(value.keyCount) &&
+    isFiniteCommandNumber(value.valueCount) &&
+    Array.isArray(value.keys) &&
+    value.keys.every(isRegistrySnapshotKeyPreview)
+  );
+}
+
+function isEvidenceEventLogExportPreview(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isNullableCommandString(value.channel) &&
+    isNullableCommandNumber(value.fileSizeBytes) &&
+    isNullableCommandNumber(value.modifiedUnixMs) &&
+    typeof value.exportFormat === "string"
+  );
+}
+
+function isNullableRegistrySnapshotSummary(value: unknown): boolean {
+  return value === null || isRegistrySnapshotSummary(value);
+}
+
+function isNullableEvidenceEventLogExportPreview(value: unknown): boolean {
+  return value === null || isEvidenceEventLogExportPreview(value);
+}
+
+
+function decodeParseResults(
+  value: unknown,
+  commandName: string,
+): ParseResult[] {
+  if (!Array.isArray(value) || !value.every(isParseResultResponse)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeParseResult(value: unknown, commandName: string): ParseResult {
+  if (!isParseResultResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
+}
+
+function decodeAggregateParseResult(
+  value: unknown,
+  commandName: string,
+): AggregateParseResult {
+  return decodeRecordResponse<AggregateParseResult>(value, commandName, {
+    entries: (entries) =>
+      Array.isArray(entries) && entries.every(isLogEntryResponse),
+    totalLines: isFiniteCommandNumber,
+    parseErrors: isFiniteCommandNumber,
+    folderPath: (path) => typeof path === "string",
+    files: (files) =>
+      Array.isArray(files) &&
+      files.every(
+        (file) =>
+          isCommandRecord(file) &&
+          typeof file.filePath === "string" &&
+          isFiniteCommandNumber(file.totalLines) &&
+          isFiniteCommandNumber(file.parseErrors) &&
+          isFiniteCommandNumber(file.fileSize) &&
+          isFiniteCommandNumber(file.byteOffset),
+      ),
+  });
+}
+
+function decodeFolderListingResult(
+  value: unknown,
+  commandName: string,
+): FolderListingResult {
+  if (!isFolderListingResponse(value)) {
+    return invalidCommandResponse(commandName);
+  }
+  return value;
 }
 function isMarkerObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -418,24 +935,40 @@ export async function loadMarkerFile(
   filePath: string,
 ): Promise<MarkerFile | null> {
   return decodeMarkerFile(
-    await invokeCommand<unknown>("load_markers", { filePath }),
+    await invokeCommand("load_markers", { filePath }),
   );
 }
 
 export async function openLogFile(path: string): Promise<ParseResult> {
-  return invokeCommand<ParseResult>("open_log_file", { path });
+  return invokeCommand("open_log_file", { path });
 }
 
 /** Parse multiple files in parallel on the Rust side (Rayon thread pool).
- *  Returns all results in a single IPC response — eliminates N-1 round-trips. */
-export async function parseFilesBatch(paths: string[]): Promise<ParseResult[]> {
-  return invokeCommand<ParseResult[]>("parse_files_batch", { paths });
+ *  Returns all results in a single IPC response.  The request ID tags progress
+ *  events to the owning source load and the offset makes progress monotonic
+ *  across sequential batches. */
+export async function parseFilesBatch(
+  paths: string[],
+  requestId: number,
+  completedOffset: number,
+): Promise<ParseResult[]> {
+  return invokeCommand("parse_files_batch", {
+    paths,
+    requestId,
+    completedOffset,
+  });
 }
 
 export async function listLogFolder(
   path: string,
 ): Promise<FolderListingResult> {
-  return invokeCommand<FolderListingResult>("list_log_folder", { path });
+  return invokeCommand("list_log_folder", { path });
+}
+
+export async function buildTimeline(
+  sources: { path: string; displayName?: string }[],
+): Promise<TimelineBundle> {
+  return invokeCommand("build_timeline_cmd", { sources });
 }
 
 const EVENT_LOG_SOURCE_KINDS: readonly EventLogSourceKind[] = [
@@ -516,10 +1049,26 @@ function assertEventLogSourceManifest(
   }
 }
 
+function decodeEventLogSourceManifest(
+  value: unknown,
+  _commandName: string,
+): EventLogSourceManifest {
+  assertEventLogSourceManifest(value);
+  return value;
+}
+
+function decodeEventLogParseResult(
+  value: unknown,
+  _commandName: string,
+): EvtxParseResult {
+  assertParseResultShape(value);
+  return value as EvtxParseResult;
+}
+
 export async function expandEventLogSources(
   sources: EventLogSourceSelection[],
 ): Promise<EventLogSourceManifest> {
-  const manifest = await invokeCommand<unknown>("evtx_expand_sources", {
+  const manifest = await invokeCommand("evtx_expand_sources", {
     sources,
   });
   assertEventLogSourceManifest(manifest);
@@ -529,7 +1078,7 @@ export async function expandEventLogSources(
 export async function parseEventLogManifest(
   manifest: EventLogSourceManifest,
 ): Promise<EvtxParseResult> {
-  return invokeCommand<EvtxParseResult>("evtx_parse_manifest", { manifest });
+  return invokeCommand("evtx_parse_manifest", { manifest });
 }
 const DIAGNOSIS_COVERAGE_STATES = new Set([
   "covered",
@@ -912,7 +1461,7 @@ export async function diagnoseEventRecords(
 ): Promise<DiagnosisSummary> {
   const commandName = "evtx_diagnose_records";
   return decodeDiagnosisSummary(
-    await invokeCommand<unknown>(commandName, {
+    await invokeCommand(commandName, {
       records: transportDiagnosisRecords(records),
       coverageGaps,
       timeline: timeline ?? null,
@@ -925,7 +1474,7 @@ export async function diagnoseEventRecords(
 export async function inspectEvidenceBundle(
   path: string,
 ): Promise<EvidenceBundleDetails> {
-  return invokeCommand<EvidenceBundleDetails>("inspect_evidence_bundle", {
+  return invokeCommand("inspect_evidence_bundle", {
     path,
   });
 }
@@ -935,7 +1484,7 @@ export async function inspectEvidenceArtifact(
   intakeKind: EvidenceArtifactIntakeKind,
   originPath?: string | null,
 ): Promise<EvidenceArtifactPreview> {
-  return invokeCommand<EvidenceArtifactPreview>("inspect_evidence_artifact", {
+  return invokeCommand("inspect_evidence_artifact", {
     path,
     intakeKind,
     originPath: originPath ?? null,
@@ -945,11 +1494,11 @@ export async function inspectEvidenceArtifact(
 export async function parseRegistryFile(
   path: string,
 ): Promise<RegistryParseResult> {
-  return invokeCommand<RegistryParseResult>("parse_registry_file", { path });
+  return invokeCommand("parse_registry_file", { path });
 }
 
 export async function getKnownLogSources(): Promise<KnownSourceMetadata[]> {
-  return invokeCommand<KnownSourceMetadata[]>("get_known_log_sources");
+  return invokeCommand("get_known_log_sources");
 }
 
 export async function openLogSourceFile(
@@ -987,7 +1536,7 @@ export async function listLogSourceFolder(
 export async function openLogFolderAggregate(
   path: string,
 ): Promise<AggregateParseResult> {
-  return invokeCommand<AggregateParseResult>("open_log_folder_aggregate", {
+  return invokeCommand("open_log_folder_aggregate", {
     path,
   });
 }
@@ -1015,7 +1564,7 @@ export async function startTail(
   nextId: number,
   nextLine: number,
 ): Promise<void> {
-  return invokeCommand<void>("start_tail", {
+  return invokeCommand("start_tail", {
     path,
     format,
     byteOffset,
@@ -1025,15 +1574,15 @@ export async function startTail(
 }
 
 export async function stopTail(path: string): Promise<void> {
-  return invokeCommand<void>("stop_tail", { path });
+  return invokeCommand("stop_tail", { path });
 }
 
 export async function pauseTail(path: string): Promise<void> {
-  return invokeCommand<void>("pause_tail", { path });
+  return invokeCommand("pause_tail", { path });
 }
 
 export async function resumeTail(path: string): Promise<void> {
-  return invokeCommand<void>("resume_tail", { path });
+  return invokeCommand("resume_tail", { path });
 }
 
 export async function analyzeIntuneLogs(
@@ -1041,7 +1590,7 @@ export async function analyzeIntuneLogs(
   requestId: string,
   options?: AnalyzeIntuneLogsOptions & { graphApiEnabled?: boolean },
 ): Promise<IntuneAnalysisResult> {
-  return invokeCommand<IntuneAnalysisResult>("analyze_intune_logs", {
+  return invokeCommand("analyze_intune_logs", {
     path,
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
@@ -1054,7 +1603,7 @@ export async function analyzeSysmonLogs(
   requestId: string,
   options?: { includeLiveEventLogs?: boolean },
 ): Promise<SysmonAnalysisResult> {
-  return invokeCommand<SysmonAnalysisResult>("analyze_sysmon_logs", {
+  return invokeCommand("analyze_sysmon_logs", {
     path,
     requestId,
     includeLiveEventLogs: options?.includeLiveEventLogs ?? false,
@@ -1065,20 +1614,20 @@ export async function analyzeDsregcmd(
   input: string,
   bundlePath?: string | null,
 ): Promise<DsregcmdAnalysisResult> {
-  return invokeCommand<DsregcmdAnalysisResult>("analyze_dsregcmd", {
+  return invokeCommand("analyze_dsregcmd", {
     input,
     bundlePath: bundlePath ?? null,
   });
 }
 
 export async function captureDsregcmd(): Promise<DsregcmdCaptureResult> {
-  return invokeCommand<DsregcmdCaptureResult>("capture_dsregcmd");
+  return invokeCommand("capture_dsregcmd");
 }
 
 export async function inspectPathKind(
   path: string,
 ): Promise<"file" | "folder" | "unknown"> {
-  return invokeCommand<"file" | "folder" | "unknown">("inspect_path_kind", {
+  return invokeCommand("inspect_path_kind", {
     path,
   });
 }
@@ -1087,37 +1636,37 @@ export async function writeTextOutputFile(
   path: string,
   contents: string,
 ): Promise<void> {
-  return invokeCommand<void>("write_text_output_file", { path, contents });
+  return invokeCommand("write_text_output_file", { path, contents });
 }
 
 export async function loadDsregcmdSource(
   kind: "file" | "folder",
   path: string,
 ): Promise<DsregcmdResolvedSource> {
-  return invokeCommand<DsregcmdResolvedSource>("load_dsregcmd_source", {
+  return invokeCommand("load_dsregcmd_source", {
     kind,
     path,
   });
 }
 
 export async function getInitialFilePaths(): Promise<string[]> {
-  return invokeCommand<string[]>("get_initial_file_paths");
+  return invokeCommand("get_initial_file_paths");
 }
 
 export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
-  return invokeCommand<WorkspaceId | null>("get_initial_workspace");
+  return invokeCommand("get_initial_workspace");
 }
 
 // --- Application-wide elevation ---
 
 export async function getAppElevationState(): Promise<AppElevationState> {
-  return invokeCommand<AppElevationState>("get_app_elevation_state");
+  return invokeCommand("get_app_elevation_state");
 }
 
 export async function restartAsAdministrator(
   request: ElevationRequest,
 ): Promise<RelaunchResult> {
-  return invokeCommand<RelaunchResult>("restart_as_administrator", {
+  return invokeCommand("restart_as_administrator", {
     request,
   });
 }
@@ -1129,34 +1678,31 @@ export async function restartAsAdministrator(
  * already consumed — because a failed restore must never stop the app starting.
  */
 export async function getInitialElevationRestore(): Promise<RestoreTicket | null> {
-  return invokeCommand<RestoreTicket | null>("get_initial_elevation_restore");
+  return invokeCommand("get_initial_elevation_restore");
 }
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
-  return invokeCommand<WorkspaceId[]>("get_available_workspaces");
+  return invokeCommand("get_available_workspaces");
 }
 
 export async function discoverSccmEnvironment(): Promise<SccmEnvironmentDiscovery> {
-  return invokeCommand<SccmEnvironmentDiscovery>("discover_sccm_environment");
+  return invokeCommand("discover_sccm_environment");
 }
 
 export async function captureSccmDiagnostics(): Promise<SccmCaptureResult> {
-  return invokeCommand<SccmCaptureResult>("capture_sccm_diagnostics");
+  return invokeCommand("capture_sccm_diagnostics");
 }
 
 export async function authorizeSccmAdvancedCapture(
   request: SccmAdvancedCaptureAuthorizationRequest,
 ): Promise<SccmAdvancedCaptureCapability> {
-  return invokeCommand<SccmAdvancedCaptureCapability>(
-    "authorize_sccm_advanced_capture",
-    { request },
-  );
+  return invokeCommand("authorize_sccm_advanced_capture", { request });
 }
 
 export async function captureSccmAdvancedDiagnostics(
   capabilityHandle: string,
 ): Promise<SccmCaptureResult> {
-  return invokeCommand<SccmCaptureResult>("capture_sccm_advanced_diagnostics", {
+  return invokeCommand("capture_sccm_advanced_diagnostics", {
     capabilityHandle,
   });
 }
@@ -1164,17 +1710,17 @@ export async function captureSccmAdvancedDiagnostics(
 export async function cancelSccmAdvancedCapture(
   capabilityHandle: string,
 ): Promise<void> {
-  return invokeCommand<void>("cancel_sccm_advanced_capture", {
+  return invokeCommand("cancel_sccm_advanced_capture", {
     capabilityHandle,
   });
 }
 
 export async function revealInFileManager(path: string): Promise<void> {
-  return invokeCommand<void>("reveal_in_file_manager", { path });
+  return invokeCommand("reveal_in_file_manager", { path });
 }
 
 export async function getUpdatePolicy(): Promise<UpdatePolicy> {
-  return invokeCommand<UpdatePolicy>("get_update_policy");
+  return invokeCommand("get_update_policy");
 }
 
 export interface DnsLoggingStatus {
@@ -1185,11 +1731,11 @@ export interface DnsLoggingStatus {
 }
 
 export async function checkDnsLoggingStatus(): Promise<DnsLoggingStatus> {
-  return invokeCommand<DnsLoggingStatus>("check_dns_logging_status");
+  return invokeCommand("check_dns_logging_status");
 }
 
 export async function enableDnsDebugLogging(): Promise<string> {
-  return invokeCommand<string>("enable_dns_debug_logging");
+  return invokeCommand("enable_dns_debug_logging");
 }
 
 export interface DnsDhcpCollectionProgress {
@@ -1221,38 +1767,31 @@ export async function collectDnsDhcpFromDomain(
   outputRoot?: string,
   servers?: string[],
 ): Promise<DnsDhcpCollectionResult> {
-  return invokeCommand<DnsDhcpCollectionResult>(
-    "collect_dns_dhcp_from_domain",
-    {
-      requestId,
-      outputRoot: outputRoot ?? null,
-      servers: servers ?? null,
-    },
-  );
+  return invokeCommand("collect_dns_dhcp_from_domain", {
+    requestId,
+    outputRoot: outputRoot ?? null,
+    servers: servers ?? null,
+  });
 }
 
 export async function getFileAssociationPromptStatus(): Promise<FileAssociationPromptStatus> {
-  return invokeCommand<FileAssociationPromptStatus>(
-    "get_file_association_prompt_status",
-  );
+  return invokeCommand("get_file_association_prompt_status");
 }
 
 export async function associateLogFilesWithApp(): Promise<void> {
-  return invokeCommand<void>("associate_log_files_with_app");
+  return invokeCommand("associate_log_files_with_app");
 }
 
 export async function setFileAssociationPromptSuppressed(
   suppressed: boolean,
 ): Promise<void> {
-  return invokeCommand<void>("set_file_association_prompt_suppressed", {
+  return invokeCommand("set_file_association_prompt_suppressed", {
     suppressed,
   });
 }
 
 export async function getSystemDateTimePreferences(): Promise<SystemDateTimePreferences> {
-  return invokeCommand<SystemDateTimePreferences>(
-    "get_system_date_time_preferences",
-  );
+  return invokeCommand("get_system_date_time_preferences");
 }
 
 // --- Diagnostics Collection ---
@@ -1279,7 +1818,7 @@ export async function collectDiagnostics(
   outputRoot?: string | null,
   enabledFamilies?: string[] | null,
 ): Promise<CollectionResult> {
-  return invokeCommand<CollectionResult>("collect_diagnostics", {
+  return invokeCommand("collect_diagnostics", {
     requestId,
     outputRoot: outputRoot ?? null,
     enabledFamilies: enabledFamilies ?? null,
@@ -1289,14 +1828,14 @@ export async function collectDiagnostics(
 // --- ESP Diagnostics ---
 
 export async function getEspElevationState(): Promise<EspElevationState> {
-  return invokeCommand<EspElevationState>("get_esp_elevation_state");
+  return invokeCommand("get_esp_elevation_state");
 }
 
 export async function analyzeEspEvidence(
   path: string,
   requestId: string,
 ): Promise<EspDiagnosticsSnapshot> {
-  return invokeCommand<EspDiagnosticsSnapshot>("analyze_esp_evidence", {
+  return invokeCommand("analyze_esp_evidence", {
     path,
     requestId,
   });
@@ -1315,7 +1854,7 @@ export async function exportEspSession(
   snapshot: EspDiagnosticsSnapshot,
   meta: EspSessionCaptureMeta,
 ): Promise<void> {
-  return invokeCommand<void>("export_esp_session", {
+  return invokeCommand("export_esp_session", {
     destination,
     snapshot,
     meta,
@@ -1325,7 +1864,7 @@ export async function exportEspSession(
 export async function startEspDiagnosticsSession(
   requestId: string,
 ): Promise<EspSessionEnvelope> {
-  return invokeCommand<EspSessionEnvelope>("start_esp_diagnostics_session", {
+  return invokeCommand("start_esp_diagnostics_session", {
     requestId,
   });
 }
@@ -1333,7 +1872,7 @@ export async function startEspDiagnosticsSession(
 export async function getEspDiagnosticsSession(
   sessionId: string,
 ): Promise<EspSessionEnvelope> {
-  return invokeCommand<EspSessionEnvelope>("get_esp_diagnostics_session", {
+  return invokeCommand("get_esp_diagnostics_session", {
     sessionId,
   });
 }
@@ -1341,17 +1880,17 @@ export async function getEspDiagnosticsSession(
 export async function stopEspDiagnosticsSession(
   sessionId: string,
 ): Promise<void> {
-  return invokeCommand<void>("stop_esp_diagnostics_session", { sessionId });
+  return invokeCommand("stop_esp_diagnostics_session", { sessionId });
 }
 
 export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
-  return invokeCommand<EspRelaunchResult>("restart_esp_as_administrator");
+  return invokeCommand("restart_esp_as_administrator");
 }
 
 export async function graphFetchEspDiagnostics(
   request: EspGraphRequest,
 ): Promise<EspGraphOverlay> {
-  return invokeCommand<EspGraphOverlay>("graph_fetch_esp_diagnostics", {
+  return invokeCommand("graph_fetch_esp_diagnostics", {
     request,
   });
 }
@@ -1359,19 +1898,19 @@ export async function graphFetchEspDiagnostics(
 export async function espFlipAppInstalled(
   appId: string,
 ): Promise<EspAppFlipResult> {
-  return invokeCommand<EspAppFlipResult>("esp_flip_app_installed", { appId });
+  return invokeCommand("esp_flip_app_installed", { appId });
 }
 
 export async function espRestoreAppState(
   backup: EspAppFlipBackup,
 ): Promise<void> {
-  return invokeCommand<void>("esp_restore_app_state", { backup });
+  return invokeCommand("esp_restore_app_state", { backup });
 }
 
 export async function graphCancelEspDiagnostics(
   requestId: string,
 ): Promise<void> {
-  return invokeCommand<void>("graph_cancel_esp_diagnostics", { requestId });
+  return invokeCommand("graph_cancel_esp_diagnostics", { requestId });
 }
 
 // --- Graph API (Windows only, opt-in) ---
@@ -1438,13 +1977,6 @@ export interface GraphInteractiveOperationTicket {
   attemptId: string;
 }
 
-function isGraphRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
 
 function isStringArray(value: unknown): value is string[] {
   return (
@@ -1453,13 +1985,13 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isGraphAuthStatus(value: unknown): value is GraphAuthStatus {
-  if (!isGraphRecord(value) || !isGraphRecord(value.capabilities)) return false;
+  if (!isCommandRecord(value) || !isCommandRecord(value.capabilities)) return false;
   const capabilities = value.capabilities;
   return (
     typeof value.isAuthenticated === "boolean" &&
-    isNullableString(value.userPrincipalName) &&
-    isNullableString(value.objectId) &&
-    isNullableString(value.tenantId) &&
+    isNullableCommandString(value.userPrincipalName) &&
+    isNullableCommandString(value.objectId) &&
+    isNullableCommandString(value.tenantId) &&
     isStringArray(value.grantedScopes) &&
     isStringArray(value.missingScopes) &&
     (value.expiresAt === null ||
@@ -1501,20 +2033,17 @@ const GRAPH_PERMISSION_UPGRADE_OUTCOMES =
     "stale",
   ]);
 
-function invalidGraphResponse(commandName: string): never {
-  throw new Error(`Command '${commandName}' returned an invalid response.`);
-}
 
 function decodeGraphHostCapability(
   value: unknown,
   commandName: string,
 ): GraphHostCapability {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.kind !== "string" ||
     !GRAPH_HOST_CAPABILITY_KINDS.has(value.kind as GraphHostCapabilityKind)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphHostCapability;
 }
@@ -1523,7 +2052,7 @@ function decodeGraphAuthStatus(
   value: unknown,
   commandName: string,
 ): GraphAuthStatus {
-  if (!isGraphAuthStatus(value)) return invalidGraphResponse(commandName);
+  if (!isGraphAuthStatus(value)) return invalidCommandResponse(commandName);
   return value;
 }
 
@@ -1532,15 +2061,15 @@ function decodeGraphAuthAttemptResult(
   commandName: string,
 ): GraphAuthAttemptResult {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.outcome !== "string" ||
     !GRAPH_AUTH_ATTEMPT_OUTCOMES.has(
       value.outcome as GraphAuthAttemptOutcome,
     ) ||
     !isGraphAuthStatus(value.status) ||
-    !isNullableString(value.message)
+    !isNullableCommandString(value.message)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   decodeGraphHostCapability(value.capability, commandName);
   return value as unknown as GraphAuthAttemptResult;
@@ -1551,15 +2080,15 @@ function decodeGraphPermissionUpgradeResult(
   commandName: string,
 ): GraphPermissionUpgradeResult {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.outcome !== "string" ||
     !GRAPH_PERMISSION_UPGRADE_OUTCOMES.has(
       value.outcome as GraphPermissionUpgradeOutcome,
     ) ||
     !isGraphAuthStatus(value.status) ||
-    !isNullableString(value.message)
+    !isNullableCommandString(value.message)
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphPermissionUpgradeResult;
 }
@@ -1569,13 +2098,13 @@ function decodeGraphInteractiveOperationTicket(
   commandName: string,
 ): GraphInteractiveOperationTicket {
   if (
-    !isGraphRecord(value) ||
+    !isCommandRecord(value) ||
     typeof value.attemptId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value.attemptId,
     )
   ) {
-    return invalidGraphResponse(commandName);
+    return invalidCommandResponse(commandName);
   }
   return value as unknown as GraphInteractiveOperationTicket;
 }
@@ -1597,62 +2126,47 @@ export async function graphReserveInteractiveOperation(
   kind: GraphInteractiveOperationKind,
 ): Promise<GraphInteractiveOperationTicket> {
   const commandName = "graph_reserve_interactive_operation";
-  return decodeGraphInteractiveOperationTicket(
-    await invokeCommand<unknown>(commandName, { kind }),
-    commandName,
-  );
+  return invokeCommand(commandName, { kind });
 }
 
 export async function graphAuthenticate(
   attemptId: string,
 ): Promise<GraphAuthAttemptResult> {
   const commandName = "graph_authenticate";
-  return decodeGraphAuthAttemptResult(
-    await invokeCommand<unknown>(commandName, { attemptId }),
-    commandName,
-  );
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphCancelAuthentication(
   attemptId: string,
 ): Promise<boolean> {
   const commandName = "graph_cancel_authentication";
-  const result = await invokeCommand<unknown>(commandName, { attemptId });
-  return typeof result === "boolean"
-    ? result
-    : invalidGraphResponse(commandName);
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphRequestMissingPermissions(
   attemptId: string,
 ): Promise<GraphPermissionUpgradeResult> {
   const commandName = "graph_request_missing_permissions";
-  return decodeGraphPermissionUpgradeResult(
-    await invokeCommand<unknown>(commandName, { attemptId }),
-    commandName,
-  );
+  return invokeCommand(commandName, { attemptId });
 }
 
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
   const commandName = "graph_get_auth_status";
-  return decodeGraphAuthStatus(
-    await invokeCommand<unknown>(commandName),
-    commandName,
-  );
+  return invokeCommand(commandName);
 }
 
 export async function graphSignOut(): Promise<void> {
-  return invokeCommand<void>("graph_sign_out");
+  return invokeCommand("graph_sign_out");
 }
 
 export async function graphResolveGuids(
   guids: string[],
 ): Promise<GraphResolutionResult> {
-  return invokeCommand<GraphResolutionResult>("graph_resolve_guids", { guids });
+  return invokeCommand("graph_resolve_guids", { guids });
 }
 
 export async function graphFetchAllApps(): Promise<GraphAppInfo[]> {
-  return invokeCommand<GraphAppInfo[]>("graph_fetch_all_apps");
+  return invokeCommand("graph_fetch_all_apps");
 }
 
 // --- macOS Diagnostics ---
@@ -1669,29 +2183,29 @@ import type {
 } from "../workspaces/macos-diag/types";
 
 export async function macosScanEnvironment(): Promise<MacosDiagEnvironment> {
-  return invokeCommand<MacosDiagEnvironment>("macos_scan_environment");
+  return invokeCommand("macos_scan_environment");
 }
 
 export async function macosScanIntuneLogs(): Promise<MacosIntuneLogScanResult> {
-  return invokeCommand<MacosIntuneLogScanResult>("macos_scan_intune_logs");
+  return invokeCommand("macos_scan_intune_logs");
 }
 
 export async function macosListProfiles(): Promise<MacosProfilesResult> {
-  return invokeCommand<MacosProfilesResult>("macos_list_profiles");
+  return invokeCommand("macos_list_profiles");
 }
 
 export async function macosInspectDefender(): Promise<MacosDefenderResult> {
-  return invokeCommand<MacosDefenderResult>("macos_inspect_defender");
+  return invokeCommand("macos_inspect_defender");
 }
 
 export async function macosListPackages(): Promise<MacosPackagesResult> {
-  return invokeCommand<MacosPackagesResult>("macos_list_packages");
+  return invokeCommand("macos_list_packages");
 }
 
 export async function macosGetPackageInfo(
   packageId: string,
 ): Promise<MacosPackageInfo> {
-  return invokeCommand<MacosPackageInfo>("macos_get_package_info", {
+  return invokeCommand("macos_get_package_info", {
     packageId,
   });
 }
@@ -1699,7 +2213,7 @@ export async function macosGetPackageInfo(
 export async function macosGetPackageFiles(
   packageId: string,
 ): Promise<MacosPackageFiles> {
-  return invokeCommand<MacosPackageFiles>("macos_get_package_files", {
+  return invokeCommand("macos_get_package_files", {
     packageId,
   });
 }
@@ -1710,11 +2224,12 @@ export async function macosQueryUnifiedLog(
   resultCap: number,
 ): Promise<MacosUnifiedLogResult> {
   const now = new Date();
+
   const start = new Date(now.getTime() - timeRangeMinutes * 60 * 1000);
   const fmt = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   const timeRange = { start: fmt(start), end: fmt(now) };
-  return invokeCommand<MacosUnifiedLogResult>("macos_query_unified_log", {
+  return invokeCommand("macos_query_unified_log", {
     presetId,
     timeRange,
     resultCap,
@@ -1728,25 +2243,395 @@ import type { SecureBootAnalysisResult } from "../workspaces/secureboot/types";
 export async function analyzeSecureBoot(
   path?: string | null,
 ): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("analyze_secureboot", {
+  return invokeCommand("analyze_secureboot", {
     path: path ?? null,
   });
 }
 
 export async function rescanSecureBoot(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>("rescan_secureboot", {});
+  return invokeCommand("rescan_secureboot", {});
 }
 
 export async function runSecureBootDetection(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>(
-    "run_secureboot_detection",
-    {},
-  );
+  return invokeCommand("run_secureboot_detection", {});
 }
 
 export async function runSecureBootRemediation(): Promise<SecureBootAnalysisResult> {
-  return invokeCommand<SecureBootAnalysisResult>(
-    "run_secureboot_remediation",
-    {},
-  );
+  return invokeCommand("run_secureboot_remediation", {});
 }
+
+function decodeSecureBootAnalysisResult(
+  value: unknown,
+  commandName: string,
+): SecureBootAnalysisResult {
+  return decodeRecordResponse<SecureBootAnalysisResult>(value, commandName, {
+    stage: (field) => typeof field === "string",
+    dataSource: (field) => typeof field === "string",
+    scanState: isCommandRecord,
+    sessions: isCommandRecordArray,
+    timeline: isCommandRecordArray,
+    diagnostics: isCommandRecordArray,
+    scriptResult: isNullableCommandRecord,
+  });
+}
+
+const decodeSccmCaptureResult: CommandDecoder<SccmCaptureResult> = (
+  value,
+  commandName,
+) =>
+  decodeRecordResponse<SccmCaptureResult>(value, commandName, {
+    bundleRoot: (field) => typeof field === "string",
+    capturedAtUtc: (field) => typeof field === "string",
+    roles: isStringArray,
+    sources: isCommandRecordArray,
+    artifactCount: isFiniteCommandNumber,
+    retainedBytes: isFiniteCommandNumber,
+  });
+
+const decodeEspSessionEnvelope: CommandDecoder<EspSessionEnvelope> = (
+  value,
+  commandName,
+) =>
+  decodeRecordResponse<EspSessionEnvelope>(value, commandName, {
+    sessionId: (field) => typeof field === "string",
+    requestId: (field) => typeof field === "string",
+    sequence: isFiniteCommandNumber,
+    state: (field) => typeof field === "string",
+    snapshot: isCommandRecord,
+  });
+const COMMAND_DECODERS = {
+  open_log_file: decodeParseResult,
+  parse_files_batch: decodeParseResults,
+  list_log_folder: decodeFolderListingResult,
+  load_markers: decodeMarkerFile,
+  evtx_expand_sources: decodeEventLogSourceManifest,
+  evtx_parse_manifest: decodeEventLogParseResult,
+  evtx_diagnose_records: decodeDiagnosisSummary,
+  build_timeline_cmd: decodeTimelineBundle,
+  inspect_evidence_bundle: (value, commandName) =>
+    decodeRecordResponse<EvidenceBundleDetails>(value, commandName, {
+      bundleRootPath: (field) => typeof field === "string",
+      metadata: isCommandRecord,
+      manifestContent: (field) => typeof field === "string",
+      artifacts: isCommandRecordArray,
+      expectedEvidence: isCommandRecordArray,
+      observedGaps: isStringArray,
+      priorityQuestions: isStringArray,
+    }),
+  inspect_evidence_artifact: (value, commandName) =>
+    decodeRecordResponse<EvidenceArtifactPreview>(value, commandName, {
+      path: (field) => typeof field === "string",
+      intakeKind: isEvidenceArtifactIntakeKind,
+      summary: (field) => typeof field === "string",
+      registrySnapshot: isNullableRegistrySnapshotSummary,
+      eventLogExport: isNullableEvidenceEventLogExportPreview,
+    }),
+  parse_registry_file: (value, commandName) =>
+    decodeRecordResponse<RegistryParseResult>(value, commandName, {
+      keys: isCommandRecordArray,
+      filePath: (field) => typeof field === "string",
+      fileSize: isFiniteCommandNumber,
+      totalKeys: isFiniteCommandNumber,
+      totalValues: isFiniteCommandNumber,
+      parseErrors: isFiniteCommandNumber,
+    }),
+  get_known_log_sources: (value, commandName) =>
+    decodeRecordArrayResponse<KnownSourceMetadata[]>(value, commandName, {
+      id: (field) => typeof field === "string",
+      label: (field) => typeof field === "string",
+      description: (field) => typeof field === "string",
+      platform: (field) => typeof field === "string",
+      sourceKind: isLogSourceKind,
+      source: isLogSourceResponse,
+      filePatterns: isStringArray,
+    }),
+  open_log_folder_aggregate: decodeAggregateParseResult,
+  start_tail: decodeUnitResponse,
+  stop_tail: decodeUnitResponse,
+  pause_tail: decodeUnitResponse,
+  resume_tail: decodeUnitResponse,
+  analyze_intune_logs: (value, commandName) =>
+    decodeRecordResponse<IntuneAnalysisResult>(value, commandName, {
+      events: isCommandRecordArray,
+      downloads: isCommandRecordArray,
+      summary: isCommandRecord,
+      diagnostics: isCommandRecordArray,
+      sourceFile: (field) => typeof field === "string",
+      sourceFiles: isStringArray,
+      diagnosticsCoverage: isCommandRecord,
+      diagnosticsConfidence: isCommandRecord,
+      repeatedFailures: isCommandRecordArray,
+      guidRegistry: isCommandRecord,
+    }),
+  analyze_sysmon_logs: (value, commandName) =>
+    decodeRecordResponse<SysmonAnalysisResult>(value, commandName, {
+      events: isCommandRecordArray,
+      summary: isCommandRecord,
+      config: isCommandRecord,
+      dashboard: isCommandRecord,
+      sourcePath: (field) => typeof field === "string",
+    }),
+  analyze_dsregcmd: (value, commandName) =>
+    decodeRecordResponse<DsregcmdAnalysisResult>(value, commandName, {
+      facts: isCommandRecord,
+      derived: isCommandRecord,
+      diagnostics: isCommandRecordArray,
+      policyEvidence: isCommandRecord,
+      osVersion: isNullableCommandRecord,
+      proxyEvidence: isNullableCommandRecord,
+      enrollmentEvidence: isNullableCommandRecord,
+      activeEvidence: isNullableCommandRecord,
+      scheduledTaskEvidence: isNullableCommandRecord,
+      eventLogAnalysis: isNullableCommandRecord,
+    }),
+  capture_dsregcmd: (value, commandName) =>
+    decodeRecordResponse<DsregcmdCaptureResult>(value, commandName, {
+      input: (field) => typeof field === "string",
+      bundlePath: isNullableCommandString,
+      evidenceFilePath: isNullableCommandString,
+    }),
+  inspect_path_kind: decodePathKindResponse,
+  write_text_output_file: decodeUnitResponse,
+  load_dsregcmd_source: (value, commandName) =>
+    decodeRecordResponse<DsregcmdResolvedSource>(value, commandName, {
+      input: (field) => typeof field === "string",
+      bundlePath: isNullableCommandString,
+      resolvedPath: isNullableCommandString,
+      evidenceFilePath: isNullableCommandString,
+    }),
+  get_initial_file_paths: decodeStringArrayResponse,
+  get_initial_workspace: decodeNullableWorkspaceIdResponse,
+  get_app_elevation_state: (value, commandName) =>
+    decodeRecordResponse<AppElevationState>(value, commandName, {
+      platformSupported: (field) => typeof field === "boolean",
+      isElevated: (field) => typeof field === "boolean",
+    }),
+  restart_as_administrator: (value, commandName) =>
+    decodeRecordResponse<RelaunchResult>(value, commandName, {
+      launched: (field) => typeof field === "boolean",
+      reason: (field) => typeof field === "string",
+    }),
+  get_initial_elevation_restore: (value, commandName) =>
+    decodeNullableRecordResponse<RestoreTicket>(value, commandName, {
+      schemaVersion: isFiniteCommandNumber,
+      ticketId: (field) => typeof field === "string",
+      createdAtMs: isFiniteCommandNumber,
+      originPid: isFiniteCommandNumber,
+      workspace: isWorkspaceIdValue,
+      target: isCommandRecord,
+      reason: (field) => typeof field === "string",
+      retryAttempted: (field) => typeof field === "boolean",
+    }),
+  get_available_workspaces: decodeWorkspaceIdArrayResponse,
+  discover_sccm_environment: (value, commandName) =>
+    decodeRecordResponse<SccmEnvironmentDiscovery>(value, commandName, {
+      supported: (field) => typeof field === "boolean",
+      configmgrVersion: isNullableCommandString,
+      roles: isCommandRecordArray,
+      sources: isCommandRecordArray,
+      issues: isCommandRecordArray,
+      advancedSources: isCommandRecordArray,
+    }),
+  capture_sccm_diagnostics: decodeSccmCaptureResult,
+  authorize_sccm_advanced_capture: (value, commandName) =>
+    decodeRecordResponse<SccmAdvancedCaptureCapability>(value, commandName, {
+      capabilityHandle: (field) => typeof field === "string",
+      cardId: (field) => typeof field === "string",
+      cardVersion: (field) => typeof field === "string",
+      sourceId: (field) => typeof field === "string",
+      roleScope: (field) => typeof field === "string",
+      pathClass: (field) => typeof field === "string",
+      sourceVersion: isNullableCommandString,
+    }),
+  capture_sccm_advanced_diagnostics: decodeSccmCaptureResult,
+  cancel_sccm_advanced_capture: decodeUnitResponse,
+  reveal_in_file_manager: decodeUnitResponse,
+  get_update_policy: (value, commandName) =>
+    decodeRecordResponse<UpdatePolicy>(value, commandName, {
+      updateChecksDisabledByPolicy: (field) => typeof field === "boolean",
+    }),
+  check_dns_logging_status: (value, commandName) =>
+    decodeRecordResponse<DnsLoggingStatus>(value, commandName, {
+      dnsServerInstalled: (field) => typeof field === "boolean",
+      debugLoggingEnabled: (field) => typeof field === "boolean",
+      logFilePath: isNullableCommandString,
+      dhcpServerInstalled: (field) => typeof field === "boolean",
+    }),
+  enable_dns_debug_logging: decodeStringResponse,
+  collect_dns_dhcp_from_domain: (value, commandName) =>
+    decodeRecordResponse<DnsDhcpCollectionResult>(value, commandName, {
+      bundlePath: (field) => typeof field === "string",
+      servers: isCommandRecordArray,
+      totalFiles: isFiniteCommandNumber,
+      totalBytes: isFiniteCommandNumber,
+      durationMs: isFiniteCommandNumber,
+    }),
+  get_file_association_prompt_status: (value, commandName) =>
+    decodeRecordResponse<FileAssociationPromptStatus>(value, commandName, {
+      supported: (field) => typeof field === "boolean",
+      shouldPrompt: (field) => typeof field === "boolean",
+      isAssociated: (field) => typeof field === "boolean",
+    }),
+  associate_log_files_with_app: decodeUnitResponse,
+  set_file_association_prompt_suppressed: decodeUnitResponse,
+  get_system_date_time_preferences: (value, commandName) =>
+    decodeRecordResponse<SystemDateTimePreferences>(value, commandName, {
+      datePattern: (field) => typeof field === "string",
+      timePattern: (field) => typeof field === "string",
+      amDesignator: isNullableCommandString,
+      pmDesignator: isNullableCommandString,
+    }),
+  collect_diagnostics: (value, commandName) =>
+    decodeRecordResponse<CollectionResult>(value, commandName, {
+      bundlePath: (field) => typeof field === "string",
+      bundleId: (field) => typeof field === "string",
+      artifactCounts: isCommandRecord,
+      durationMs: isFiniteCommandNumber,
+      gaps: isCommandRecordArray,
+    }),
+  get_esp_elevation_state: (value, commandName) =>
+    decodeRecordResponse<EspElevationState>(value, commandName, {
+      isElevated: (field) => typeof field === "boolean",
+      restartSupported: (field) => typeof field === "boolean",
+      restrictedSources: isStringArray,
+    }),
+  analyze_esp_evidence: (value, commandName) =>
+    decodeRecordResponse<EspDiagnosticsSnapshot>(value, commandName, {
+      schemaVersion: isFiniteCommandNumber,
+      scenario: (field) => typeof field === "string",
+      phase: (field) => typeof field === "string",
+      generatedAtUtc: (field) => typeof field === "string",
+      elevation: isCommandRecord,
+      identity: isCommandRecord,
+      profile: isNullableCommandRecord,
+      enrollments: isCommandRecordArray,
+      sessions: isCommandRecordArray,
+      workloads: isCommandRecordArray,
+      installerCorrelations: isCommandRecordArray,
+      nodeCache: isCommandRecordArray,
+      registrationEvents: isCommandRecordArray,
+      deliveryOptimization: isNullableCommandRecord,
+      hardware: isNullableCommandRecord,
+      activity: isCommandRecordArray,
+      findings: isCommandRecordArray,
+      coverage: isCommandRecordArray,
+      rawEvidence: isCommandRecordArray,
+      graph: isNullableCommandRecord,
+    }),
+  export_esp_session: decodeUnitResponse,
+  start_esp_diagnostics_session: decodeEspSessionEnvelope,
+  get_esp_diagnostics_session: decodeEspSessionEnvelope,
+  stop_esp_diagnostics_session: decodeUnitResponse,
+  restart_esp_as_administrator: (value, commandName) =>
+    decodeRecordResponse<EspRelaunchResult>(value, commandName, {
+      launched: (field) => typeof field === "boolean",
+      reason: (field) => typeof field === "string",
+    }),
+  graph_fetch_esp_diagnostics: (value, commandName) =>
+    decodeRecordResponse<EspGraphOverlay>(value, commandName, {
+      requestId: (field) => typeof field === "string",
+      requestedAtUtc: (field) => typeof field === "string",
+      deviceMatch: isCommandRecord,
+      autopilotIdentity: isCommandRecord,
+      deploymentProfile: isCommandRecord,
+      intendedDeploymentProfile: isCommandRecord,
+      profileAssignments: isCommandRecord,
+      autopilotEvents: isCommandRecord,
+      enrollmentConfiguration: isCommandRecord,
+      apps: isCommandRecord,
+      policies: isCommandRecord,
+      scripts: isCommandRecord,
+    }),
+  esp_flip_app_installed: (value, commandName) =>
+    decodeRecordResponse<EspAppFlipResult>(value, commandName, {
+      appId: (field) => typeof field === "string",
+      installationState: isFiniteCommandNumber,
+      backup: isCommandRecord,
+    }),
+  esp_restore_app_state: decodeUnitResponse,
+  graph_cancel_esp_diagnostics: decodeUnitResponse,
+  graph_reserve_interactive_operation: decodeGraphInteractiveOperationTicket,
+  graph_authenticate: decodeGraphAuthAttemptResult,
+  graph_cancel_authentication: decodeBooleanResponse,
+  graph_request_missing_permissions: decodeGraphPermissionUpgradeResult,
+  graph_get_auth_status: decodeGraphAuthStatus,
+  graph_sign_out: decodeUnitResponse,
+  graph_resolve_guids: (value, commandName) =>
+    decodeRecordResponse<GraphResolutionResult>(value, commandName, {
+      resolved: isCommandRecord,
+      notFound: isStringArray,
+      errors: isStringArray,
+    }),
+  graph_fetch_all_apps: (value, commandName) =>
+    decodeRecordArrayResponse<GraphAppInfo[]>(value, commandName, {
+      id: (field) => typeof field === "string",
+      displayName: (field) => typeof field === "string",
+      publisher: isNullableCommandString,
+      odataType: isNullableCommandString,
+    }),
+  macos_scan_environment: (value, commandName) =>
+    decodeRecordResponse<MacosDiagEnvironment>(value, commandName, {
+      macosVersion: (field) => typeof field === "string",
+      macosBuild: (field) => typeof field === "string",
+      fullDiskAccess: (field) => typeof field === "string",
+      tools: isCommandRecord,
+      directories: isCommandRecord,
+      summary: (field) => typeof field === "string",
+    }),
+  macos_scan_intune_logs: (value, commandName) =>
+    decodeRecordResponse<MacosIntuneLogScanResult>(value, commandName, {
+      files: isCommandRecordArray,
+      scannedDirectories: isStringArray,
+      totalSizeBytes: isFiniteCommandNumber,
+    }),
+  macos_list_profiles: (value, commandName) =>
+    decodeRecordResponse<MacosProfilesResult>(value, commandName, {
+      profiles: isCommandRecordArray,
+      enrollmentStatus: isCommandRecord,
+      rawOutput: (field) => typeof field === "string",
+    }),
+  macos_inspect_defender: (value, commandName) =>
+    decodeRecordResponse<MacosDefenderResult>(value, commandName, {
+      health: isNullableCommandRecord,
+      logFiles: isCommandRecordArray,
+      diagFiles: isCommandRecordArray,
+    }),
+  macos_list_packages: (value, commandName) =>
+    decodeRecordResponse<MacosPackagesResult>(value, commandName, {
+      packages: isCommandRecordArray,
+      totalCount: isFiniteCommandNumber,
+      microsoftCount: isFiniteCommandNumber,
+    }),
+  macos_get_package_info: (value, commandName) =>
+    decodeRecordResponse<MacosPackageInfo>(value, commandName, {
+      packageId: (field) => typeof field === "string",
+      version: (field) => typeof field === "string",
+      volume: isNullableCommandString,
+      location: isNullableCommandString,
+      installTime: isNullableCommandString,
+    }),
+  macos_get_package_files: (value, commandName) =>
+    decodeRecordResponse<MacosPackageFiles>(value, commandName, {
+      packageId: (field) => typeof field === "string",
+      files: isStringArray,
+      fileCount: isFiniteCommandNumber,
+    }),
+  macos_query_unified_log: (value, commandName) =>
+    decodeRecordResponse<MacosUnifiedLogResult>(value, commandName, {
+      entries: isCommandRecordArray,
+      totalMatched: isFiniteCommandNumber,
+      capped: (field) => typeof field === "boolean",
+      resultCap: isFiniteCommandNumber,
+      predicateUsed: (field) => typeof field === "string",
+      timeRange: isNullableCommandRecord,
+    }),
+  analyze_secureboot: decodeSecureBootAnalysisResult,
+  rescan_secureboot: decodeSecureBootAnalysisResult,
+  run_secureboot_detection: decodeSecureBootAnalysisResult,
+  run_secureboot_remediation: decodeSecureBootAnalysisResult,
+} satisfies Record<string, CommandDecoder<unknown>>;
+
+type CommandName = keyof typeof COMMAND_DECODERS;
+type CommandResponse<Name extends CommandName> = ReturnType<
+  (typeof COMMAND_DECODERS)[Name]
+>;

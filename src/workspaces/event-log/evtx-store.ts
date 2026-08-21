@@ -716,6 +716,7 @@ loadGeneration: number;
   startLiveTail: () => Promise<EvtxTailStatus[]>;
   stopLiveTail: () => Promise<void>;
   clearChannel: (channel: string, confirmed: boolean) => Promise<EvtxClearStatusResult>;
+  setLoadError: (error: string | null) => void;
   setTimeZoneMode: (mode: EvtxTimeZoneMode) => void;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
@@ -1830,6 +1831,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     }
     return result;
   },
+  setLoadError: (error) =>
+    set(
+      error === null
+        ? { loadError: null }
+        : { isLoading: false, loadError: error },
+    ),
 
   setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
 

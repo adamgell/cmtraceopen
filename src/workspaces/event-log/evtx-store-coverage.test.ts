@@ -2016,3 +2016,16 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().sourceMode).toBeNull();
   });
 });
+
+describe("load error state", () => {
+  it("clears a load error without ending an active load", () => {
+    useEvtxStore.setState({ isLoading: true, loadError: "stale error" });
+
+    useEvtxStore.getState().setLoadError(null);
+
+    expect(useEvtxStore.getState()).toMatchObject({
+      isLoading: true,
+      loadError: null,
+    });
+  });
+});

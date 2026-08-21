@@ -1,11 +1,14 @@
 # Workspace Knowledge Library
 
 This is a routing index for Clairvoyance Staff, not a reading list.
-WikiLinks in this file resolve to documents under `.clairvoyance/Docs/` or the repo root.
-If no route matches, note the missing topic, write the doc when you learn it, and add the route in the same turn.
+WikiLinks in this file resolve to checked-in repository paths; do not invent a missing `.Clairvoyance/Docs/` tree.
+If no route matches, report the missing topic to Main. Main may create the document and route after approval.
 
 ## When to read what
 
+- IF starting agent-driven development in OMP → read [[.omp/skills/cmtraceopen-dev/SKILL.md]], [[soul.md]], and [[memory.md]]
+- IF assigning a staff agent → read exactly one matching charter under [[.Clairvoyance/staff/]]
+- IF checking live lane state → read the Git-common `omp/lanes.json`; refresh GitHub and exact SHAs before trusting it
 - IF full repo path/subject catalog → read [[library.md]] (repo root)
 - IF agent conventions / no-compat / phased edits → read [[AGENTS.md]]
 - IF build commands / module map / architecture → read [[CLAUDE.md]]
@@ -22,6 +25,10 @@ If no route matches, note the missing topic, write the doc when you learn it, an
 - IF evidence collection scripts → read [[scripts/collection/README.md]]
 - IF parser crate layout / pure domain → read [[crates/cmtraceopen-parser/README.md]]
 - IF loading the CMTrace Open specialist agent → read [[soul.md]] and [[memory.md]]
+
+## Authority and evidence
+
+Adam's current direct instruction is highest authority. Root `AGENTS.md` contains mandatory repository operating rules subordinate only to it; approved specs and ADRs, and each role's charter, are normative within their scope. `.omp/skills/cmtraceopen-dev/SKILL.md` is the operational workflow and cannot override those sources; any conflict blocks work and is reported. Live GitHub state, exact SHAs, and command artifacts are evidence. Manifests and memory never override authority or evidence.
 
 ## Quick Reference
 
@@ -43,5 +50,5 @@ If no route matches, note the missing topic, write the doc when you learn it, an
 
 ## Memory
 
-- Shared memory index: `.clairvoyance/memory/index.md`
-- Staff memory lives under `.clairvoyance/staff/{name}/index.md`
+- Shared memory index: `.Clairvoyance/memory/index.md`
+- Staff memory lives under `.Clairvoyance/staff/{name}/index.md`

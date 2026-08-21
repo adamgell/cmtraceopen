@@ -146,7 +146,7 @@ export async function analyzeDsregcmdPath(
   options: { fallbackToFolder?: boolean } = {}
 ): Promise<DsregcmdAnalysisResult> {
   try {
-    return analyzeDsregcmdSource({ kind: "file", path });
+    return await analyzeDsregcmdSource({ kind: "file", path });
   } catch (error) {
     if (options.fallbackToFolder === false) {
       throw error;
@@ -156,7 +156,7 @@ export async function analyzeDsregcmdPath(
       path,
       error,
     });
-    return analyzeDsregcmdSource({ kind: "folder", path });
+    return await analyzeDsregcmdSource({ kind: "folder", path });
   }
 }
 

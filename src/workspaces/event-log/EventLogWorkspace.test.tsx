@@ -71,6 +71,18 @@ const virtualizerState = vi.hoisted(() => ({
     }
   },
 }));
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+function configureInvoke() {
+  invoke.mockImplementation(async (command: string) => {
+    if (command === "evtx_build_unified_timeline") {
+      return { items: [], unplaced: [], edges: [], coverageGaps: [] };
+    }
+    if (command === "load_markers") return null;
+    return undefined;
+  });
+}
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
@@ -143,6 +155,8 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
+import { defaultColumnConfig } from "./evtx-columns";
+import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
@@ -201,6 +215,7 @@ function recordTreeItems(root: HTMLElement): HTMLElement[] {
 }
 describe("event-viewer shared font metrics", () => {
   beforeEach(() => {
+    configureInvoke();
     useEvtxStore.getState().reset();
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
@@ -248,7 +263,7 @@ describe("event-viewer shared font metrics", () => {
     channel.unmount();
 
     const filter = render(<EvtxFilterBar />);
-    expect(screen.getByRole("button", { name: "Crit" }).style.fontSize).toBe(
+    expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
     expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
@@ -310,7 +325,7 @@ describe("event-viewer shared font metrics", () => {
     channelLarge.unmount();
 
     const filterLarge = render(<EvtxFilterBar />);
-    expect(screen.getByRole("button", { name: "Crit" }).style.fontSize).toBe(
+    expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
     expect(screen.getByPlaceholderText("Event IDs (comma sep.)").style.fontSize).toBe(
@@ -377,7 +392,7 @@ describe("event-viewer shared font metrics", () => {
     const channelInput = channel.getByPlaceholderText("Filter channels...") as HTMLInputElement;
     const channelRow = channel.getByText("Application").closest("label") as HTMLElement;
     const filter = render(<EvtxFilterBar />);
-    const filterButton = filter.getByRole("button", { name: "Crit" });
+    const filterButton = filter.getByRole("button", { name: "Toggle Critical events" });
     const timeline = render(<EvtxTimeline />);
     const recordRow = recordTreeItems(timeline.container)[0];
     const initialMeasureCalls = virtualizerState.measureCalls;
@@ -401,7 +416,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channel.getByPlaceholderText("Filter channels...")).toBe(channelInput);
     expect(channelInput.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
-    expect(filter.getByRole("button", { name: "Crit" })).toBe(filterButton);
+    expect(filter.getByRole("button", { name: "Toggle Critical events" })).toBe(filterButton);
     expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
     expect(recordTreeItems(timeline.container)[0]).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
@@ -540,5 +555,138 @@ describe("event-viewer shared font metrics", () => {
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + largeList.rowHeight + 2
     );
+  });
+});
+
+function fixtureRecord(): EvtxRecord {
+  return {
+    id: 0,
+    eventRecordId: 42,
+    timestamp: "2026-01-15T12:00:00.000Z",
+    timestampEpoch: Date.parse("2026-01-15T12:00:00.000Z"),
+    provider: "Application Error",
+    channel: "Application",
+    eventId: 1000,
+    level: "Error",
+    computer: "PC01",
+    message: "Faulting application name: setup.exe",
+    eventData: [{ name: "AppName", value: "setup.exe" }],
+    rawXml: "<Event><System><EventID>1000</EventID></System></Event>",
+    sourceLabel: "Application.evtx",
+  };
+}
+
+function seedFixtureEvents() {
+  useEvtxStore.setState({
+    records: [fixtureRecord()],
+    channels: [
+      { name: "Application", eventCount: 1, sourceType: "live" },
+      { name: "System", eventCount: 0, sourceType: "live" },
+      {
+        name: "Microsoft-Windows-AAD/Operational",
+        eventCount: 0,
+        sourceType: "live",
+      },
+    ],
+    sourceMode: "live",
+    isLoading: false,
+    loadError: null,
+    coverageGaps: [],
+    selectedChannels: new Set([
+      "Application",
+      "System",
+      "Microsoft-Windows-AAD/Operational",
+    ]),
+    loadedChannels: new Set(["Application"]),
+    filterLevels: new Set([
+      "Critical",
+      "Error",
+      "Warning",
+      "Information",
+      "Verbose",
+    ]),
+    filterEventIds: "",
+    filterSearch: "",
+    timeWindow: "all",
+    timeZoneMode: "local",
+    columnConfig: defaultColumnConfig(),
+    groupBy: [],
+    collapsedGroups: new Set(),
+    sortField: "time",
+    sortDirection: "asc",
+    selectedRecordId: null,
+  });
+}
+
+describe("EventLogWorkspace fixtures", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    configureInvoke();
+    useEvtxStore.getState().reset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useEvtxStore.getState().reset();
+  });
+
+  it("shows the Windows Logs / Applications tree with select controls", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+
+    expect(screen.getByText("Windows Logs")).toBeInTheDocument();
+    expect(screen.getByText("Applications and Services Logs")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Filter channels...")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select all" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deselect all" })).toBeInTheDocument();
+    expect(screen.getAllByText("Application").length).toBeGreaterThan(0);
+  });
+
+  it("offers CSV, TSV, JSON, and Event XML export of visible events", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+
+    fireEvent.click(
+      screen.getByTitle(
+        "Export the events currently shown, using the same filters as the list"
+      )
+    );
+
+    expect(screen.getByText("CSV")).toBeInTheDocument();
+    expect(screen.getByText("TSV")).toBeInTheDocument();
+    expect(screen.getByText("JSON")).toBeInTheDocument();
+    expect(screen.getByText("Event XML")).toBeInTheDocument();
+  });
+
+  it("gives level filters descriptive state to keyboard and screen-reader users", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+
+    const errorToggle = screen.getByRole("button", { name: "Toggle Error events" });
+    expect(errorToggle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(errorToggle);
+    expect(errorToggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows event detail, Event Data, and Show/Hide Raw XML", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+
+    const eventRow = recordTreeItems(document.body)[0];
+    expect(eventRow).toBeDefined();
+    fireEvent.click(eventRow!);
+
+    expect(screen.getByText("Event 1000")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Faulting application name: setup.exe").length
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("Event Data")).toBeInTheDocument();
+    expect(screen.getByText("AppName")).toBeInTheDocument();
+    expect(screen.getAllByText("Application Error").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show Raw XML" }));
+    expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
+    expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
   });
 });

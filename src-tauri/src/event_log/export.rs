@@ -456,18 +456,15 @@ pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
 }
 
 fn redact_labeled_value(label: &str, value: &str) -> String {
+    if let Some(sensitive) = sensitive_xml_label(label) {
+        return format!("[sensitive:{sensitive}]");
+    }
     let prefix = format!("{label}=");
     let redacted = redact_export_text(&format!("{prefix}{value}"));
-    let redacted = redacted
+    redacted
         .strip_prefix(&prefix)
         .unwrap_or(&redacted)
-        .to_owned();
-    if redacted == value {
-        if let Some(sensitive) = sensitive_xml_label(label) {
-            return format!("[sensitive:{sensitive}]");
-        }
-    }
-    redacted
+        .to_owned()
 }
 
 fn redact_xml_value(label: &str, value: &str) -> String {
@@ -482,6 +479,8 @@ fn redact_xml_value(label: &str, value: &str) -> String {
         .unwrap_or_else(|_| trimmed.to_owned());
     let redacted = if let Some(sensitive) = sensitive_xml_label(label) {
         format!("[sensitive:{sensitive}]")
+    } else if label.eq_ignore_ascii_case("XmlData") {
+        "[sensitive:XmlData]".to_owned()
     } else {
         let assignment_redacted = redact_mapped_property(&decoded);
         if assignment_redacted != decoded {
@@ -745,13 +744,20 @@ fn redact_xml_tag(tag: &str, inherited_label: Option<&str>) -> String {
         let pending_label_for_value = pending_label.clone();
         let label = if attr_local_name.eq_ignore_ascii_case("value") {
             context_sensitive_label
-                .or(own_label.as_deref())
+                .or(own_label
+                    .as_deref()
+                    .filter(|label| !label.eq_ignore_ascii_case("XmlData")))
                 .or(inherited_label)
                 .or(pending_label_for_value.as_deref())
                 .or(context_label.as_deref())
+                .or(own_label.as_deref())
                 .unwrap_or(attr_local_name)
         } else if attr_local_name.eq_ignore_ascii_case("name") {
-            own_label.as_deref().or(inherited_label).unwrap_or("Name")
+            own_label
+                .as_deref()
+                .filter(|label| !label.eq_ignore_ascii_case("XmlData"))
+                .or(inherited_label)
+                .unwrap_or("Name")
         } else if attr_local_name.eq_ignore_ascii_case("computer") {
             "ComputerName"
         } else {
@@ -1641,6 +1647,49 @@ mod tests {
         );
         assert!(output.contains(r#"Value="safe""#), "{output}");
     }
+    #[test]
+    fn sensitive_labeled_values_redact_the_complete_value() {
+        let mut event = record("safe");
+        event.computer = "HOST-UNIQUE-SENSITIVE-SUFFIX".into();
+        event.event_data = vec![crate::event_log::models::EvtxField {
+            name: "Password".into(),
+            value: "secret prefix UNIQUE-SENSITIVE-SUFFIX".into(),
+        }];
+        event.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "RunAsUser".into(),
+            text: "CONTOSO\\Alice UNIQUE-SENSITIVE-SUFFIX".into(),
+            complete: true,
+        }];
+
+        for format in [
+            ExportFormat::Json,
+            ExportFormat::Xml,
+            ExportFormat::RawXml,
+            ExportFormat::Csv,
+            ExportFormat::Tsv,
+        ] {
+            let output = export_records(&[event.clone()], format).expect("export");
+            assert!(
+                !output.contains("UNIQUE-SENSITIVE-SUFFIX"),
+                "{format:?}: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_xml_attributes_are_redacted_by_default() {
+        let mut event = record("safe");
+        event.raw_xml = r#"<Event><Foo Value="UNKNOWN-ATTRIBUTE-SECRET" /></Event>"#.into();
+
+        for format in [ExportFormat::Json, ExportFormat::Xml, ExportFormat::RawXml] {
+            let output = export_records(&[event.clone()], format).expect("export");
+            assert!(
+                !output.contains("UNKNOWN-ATTRIBUTE-SECRET"),
+                "{format:?}: {output}"
+            );
+        }
+    }
+
     #[test]
     fn sensitive_processing_instruction_targets_redact_their_data() {
         let mut event = record("safe");

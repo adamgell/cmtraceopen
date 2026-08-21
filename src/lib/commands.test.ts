@@ -5,6 +5,7 @@ import {
   authorizeSccmAdvancedCapture,
   cancelSccmAdvancedCapture,
   captureSccmAdvancedDiagnostics,
+  analyzeIntuneLogs,
   discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
@@ -16,7 +17,11 @@ import {
   openLogFile,
   parseEventLogManifest,
   expandEventLogSources,
+  buildTimeline,
+  listLogFolder,
+  parseFilesBatch,
   revealInFileManager,
+  inspectEvidenceArtifact,
 } from "./commands";
 import type { EvtxRecord } from "../workspaces/event-log/types";
 
@@ -85,6 +90,257 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
 });
 
+describe("parse and folder IPC response validation", () => {
+  it("preserves valid parser and folder responses", async () => {
+    const parseResult = {
+      entries: [
+        {
+          id: 0,
+          lineNumber: 1,
+          message: "line",
+          component: null,
+          timestamp: null,
+          timestampDisplay: null,
+          severity: "Info",
+          thread: null,
+          threadDisplay: null,
+          sourceFile: null,
+          format: "Simple",
+          filePath: "C:\\Logs\\App.log",
+          timezoneOffset: null,
+        },
+      ],
+      formatDetected: "Simple",
+      parserSelection: {
+        parser: "simple",
+        implementation: "simple",
+        provenance: "dedicated",
+        parseQuality: "structured",
+        recordFraming: "physicalLine",
+        dateOrder: null,
+        specialization: null,
+      },
+      totalLines: 0,
+      parseErrors: 0,
+      filePath: "C:\\Logs\\App.log",
+      fileSize: 0,
+      byteOffset: 0,
+    };
+    const folderListing = {
+      sourceKind: "folder",
+      source: { kind: "folder", path: "C:\\Logs" },
+      entries: [],
+      bundleMetadata: null,
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce([parseResult])
+      .mockResolvedValueOnce(folderListing);
+
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).resolves.toEqual(
+      [parseResult],
+    );
+    expect(invoke).toHaveBeenCalledWith("parse_files_batch", {
+      paths: ["C:\\Logs\\App.log"],
+      requestId: 7,
+      completedOffset: 0,
+    });
+    await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
+  });
+
+  it("rejects malformed parser and folder responses", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ filePath: "C:\\Logs\\App.log" })
+      .mockResolvedValueOnce([{ filePath: "C:\\Logs\\App.log" }])
+      .mockResolvedValueOnce({
+        sourceKind: "folder",
+        source: { kind: "folder", path: "C:\\Logs" },
+        entries: [{ name: "App.log", path: "C:\\Logs\\App.log" }],
+      });
+
+    await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
+      "Command 'open_log_file' returned an invalid response.",
+    );
+    await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).rejects.toThrow(
+      "Command 'parse_files_batch' returned an invalid response.",
+    );
+    await expect(listLogFolder("C:\\Logs")).rejects.toThrow(
+      "Command 'list_log_folder' returned an invalid response.",
+    );
+  });
+});
+function validIntuneAnalysis() {
+  return {
+    events: [],
+    downloads: [],
+    summary: {},
+    diagnostics: [],
+    sourceFile: "C:\\Logs\\IntuneManagementExtension.log",
+    sourceFiles: [],
+    diagnosticsCoverage: {},
+    diagnosticsConfidence: {},
+    repeatedFailures: [],
+    guidRegistry: {},
+  };
+}
+
+describe("Intune IPC response validation", () => {
+  it("accepts structured diagnostics metadata", async () => {
+    const result = validIntuneAnalysis();
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(
+      analyzeIntuneLogs("C:\\Logs", "request-1"),
+    ).resolves.toEqual(result);
+  });
+
+  it("rejects malformed diagnostics metadata", async () => {
+    const result = {
+      ...validIntuneAnalysis(),
+      diagnosticsCoverage: "complete",
+      diagnosticsConfidence: "high",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+
+    await expect(
+      analyzeIntuneLogs("C:\\Logs", "request-1"),
+    ).rejects.toThrow("invalid response");
+  });
+});
+
+
+function validTimelineBundle() {
+  return {
+    id: "timeline-1",
+    sources: [
+      {
+        idx: 0,
+        kind: "intuneEvents",
+        path: "C:\\Logs",
+        displayName: "Logs",
+        color: "#2563eb",
+        entryCount: 1,
+      },
+      {
+        idx: 1,
+        kind: { logFile: { parserKind: "ccm" } },
+        path: "C:\\Logs\\App.log",
+        displayName: "App.log",
+        color: "#16a34a",
+        entryCount: 1,
+      },
+    ],
+    timeRangeMs: [100, 200],
+    totalEntries: 2,
+    incidents: [
+      {
+        id: 0,
+        tsStartMs: 100,
+        tsEndMs: 200,
+        signalCount: 2,
+        sourceCount: 2,
+        confidence: 0.5,
+        anchorEventRef: null,
+        anchorGuid: null,
+        summary: "Overlapping failures",
+      },
+    ],
+    deniedGuids: [],
+    errors: [],
+    tunables: {
+      overlapWindowMs: 5_000,
+      minSourceCount: 2,
+      maxIncidentSpanMs: 60_000,
+      enabledSignalKinds: ["errorSeverity"],
+    },
+  };
+}
+
+describe("timeline IPC response validation", () => {
+  it("preserves a valid timeline bundle", async () => {
+    const bundle = validTimelineBundle();
+    vi.mocked(invoke).mockResolvedValue(bundle);
+
+    await expect(
+      buildTimeline([{ path: "C:\\Logs", displayName: "Logs" }]),
+    ).resolves.toEqual(bundle);
+    expect(invoke).toHaveBeenCalledWith("build_timeline_cmd", {
+      sources: [{ path: "C:\\Logs", displayName: "Logs" }],
+    });
+  });
+
+  it("rejects a timeline bundle with malformed nested source data", async () => {
+    const bundle = validTimelineBundle();
+    const malformedBundle = {
+      ...bundle,
+      sources: [
+        {
+          ...bundle.sources[0],
+          kind: { logFile: { parserKind: "not-a-parser" } },
+        },
+      ],
+    };
+    vi.mocked(invoke).mockResolvedValue(malformedBundle);
+
+    await expect(buildTimeline([{ path: "C:\\Logs" }])).rejects.toThrow(
+      "Command 'build_timeline_cmd' returned an invalid response.",
+    );
+  });
+});
+
+function validEvidenceArtifactPreview() {
+  return {
+    path: "C:\\Logs\\snapshot.reg",
+    intakeKind: "registrySnapshot",
+    summary: "Parsed registry snapshot.",
+    registrySnapshot: {
+      keyCount: 1,
+      valueCount: 1,
+      keys: [
+        {
+          path: "HKLM\\Software\\Contoso",
+          valueCount: 1,
+          values: [
+            {
+              name: "Enabled",
+              valueType: "dword",
+              value: "0x00000001 (1)",
+            },
+          ],
+        },
+      ],
+    },
+    eventLogExport: null,
+  };
+}
+
+describe("evidence artifact IPC response validation", () => {
+  it("preserves validated nested preview metadata", async () => {
+    const preview = validEvidenceArtifactPreview();
+    vi.mocked(invoke).mockResolvedValue(preview);
+
+    await expect(
+      inspectEvidenceArtifact("C:\\Logs\\snapshot.reg", "registrySnapshot"),
+    ).resolves.toEqual(preview);
+  });
+
+  it("rejects malformed nested preview metadata", async () => {
+    const preview = validEvidenceArtifactPreview();
+    vi.mocked(invoke).mockResolvedValue({
+      ...preview,
+      registrySnapshot: {
+        ...preview.registrySnapshot,
+        keys: [{ path: "HKLM\\Software\\Contoso", valueCount: 1 }],
+      },
+    });
+
+    await expect(
+      inspectEvidenceArtifact("C:\\Logs\\snapshot.reg", "registrySnapshot"),
+    ).rejects.toThrow(
+      "Command 'inspect_evidence_artifact' returned an invalid response.",
+    );
+  });
+});
+
 function validGraphStatus() {
   return {
     isAuthenticated: true,
@@ -106,7 +362,14 @@ function validGraphStatus() {
 
 describe("SCCM product-path IPC boundary", () => {
   it("invokes discovery and capture without accepting frontend inputs", async () => {
-    const discovery = { supported: true, roles: [], sources: [], issues: [] };
+    const discovery = {
+      supported: true,
+      configmgrVersion: null,
+      roles: [],
+      sources: [],
+      issues: [],
+      advancedSources: [],
+    };
     const capture = {
       bundleRoot: "C:\\capture",
       capturedAtUtc: "2026-08-04T14:30:00Z",
@@ -160,7 +423,14 @@ describe("SCCM product-path IPC boundary", () => {
       pathClass: request.pathClass,
       sourceVersion: request.expectedSourceVersion,
     };
-    const result = { bundleRoot: "C:\\bundle", sources: [] };
+    const result = {
+      bundleRoot: "C:\\bundle",
+      capturedAtUtc: "2026-08-04T14:30:00Z",
+      roles: [],
+      sources: [],
+      artifactCount: 0,
+      retainedBytes: 0,
+    };
     vi.mocked(invoke)
       .mockResolvedValueOnce(capability)
       .mockResolvedValueOnce(result)
