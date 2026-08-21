@@ -4,7 +4,3 @@
 # reference src-tauri/target/...) keep working without changes.
 [build]
 target-dir = "src-tauri/target"
-
-[env]
-# Tauri requires its application manifest on Windows test binaries too.
-__TAURI_WORKSPACE__ = "true"
