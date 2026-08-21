@@ -260,6 +260,37 @@ jobs:
       - name: Test Graph ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test graph_esp_diagnostics
 
+      - name: Build full Windows application workspace
+        run: cargo test --locked -p cmtrace-open --all-features --no-run
+
+      - name: Verify Windows test manifest
+        shell: pwsh
+        run: |
+          $testBinary = Get-ChildItem "src-tauri/target/debug/deps/app_lib-*.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $testBinary) {
+            throw "The full application test binary was not produced."
+          }
+
+          $mtPath = (Get-Command mt.exe -ErrorAction SilentlyContinue).Source
+          if ([string]::IsNullOrWhiteSpace($mtPath)) {
+            $mtPath = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Filter mt.exe -Recurse |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if ([string]::IsNullOrWhiteSpace($mtPath)) {
+            throw "Windows SDK mt.exe was not found."
+          }
+
+          $manifestPath = Join-Path $env:RUNNER_TEMP "cmtrace-open-test.manifest.xml"
+          & $mtPath "-inputresource:$($testBinary.FullName);#1" "-out:$manifestPath"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "The full application test binary has no readable embedded manifest."
+          }
+          Get-Content $manifestPath
+
       - name: Test full Windows application workspace
         run: cargo test --locked -p cmtrace-open --all-features
 
