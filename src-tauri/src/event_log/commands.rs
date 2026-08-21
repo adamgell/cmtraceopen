@@ -532,11 +532,12 @@ pub async fn evtx_clear_channel(
             .as_deref()
             .map(super::live::normalize_remote_machine_name)
             .transpose()?;
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             super::live::clear_channel(&channel, confirmed, remote_machine.as_deref())
         })
         .await
-        .map_err(|error| format!("Task join error: {error}"))?
+        .map_err(|error| format!("Task join error: {error}"))?;
+        Ok(result)
     }
     #[cfg(not(target_os = "windows"))]
     {
