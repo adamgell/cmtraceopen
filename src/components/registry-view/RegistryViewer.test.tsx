@@ -164,6 +164,35 @@ describe("RegistryViewer", () => {
     expect(target).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("cancels disclosure focus before toggling an unselected lower row", () => {
+    useLogStore.setState({ openFilePath: null });
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const target = screen
+      .getByTitle(fixture.keys[0].path)
+      .closest('[role="treeitem"]');
+    const disclosure = target?.firstElementChild;
+    if (!target || !disclosure) {
+      throw new Error("Expected the lower registry row disclosure");
+    }
+
+    const pointerDown = new MouseEvent("pointerdown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(disclosure, pointerDown);
+    if (!pointerDown.defaultPrevented) {
+      fireEvent.focus(tree);
+    }
+    fireEvent.click(disclosure);
+
+    expect(pointerDown.defaultPrevented).toBe(true);
+    expect(useRegistryStore.getState().selectedKeyPath).toBeNull();
+    expect(target).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("initializes tree focus and navigates vertically", () => {
     render(<RegistryViewer />);
 
@@ -229,13 +258,10 @@ describe("RegistryViewer", () => {
   it("moves from an expanded-state leaf to its parent with one ArrowLeft press", () => {
     const leafPath = fixture.keys[1].path;
     useRegistryStore.setState((state) => ({
-      expandedPaths: new Set(
-        [...state.expandedPaths].filter((path) => path !== leafPath),
-      ),
+      expandedPaths: new Set([...state.expandedPaths, leafPath]),
       selectedKeyPath: leafPath,
     }));
-    useRegistryStore.getState().toggleExpanded(leafPath);
-    expect(useRegistryStore.getState().expandedPaths).not.toContain(leafPath);
+    expect(useRegistryStore.getState().expandedPaths).toContain(leafPath);
     render(<RegistryViewer />);
 
     const tree = screen.getByRole("tree", { name: "Registry keys" });

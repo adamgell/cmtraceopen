@@ -159,7 +159,6 @@ export function KeyTree() {
       style={{
         height: "100%",
         overflow: "auto",
-        outline: "none",
       }}
     >
 
@@ -231,7 +230,10 @@ export function KeyTree() {
                   color: tokens.colorNeutralForeground3,
                   fontSize: "10px",
                 }}
-                onPointerDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (e.button === 0) e.preventDefault();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (hasChildren) toggleExpanded(row.node.fullPath);
