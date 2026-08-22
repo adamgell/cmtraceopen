@@ -221,6 +221,10 @@ describe("ui-store", () => {
   });
 
   describe("dialogs", () => {
+    beforeEach(() => {
+      useUiStore.setState(useUiStore.getInitialState(), true);
+    });
+
     it("closes all transient dialogs", () => {
       useUiStore.getState().setShowFindBar(true);
       useUiStore.getState().setShowFilterDialog(true);
@@ -230,6 +234,57 @@ describe("ui-store", () => {
       const state = useUiStore.getState();
       expect(state.showFindBar).toBe(false);
       expect(state.showFilterDialog).toBe(false);
+    });
+
+    it("keeps an active user dialog when the delayed startup prompt asks to open", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+
+      useUiStore.getState().setShowFileAssociationPrompt(true);
+
+      expect(useUiStore.getState().showAboutDialog).toBe(true);
+      expect(useUiStore.getState().showFileAssociationPrompt).toBe(false);
+    });
+
+    it("lets a user dialog atomically replace the low-priority startup prompt", () => {
+      useUiStore.getState().setShowFileAssociationPrompt(true);
+
+      useUiStore.getState().setShowSettingsDialog(true);
+
+      expect(useUiStore.getState().showFileAssociationPrompt).toBe(false);
+      expect(useUiStore.getState().showSettingsDialog).toBe(true);
+    });
+
+    it("keeps exactly one modal flag open when ownership moves between user dialogs", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+
+      useUiStore.getState().setShowCollectDiagnosticsDialog(true);
+
+      const state = useUiStore.getState();
+      expect({
+        showFilterDialog: state.showFilterDialog,
+        showErrorLookupDialog: state.showErrorLookupDialog,
+        showAboutDialog: state.showAboutDialog,
+        showSettingsDialog: state.showSettingsDialog,
+        showEvidenceBundleDialog: state.showEvidenceBundleDialog,
+        showGuidRegistryDialog: state.showGuidRegistryDialog,
+        showMergeTabsDialog: state.showMergeTabsDialog,
+        showDiffConfigDialog: state.showDiffConfigDialog,
+        showFileAssociationPrompt: state.showFileAssociationPrompt,
+        showCollectDiagnosticsDialog: state.showCollectDiagnosticsDialog,
+        showUpdateDialog: state.showUpdateDialog,
+      }).toEqual({
+        showFilterDialog: false,
+        showErrorLookupDialog: false,
+        showAboutDialog: false,
+        showSettingsDialog: false,
+        showEvidenceBundleDialog: false,
+        showGuidRegistryDialog: false,
+        showMergeTabsDialog: false,
+        showDiffConfigDialog: false,
+        showFileAssociationPrompt: false,
+        showCollectDiagnosticsDialog: true,
+        showUpdateDialog: false,
+      });
     });
   });
 

@@ -1,51 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
 import { tokens } from "@fluentui/react-components";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  getSafeErrorMessage,
+  getFileAssociationPromptStatus,
+  openWindowsDefaultApps,
+  registerLogFileHandler,
+} from "../../../lib/commands";
 import { useUiStore } from "../../../stores/ui-store";
-
-interface FileAssociationPromptStatus {
-  supported: boolean;
-  shouldPrompt: boolean;
-  isAssociated: boolean;
-}
 
 export function FileAssociationsTab() {
   const currentPlatform = useUiStore((state) => state.currentPlatform);
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isAssociated, setIsAssociated] = useState<boolean | null>(null);
+  const [isRegistered, setIsRegistered] = useState<boolean | null>(null);
 
-  const refreshAssociationStatus = useCallback(async () => {
+  const refreshRegistrationStatus = useCallback(async () => {
     if (currentPlatform !== "windows") {
       return;
     }
     try {
-      const result = await invoke("get_file_association_prompt_status");
-      // Defensive shape check — the dev ipc_bridge stub used to return a
-      // plain string ("dismissed"), and other transports could change too.
-      if (
-        typeof result === "object" &&
-        result !== null &&
-        "isAssociated" in result &&
-        typeof (result as FileAssociationPromptStatus).isAssociated === "boolean"
-      ) {
-        setIsAssociated((result as FileAssociationPromptStatus).isAssociated);
-      } else {
-        console.warn(
-          "[file-associations] unexpected association status shape",
-          result
-        );
-        setIsAssociated(null);
-      }
+      const result = await getFileAssociationPromptStatus();
+      setIsRegistered(result.isRegistered);
     } catch (err) {
-      console.warn("[file-associations] failed to read association status", err);
-      setIsAssociated(null);
+      console.warn("[file-associations] failed to read handler registration", err);
+      setIsRegistered(null);
     }
   }, [currentPlatform]);
 
   useEffect(() => {
-    void refreshAssociationStatus();
-  }, [refreshAssociationStatus]);
+    void refreshRegistrationStatus();
+  }, [refreshRegistrationStatus]);
 
   if (currentPlatform !== "windows") {
     return (
@@ -57,57 +41,59 @@ export function FileAssociationsTab() {
     );
   }
 
-  const handleAssociate = async () => {
+  const handleRegister = async () => {
     try {
       setStatus("idle");
       setErrorMessage(null);
-      await invoke("associate_log_files_with_app");
+      await registerLogFileHandler();
       setStatus("success");
-      await refreshAssociationStatus();
+      await refreshRegistrationStatus();
     } catch (err) {
       setStatus("error");
-      setErrorMessage(String(err));
+      setErrorMessage(
+        `Failed to register CMTrace Open: ${getSafeErrorMessage(err, "Unknown error")}`,
+      );
+    }
+  };
+
+  const handleOpenDefaultApps = async () => {
+    try {
+      setErrorMessage(null);
+      await openWindowsDefaultApps();
+    } catch (err) {
+      setStatus("error");
+      setErrorMessage(
+        `Failed to open Windows Default Apps: ${getSafeErrorMessage(err, "Unknown error")}`,
+      );
     }
   };
 
   return (
     <div>
       <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground3, marginBottom: "16px", lineHeight: 1.5 }}>
-        Register CMTrace Open as the default handler for .log, .log_, .lo_, and .cmtlog files on Windows.
+        Register CMTrace Open as an available handler for .log, .log_, .lo_, and
+        .cmtlog files. Windows keeps your current defaults until you choose
+        CMTrace Open in Default Apps.
       </div>
 
-      {isAssociated === true ? (
-        <>
-          <div
-            style={{
-              fontSize: "12px",
-              color: tokens.colorPaletteGreenForeground1,
-              marginBottom: "10px",
-              fontWeight: 600,
-            }}
-          >
-            CMTrace Open is currently registered as the handler for .log, .log_, .lo_, and .cmtlog files.
-          </div>
-          <button
-            type="button"
-            onClick={handleAssociate}
-            style={{
-              padding: "6px 16px",
-              fontSize: "12px",
-              border: `1px solid ${tokens.colorNeutralStroke1}`,
-              borderRadius: "4px",
-              background: tokens.colorNeutralBackground1,
-              color: tokens.colorNeutralForeground1,
-              cursor: "pointer",
-            }}
-          >
-            Re-register associations
-          </button>
-        </>
-      ) : (
+      {isRegistered === true && (
+        <div
+          style={{
+            fontSize: "12px",
+            color: tokens.colorPaletteGreenForeground1,
+            marginBottom: "10px",
+            fontWeight: 600,
+          }}
+        >
+          CMTrace Open is registered as an available handler for the supported
+          log file types.
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <button
           type="button"
-          onClick={handleAssociate}
+          onClick={() => void handleRegister()}
           style={{
             padding: "6px 16px",
             fontSize: "12px",
@@ -119,19 +105,37 @@ export function FileAssociationsTab() {
             fontWeight: 600,
           }}
         >
-          Associate .log, .log_, .lo_, and .cmtlog files with CMTrace Open
+          {isRegistered === true
+            ? "Re-register CMTrace Open handler"
+            : "Register CMTrace Open as an available handler"}
         </button>
-      )}
 
-      {status === "success" && isAssociated !== true && (
+        <button
+          type="button"
+          onClick={() => void handleOpenDefaultApps()}
+          style={{
+            padding: "6px 16px",
+            fontSize: "12px",
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: "4px",
+            background: tokens.colorNeutralBackground1,
+            color: tokens.colorNeutralForeground1,
+            cursor: "pointer",
+          }}
+        >
+          Open Windows Default Apps
+        </button>
+      </div>
+
+      {status === "success" && (
         <div style={{ fontSize: "12px", color: tokens.colorPaletteGreenForeground1, marginTop: "8px" }}>
-          File associations registered successfully.
+          CMTrace Open is now available to choose in Windows Default Apps.
         </div>
       )}
 
-      {status === "error" && (
+      {status === "error" && errorMessage && (
         <div style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1, marginTop: "8px" }}>
-          Failed to register file associations: {errorMessage}
+          {errorMessage}
         </div>
       )}
     </div>

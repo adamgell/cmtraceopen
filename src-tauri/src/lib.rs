@@ -300,7 +300,8 @@ pub fn run() {
         })
         .invoke_handler(app_invoke_handler![
             commands::file_association::get_file_association_prompt_status,
-            commands::file_association::associate_log_files_with_app,
+            commands::file_association::register_log_file_handler,
+            commands::file_association::open_windows_default_apps,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,

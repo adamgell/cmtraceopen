@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  associateLogFilesWithApp,
+  getSafeErrorMessage,
+  openWindowsDefaultApps,
+  registerLogFileHandler,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
 import { tokens } from "@fluentui/react-components";
@@ -9,14 +11,6 @@ import { useModalFocus } from "../../hooks/use-modal-focus";
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
   onClose: () => void;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Unknown error";
 }
 
 export function FileAssociationPromptDialog({
@@ -54,15 +48,27 @@ export function FileAssociationPromptDialog({
     return null;
   }
 
-  const handleAssociate = async () => {
+  const handleRegister = async () => {
     setIsSubmitting(true);
     setErrorMessage(null);
 
     try {
-      await associateLogFilesWithApp();
+      await registerLogFileHandler();
+    } catch (error) {
+      setErrorMessage(
+        `Failed to register CMTrace Open: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      await openWindowsDefaultApps();
       onClose();
     } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      setErrorMessage(
+        `CMTrace Open is registered, but Windows Default Apps could not be opened: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -76,7 +82,7 @@ export function FileAssociationPromptDialog({
       await setFileAssociationPromptSuppressed(true);
       onClose();
     } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      setErrorMessage(getSafeErrorMessage(error, "Unknown error"));
     } finally {
       setIsSubmitting(false);
     }
@@ -106,7 +112,7 @@ export function FileAssociationPromptDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Associate log files with CMTrace Open?"
+        aria-label="Make CMTrace Open available for log files?"
         tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
@@ -126,13 +132,14 @@ export function FileAssociationPromptDialog({
             marginBottom: "10px",
           }}
         >
-          Associate log files with CMTrace Open?
+          Make CMTrace Open available for log files?
         </div>
 
         <div style={{ fontSize: "12px", lineHeight: 1.5, marginBottom: "12px" }}>
-          This standalone copy of CMTrace Open can associate <strong>.log</strong>,{" "}
+          This standalone copy of CMTrace Open can register as an available
+          handler for <strong>.log</strong>,{" "}
           <strong>.log_</strong>, <strong>.lo_</strong>, and <strong>.cmtlog</strong>{" "}
-          files so they open directly in the app, similar to classic CMTrace.exe.
+          files.
         </div>
 
         <div
@@ -146,8 +153,9 @@ export function FileAssociationPromptDialog({
             color: tokens.colorNeutralForeground1,
           }}
         >
-          If you choose <strong>Associate</strong>, CMTrace Open will register
-          itself for the current Windows user.
+          Windows keeps your current defaults until you choose CMTrace Open in
+          Default Apps. This action registers CMTrace Open for the current user,
+          then opens the Windows-owned picker.
         </div>
 
         {errorMessage && (
@@ -200,7 +208,7 @@ export function FileAssociationPromptDialog({
             Don&apos;t Ask Again
           </button>
           <button
-            onClick={() => void handleAssociate()}
+            onClick={() => void handleRegister()}
             disabled={isSubmitting}
             style={{
               padding: "2px 12px",
@@ -212,7 +220,7 @@ export function FileAssociationPromptDialog({
               cursor: isSubmitting ? "default" : "pointer",
             }}
           >
-            {isSubmitting ? "Working..." : "Associate"}
+            {isSubmitting ? "Working..." : "Register and open Default Apps"}
           </button>
         </div>
       </div>

@@ -201,11 +201,11 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
 
         "get_file_association_prompt_status" => {
             // Match the real command's response shape so the frontend can
-            // safely read `isAssociated` etc. in dev/browser mode.
+            // safely read `isRegistered` etc. in dev/browser mode.
             ok_json(&serde_json::json!({
                 "supported": false,
                 "shouldPrompt": false,
-                "isAssociated": false,
+                "isRegistered": false,
             }))
         }
 

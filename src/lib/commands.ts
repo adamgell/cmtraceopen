@@ -78,7 +78,7 @@ import type { SignalKind, TimelineBundle } from "../types/timeline";
 export interface FileAssociationPromptStatus {
   supported: boolean;
   shouldPrompt: boolean;
-  isAssociated: boolean;
+  isRegistered: boolean;
 }
 
 export interface SystemDateTimePreferences {
@@ -1943,8 +1943,12 @@ export async function getFileAssociationPromptStatus(): Promise<FileAssociationP
   return invokeCommand("get_file_association_prompt_status");
 }
 
-export async function associateLogFilesWithApp(): Promise<void> {
-  return invokeCommand("associate_log_files_with_app");
+export async function registerLogFileHandler(): Promise<void> {
+  return invokeCommand("register_log_file_handler");
+}
+
+export async function openWindowsDefaultApps(): Promise<void> {
+  return invokeCommand("open_windows_default_apps");
 }
 
 export async function setFileAssociationPromptSuppressed(
@@ -2635,9 +2639,10 @@ const COMMAND_DECODERS = {
     decodeRecordResponse<FileAssociationPromptStatus>(value, commandName, {
       supported: (field) => typeof field === "boolean",
       shouldPrompt: (field) => typeof field === "boolean",
-      isAssociated: (field) => typeof field === "boolean",
+      isRegistered: (field) => typeof field === "boolean",
     }),
-  associate_log_files_with_app: decodeUnitResponse,
+  register_log_file_handler: decodeUnitResponse,
+  open_windows_default_apps: decodeUnitResponse,
   set_file_association_prompt_suppressed: decodeUnitResponse,
   get_system_date_time_preferences: (value, commandName) =>
     decodeRecordResponse<SystemDateTimePreferences>(value, commandName, {

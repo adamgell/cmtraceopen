@@ -259,6 +259,62 @@ interface UiState {
   setGraphApiLastAttempt: (attempt: GraphApiLastAttempt | null) => void;
 }
 
+// AppShell's boolean dialog flags share one modal surface. Data-carrying
+// confirmations (for example elevationPrompt) keep their existing lifecycle.
+const CLOSED_MODAL_STATE = {
+  showFilterDialog: false,
+  showErrorLookupDialog: false,
+  showAboutDialog: false,
+  showSettingsDialog: false,
+  showEvidenceBundleDialog: false,
+  showGuidRegistryDialog: false,
+  showMergeTabsDialog: false,
+  showDiffConfigDialog: false,
+  showFileAssociationPrompt: false,
+  showCollectDiagnosticsDialog: false,
+  showUpdateDialog: false,
+} satisfies Partial<UiState>;
+
+type BooleanModalKey =
+  | "showFilterDialog"
+  | "showErrorLookupDialog"
+  | "showAboutDialog"
+  | "showSettingsDialog"
+  | "showEvidenceBundleDialog"
+  | "showGuidRegistryDialog"
+  | "showMergeTabsDialog"
+  | "showDiffConfigDialog"
+  | "showFileAssociationPrompt"
+  | "showCollectDiagnosticsDialog"
+  | "showUpdateDialog";
+
+function setBooleanModalState(
+  key: BooleanModalKey,
+  show: boolean,
+): Partial<UiState> {
+  if (!show) {
+    return { [key]: false };
+  }
+
+  return { ...CLOSED_MODAL_STATE, [key]: true };
+}
+
+/** Whether a user-initiated modal currently outranks the startup association prompt. */
+export function hasOpenPriorityModal(state: UiState): boolean {
+  return (
+    state.showFilterDialog ||
+    state.showErrorLookupDialog ||
+    state.showAboutDialog ||
+    state.showSettingsDialog ||
+    state.showEvidenceBundleDialog ||
+    state.showGuidRegistryDialog ||
+    state.showMergeTabsDialog ||
+    state.showDiffConfigDialog ||
+    state.showCollectDiagnosticsDialog ||
+    state.showUpdateDialog
+  );
+}
+
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
 
 const sanitizePersistedUiState = (
@@ -441,15 +497,27 @@ export const useUiStore = create<UiState>()(
         set((state) => ({ showDetails: !state.showDetails })),
       setInfoPaneHeight: (height) => set({ infoPaneHeight: height }),
       setShowFindBar: (show) => set({ showFindBar: show }),
-      setShowFilterDialog: (show) => set({ showFilterDialog: show }),
-      setShowErrorLookupDialog: (show) => set({ showErrorLookupDialog: show }),
-      setShowAboutDialog: (show) => set({ showAboutDialog: show }),
-      setShowSettingsDialog: (show) => set({ showSettingsDialog: show }),
-      setShowEvidenceBundleDialog: (show) => set({ showEvidenceBundleDialog: show }),
-      setShowGuidRegistryDialog: (show) => set({ showGuidRegistryDialog: show }),
-      setShowMergeTabsDialog: (show) => set({ showMergeTabsDialog: show }),
-      setShowDiffConfigDialog: (show) => set({ showDiffConfigDialog: show }),
-      setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
+      setShowFilterDialog: (show) => set(setBooleanModalState("showFilterDialog", show)),
+      setShowErrorLookupDialog: (show) =>
+        set(setBooleanModalState("showErrorLookupDialog", show)),
+      setShowAboutDialog: (show) => set(setBooleanModalState("showAboutDialog", show)),
+      setShowSettingsDialog: (show) =>
+        set(setBooleanModalState("showSettingsDialog", show)),
+      setShowEvidenceBundleDialog: (show) =>
+        set(setBooleanModalState("showEvidenceBundleDialog", show)),
+      setShowGuidRegistryDialog: (show) =>
+        set(setBooleanModalState("showGuidRegistryDialog", show)),
+      setShowMergeTabsDialog: (show) =>
+        set(setBooleanModalState("showMergeTabsDialog", show)),
+      setShowDiffConfigDialog: (show) =>
+        set(setBooleanModalState("showDiffConfigDialog", show)),
+      setShowFileAssociationPrompt: (show) =>
+        set((state) => {
+          if (show && hasOpenPriorityModal(state)) {
+            return state;
+          }
+          return setBooleanModalState("showFileAssociationPrompt", show);
+        }),
       setElevationPrompt: (prompt) => set({ elevationPrompt: prompt }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
@@ -643,8 +711,10 @@ export const useUiStore = create<UiState>()(
       },
       setCollectionProgress: (progress) => set({ collectionProgress: progress }),
       setCollectionResult: (result) => set({ collectionResult: result }),
-      setShowCollectDiagnosticsDialog: (show) => set({ showCollectDiagnosticsDialog: show }),
-      setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
+      setShowCollectDiagnosticsDialog: (show) =>
+        set(setBooleanModalState("showCollectDiagnosticsDialog", show)),
+      setShowUpdateDialog: (show) =>
+        set(setBooleanModalState("showUpdateDialog", show)),
       dismissDnsBannerPath: (path) =>
         set((state) => ({
           dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)

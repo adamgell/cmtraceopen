@@ -58,7 +58,7 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
   get_file_association_prompt_status: {
     supported: false,
     shouldPrompt: false,
-    isAssociated: false,
+    isRegistered: false,
   },
   get_esp_elevation_state: {
     isElevated: false,

@@ -1,13 +1,17 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  associateLogFilesWithApp,
+  openWindowsDefaultApps,
+  registerLogFileHandler,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
 import { FileAssociationPromptDialog } from "./FileAssociationPromptDialog";
 
 vi.mock("../../lib/commands", () => ({
-  associateLogFilesWithApp: vi.fn(),
+  getSafeErrorMessage: (error: unknown, fallback = "Unknown error") =>
+    error instanceof Error ? error.message : fallback,
+  openWindowsDefaultApps: vi.fn(),
+  registerLogFileHandler: vi.fn(),
   setFileAssociationPromptSuppressed: vi.fn(),
 }));
 
@@ -25,10 +29,9 @@ describe("FileAssociationPromptDialog", () => {
     opener.remove();
   });
   it("traps focus and restores the opener when closed", () => {
-    vi.mocked(associateLogFilesWithApp).mockResolvedValue(undefined);
+    vi.mocked(registerLogFileHandler).mockResolvedValue(undefined);
+    vi.mocked(openWindowsDefaultApps).mockResolvedValue(undefined);
     vi.mocked(setFileAssociationPromptSuppressed).mockResolvedValue(undefined);
-
-
     const rendered = render(
       <FileAssociationPromptDialog isOpen onClose={() => {}} />,
     );
@@ -58,16 +61,16 @@ describe("FileAssociationPromptDialog", () => {
   });
 
   it("keeps focus on the dialog surface while submission disables its controls", () => {
-    vi.mocked(associateLogFilesWithApp).mockReturnValue(
+    vi.mocked(registerLogFileHandler).mockReturnValue(
       new Promise<void>(() => {}),
     );
-
-
     const rendered = render(
       <FileAssociationPromptDialog isOpen onClose={() => {}} />,
     );
     const dialog = screen.getByRole("dialog");
-    const associate = within(dialog).getByRole("button", { name: "Associate" });
+    const associate = within(dialog).getByRole("button", {
+      name: "Register and open Default Apps",
+    });
 
     associate.focus();
     fireEvent.click(associate);
@@ -81,5 +84,25 @@ describe("FileAssociationPromptDialog", () => {
       <FileAssociationPromptDialog isOpen={false} onClose={() => {}} />,
     );
     expect(document.activeElement).toBe(opener);
+  });
+
+  it("registers before opening the Windows-owned default picker", async () => {
+    vi.mocked(registerLogFileHandler).mockResolvedValue(undefined);
+    vi.mocked(openWindowsDefaultApps).mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    render(<FileAssociationPromptDialog isOpen onClose={onClose} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Register and open Default Apps" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(openWindowsDefaultApps).toHaveBeenCalledTimes(1);
+    });
+    expect(registerLogFileHandler).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(registerLogFileHandler).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(openWindowsDefaultApps).mock.invocationCallOrder[0]);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

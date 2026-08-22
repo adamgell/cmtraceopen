@@ -22,6 +22,9 @@ import {
   parseFilesBatch,
   revealInFileManager,
   inspectEvidenceArtifact,
+  getFileAssociationPromptStatus,
+  openWindowsDefaultApps,
+  registerLogFileHandler,
 } from "./commands";
 import type { EvtxRecord } from "../workspaces/event-log/types";
 
@@ -168,6 +171,53 @@ describe("parse and folder IPC response validation", () => {
     );
   });
 });
+
+describe("Windows file handler IPC boundary", () => {
+  it("registers a candidate separately from opening the user-owned default picker", async () => {
+    const registration = {
+      supported: true,
+      shouldPrompt: false,
+      isRegistered: true,
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(registration)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(getFileAssociationPromptStatus()).resolves.toEqual(registration);
+    await expect(registerLogFileHandler()).resolves.toBeUndefined();
+    await expect(openWindowsDefaultApps()).resolves.toBeUndefined();
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "get_file_association_prompt_status",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "register_log_file_handler",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      3,
+      "open_windows_default_apps",
+      undefined,
+    );
+  });
+
+  it("rejects the obsolete default-association status shape", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      supported: true,
+      shouldPrompt: false,
+      isAssociated: true,
+    });
+
+    await expect(getFileAssociationPromptStatus()).rejects.toThrow(
+      "Command 'get_file_association_prompt_status' returned an invalid response.",
+    );
+  });
+});
+
 function validIntuneAnalysis() {
   return {
     events: [],
