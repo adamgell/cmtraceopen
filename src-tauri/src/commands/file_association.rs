@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const LOG_FILE_EXTENSIONS: &[&str] = &[".log", ".lo_", ".log_", ".cmtlog"];
-const FILE_ASSOCIATION_PROMPT_FILE_NAME: &str = "file-association-preferences.json";
+const FILE_ASSOCIATION_PROMPT_FILE_PREFIX: &str = "file-association-preferences";
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 struct FileAssociationIdentity {
@@ -18,6 +18,7 @@ struct FileAssociationIdentity {
     prog_id: String,
     capabilities_path: String,
     default_apps_settings_uri: String,
+    preferences_file_name: String,
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -49,6 +50,9 @@ fn file_association_identity(
         prog_id: format!("{registry_stem}.LogFile"),
         capabilities_path: format!("Software\\{registry_stem}\\Capabilities"),
         default_apps_settings_uri,
+        preferences_file_name: format!(
+            "{FILE_ASSOCIATION_PROMPT_FILE_PREFIX}-{registry_stem}.json"
+        ),
     })
 }
 
@@ -68,19 +72,21 @@ struct FileAssociationPreferences {
 
 fn get_file_association_preferences_path(
     app: &AppHandle,
+    identity: &FileAssociationIdentity,
 ) -> Result<PathBuf, crate::error::AppError> {
     let mut path = app
         .path()
         .app_config_dir()
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
-    path.push(FILE_ASSOCIATION_PROMPT_FILE_NAME);
+    path.push(&identity.preferences_file_name);
     Ok(path)
 }
 
 fn read_file_association_preferences(
     app: &AppHandle,
+    identity: &FileAssociationIdentity,
 ) -> Result<FileAssociationPreferences, crate::error::AppError> {
-    let path = get_file_association_preferences_path(app)?;
+    let path = get_file_association_preferences_path(app, identity)?;
 
     if !path.exists() {
         return Ok(FileAssociationPreferences::default());
@@ -93,9 +99,10 @@ fn read_file_association_preferences(
 
 fn write_file_association_preferences(
     app: &AppHandle,
+    identity: &FileAssociationIdentity,
     preferences: &FileAssociationPreferences,
 ) -> Result<(), crate::error::AppError> {
-    let path = get_file_association_preferences_path(app)?;
+    let path = get_file_association_preferences_path(app, identity)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
@@ -415,11 +422,11 @@ fn launch_windows_default_apps(
 pub fn get_file_association_prompt_status(
     app: AppHandle,
 ) -> Result<FileAssociationPromptStatus, crate::error::AppError> {
-    let preferences = read_file_association_preferences(&app)?;
+    let identity = file_association_identity(app.config().product_name.as_deref())?;
+    let preferences = read_file_association_preferences(&app, &identity)?;
 
     #[cfg(target_os = "windows")]
     {
-        let identity = file_association_identity(app.config().product_name.as_deref())?;
         let is_registered = is_log_file_handler_registered(&identity)?;
         Ok(FileAssociationPromptStatus {
             supported: true,
@@ -430,6 +437,7 @@ pub fn get_file_association_prompt_status(
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = identity;
         let _ = preferences;
         let _ = app;
         Ok(FileAssociationPromptStatus {
@@ -479,8 +487,10 @@ pub fn set_file_association_prompt_suppressed(
     app: AppHandle,
     suppressed: bool,
 ) -> Result<(), crate::error::AppError> {
+    let identity = file_association_identity(app.config().product_name.as_deref())?;
     write_file_association_preferences(
         &app,
+        &identity,
         &FileAssociationPreferences {
             suppress_prompt: suppressed,
         },
@@ -506,31 +516,43 @@ mod tests {
                 "CMTraceOpen.LogFile",
                 "Software\\CMTraceOpen\\Capabilities",
                 "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open",
+                "file-association-preferences-CMTraceOpen.json",
             ),
             (
                 "CMTrace Open Lite",
                 "CMTraceOpenLite.LogFile",
                 "Software\\CMTraceOpenLite\\Capabilities",
                 "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Lite",
+                "file-association-preferences-CMTraceOpenLite.json",
             ),
             (
                 "CMTrace Open Nightly",
                 "CMTraceOpenNightly.LogFile",
                 "Software\\CMTraceOpenNightly\\Capabilities",
                 "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Nightly",
+                "file-association-preferences-CMTraceOpenNightly.json",
             ),
             (
                 "CMTrace Open Lite Nightly",
                 "CMTraceOpenLiteNightly.LogFile",
                 "Software\\CMTraceOpenLiteNightly\\Capabilities",
                 "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Lite%20Nightly",
+                "file-association-preferences-CMTraceOpenLiteNightly.json",
             ),
         ];
         let mut prog_ids = HashSet::new();
         let mut capabilities_paths = HashSet::new();
         let mut settings_uris = HashSet::new();
+        let mut preferences_file_names = HashSet::new();
 
-        for (product_name, expected_prog_id, expected_capabilities_path, expected_uri) in cases {
+        for (
+            product_name,
+            expected_prog_id,
+            expected_capabilities_path,
+            expected_uri,
+            expected_preferences_file_name,
+        ) in cases
+        {
             let identity = file_association_identity(Some(product_name))
                 .expect("shipped product name must have an association identity");
 
@@ -538,14 +560,20 @@ mod tests {
             assert_eq!(identity.prog_id, expected_prog_id);
             assert_eq!(identity.capabilities_path, expected_capabilities_path);
             assert_eq!(identity.default_apps_settings_uri, expected_uri);
+            assert_eq!(
+                identity.preferences_file_name,
+                expected_preferences_file_name
+            );
             prog_ids.insert(identity.prog_id);
             capabilities_paths.insert(identity.capabilities_path);
             settings_uris.insert(identity.default_apps_settings_uri);
+            preferences_file_names.insert(identity.preferences_file_name);
         }
 
         assert_eq!(prog_ids.len(), cases.len());
         assert_eq!(capabilities_paths.len(), cases.len());
         assert_eq!(settings_uris.len(), cases.len());
+        assert_eq!(preferences_file_names.len(), cases.len());
     }
 
     #[test]
