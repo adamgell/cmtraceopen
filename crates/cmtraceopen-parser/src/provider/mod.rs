@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::ser::SerializeSeq;
+use serde::ser::{Error as _, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Reinterprets a signed integer as unsigned, preserving the bit pattern.
@@ -57,6 +57,11 @@ fn u64_vec_as_signed<S: Serializer>(values: &[u64], serializer: S) -> Result<S::
 /// EventLogExpert stores the low message identifier as a signed Int16 even though the in-memory
 /// model keeps the complete low-word value as `u32`.
 fn short_id_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    if *value > u16::MAX as u32 {
+        return Err(S::Error::custom(
+            "ShortId must fit an unsigned 16-bit low word",
+        ));
+    }
     serializer.serialize_i64((*value as u16 as i16) as i64)
 }
 
@@ -665,6 +670,18 @@ mod tests {
                 "out-of-range ShortId should be rejected: {wire_value}"
             );
         }
+    }
+
+    #[test]
+    fn short_message_ids_reject_in_memory_values_wider_than_a_low_word() {
+        let message = ProviderMessage {
+            short_id: u16::MAX as u32 + 1,
+            ..ProviderMessage::default()
+        };
+
+        let error = serde_json::to_string(&message)
+            .expect_err("serializing a ShortId wider than 16 bits must fail");
+        assert!(error.to_string().contains("ShortId"));
     }
 
     #[test]
