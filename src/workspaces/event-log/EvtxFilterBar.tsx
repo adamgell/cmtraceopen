@@ -133,6 +133,8 @@ export function EvtxFilterBar() {
   const isLoading = useEvtxStore((s) => s.isLoading);
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
+  const nextSortDirectionLabel =
+    sortDirection === "asc" ? "descending" : "ascending";
 
   const groupBy = useEvtxStore((s) => s.groupBy);
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
@@ -691,13 +693,13 @@ export function EvtxFilterBar() {
         <Button
           size="small"
           appearance="subtle"
-          aria-label={`Sort ${sortDirection === "asc" ? "ascending" : "descending"}`}
+          aria-label={`Change sort direction to ${nextSortDirectionLabel}`}
           onClick={() =>
             setSortDirection(
               sortDirection === "asc" ? "desc" : "asc"
             )
           }
-          title={`Sort ${sortDirection === "asc" ? "ascending" : "descending"}`}
+          title={`Change sort direction to ${nextSortDirectionLabel}`}
           style={{ minWidth: "auto", padding: "2px 6px", fontSize: controlFontSize }}
         >
           {sortDirection === "asc" ? "\u2191" : "\u2193"}

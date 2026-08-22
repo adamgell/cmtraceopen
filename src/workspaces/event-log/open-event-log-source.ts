@@ -1,5 +1,5 @@
 import { expandEventLogSources, listLogFolder } from "../../lib/commands";
-import type { FolderEntry, LogSource } from "../../types/log";
+import type { FolderEntry, LogSource, PathDiagnostic } from "../../types/log";
 import { useEvtxStore } from "./evtx-store";
 import type { EventLogSourceManifest, EventLogSourceSelection } from "./types";
 
@@ -10,6 +10,27 @@ export type EventLogOpenSource =
   | { kind: "archive"; path: string }
   | { kind: "vss"; path: string }
   | Extract<LogSource, { kind: "known" }>;
+
+const MAX_CHILD_ERROR_DETAILS = 3;
+const MAX_DIAGNOSTIC_FIELD_LENGTH = 160;
+
+function boundedDiagnosticField(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= MAX_DIAGNOSTIC_FIELD_LENGTH
+    ? normalized
+    : `${normalized.slice(0, MAX_DIAGNOSTIC_FIELD_LENGTH - 1)}…`;
+}
+
+function formatChildErrors(childErrors: PathDiagnostic[]): string {
+  const details = childErrors
+    .slice(0, MAX_CHILD_ERROR_DETAILS)
+    .map(
+      ({ path, reason }) =>
+        `${boundedDiagnosticField(path)}: ${boundedDiagnosticField(reason)}`,
+    );
+  const remaining = childErrors.length - details.length;
+  return `${details.join("; ")}${remaining > 0 ? `; ${remaining} more` : ""}`;
+}
 
 function evtxPathsFromFolderEntries(entries: FolderEntry[]): string[] {
   return entries
@@ -61,10 +82,14 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
     const listing = await listLogFolder(path);
     const evtxPaths = evtxPathsFromFolderEntries(listing.entries);
     if (evtxPaths.length === 0) {
+      const childErrorDetails = listing.childErrors?.length
+        ? ` Access diagnostics: ${formatChildErrors(listing.childErrors)}`
+        : "";
       throw new Error(
-        source.kind === "known"
+        (source.kind === "known"
           ? "No .evtx files were found for that known source."
-          : "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files."
+          : "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.") +
+          childErrorDetails,
       );
     }
     await parseFiles(evtxPaths);

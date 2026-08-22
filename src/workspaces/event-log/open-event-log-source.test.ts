@@ -181,4 +181,58 @@ describe("openEventLogSource", () => {
       "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files."
     );
   });
+
+  it("preserves child traversal details when they explain an empty folder", async () => {
+    listLogFolder.mockResolvedValue({
+      sourceKind: "folder",
+      source: { kind: "folder", path: "/tmp/logs" },
+      entries: [],
+      childErrors: [
+        {
+          path: "/tmp/logs/protected.evtx",
+          reason: "access denied",
+        },
+      ],
+    });
+
+    await expect(
+      openEventLogSource({ kind: "folder", path: "/tmp/logs" })
+    ).rejects.toThrow("/tmp/logs/protected.evtx: access denied");
+    expect(setLoadError).toHaveBeenCalledWith(
+      expect.stringContaining("/tmp/logs/protected.evtx: access denied")
+    );
+  });
+
+  it("bounds empty-folder traversal diagnostics by count and message size", async () => {
+    const longPath = `/tmp/${"a".repeat(500)}.evtx`;
+    const longReason = `denied-${"b".repeat(500)}`;
+    listLogFolder.mockResolvedValue({
+      sourceKind: "folder",
+      source: { kind: "folder", path: "/tmp/logs" },
+      entries: [],
+      childErrors: [
+        { path: longPath, reason: longReason },
+        { path: "/tmp/logs/second.evtx", reason: "second failure" },
+        { path: "/tmp/logs/third.evtx", reason: "third failure" },
+        { path: "/tmp/logs/fourth.evtx", reason: "fourth failure" },
+        { path: "/tmp/logs/fifth.evtx", reason: "fifth failure" },
+      ],
+    });
+
+    let message = "";
+    try {
+      await openEventLogSource({ kind: "folder", path: "/tmp/logs" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain(`/tmp/${"a".repeat(20)}`);
+    expect(message).toContain(`denied-${"b".repeat(20)}`);
+    expect(message).toContain("/tmp/logs/second.evtx: second failure");
+    expect(message).toContain("/tmp/logs/third.evtx: third failure");
+    expect(message).not.toContain("/tmp/logs/fourth.evtx");
+    expect(message).not.toContain("/tmp/logs/fifth.evtx");
+    expect(message).toContain("2 more");
+    expect(message.length).toBeLessThanOrEqual(1_200);
+  });
 });

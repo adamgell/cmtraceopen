@@ -682,6 +682,30 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("names the sort-direction action that the button will perform", () => {
+    seedFixtureEvents();
+    render(<EvtxFilterBar />);
+
+    const changeToDescending = screen.getByTitle(
+      "Change sort direction to descending",
+    );
+    expect(changeToDescending).toHaveAttribute(
+      "aria-label",
+      "Change sort direction to descending",
+    );
+    fireEvent.click(changeToDescending);
+
+    expect(useEvtxStore.getState().sortDirection).toBe("desc");
+    expect(changeToDescending).toHaveAttribute(
+      "aria-label",
+      "Change sort direction to ascending",
+    );
+    expect(changeToDescending).toHaveAttribute(
+      "title",
+      "Change sort direction to ascending",
+    );
+  });
+
   it("shows event detail, Event Data, and Show/Hide Raw XML", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
