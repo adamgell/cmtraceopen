@@ -564,6 +564,14 @@ function isFolderEntryResponse(value: unknown): boolean {
   );
 }
 
+function isPathDiagnosticResponse(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.reason === "string"
+  );
+}
+
 function isFolderListingResponse(value: unknown): value is FolderListingResult {
   return (
     isCommandRecord(value) &&
@@ -571,6 +579,9 @@ function isFolderListingResponse(value: unknown): value is FolderListingResult {
     isLogSourceResponse(value.source) &&
     Array.isArray(value.entries) &&
     value.entries.every(isFolderEntryResponse) &&
+    (value.childErrors === undefined ||
+      (Array.isArray(value.childErrors) &&
+        value.childErrors.every(isPathDiagnosticResponse))) &&
     (value.bundleMetadata === undefined ||
       value.bundleMetadata === null ||
       isCommandRecord(value.bundleMetadata))

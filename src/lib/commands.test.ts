@@ -133,6 +133,12 @@ describe("parse and folder IPC response validation", () => {
       sourceKind: "folder",
       source: { kind: "folder", path: "C:\\Logs" },
       entries: [],
+      childErrors: [
+        {
+          path: "C:\\Logs\\protected.evtx",
+          reason: "access denied",
+        },
+      ],
       bundleMetadata: null,
     };
     vi.mocked(invoke)
@@ -166,6 +172,43 @@ describe("parse and folder IPC response validation", () => {
     await expect(parseFilesBatch(["C:\\Logs\\App.log"], 7, 0)).rejects.toThrow(
       "Command 'parse_files_batch' returned an invalid response.",
     );
+    await expect(listLogFolder("C:\\Logs")).rejects.toThrow(
+      "Command 'list_log_folder' returned an invalid response.",
+    );
+  });
+
+  it("accepts a folder listing when optional childErrors is absent", async () => {
+    const folderListing = {
+      sourceKind: "folder",
+      source: { kind: "folder", path: "C:\\Logs" },
+      entries: [],
+      bundleMetadata: null,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(folderListing);
+
+    await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
+  });
+
+  it.each([
+    ["when it is not an array", { path: "C:\\Logs\\protected.evtx", reason: "access denied" }],
+    ["when it has a non-record member", ["access denied"]],
+    [
+      "when a member has a non-string path",
+      [{ path: 7, reason: "access denied" }],
+    ],
+    [
+      "when a member has a non-string reason",
+      [{ path: "C:\\Logs\\protected.evtx", reason: { message: "denied" } }],
+    ],
+  ])("rejects folder childErrors %s", async (_label, childErrors) => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      sourceKind: "folder",
+      source: { kind: "folder", path: "C:\\Logs" },
+      entries: [],
+      childErrors,
+      bundleMetadata: null,
+    });
+
     await expect(listLogFolder("C:\\Logs")).rejects.toThrow(
       "Command 'list_log_folder' returned an invalid response.",
     );

@@ -2,12 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventLogSourceManifest } from "./types";
 
 const expandEventLogSources = vi.hoisted(() => vi.fn());
-const listLogFolder = vi.hoisted(() => vi.fn());
 const parseManifest = vi.hoisted(() => vi.fn());
 const parseFiles = vi.hoisted(() => vi.fn());
 const setLoadError = vi.hoisted(() => vi.fn());
 
-vi.mock("../../lib/commands", () => ({ expandEventLogSources, listLogFolder }));
+vi.mock("../../lib/commands", () => ({ expandEventLogSources }));
 vi.mock("./evtx-store", () => ({
   useEvtxStore: {
     getState: () => ({ parseManifest, parseFiles, setLoadError }),
@@ -19,11 +18,17 @@ const { openEventLogSource, openEventLogSources } =
   await import("./open-event-log-source");
 beforeEach(() => {
   expandEventLogSources.mockReset();
-  listLogFolder.mockReset();
   parseManifest.mockReset();
   parseFiles.mockReset();
   setLoadError.mockReset();
 });
+
+function manifestFor(path: string): EventLogSourceManifest {
+  return {
+    entries: [{ sourceId: path.toLowerCase(), path, kind: "file" }],
+    coverage: [],
+  };
+}
 
 describe("openEventLogSources provenance", () => {
   it("keeps backend archive and VSS kinds when the picker reports a generic file", async () => {
@@ -52,12 +57,92 @@ describe("openEventLogSources provenance", () => {
 describe("openEventLogSource", () => {
   beforeEach(() => {
     parseFiles.mockResolvedValue(undefined);
+    parseManifest.mockResolvedValue(undefined);
   });
 
   it("parses a single evtx file", async () => {
     await openEventLogSource({ kind: "file", path: "/tmp/Application.evtx" });
 
     expect(parseFiles).toHaveBeenCalledWith(["/tmp/Application.evtx"]);
+  });
+
+  it.each([
+    {
+      label: "folder",
+      source: { kind: "folder" as const, path: "/tmp/logs" },
+    },
+    {
+      label: "known folder",
+      source: {
+        kind: "known" as const,
+        sourceId: "known-logs",
+        defaultPath: "/tmp/logs",
+        pathKind: "folder" as const,
+      },
+    },
+  ])(
+    "loads usable EVTX and preserves partial coverage from one $label manifest expansion",
+    async ({ source }) => {
+      const manifest: EventLogSourceManifest = {
+        entries: [
+          {
+            sourceId: "application",
+            path: "/tmp/logs/Application.evtx",
+            kind: "file",
+          },
+        ],
+        coverage: [
+          {
+            kind: "accessDenied",
+            path: "/tmp/logs/protected.evtx",
+            reason: "access denied",
+          },
+        ],
+      };
+      expandEventLogSources.mockResolvedValue(manifest);
+      parseManifest.mockResolvedValue(undefined);
+
+      await openEventLogSource(source);
+
+      expect(expandEventLogSources).toHaveBeenCalledWith([
+        { kind: "folder", path: "/tmp/logs" },
+      ]);
+      expect(expandEventLogSources).toHaveBeenCalledTimes(1);
+      expect(parseManifest).toHaveBeenCalledWith(manifest);
+      expect(parseFiles).not.toHaveBeenCalled();
+    },
+  );
+
+  it("loads EVTX files found only in a nested folder by the manifest expander", async () => {
+    const manifest = manifestFor("/tmp/logs/nested/Application.evtx");
+    expandEventLogSources.mockResolvedValue(manifest);
+
+    await openEventLogSource({ kind: "folder", path: "/tmp/logs" });
+
+    expect(expandEventLogSources).toHaveBeenCalledWith([
+      { kind: "folder", path: "/tmp/logs" },
+    ]);
+    expect(expandEventLogSources).toHaveBeenCalledTimes(1);
+    expect(parseManifest).toHaveBeenCalledWith(manifest);
+  });
+
+  it("uses manifest coverage to explain why a folder produced no usable EVTX entries", async () => {
+    expandEventLogSources.mockResolvedValue({
+      entries: [],
+      coverage: [
+        {
+          kind: "accessDenied",
+          path: "/tmp/logs/protected.evtx",
+          reason: "access denied",
+        },
+      ],
+    });
+
+    await expect(
+      openEventLogSource({ kind: "folder", path: "/tmp/logs" }),
+    ).rejects.toThrow("/tmp/logs/protected.evtx: access denied");
+    expect(expandEventLogSources).toHaveBeenCalledTimes(1);
+    expect(parseManifest).not.toHaveBeenCalled();
   });
 
   it("propagates file parse failures and records the error", async () => {
@@ -80,36 +165,13 @@ describe("openEventLogSource", () => {
     });
 
     expect(parseFiles).toHaveBeenCalledWith([defaultPath]);
-    expect(listLogFolder).not.toHaveBeenCalled();
+    expect(expandEventLogSources).not.toHaveBeenCalled();
   });
 
   it("parses evtx files from a known folder source", async () => {
     const defaultPath = "/tmp/logs";
-    listLogFolder.mockResolvedValue({
-      entries: [
-        {
-          name: "SYSTEM.EVTX",
-          path: `${defaultPath}/SYSTEM.EVTX`,
-          isDir: false,
-          sizeBytes: 1,
-          modifiedUnixMs: null,
-        },
-        {
-          name: "notes.txt",
-          path: `${defaultPath}/notes.txt`,
-          isDir: false,
-          sizeBytes: 1,
-          modifiedUnixMs: null,
-        },
-        {
-          name: "nested.evtx",
-          path: `${defaultPath}/nested.evtx`,
-          isDir: true,
-          sizeBytes: null,
-          modifiedUnixMs: null,
-        },
-      ],
-    });
+    const manifest = manifestFor(`${defaultPath}/SYSTEM.EVTX`);
+    expandEventLogSources.mockResolvedValue(manifest);
 
     await openEventLogSource({
       kind: "known",
@@ -118,12 +180,24 @@ describe("openEventLogSource", () => {
       pathKind: "folder",
     });
 
-    expect(listLogFolder).toHaveBeenCalledWith(defaultPath);
-    expect(parseFiles).toHaveBeenCalledWith([`${defaultPath}/SYSTEM.EVTX`]);
+    expect(expandEventLogSources).toHaveBeenCalledWith([
+      { kind: "folder", path: defaultPath },
+    ]);
+    expect(parseManifest).toHaveBeenCalledWith(manifest);
+    expect(parseFiles).not.toHaveBeenCalled();
   });
 
   it("rejects a known folder with no evtx files", async () => {
-    listLogFolder.mockResolvedValue({ entries: [] });
+    expandEventLogSources.mockResolvedValue({
+      entries: [],
+      coverage: [
+        {
+          kind: "empty",
+          path: "/tmp/empty",
+          reason: "folder contains no EVTX files",
+        },
+      ],
+    });
 
     await expect(
       openEventLogSource({
@@ -137,42 +211,34 @@ describe("openEventLogSource", () => {
       "No .evtx files were found for that known source."
     );
     expect(parseFiles).not.toHaveBeenCalled();
+    expect(parseManifest).not.toHaveBeenCalled();
+    expect(expandEventLogSources).toHaveBeenCalledTimes(1);
   });
 
-  it("parses evtx files from a folder and ignores other names", async () => {
-    listLogFolder.mockResolvedValue({
-      entries: [
-        {
-          name: "Application.evtx",
-          path: "/tmp/logs/Application.evtx",
-          isDir: false,
-          sizeBytes: 1,
-          modifiedUnixMs: null,
-        },
-        {
-          name: "notes.txt",
-          path: "/tmp/logs/notes.txt",
-          isDir: false,
-          sizeBytes: 1,
-          modifiedUnixMs: null,
-        },
-        {
-          name: "nested",
-          path: "/tmp/logs/nested",
-          isDir: true,
-          sizeBytes: null,
-          modifiedUnixMs: null,
-        },
-      ],
-    });
+  it("parses the manifest returned for a folder", async () => {
+    const manifest = manifestFor("/tmp/logs/Application.evtx");
+    expandEventLogSources.mockResolvedValue(manifest);
 
     await openEventLogSource({ kind: "folder", path: "/tmp/logs" });
 
-    expect(parseFiles).toHaveBeenCalledWith(["/tmp/logs/Application.evtx"]);
+    expect(expandEventLogSources).toHaveBeenCalledWith([
+      { kind: "folder", path: "/tmp/logs" },
+    ]);
+    expect(parseManifest).toHaveBeenCalledWith(manifest);
+    expect(parseFiles).not.toHaveBeenCalled();
   });
 
   it("rejects a folder with no evtx files", async () => {
-    listLogFolder.mockResolvedValue({ entries: [] });
+    expandEventLogSources.mockResolvedValue({
+      entries: [],
+      coverage: [
+        {
+          kind: "empty",
+          path: "/tmp/empty",
+          reason: "folder contains no EVTX files",
+        },
+      ],
+    });
 
     await expect(
       openEventLogSource({ kind: "folder", path: "/tmp/empty" })
@@ -180,15 +246,16 @@ describe("openEventLogSource", () => {
     expect(setLoadError).toHaveBeenCalledWith(
       "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files."
     );
+    expect(parseManifest).not.toHaveBeenCalled();
+    expect(expandEventLogSources).toHaveBeenCalledTimes(1);
   });
 
   it("preserves child traversal details when they explain an empty folder", async () => {
-    listLogFolder.mockResolvedValue({
-      sourceKind: "folder",
-      source: { kind: "folder", path: "/tmp/logs" },
+    expandEventLogSources.mockResolvedValue({
       entries: [],
-      childErrors: [
+      coverage: [
         {
+          kind: "accessDenied",
           path: "/tmp/logs/protected.evtx",
           reason: "access denied",
         },
@@ -206,16 +273,30 @@ describe("openEventLogSource", () => {
   it("bounds empty-folder traversal diagnostics by count and message size", async () => {
     const longPath = `/tmp/${"a".repeat(500)}.evtx`;
     const longReason = `denied-${"b".repeat(500)}`;
-    listLogFolder.mockResolvedValue({
-      sourceKind: "folder",
-      source: { kind: "folder", path: "/tmp/logs" },
+    expandEventLogSources.mockResolvedValue({
       entries: [],
-      childErrors: [
-        { path: longPath, reason: longReason },
-        { path: "/tmp/logs/second.evtx", reason: "second failure" },
-        { path: "/tmp/logs/third.evtx", reason: "third failure" },
-        { path: "/tmp/logs/fourth.evtx", reason: "fourth failure" },
-        { path: "/tmp/logs/fifth.evtx", reason: "fifth failure" },
+      coverage: [
+        { kind: "accessDenied", path: longPath, reason: longReason },
+        {
+          kind: "accessDenied",
+          path: "/tmp/logs/second.evtx",
+          reason: "second failure",
+        },
+        {
+          kind: "accessDenied",
+          path: "/tmp/logs/third.evtx",
+          reason: "third failure",
+        },
+        {
+          kind: "accessDenied",
+          path: "/tmp/logs/fourth.evtx",
+          reason: "fourth failure",
+        },
+        {
+          kind: "accessDenied",
+          path: "/tmp/logs/fifth.evtx",
+          reason: "fifth failure",
+        },
       ],
     });
 

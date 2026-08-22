@@ -1,7 +1,11 @@
-import { expandEventLogSources, listLogFolder } from "../../lib/commands";
-import type { FolderEntry, LogSource, PathDiagnostic } from "../../types/log";
+import { expandEventLogSources } from "../../lib/commands";
+import type { LogSource } from "../../types/log";
 import { useEvtxStore } from "./evtx-store";
-import type { EventLogSourceManifest, EventLogSourceSelection } from "./types";
+import type {
+  EventLogSourceCoverage,
+  EventLogSourceManifest,
+  EventLogSourceSelection,
+} from "./types";
 
 export type EventLogOpenSource =
   | { kind: "file"; path: string }
@@ -11,7 +15,7 @@ export type EventLogOpenSource =
   | { kind: "vss"; path: string }
   | Extract<LogSource, { kind: "known" }>;
 
-const MAX_CHILD_ERROR_DETAILS = 3;
+const MAX_COVERAGE_DETAILS = 3;
 const MAX_DIAGNOSTIC_FIELD_LENGTH = 160;
 
 function boundedDiagnosticField(value: string): string {
@@ -21,21 +25,15 @@ function boundedDiagnosticField(value: string): string {
     : `${normalized.slice(0, MAX_DIAGNOSTIC_FIELD_LENGTH - 1)}…`;
 }
 
-function formatChildErrors(childErrors: PathDiagnostic[]): string {
-  const details = childErrors
-    .slice(0, MAX_CHILD_ERROR_DETAILS)
+function formatCoverageDiagnostics(coverage: EventLogSourceCoverage[]): string {
+  const details = coverage
+    .slice(0, MAX_COVERAGE_DETAILS)
     .map(
       ({ path, reason }) =>
         `${boundedDiagnosticField(path)}: ${boundedDiagnosticField(reason)}`,
     );
-  const remaining = childErrors.length - details.length;
+  const remaining = coverage.length - details.length;
   return `${details.join("; ")}${remaining > 0 ? `; ${remaining} more` : ""}`;
-}
-
-function evtxPathsFromFolderEntries(entries: FolderEntry[]): string[] {
-  return entries
-    .filter((entry) => !entry.isDir && entry.name.toLowerCase().endsWith(".evtx"))
-    .map((entry) => entry.path);
 }
 
 /** Expand selected sources once and hand the complete manifest to the store. */
@@ -79,20 +77,22 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
       return;
     }
 
-    const listing = await listLogFolder(path);
-    const evtxPaths = evtxPathsFromFolderEntries(listing.entries);
-    if (evtxPaths.length === 0) {
-      const childErrorDetails = listing.childErrors?.length
-        ? ` Access diagnostics: ${formatChildErrors(listing.childErrors)}`
+    const manifest = await expandEventLogSources([{ kind: "folder", path }]);
+    if (manifest.entries.length === 0) {
+      const usefulCoverage = manifest.coverage.filter(
+        (coverage) => coverage.kind !== "empty",
+      );
+      const coverageDetails = usefulCoverage.length
+        ? ` Source diagnostics: ${formatCoverageDiagnostics(usefulCoverage)}`
         : "";
       throw new Error(
         (source.kind === "known"
           ? "No .evtx files were found for that known source."
           : "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.") +
-          childErrorDetails,
+          coverageDetails,
       );
     }
-    await parseFiles(evtxPaths);
+    await useEvtxStore.getState().parseManifest(manifest);
   } catch (error) {
     useEvtxStore.getState().setLoadError(
       error instanceof Error ? error.message : String(error)
