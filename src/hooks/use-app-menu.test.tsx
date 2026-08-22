@@ -313,9 +313,6 @@ describe("useAppMenu", () => {
     const { rerender } = renderHook(() => useAppMenu());
     await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
 
-    const registeredCallback = eventMocks.state.callback as (
-      event: { payload: TestMenuPayload },
-    ) => Promise<void>;
     const originalToggleSidebar = actionMocks.current.toggleSidebar;
     const replacementToggleSidebar = vi.fn();
 
@@ -324,19 +321,8 @@ describe("useAppMenu", () => {
       rerender();
       await act(async () => Promise.resolve());
 
-      await act(async () => {
-        await registeredCallback({
-          payload: {
-            version: 1,
-            menu_id: "test.toggle_sidebar",
-            action: "toggle_sidebar",
-            category: "test",
-            trigger: "menu",
-            source_id: null,
-            target_id: null,
-          },
-        });
-      });
+      expect(eventMocks.listen).toHaveBeenCalledOnce();
+      await emitMenuAction({ action: "toggle_sidebar" });
 
       expect(replacementToggleSidebar).toHaveBeenCalledOnce();
     } finally {
