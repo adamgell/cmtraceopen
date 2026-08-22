@@ -80,6 +80,13 @@ export function KeyTree() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if ((e.key === "Home" || e.key === "End") && flatRows.length > 0) {
+        e.preventDefault();
+        const targetIndex = e.key === "Home" ? 0 : flatRows.length - 1;
+        setSelectedKeyPath(flatRows[targetIndex].node.fullPath);
+        return;
+      }
+
       if (selectedIndex < 0) {
         if (flatRows.length === 0) return;
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -112,7 +119,10 @@ export function KeyTree() {
         }
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (expandedPaths.has(row.node.fullPath)) {
+        if (
+          row.node.children.length > 0 &&
+          expandedPaths.has(row.node.fullPath)
+        ) {
           toggleExpanded(row.node.fullPath);
         } else if (row.depth > 0) {
           for (let index = selectedIndex - 1; index >= 0; index--) {
@@ -172,6 +182,8 @@ export function KeyTree() {
               id={`registry-tree-item-${virtualRow.index}`}
               role="treeitem"
               aria-level={row.depth + 1}
+              aria-posinset={row.posInSet}
+              aria-setsize={row.setSize}
               aria-selected={isSelected}
               aria-expanded={hasChildren ? isExpanded : undefined}
               style={{
@@ -198,6 +210,11 @@ export function KeyTree() {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}
+              onPointerDown={(e) => {
+                if (e.button === 0) {
+                  setSelectedKeyPath(row.node.fullPath);
+                }
+              }}
               onClick={() => setSelectedKeyPath(row.node.fullPath)}
               onDoubleClick={() => {
                 if (hasChildren) toggleExpanded(row.node.fullPath);
@@ -214,6 +231,7 @@ export function KeyTree() {
                   color: tokens.colorNeutralForeground3,
                   fontSize: "10px",
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (hasChildren) toggleExpanded(row.node.fullPath);

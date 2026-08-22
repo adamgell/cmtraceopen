@@ -109,6 +109,61 @@ describe("RegistryViewer", () => {
     expect(tree).toHaveAttribute("aria-activedescendant", treeItems[0].id);
   });
 
+  it("selects a primary-pointer row before tree focus initializes a different row", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const target = screen
+      .getByTitle(fixture.keys[1].path)
+      .closest('[role="treeitem"]');
+    if (!target) throw new Error("Expected the target registry row");
+
+    fireEvent.pointerDown(target, { button: 0 });
+    fireEvent.focus(tree);
+
+    expect(target).toHaveAttribute("aria-selected", "true");
+    expect(tree).toHaveAttribute("aria-activedescendant", target.id);
+  });
+
+  it("does not select a row from a secondary pointer press", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const rows = screen.getAllByRole("treeitem");
+    const target = screen
+      .getByTitle(fixture.keys[1].path)
+      .closest('[role="treeitem"]');
+    if (!target) throw new Error("Expected the target registry row");
+
+    fireEvent.pointerDown(target, { button: 2 });
+    fireEvent.focus(tree);
+
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(target).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("toggles a disclosure without changing the selected row", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    fireEvent.focus(tree);
+    const selected = screen.getAllByRole("treeitem")[0];
+    const target = screen
+      .getByTitle(fixture.keys[0].path)
+      .closest('[role="treeitem"]');
+    const disclosure = target?.firstElementChild;
+    if (!target || !disclosure) {
+      throw new Error("Expected the target registry row disclosure");
+    }
+
+    fireEvent.pointerDown(disclosure, { button: 0 });
+    fireEvent.click(disclosure);
+
+    expect(selected).toHaveAttribute("aria-selected", "true");
+    expect(target).toHaveAttribute("aria-selected", "false");
+    expect(target).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("initializes tree focus and navigates vertically", () => {
     render(<RegistryViewer />);
 
@@ -169,6 +224,128 @@ describe("RegistryViewer", () => {
       "aria-activedescendant",
       collapsedItems[0].id,
     );
+  });
+
+  it("moves from an expanded-state leaf to its parent with one ArrowLeft press", () => {
+    const leafPath = fixture.keys[1].path;
+    useRegistryStore.setState((state) => ({
+      expandedPaths: new Set(
+        [...state.expandedPaths].filter((path) => path !== leafPath),
+      ),
+      selectedKeyPath: leafPath,
+    }));
+    useRegistryStore.getState().toggleExpanded(leafPath);
+    expect(useRegistryStore.getState().expandedPaths).not.toContain(leafPath);
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    fireEvent.keyDown(tree, { key: "ArrowLeft" });
+
+    expect(useRegistryStore.getState().selectedKeyPath).toBe(
+      "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot",
+    );
+  });
+
+  it("never expands leaves when registry data loads or search navigation reveals a key", () => {
+    const parentPath =
+      "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot";
+    const leafPath = fixture.keys[1].path;
+
+    expect(useRegistryStore.getState().expandedPaths).toContain(parentPath);
+    expect(useRegistryStore.getState().expandedPaths).not.toContain(leafPath);
+
+    act(() => useRegistryStore.getState().expandToPath(leafPath));
+
+    expect(useRegistryStore.getState().expandedPaths).toContain(parentPath);
+    expect(useRegistryStore.getState().expandedPaths).not.toContain(leafPath);
+    expect(useRegistryStore.getState().selectedKeyPath).toBe(leafPath);
+  });
+
+  it("handles Home and End as cancellable first/last-row navigation", () => {
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const rows = screen.getAllByRole("treeitem");
+    fireEvent.focus(tree);
+
+    const endEvent = new KeyboardEvent("keydown", {
+      key: "End",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(tree, endEvent);
+    expect(endEvent.defaultPrevented).toBe(true);
+    expect(tree).toHaveAttribute(
+      "aria-activedescendant",
+      rows[rows.length - 1].id,
+    );
+
+    const homeEvent = new KeyboardEvent("keydown", {
+      key: "Home",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(tree, homeEvent);
+    expect(homeEvent.defaultPrevented).toBe(true);
+    expect(tree).toHaveAttribute("aria-activedescendant", rows[0].id);
+  });
+
+  it("selects a collapsed ancestor when its selected descendant becomes hidden", () => {
+    const ancestorPath = "HKEY_LOCAL_MACHINE\\SYSTEM";
+    useRegistryStore.getState().setSelectedKeyPath(fixture.keys[1].path);
+    render(<RegistryViewer />);
+
+    act(() => useRegistryStore.getState().toggleExpanded(ancestorPath));
+
+    const ancestor = screen
+      .getByTitle(ancestorPath)
+      .closest('[role="treeitem"]');
+    if (!ancestor) throw new Error("Expected the collapsed ancestor row");
+    expect(useRegistryStore.getState().selectedKeyPath).toBe(ancestorPath);
+    expect(ancestor).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("exposes each visible row's position within its sibling set", () => {
+    useRegistryStore.getState().setRegistryData({
+      ...fixture,
+      totalKeys: 4,
+      keys: [
+        ...fixture.keys,
+        {
+          ...fixture.keys[0],
+          path: "HKEY_LOCAL_MACHINE\\SOFTWARE",
+          values: [],
+        },
+        {
+          ...fixture.keys[0],
+          path: "HKEY_CURRENT_USER\\Software",
+          values: [],
+        },
+      ],
+    });
+    render(<RegistryViewer />);
+
+    const hklm = screen
+      .getByTitle("HKEY_LOCAL_MACHINE")
+      .closest('[role="treeitem"]');
+    const hkcu = screen
+      .getByTitle("HKEY_CURRENT_USER")
+      .closest('[role="treeitem"]');
+    const system = screen
+      .getByTitle("HKEY_LOCAL_MACHINE\\SYSTEM")
+      .closest('[role="treeitem"]');
+    const software = screen
+      .getByTitle("HKEY_LOCAL_MACHINE\\SOFTWARE")
+      .closest('[role="treeitem"]');
+
+    expect(hklm).toHaveAttribute("aria-posinset", "1");
+    expect(hklm).toHaveAttribute("aria-setsize", "2");
+    expect(hkcu).toHaveAttribute("aria-posinset", "2");
+    expect(hkcu).toHaveAttribute("aria-setsize", "2");
+    expect(system).toHaveAttribute("aria-posinset", "1");
+    expect(system).toHaveAttribute("aria-setsize", "2");
+    expect(software).toHaveAttribute("aria-posinset", "2");
+    expect(software).toHaveAttribute("aria-setsize", "2");
   });
 
   it("keeps a selected registry row in the virtualized range", () => {
