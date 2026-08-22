@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AboutDialog } from "../../components/dialogs/AboutDialog";
+import { useUiStore } from "../../stores/ui-store";
 import { EspActions } from "./EspActions";
 import { makeEspWorkload } from "./esp-session-fixtures";
 import type { EspWorkload } from "./types";
@@ -26,7 +28,26 @@ function failedApp(): EspWorkload {
   });
 }
 
+function AboutAndEspActions() {
+  const showAboutDialog = useUiStore((state) => state.showAboutDialog);
+  const setShowAboutDialog = useUiStore((state) => state.setShowAboutDialog);
+  return (
+    <>
+      <AboutDialog
+        isOpen={showAboutDialog}
+        onClose={() => setShowAboutDialog(false)}
+      />
+      <EspActions failedApps={[failedApp()]} graphNames={new Map()} elevated />
+    </>
+  );
+}
+
 describe("EspActions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useUiStore.setState(useUiStore.getInitialState(), true);
+  });
+
   it("renders nothing when there are no failed apps", () => {
     const { container } = render(
       <EspActions failedApps={[]} graphNames={new Map()} elevated />,
@@ -80,5 +101,31 @@ describe("EspActions", () => {
     expect(
       screen.getByRole("button", { name: /Restore/i, hidden: true }),
     ).toBeInTheDocument();
+  });
+
+  it("queues force confirmation behind the app modal and releases ownership on unmount", async () => {
+    useUiStore.getState().setShowAboutDialog(true);
+    const view = render(<AboutAndEspActions />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Force past ESP/i }));
+
+    expect(document.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+    expect(useUiStore.getState().modalOwner).toBe("about");
+    expect(useUiStore.getState().modalQueue).toEqual(["espForceAction"]);
+    expect(screen.queryByText("Force ESP past this app?")).toBeNull();
+
+    act(() => {
+      useUiStore.getState().setShowAboutDialog(false);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Force ESP past this app?")).toBeInTheDocument();
+      expect(document.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+    });
+
+    view.unmount();
+
+    expect(useUiStore.getState().modalOwner).toBeNull();
+    expect(useUiStore.getState().modalQueue).toEqual([]);
   });
 });

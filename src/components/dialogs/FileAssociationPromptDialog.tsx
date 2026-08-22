@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  getFileAssociationPromptStatus,
   getSafeErrorMessage,
   openWindowsDefaultApps,
   registerLogFileHandler,
@@ -7,6 +8,7 @@ import {
 } from "../../lib/commands";
 import { tokens } from "@fluentui/react-components";
 import { useModalFocus } from "../../hooks/use-modal-focus";
+import { useUiStore } from "../../stores/ui-store";
 
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
@@ -19,7 +21,14 @@ export function FileAssociationPromptDialog({
 }: FileAssociationPromptDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const setFileAssociationPromptBusy = useUiStore(
+    (state) => state.setFileAssociationPromptBusy,
+  );
   const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(
+    () => () => setFileAssociationPromptBusy(false),
+    [setFileAssociationPromptBusy],
+  );
   useModalFocus(
     isOpen,
     dialogRef,
@@ -50,6 +59,7 @@ export function FileAssociationPromptDialog({
 
   const handleRegister = async () => {
     setIsSubmitting(true);
+    setFileAssociationPromptBusy(true);
     setErrorMessage(null);
 
     try {
@@ -58,32 +68,57 @@ export function FileAssociationPromptDialog({
       setErrorMessage(
         `Failed to register CMTrace Open: ${getSafeErrorMessage(error, "Unknown error")}`,
       );
+      setFileAssociationPromptBusy(false);
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      const status = await getFileAssociationPromptStatus();
+      if (!status.isRegistered) {
+        setErrorMessage(
+          "CMTrace Open registration could not be confirmed by Windows. Try again or check Windows Default Apps.",
+        );
+        setFileAssociationPromptBusy(false);
+        setIsSubmitting(false);
+        return;
+      }
+    } catch (error) {
+      setErrorMessage(
+        `CMTrace Open was registered, but Windows registration could not be confirmed: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
+      setFileAssociationPromptBusy(false);
       setIsSubmitting(false);
       return;
     }
 
     try {
       await openWindowsDefaultApps();
+      setFileAssociationPromptBusy(false);
       onClose();
     } catch (error) {
       setErrorMessage(
         `CMTrace Open is registered, but Windows Default Apps could not be opened: ${getSafeErrorMessage(error, "Unknown error")}`,
       );
     } finally {
+      setFileAssociationPromptBusy(false);
       setIsSubmitting(false);
     }
   };
 
   const handleDontAskAgain = async () => {
     setIsSubmitting(true);
+    setFileAssociationPromptBusy(true);
     setErrorMessage(null);
 
     try {
       await setFileAssociationPromptSuppressed(true);
+      setFileAssociationPromptBusy(false);
       onClose();
     } catch (error) {
       setErrorMessage(getSafeErrorMessage(error, "Unknown error"));
     } finally {
+      setFileAssociationPromptBusy(false);
       setIsSubmitting(false);
     }
   };
@@ -136,7 +171,7 @@ export function FileAssociationPromptDialog({
         </div>
 
         <div style={{ fontSize: "12px", lineHeight: 1.5, marginBottom: "12px" }}>
-          This standalone copy of CMTrace Open can register as an available
+          This edition of CMTrace Open can register as a per-user available
           handler for <strong>.log</strong>,{" "}
           <strong>.log_</strong>, <strong>.lo_</strong>, and <strong>.cmtlog</strong>{" "}
           files.
@@ -160,6 +195,7 @@ export function FileAssociationPromptDialog({
 
         {errorMessage && (
           <div
+            role="alert"
             style={{
               color: tokens.colorPaletteRedForeground1,
               fontSize: "11px",

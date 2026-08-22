@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
 
@@ -15,10 +15,27 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const { useEvtxStore } = await import("./evtx-store");
 const { ChannelPicker } = await import("./ChannelPicker");
+const { AboutDialog } = await import("../../components/dialogs/AboutDialog");
+const { useUiStore } = await import("../../stores/ui-store");
+
+function AboutAndChannelPicker() {
+  const showAboutDialog = useUiStore((state) => state.showAboutDialog);
+  const setShowAboutDialog = useUiStore((state) => state.setShowAboutDialog);
+  return (
+    <>
+      <AboutDialog
+        isOpen={showAboutDialog}
+        onClose={() => setShowAboutDialog(false)}
+      />
+      <ChannelPicker />
+    </>
+  );
+}
 
 describe("event-log live operations", () => {
   beforeEach(() => {
     invoke.mockReset();
+    useUiStore.setState(useUiStore.getInitialState(), true);
     useEvtxStore.setState({
       sourceMode: "live",
       remoteMachine: null,
@@ -693,5 +710,32 @@ describe("event-log live operations", () => {
     fireEvent.click(cancelButton!);
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(invoke).not.toHaveBeenCalledWith("evtx_clear_channel", expect.anything());
+  });
+
+  it("queues the channel-clear confirmation behind the active app modal", async () => {
+    useUiStore.getState().setShowAboutDialog(true);
+    render(<AboutAndChannelPicker />);
+
+    fireEvent.change(document.querySelector('select[aria-label="Channel to clear"]')!, {
+      target: { value: "Application" },
+    });
+    const clearButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Clear",
+    );
+    fireEvent.click(clearButton!);
+
+    expect(document.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+    expect(useUiStore.getState().modalOwner).toBe("about");
+    expect(useUiStore.getState().modalQueue).toEqual(["eventLogChannelClear"]);
+    expect(document.body.textContent).not.toContain("Clear event channel?");
+
+    act(() => {
+      useUiStore.getState().setShowAboutDialog(false);
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Clear event channel?");
+      expect(document.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+    });
   });
 });

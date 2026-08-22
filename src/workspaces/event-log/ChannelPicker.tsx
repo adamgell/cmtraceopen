@@ -12,6 +12,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
+import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
 import type { EvtxChannelInfo } from "./types";
@@ -120,6 +121,10 @@ export function ChannelPicker() {
   const clearChannel = useEvtxStore((s) => s.clearChannel);
   const [clearTarget, setClearTarget] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const ownsClearConfirmation = useModalOwnership(
+    "eventLogChannelClear",
+    confirmClear,
+  );
   const [clearError, setClearError] = useState<string | null>(null);
   const channels = useEvtxStore((s) => s.channels);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
@@ -315,7 +320,7 @@ export function ChannelPicker() {
           )}
         </div>
         <Dialog
-          open={confirmClear}
+          open={ownsClearConfirmation}
           onOpenChange={(_, data) => {
             setConfirmClear(data.open);
             if (data.open) setClearError(null);

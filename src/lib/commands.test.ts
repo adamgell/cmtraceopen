@@ -259,6 +259,23 @@ describe("Windows file handler IPC boundary", () => {
       "Command 'get_file_association_prompt_status' returned an invalid response.",
     );
   });
+
+  it("surfaces unavailable native association commands instead of decoding a false unit success", async () => {
+    vi.mocked(invoke)
+      .mockRejectedValueOnce(
+        new Error("register_log_file_handler is unavailable in browser mode"),
+      )
+      .mockRejectedValueOnce(
+        new Error("open_windows_default_apps is unavailable in browser mode"),
+      );
+
+    await expect(registerLogFileHandler()).rejects.toThrow(
+      "Command 'register_log_file_handler' failed.",
+    );
+    await expect(openWindowsDefaultApps()).rejects.toThrow(
+      "Command 'open_windows_default_apps' failed.",
+    );
+  });
 });
 
 function validIntuneAnalysis() {

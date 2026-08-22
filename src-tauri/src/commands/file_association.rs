@@ -4,19 +4,53 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-#[cfg(target_os = "windows")]
-const FILE_ASSOCIATION_PROG_ID: &str = "CMTraceOpen.LogFile";
-const REGISTERED_APPLICATION_NAME: &str = "CMTrace Open";
-#[cfg(target_os = "windows")]
-const FILE_ASSOCIATION_CAPABILITIES_PATH: &str = "Software\\CMTraceOpen\\Capabilities";
-#[cfg(target_os = "windows")]
-const DEFAULT_APPS_SETTINGS_URI: &str = "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open";
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const LOG_FILE_EXTENSIONS: &[&str] = &[".log", ".lo_", ".log_", ".cmtlog"];
 const FILE_ASSOCIATION_PROMPT_FILE_NAME: &str = "file-association-preferences.json";
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+struct FileAssociationIdentity {
+    application_name: String,
+    prog_id: String,
+    capabilities_path: String,
+    default_apps_settings_uri: String,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn file_association_identity(
+    product_name: Option<&str>,
+) -> Result<FileAssociationIdentity, crate::error::AppError> {
+    let application_name = product_name.ok_or_else(|| {
+        crate::error::AppError::InvalidInput(
+            "The configured product name is required for file handler registration.".to_string(),
+        )
+    })?;
+    let registry_stem = match application_name {
+        "CMTrace Open" => "CMTraceOpen",
+        "CMTrace Open Lite" => "CMTraceOpenLite",
+        "CMTrace Open Nightly" => "CMTraceOpenNightly",
+        "CMTrace Open Lite Nightly" => "CMTraceOpenLiteNightly",
+        _ => {
+            return Err(crate::error::AppError::InvalidInput(format!(
+                "File handler registration is not configured for product {application_name:?}."
+            )))
+        }
+    };
+    let encoded_application_name = utf8_percent_encode(application_name, NON_ALPHANUMERIC);
+    let default_apps_settings_uri =
+        format!("ms-settings:defaultapps?registeredAppUser={encoded_application_name}");
+
+    Ok(FileAssociationIdentity {
+        application_name: application_name.to_string(),
+        prog_id: format!("{registry_stem}.LogFile"),
+        capabilities_path: format!("Software\\{registry_stem}\\Capabilities"),
+        default_apps_settings_uri,
+    })
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,100 +165,134 @@ fn normalize_registry_value(value: &str) -> String {
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn has_visible_application_capabilities(
+    expected_application_name: &str,
     application_name: &str,
     application_description: &str,
 ) -> bool {
-    application_name == REGISTERED_APPLICATION_NAME && !application_description.trim().is_empty()
+    application_name == expected_application_name && !application_description.trim().is_empty()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn optional_registry_entry<T>(
+    result: std::io::Result<T>,
+) -> Result<Option<T>, crate::error::AppError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::error::AppError::Internal(error.to_string())),
+    }
 }
 
 #[cfg(target_os = "windows")]
-fn is_log_file_handler_registered() -> Result<bool, crate::error::AppError> {
+fn is_log_file_handler_registered(
+    identity: &FileAssociationIdentity,
+) -> Result<bool, crate::error::AppError> {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
     let expected_command = normalize_registry_value(&get_expected_open_command()?);
     let current_user = RegKey::predef(HKEY_CURRENT_USER);
 
-    let registered_applications = match current_user.open_subkey("Software\\RegisteredApplications")
-    {
-        Ok(key) => key,
-        Err(_) => return Ok(false),
+    let registered_applications = match optional_registry_entry(
+        current_user.open_subkey("Software\\RegisteredApplications"),
+    )? {
+        Some(key) => key,
+        None => return Ok(false),
     };
-    let capabilities_path: String =
-        match registered_applications.get_value(REGISTERED_APPLICATION_NAME) {
-            Ok(value) => value,
-            Err(_) => return Ok(false),
+    let capabilities_path: String = match optional_registry_entry(
+        registered_applications.get_value(identity.application_name.as_str()),
+    )? {
+        Some(value) => value,
+        None => return Ok(false),
+    };
+    if capabilities_path != identity.capabilities_path {
+        return Ok(false);
+    }
+
+    let capabilities = match optional_registry_entry(
+        current_user.open_subkey(identity.capabilities_path.as_str()),
+    )? {
+        Some(key) => key,
+        None => return Ok(false),
+    };
+    let application_name: String =
+        match optional_registry_entry(capabilities.get_value("ApplicationName"))? {
+            Some(value) => value,
+            None => return Ok(false),
         };
-    if capabilities_path != FILE_ASSOCIATION_CAPABILITIES_PATH {
+    let application_description: String =
+        match optional_registry_entry(capabilities.get_value("ApplicationDescription"))? {
+            Some(value) => value,
+            None => return Ok(false),
+        };
+    if !has_visible_application_capabilities(
+        &identity.application_name,
+        &application_name,
+        &application_description,
+    ) {
         return Ok(false);
     }
 
-    let capabilities = match current_user.open_subkey(FILE_ASSOCIATION_CAPABILITIES_PATH) {
-        Ok(key) => key,
-        Err(_) => return Ok(false),
-    };
-    let application_name: String = match capabilities.get_value("ApplicationName") {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
-    };
-    let application_description: String = match capabilities.get_value("ApplicationDescription") {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
-    };
-    if !has_visible_application_capabilities(&application_name, &application_description) {
-        return Ok(false);
-    }
-
-    let file_associations = match capabilities.open_subkey("FileAssociations") {
-        Ok(key) => key,
-        Err(_) => return Ok(false),
-    };
+    let file_associations =
+        match optional_registry_entry(capabilities.open_subkey("FileAssociations"))? {
+            Some(key) => key,
+            None => return Ok(false),
+        };
     for extension in LOG_FILE_EXTENSIONS {
-        let prog_id: String = match file_associations.get_value(extension) {
-            Ok(value) => value,
-            Err(_) => return Ok(false),
+        let prog_id: String = match optional_registry_entry(file_associations.get_value(extension))?
+        {
+            Some(value) => value,
+            None => return Ok(false),
         };
-        if prog_id != FILE_ASSOCIATION_PROG_ID {
+        if prog_id != identity.prog_id {
             return Ok(false);
         }
     }
 
-    let classes = match current_user.open_subkey("Software\\Classes") {
-        Ok(key) => key,
-        Err(_) => return Ok(false),
+    let classes = match optional_registry_entry(current_user.open_subkey("Software\\Classes"))? {
+        Some(key) => key,
+        None => return Ok(false),
     };
 
     for extension in LOG_FILE_EXTENSIONS {
-        let open_with_prog_ids =
-            match classes.open_subkey(format!("{}\\OpenWithProgids", extension)) {
-                Ok(key) => key,
-                Err(_) => return Ok(false),
-            };
-        let registration: String = match open_with_prog_ids.get_value(FILE_ASSOCIATION_PROG_ID) {
-            Ok(value) => value,
-            Err(_) => return Ok(false),
+        let open_with_prog_ids = match optional_registry_entry(
+            classes.open_subkey(format!("{}\\OpenWithProgids", extension)),
+        )? {
+            Some(key) => key,
+            None => return Ok(false),
         };
+        let registration: String =
+            match optional_registry_entry(open_with_prog_ids.get_value(identity.prog_id.as_str()))?
+            {
+                Some(value) => value,
+                None => return Ok(false),
+            };
         if !registration.is_empty() {
             return Ok(false);
         }
     }
 
-    let command_key = classes
-        .open_subkey(format!(
-            "{}\\shell\\open\\command",
-            FILE_ASSOCIATION_PROG_ID
-        ))
-        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
-    let command_value: String = command_key
-        .get_value("")
-        .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
+    let command_key = match optional_registry_entry(
+        classes.open_subkey(format!("{}\\shell\\open\\command", identity.prog_id)),
+    )? {
+        Some(key) => key,
+        None => return Ok(false),
+    };
+    let command_value: String = match optional_registry_entry(command_key.get_value(""))? {
+        Some(value) => value,
+        None => return Ok(false),
+    };
 
     Ok(normalize_registry_value(&command_value) == expected_command)
 }
 
 #[cfg(target_os = "windows")]
-fn register_log_file_handler_for_current_user() -> Result<(), crate::error::AppError> {
-    use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+fn register_log_file_handler_for_current_user(
+    identity: &FileAssociationIdentity,
+) -> Result<(), crate::error::AppError> {
+    use windows::Win32::UI::Shell::{
+        SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_FLUSH, SHCNF_IDLIST,
+    };
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
@@ -240,10 +308,10 @@ fn register_log_file_handler_for_current_user() -> Result<(), crate::error::AppE
     let open_command = get_expected_open_command()?;
 
     let (prog_id_key, _) = classes
-        .create_subkey(FILE_ASSOCIATION_PROG_ID)
+        .create_subkey(identity.prog_id.as_str())
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     prog_id_key
-        .set_value("", &"CMTrace Open Log File")
+        .set_value("", &format!("{} Log File", identity.application_name))
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     let (default_icon_key, _) = prog_id_key
@@ -265,16 +333,16 @@ fn register_log_file_handler_for_current_user() -> Result<(), crate::error::AppE
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     registered_applications
         .set_value(
-            REGISTERED_APPLICATION_NAME,
-            &FILE_ASSOCIATION_CAPABILITIES_PATH,
+            identity.application_name.as_str(),
+            &identity.capabilities_path,
         )
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
     let (capabilities, _) = current_user
-        .create_subkey(FILE_ASSOCIATION_CAPABILITIES_PATH)
+        .create_subkey(identity.capabilities_path.as_str())
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     capabilities
-        .set_value("ApplicationName", &REGISTERED_APPLICATION_NAME)
+        .set_value("ApplicationName", &identity.application_name)
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     capabilities
         .set_value(
@@ -290,32 +358,35 @@ fn register_log_file_handler_for_current_user() -> Result<(), crate::error::AppE
     // an extension's default value or Windows' protected UserChoice state.
     for extension in LOG_FILE_EXTENSIONS {
         file_associations
-            .set_value(extension, &FILE_ASSOCIATION_PROG_ID)
+            .set_value(extension, &identity.prog_id)
             .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
         let (open_with_prog_ids, _) = classes
             .create_subkey(format!("{}\\OpenWithProgids", extension))
             .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
         open_with_prog_ids
-            .set_value(FILE_ASSOCIATION_PROG_ID, &"")
+            .set_value(identity.prog_id.as_str(), &"")
             .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
     }
 
-    // New handler registrations are not guaranteed to appear until the Shell
-    // invalidates its association cache.
+    // Wait for the Shell to invalidate its association cache before the caller
+    // immediately verifies the registration and opens Default Apps.
     unsafe {
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, None, None);
     }
 
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn launch_windows_default_apps() -> Result<(), crate::error::AppError> {
+fn launch_windows_default_apps(
+    identity: &FileAssociationIdentity,
+) -> Result<(), crate::error::AppError> {
     use windows::core::{w, PCWSTR};
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    let settings_uri: Vec<u16> = DEFAULT_APPS_SETTINGS_URI
+    let settings_uri: Vec<u16> = identity
+        .default_apps_settings_uri
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -348,7 +419,8 @@ pub fn get_file_association_prompt_status(
 
     #[cfg(target_os = "windows")]
     {
-        let is_registered = is_log_file_handler_registered()?;
+        let identity = file_association_identity(app.config().product_name.as_deref())?;
+        let is_registered = is_log_file_handler_registered(&identity)?;
         Ok(FileAssociationPromptStatus {
             supported: true,
             should_prompt: !preferences.suppress_prompt && !is_registered,
@@ -372,14 +444,8 @@ pub fn get_file_association_prompt_status(
 pub fn register_log_file_handler(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
-        register_log_file_handler_for_current_user()?;
-        write_file_association_preferences(
-            &app,
-            &FileAssociationPreferences {
-                suppress_prompt: false,
-            },
-        )?;
-        Ok(())
+        let identity = file_association_identity(app.config().product_name.as_deref())?;
+        register_log_file_handler_for_current_user(&identity)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -392,14 +458,16 @@ pub fn register_log_file_handler(app: AppHandle) -> Result<(), crate::error::App
 }
 
 #[tauri::command]
-pub fn open_windows_default_apps() -> Result<(), crate::error::AppError> {
+pub fn open_windows_default_apps(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
-        launch_windows_default_apps()
+        let identity = file_association_identity(app.config().product_name.as_deref())?;
+        launch_windows_default_apps(&identity)
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = app;
         Err(crate::error::AppError::PlatformUnsupported(
             "Windows Default Apps settings are only available on Windows.".to_string(),
         ))
@@ -422,8 +490,121 @@ pub fn set_file_association_prompt_suppressed(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
+    use std::path::Path;
 
-    use super::{has_visible_application_capabilities, LOG_FILE_EXTENSIONS};
+    use super::{
+        file_association_identity, has_visible_application_capabilities, optional_registry_entry,
+        LOG_FILE_EXTENSIONS,
+    };
+
+    #[test]
+    fn handler_identity_is_bounded_and_distinct_for_every_shipped_product() {
+        let cases = [
+            (
+                "CMTrace Open",
+                "CMTraceOpen.LogFile",
+                "Software\\CMTraceOpen\\Capabilities",
+                "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open",
+            ),
+            (
+                "CMTrace Open Lite",
+                "CMTraceOpenLite.LogFile",
+                "Software\\CMTraceOpenLite\\Capabilities",
+                "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Lite",
+            ),
+            (
+                "CMTrace Open Nightly",
+                "CMTraceOpenNightly.LogFile",
+                "Software\\CMTraceOpenNightly\\Capabilities",
+                "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Nightly",
+            ),
+            (
+                "CMTrace Open Lite Nightly",
+                "CMTraceOpenLiteNightly.LogFile",
+                "Software\\CMTraceOpenLiteNightly\\Capabilities",
+                "ms-settings:defaultapps?registeredAppUser=CMTrace%20Open%20Lite%20Nightly",
+            ),
+        ];
+        let mut prog_ids = HashSet::new();
+        let mut capabilities_paths = HashSet::new();
+        let mut settings_uris = HashSet::new();
+
+        for (product_name, expected_prog_id, expected_capabilities_path, expected_uri) in cases {
+            let identity = file_association_identity(Some(product_name))
+                .expect("shipped product name must have an association identity");
+
+            assert_eq!(identity.application_name, product_name);
+            assert_eq!(identity.prog_id, expected_prog_id);
+            assert_eq!(identity.capabilities_path, expected_capabilities_path);
+            assert_eq!(identity.default_apps_settings_uri, expected_uri);
+            prog_ids.insert(identity.prog_id);
+            capabilities_paths.insert(identity.capabilities_path);
+            settings_uris.insert(identity.default_apps_settings_uri);
+        }
+
+        assert_eq!(prog_ids.len(), cases.len());
+        assert_eq!(capabilities_paths.len(), cases.len());
+        assert_eq!(settings_uris.len(), cases.len());
+    }
+
+    #[test]
+    fn handler_identity_rejects_unconfigured_product_names() {
+        for product_name in [
+            None,
+            Some(""),
+            Some("CMTrace Open Beta"),
+            Some("Another App"),
+        ] {
+            assert!(matches!(
+                file_association_identity(product_name),
+                Err(crate::error::AppError::InvalidInput(_))
+            ));
+        }
+    }
+
+    fn load_tauri_config(file_name: &str) -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file_name);
+        let contents = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        serde_json::from_str(&contents)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
+    }
+
+    #[test]
+    fn windows_packaging_disables_installer_associations_without_removing_other_platforms() {
+        let base_config = load_tauri_config("tauri.conf.json");
+        let base_associations = base_config
+            .pointer("/bundle/fileAssociations")
+            .and_then(serde_json::Value::as_array)
+            .expect("base bundle.fileAssociations must be an array");
+        let mut base_extensions: Vec<_> = base_associations
+            .iter()
+            .flat_map(|association| {
+                association
+                    .get("ext")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .map(|extension| {
+                extension
+                    .as_str()
+                    .expect("file association extensions must be strings")
+            })
+            .collect();
+        base_extensions.sort_unstable();
+
+        assert_eq!(base_extensions, ["cmtlog", "lo_", "log", "log_"]);
+
+        let windows_config = load_tauri_config("tauri.windows.conf.json");
+        let windows_associations = windows_config
+            .pointer("/bundle/fileAssociations")
+            .and_then(serde_json::Value::as_array)
+            .expect("Windows bundle.fileAssociations override must be an array");
+
+        assert!(windows_associations.is_empty());
+    }
 
     #[test]
     fn log_file_extensions_include_each_unique_rotation() {
@@ -437,12 +618,36 @@ mod tests {
     fn visible_registration_requires_the_expected_name_and_a_description() {
         assert!(has_visible_application_capabilities(
             "CMTrace Open",
+            "CMTrace Open",
             "Open and analyze log files.",
         ));
-        assert!(!has_visible_application_capabilities("CMTrace Open", "   "));
         assert!(!has_visible_application_capabilities(
+            "CMTrace Open",
+            "CMTrace Open",
+            "   ",
+        ));
+        assert!(!has_visible_application_capabilities(
+            "CMTrace Open",
             "Another App",
             "Open and analyze log files.",
+        ));
+    }
+
+    #[test]
+    fn registry_readback_only_treats_missing_entries_as_unregistered() {
+        assert_eq!(optional_registry_entry(Ok(42)).unwrap(), Some(42));
+        assert_eq!(
+            optional_registry_entry::<i32>(Err(
+                std::io::Error::from(std::io::ErrorKind::NotFound,)
+            ))
+            .unwrap(),
+            None,
+        );
+        assert!(matches!(
+            optional_registry_entry::<i32>(Err(std::io::Error::from(
+                std::io::ErrorKind::PermissionDenied,
+            ))),
+            Err(crate::error::AppError::Internal(_))
         ));
     }
 }

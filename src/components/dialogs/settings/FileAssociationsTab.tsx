@@ -13,23 +13,51 @@ export function FileAssociationsTab() {
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isReadingInitialStatus, setIsReadingInitialStatus] = useState(
+    currentPlatform === "windows",
+  );
 
-  const refreshRegistrationStatus = useCallback(async () => {
+  const readRegistrationStatus = useCallback(async (): Promise<boolean | null> => {
     if (currentPlatform !== "windows") {
-      return;
+      return null;
     }
-    try {
-      const result = await getFileAssociationPromptStatus();
-      setIsRegistered(result.isRegistered);
-    } catch (err) {
-      console.warn("[file-associations] failed to read handler registration", err);
-      setIsRegistered(null);
-    }
+    const result = await getFileAssociationPromptStatus();
+    return result.isRegistered;
   }, [currentPlatform]);
 
   useEffect(() => {
-    void refreshRegistrationStatus();
-  }, [refreshRegistrationStatus]);
+    if (currentPlatform !== "windows") {
+      setIsReadingInitialStatus(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsReadingInitialStatus(true);
+    void readRegistrationStatus()
+      .then((registered) => {
+        if (!cancelled && registered !== null) {
+          setIsRegistered(registered);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("[file-associations] failed to read handler registration", err);
+        setIsRegistered(null);
+        setStatus("error");
+        setErrorMessage(
+          `Failed to read CMTrace Open handler registration: ${getSafeErrorMessage(err, "Unknown error")}`,
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsReadingInitialStatus(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPlatform, readRegistrationStatus]);
 
   if (currentPlatform !== "windows") {
     return (
@@ -42,21 +70,54 @@ export function FileAssociationsTab() {
   }
 
   const handleRegister = async () => {
+    if (isRegistering || isReadingInitialStatus) return;
+
+    setIsRegistering(true);
+    setStatus("idle");
+    setErrorMessage(null);
+
     try {
-      setStatus("idle");
-      setErrorMessage(null);
-      await registerLogFileHandler();
+      try {
+        await registerLogFileHandler();
+      } catch (err) {
+        setStatus("error");
+        setErrorMessage(
+          `Failed to register CMTrace Open: ${getSafeErrorMessage(err, "Unknown error")}`,
+        );
+        return;
+      }
+
+      let registered: boolean | null;
+      try {
+        registered = await readRegistrationStatus();
+        setIsRegistered(registered);
+      } catch (err) {
+        console.warn("[file-associations] failed to confirm handler registration", err);
+        setIsRegistered(null);
+        setStatus("error");
+        setErrorMessage(
+          `CMTrace Open was registered, but Windows registration could not be confirmed: ${getSafeErrorMessage(err, "Unknown error")}`,
+        );
+        return;
+      }
+
+      if (registered !== true) {
+        setStatus("error");
+        setErrorMessage(
+          "CMTrace Open registration could not be confirmed by Windows. Try again or check Windows Default Apps.",
+        );
+        return;
+      }
+
       setStatus("success");
-      await refreshRegistrationStatus();
-    } catch (err) {
-      setStatus("error");
-      setErrorMessage(
-        `Failed to register CMTrace Open: ${getSafeErrorMessage(err, "Unknown error")}`,
-      );
+    } finally {
+      setIsRegistering(false);
     }
   };
 
   const handleOpenDefaultApps = async () => {
+    if (isRegistering || isReadingInitialStatus) return;
+
     try {
       setErrorMessage(null);
       await openWindowsDefaultApps();
@@ -93,6 +154,7 @@ export function FileAssociationsTab() {
       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <button
           type="button"
+          disabled={isRegistering || isReadingInitialStatus}
           onClick={() => void handleRegister()}
           style={{
             padding: "6px 16px",
@@ -101,17 +163,21 @@ export function FileAssociationsTab() {
             borderRadius: "4px",
             background: tokens.colorBrandBackground,
             color: tokens.colorNeutralForegroundOnBrand,
-            cursor: "pointer",
+            cursor:
+              isRegistering || isReadingInitialStatus ? "default" : "pointer",
             fontWeight: 600,
           }}
         >
-          {isRegistered === true
+          {isRegistering
+            ? "Registering…"
+            : isRegistered === true
             ? "Re-register CMTrace Open handler"
             : "Register CMTrace Open as an available handler"}
         </button>
 
         <button
           type="button"
+          disabled={isRegistering || isReadingInitialStatus}
           onClick={() => void handleOpenDefaultApps()}
           style={{
             padding: "6px 16px",
@@ -120,7 +186,8 @@ export function FileAssociationsTab() {
             borderRadius: "4px",
             background: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,
-            cursor: "pointer",
+            cursor:
+              isRegistering || isReadingInitialStatus ? "default" : "pointer",
           }}
         >
           Open Windows Default Apps
@@ -128,13 +195,13 @@ export function FileAssociationsTab() {
       </div>
 
       {status === "success" && (
-        <div style={{ fontSize: "12px", color: tokens.colorPaletteGreenForeground1, marginTop: "8px" }}>
+        <div role="status" style={{ fontSize: "12px", color: tokens.colorPaletteGreenForeground1, marginTop: "8px" }}>
           CMTrace Open is now available to choose in Windows Default Apps.
         </div>
       )}
 
       {status === "error" && errorMessage && (
-        <div style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1, marginTop: "8px" }}>
+        <div role="alert" style={{ fontSize: "12px", color: tokens.colorPaletteRedForeground1, marginTop: "8px" }}>
           {errorMessage}
         </div>
       )}

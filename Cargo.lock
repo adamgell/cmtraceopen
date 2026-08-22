@@ -594,6 +594,7 @@ dependencies = [
  "libc",
  "log",
  "notify",
+ "percent-encoding",
  "plist",
  "quick-xml 0.41.0",
  "rayon",

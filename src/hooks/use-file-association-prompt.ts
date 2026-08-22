@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 import { getFileAssociationPromptStatus } from "../lib/commands";
-import { hasOpenPriorityModal, useUiStore } from "../stores/ui-store";
+import { useUiStore } from "../stores/ui-store";
 
 /**
- * Shows the standalone Windows registration prompt when the app has not yet
+ * Shows the per-user Windows registration prompt when this edition has not yet
  * registered as an available handler for its supported log file types.
  */
 export function useFileAssociationPrompt() {
   const [isEligible, setIsEligible] = useState(false);
-  const hasBlockingModal = useUiStore(hasOpenPriorityModal);
   const setShowFileAssociationPrompt = useUiStore(
     (state) => state.setShowFileAssociationPrompt
   );
@@ -38,11 +37,11 @@ export function useFileAssociationPrompt() {
   }, []);
 
   useEffect(() => {
-    if (isEligible && !hasBlockingModal) {
+    if (isEligible) {
       setShowFileAssociationPrompt(true);
       if (useUiStore.getState().showFileAssociationPrompt) {
         setIsEligible(false);
       }
     }
-  }, [hasBlockingModal, isEligible, setShowFileAssociationPrompt]);
+  }, [isEligible, setShowFileAssociationPrompt]);
 }

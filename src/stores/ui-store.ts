@@ -127,7 +127,24 @@ export function getUiChromeStatus(
   };
 }
 
-interface UiState {
+export type ModalOwner =
+  | "filter"
+  | "errorLookup"
+  | "about"
+  | "settings"
+  | "evidenceBundle"
+  | "guidRegistry"
+  | "mergeTabs"
+  | "diffConfig"
+  | "fileAssociationPrompt"
+  | "collectDiagnostics"
+  | "update"
+  | "elevationPrompt"
+  | "collectionResult"
+  | "eventLogChannelClear"
+  | "espForceAction";
+
+export interface UiState {
   activeWorkspace: WorkspaceId;
   activeView: AppView;
   showInfoPane: boolean;
@@ -143,6 +160,12 @@ interface UiState {
   showMergeTabsDialog: boolean;
   showDiffConfigDialog: boolean;
   showFileAssociationPrompt: boolean;
+  /** The only modal surface currently allowed to render. */
+  modalOwner: ModalOwner | null;
+  /** Pending modal requests, ordered by arrival. */
+  modalQueue: ModalOwner[];
+  /** Registration/readback/default-apps continuation currently owns the prompt. */
+  fileAssociationPromptBusy: boolean;
   /**
    * The pending "restart as administrator" confirmation, or null when none is
    * open. Carries the request rather than a bare boolean so the menu action and
@@ -207,6 +230,9 @@ interface UiState {
   setShowMergeTabsDialog: (show: boolean) => void;
   setShowDiffConfigDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
+  requestModal: (owner: ModalOwner) => void;
+  releaseModal: (owner: ModalOwner) => void;
+  setFileAssociationPromptBusy: (busy: boolean) => void;
   setElevationPrompt: (prompt: ElevationPrompt | null) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
@@ -259,22 +285,6 @@ interface UiState {
   setGraphApiLastAttempt: (attempt: GraphApiLastAttempt | null) => void;
 }
 
-// AppShell's boolean dialog flags share one modal surface. Data-carrying
-// confirmations (for example elevationPrompt) keep their existing lifecycle.
-const CLOSED_MODAL_STATE = {
-  showFilterDialog: false,
-  showErrorLookupDialog: false,
-  showAboutDialog: false,
-  showSettingsDialog: false,
-  showEvidenceBundleDialog: false,
-  showGuidRegistryDialog: false,
-  showMergeTabsDialog: false,
-  showDiffConfigDialog: false,
-  showFileAssociationPrompt: false,
-  showCollectDiagnosticsDialog: false,
-  showUpdateDialog: false,
-} satisfies Partial<UiState>;
-
 type BooleanModalKey =
   | "showFilterDialog"
   | "showErrorLookupDialog"
@@ -288,31 +298,64 @@ type BooleanModalKey =
   | "showCollectDiagnosticsDialog"
   | "showUpdateDialog";
 
-function setBooleanModalState(
-  key: BooleanModalKey,
-  show: boolean,
+function requestModalState(
+  state: UiState,
+  owner: ModalOwner,
 ): Partial<UiState> {
-  if (!show) {
-    return { [key]: false };
+  if (state.modalOwner === owner || state.modalQueue.includes(owner)) {
+    return {};
   }
 
-  return { ...CLOSED_MODAL_STATE, [key]: true };
+  if (state.modalOwner === null) {
+    return { modalOwner: owner };
+  }
+
+  return { modalQueue: [...state.modalQueue, owner] };
 }
 
-/** Whether a user-initiated modal currently outranks the startup association prompt. */
-export function hasOpenPriorityModal(state: UiState): boolean {
-  return (
-    state.showFilterDialog ||
-    state.showErrorLookupDialog ||
-    state.showAboutDialog ||
-    state.showSettingsDialog ||
-    state.showEvidenceBundleDialog ||
-    state.showGuidRegistryDialog ||
-    state.showMergeTabsDialog ||
-    state.showDiffConfigDialog ||
-    state.showCollectDiagnosticsDialog ||
-    state.showUpdateDialog
-  );
+function releaseModalState(
+  state: UiState,
+  owner: ModalOwner,
+): Partial<UiState> {
+  if (owner === "fileAssociationPrompt" && state.fileAssociationPromptBusy) {
+    return {};
+  }
+
+  const remainingQueue = state.modalQueue.filter((queued) => queued !== owner);
+
+  if (state.modalOwner !== owner) {
+    return remainingQueue.length === state.modalQueue.length
+      ? {}
+      : { modalQueue: remainingQueue };
+  }
+
+  const [nextOwner, ...nextQueue] = remainingQueue;
+  return {
+    modalOwner: nextOwner ?? null,
+    modalQueue: nextQueue,
+  };
+}
+
+function setBooleanModalState(
+  state: UiState,
+  key: BooleanModalKey,
+  owner: ModalOwner,
+  show: boolean,
+): Partial<UiState> {
+  if (
+    !show &&
+    owner === "fileAssociationPrompt" &&
+    state.fileAssociationPromptBusy
+  ) {
+    return {};
+  }
+
+  return {
+    [key]: show,
+    ...(show
+      ? requestModalState(state, owner)
+      : releaseModalState(state, owner)),
+  };
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -382,6 +425,9 @@ export const useUiStore = create<UiState>()(
       showMergeTabsDialog: false,
       showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
+      modalOwner: null,
+      modalQueue: [],
+      fileAssociationPromptBusy: false,
       elevationPrompt: null,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
@@ -497,28 +543,59 @@ export const useUiStore = create<UiState>()(
         set((state) => ({ showDetails: !state.showDetails })),
       setInfoPaneHeight: (height) => set({ infoPaneHeight: height }),
       setShowFindBar: (show) => set({ showFindBar: show }),
-      setShowFilterDialog: (show) => set(setBooleanModalState("showFilterDialog", show)),
+      requestModal: (owner) => set((state) => requestModalState(state, owner)),
+      releaseModal: (owner) => set((state) => releaseModalState(state, owner)),
+      setFileAssociationPromptBusy: (busy) =>
+        set({ fileAssociationPromptBusy: busy }),
+      setShowFilterDialog: (show) =>
+        set((state) => setBooleanModalState(state, "showFilterDialog", "filter", show)),
       setShowErrorLookupDialog: (show) =>
-        set(setBooleanModalState("showErrorLookupDialog", show)),
-      setShowAboutDialog: (show) => set(setBooleanModalState("showAboutDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showErrorLookupDialog", "errorLookup", show)
+        ),
+      setShowAboutDialog: (show) =>
+        set((state) => setBooleanModalState(state, "showAboutDialog", "about", show)),
       setShowSettingsDialog: (show) =>
-        set(setBooleanModalState("showSettingsDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showSettingsDialog", "settings", show)
+        ),
       setShowEvidenceBundleDialog: (show) =>
-        set(setBooleanModalState("showEvidenceBundleDialog", show)),
+        set((state) =>
+          setBooleanModalState(
+            state,
+            "showEvidenceBundleDialog",
+            "evidenceBundle",
+            show
+          )
+        ),
       setShowGuidRegistryDialog: (show) =>
-        set(setBooleanModalState("showGuidRegistryDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showGuidRegistryDialog", "guidRegistry", show)
+        ),
       setShowMergeTabsDialog: (show) =>
-        set(setBooleanModalState("showMergeTabsDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showMergeTabsDialog", "mergeTabs", show)
+        ),
       setShowDiffConfigDialog: (show) =>
-        set(setBooleanModalState("showDiffConfigDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showDiffConfigDialog", "diffConfig", show)
+        ),
       setShowFileAssociationPrompt: (show) =>
-        set((state) => {
-          if (show && hasOpenPriorityModal(state)) {
-            return state;
-          }
-          return setBooleanModalState("showFileAssociationPrompt", show);
-        }),
-      setElevationPrompt: (prompt) => set({ elevationPrompt: prompt }),
+        set((state) =>
+          setBooleanModalState(
+            state,
+            "showFileAssociationPrompt",
+            "fileAssociationPrompt",
+            show
+          )
+        ),
+      setElevationPrompt: (prompt) =>
+        set((state) => ({
+          elevationPrompt: prompt,
+          ...(prompt
+            ? requestModalState(state, "elevationPrompt")
+            : releaseModalState(state, "elevationPrompt")),
+        })),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
       increaseLogListFontSize: () =>
@@ -556,6 +633,29 @@ export const useUiStore = create<UiState>()(
       clearErrorLookupHistory: () => set({ errorLookupHistory: [] }),
       closeTransientDialogs: (trigger) => {
         const state = get();
+        const lockedAssociationPrompt =
+          state.fileAssociationPromptBusy &&
+          state.modalOwner === "fileAssociationPrompt";
+        const preservedModalRequests = [
+          ...(state.modalOwner ? [state.modalOwner] : []),
+          ...state.modalQueue,
+        ].filter(
+          (owner) =>
+            owner === "eventLogChannelClear" ||
+            owner === "espForceAction" ||
+            owner === "collectionResult" ||
+            (owner === "fileAssociationPrompt" && lockedAssociationPrompt),
+        );
+        if (
+          state.collectionResult &&
+          !preservedModalRequests.includes("collectionResult")
+        ) {
+          preservedModalRequests.push("collectionResult");
+        }
+        const [preservedOwner, ...preservedQueue] = preservedModalRequests;
+        const hasTransientModalOwner =
+          (state.modalOwner !== null && state.modalOwner !== "collectionResult") ||
+          state.modalQueue.some((owner) => owner !== "collectionResult");
 
         if (
           !state.showFindBar &&
@@ -570,7 +670,8 @@ export const useUiStore = create<UiState>()(
           !state.showFileAssociationPrompt &&
           !state.showCollectDiagnosticsDialog &&
           !state.showUpdateDialog &&
-          state.elevationPrompt === null
+          state.elevationPrompt === null &&
+          !hasTransientModalOwner
         ) {
           return;
         }
@@ -587,12 +688,17 @@ export const useUiStore = create<UiState>()(
           showGuidRegistryDialog: false,
           showMergeTabsDialog: false,
           showDiffConfigDialog: false,
-          showFileAssociationPrompt: false,
+          showFileAssociationPrompt:
+            lockedAssociationPrompt && state.showFileAssociationPrompt,
           showCollectDiagnosticsDialog: false,
           showUpdateDialog: false,
           // Dismissing the confirmation is the "user cancelled" path: no backend
           // call was made, so there is nothing to unwind.
           elevationPrompt: null,
+          // Collection results are valuable output, not transient intent. Keep
+          // the payload and promote it after every dismissible request is gone.
+          modalOwner: preservedOwner ?? null,
+          modalQueue: preservedQueue,
         });
       },
 
@@ -710,11 +816,26 @@ export const useUiStore = create<UiState>()(
         set({ openTabs: updated });
       },
       setCollectionProgress: (progress) => set({ collectionProgress: progress }),
-      setCollectionResult: (result) => set({ collectionResult: result }),
+      setCollectionResult: (result) =>
+        set((state) => ({
+          collectionResult: result,
+          ...(result
+            ? requestModalState(state, "collectionResult")
+            : releaseModalState(state, "collectionResult")),
+        })),
       setShowCollectDiagnosticsDialog: (show) =>
-        set(setBooleanModalState("showCollectDiagnosticsDialog", show)),
+        set((state) =>
+          setBooleanModalState(
+            state,
+            "showCollectDiagnosticsDialog",
+            "collectDiagnostics",
+            show
+          )
+        ),
       setShowUpdateDialog: (show) =>
-        set(setBooleanModalState("showUpdateDialog", show)),
+        set((state) =>
+          setBooleanModalState(state, "showUpdateDialog", "update", show)
+        ),
       dismissDnsBannerPath: (path) =>
         set((state) => ({
           dismissedDnsBannerPaths: state.dismissedDnsBannerPaths.includes(path)

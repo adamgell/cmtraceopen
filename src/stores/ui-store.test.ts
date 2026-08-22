@@ -236,55 +236,112 @@ describe("ui-store", () => {
       expect(state.showFilterDialog).toBe(false);
     });
 
-    it("keeps an active user dialog when the delayed startup prompt asks to open", () => {
+    it("queues modal requests in arrival order without discarding their state", () => {
       useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().setElevationPrompt({
+        request: {
+          reason: "explicitMenu",
+          workspace: "log",
+          target: { kind: "workspace" },
+        },
+      });
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-1",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
+      });
 
-      useUiStore.getState().setShowFileAssociationPrompt(true);
-
-      expect(useUiStore.getState().showAboutDialog).toBe(true);
-      expect(useUiStore.getState().showFileAssociationPrompt).toBe(false);
+      const state = useUiStore.getState();
+      expect(state.modalOwner).toBe("about");
+      expect(state.modalQueue).toEqual(["elevationPrompt", "collectionResult"]);
+      expect(state.showAboutDialog).toBe(true);
+      expect(state.elevationPrompt).not.toBeNull();
+      expect(state.collectionResult?.bundleId).toBe("collection-1");
     });
 
-    it("lets a user dialog atomically replace the low-priority startup prompt", () => {
+    it("promotes the next queued modal when the owner completes", () => {
       useUiStore.getState().setShowFileAssociationPrompt(true);
-
       useUiStore.getState().setShowSettingsDialog(true);
 
-      expect(useUiStore.getState().showFileAssociationPrompt).toBe(false);
+      expect(useUiStore.getState().modalOwner).toBe("fileAssociationPrompt");
+      expect(useUiStore.getState().modalQueue).toEqual(["settings"]);
+
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+
+      expect(useUiStore.getState().modalOwner).toBe("settings");
+      expect(useUiStore.getState().modalQueue).toEqual([]);
       expect(useUiStore.getState().showSettingsDialog).toBe(true);
     });
 
-    it("keeps exactly one modal flag open when ownership moves between user dialogs", () => {
+    it("does not enqueue the same pending modal more than once", () => {
       useUiStore.getState().setShowAboutDialog(true);
-
+      useUiStore.getState().setShowCollectDiagnosticsDialog(true);
       useUiStore.getState().setShowCollectDiagnosticsDialog(true);
 
       const state = useUiStore.getState();
-      expect({
-        showFilterDialog: state.showFilterDialog,
-        showErrorLookupDialog: state.showErrorLookupDialog,
-        showAboutDialog: state.showAboutDialog,
-        showSettingsDialog: state.showSettingsDialog,
-        showEvidenceBundleDialog: state.showEvidenceBundleDialog,
-        showGuidRegistryDialog: state.showGuidRegistryDialog,
-        showMergeTabsDialog: state.showMergeTabsDialog,
-        showDiffConfigDialog: state.showDiffConfigDialog,
-        showFileAssociationPrompt: state.showFileAssociationPrompt,
-        showCollectDiagnosticsDialog: state.showCollectDiagnosticsDialog,
-        showUpdateDialog: state.showUpdateDialog,
-      }).toEqual({
-        showFilterDialog: false,
-        showErrorLookupDialog: false,
-        showAboutDialog: false,
-        showSettingsDialog: false,
-        showEvidenceBundleDialog: false,
-        showGuidRegistryDialog: false,
-        showMergeTabsDialog: false,
-        showDiffConfigDialog: false,
-        showFileAssociationPrompt: false,
-        showCollectDiagnosticsDialog: true,
-        showUpdateDialog: false,
+      expect(state.modalOwner).toBe("about");
+      expect(state.modalQueue).toEqual(["collectDiagnostics"]);
+      expect(state.showAboutDialog).toBe(true);
+      expect(state.showCollectDiagnosticsDialog).toBe(true);
+    });
+
+    it("removes a queued local owner and cannot later promote it", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().requestModal("eventLogChannelClear");
+
+      useUiStore.getState().releaseModal("eventLogChannelClear");
+      useUiStore.getState().setShowAboutDialog(false);
+
+      expect(useUiStore.getState().modalOwner).toBeNull();
+      expect(useUiStore.getState().modalQueue).toEqual([]);
+    });
+
+    it("closes transient requests deterministically without losing a collection result", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().requestModal("eventLogChannelClear");
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-2",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
       });
+
+      useUiStore.getState().closeTransientDialogs("test");
+
+      const state = useUiStore.getState();
+      expect(state.showAboutDialog).toBe(false);
+      expect(state.modalOwner).toBe("eventLogChannelClear");
+      expect(state.modalQueue).toEqual(["collectionResult"]);
+      expect(state.collectionResult?.bundleId).toBe("collection-2");
+    });
+
+    it("retains a locked registration owner while clearing other transient requests", () => {
+      useUiStore.getState().setShowFileAssociationPrompt(true);
+      useUiStore.getState().setFileAssociationPromptBusy(true);
+      useUiStore.getState().setShowUpdateDialog(true);
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-after-registration",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
+      });
+
+      useUiStore.getState().closeTransientDialogs("test");
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+
+      const locked = useUiStore.getState();
+      expect(locked.modalOwner).toBe("fileAssociationPrompt");
+      expect(locked.modalQueue).toEqual(["collectionResult"]);
+      expect(locked.showFileAssociationPrompt).toBe(true);
+      expect(locked.showUpdateDialog).toBe(false);
+
+      useUiStore.getState().setFileAssociationPromptBusy(false);
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+      expect(useUiStore.getState().modalOwner).toBe("collectionResult");
     });
   });
 
