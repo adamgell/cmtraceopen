@@ -45,6 +45,7 @@ export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const loadError = useEvtxStore((s) => s.loadError);
   const [nowEpoch, setNowEpoch] = useState(() => Date.now());
   useEffect(() => {
     if (sourceMode !== "live" || timeWindow === "all") return;
@@ -352,6 +353,17 @@ export function EventLogWorkspace() {
         overflow: "hidden",
       }}
     >
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            color: tokens.colorPaletteRedForeground1,
+            padding: "4px 12px",
+          }}
+        >
+          {loadError}
+        </div>
+      )}
       {diagnosisError && (
         <div
           role="alert"

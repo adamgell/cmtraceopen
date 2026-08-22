@@ -220,6 +220,7 @@ export function SourcePicker() {
 
       {displayError && (
         <div
+          role="alert"
           style={{
             fontSize: `${errorFontSize}px`,
             color: tokens.colorPaletteRedForeground1,

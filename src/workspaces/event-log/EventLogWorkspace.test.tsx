@@ -655,6 +655,21 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.getAllByText("Application").length).toBeGreaterThan(0);
   });
 
+  it("keeps a later source load error visible while prior events remain loaded", () => {
+    seedFixtureEvents();
+    render(<EventLogWorkspace />);
+    expect(recordTreeItems(document.body)).toHaveLength(1);
+
+    const message =
+      "No .evtx files were found. Source diagnostics: C:/protected/Security.evtx: Access is denied";
+    act(() => {
+      useEvtxStore.getState().setLoadError(message);
+    });
+
+    expect(screen.getByText(message)).toHaveAttribute("role", "alert");
+    expect(recordTreeItems(document.body)).toHaveLength(1);
+  });
+
   it("offers CSV, TSV, JSON, and Event XML export of visible events", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);

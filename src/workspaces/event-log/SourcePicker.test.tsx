@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -100,6 +100,17 @@ describe("SourcePicker remote source", () => {
 
     expect(document.body.textContent).toContain("remote source access denied");
     expect(document.body.textContent).toContain("Security: not read (access denied)");
+  });
+
+  it("announces a source error while the empty picker remains visible", () => {
+    const message =
+      "No .evtx files were found. Source diagnostics: C:/protected/Security.evtx: Access is denied";
+    useEvtxStore.setState({ loadError: message });
+
+    render(<SourcePicker />);
+
+    expect(screen.getByText(message)).toHaveAttribute("role", "alert");
+    expect(screen.getByText("Open .evtx files...")).toBeInTheDocument();
   });
 
   it("keeps classified coverage visible when a remote query also fails", async () => {
