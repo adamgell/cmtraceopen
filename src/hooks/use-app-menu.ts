@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getAvailableWorkspaces, useUiStore } from "../stores/ui-store";
@@ -11,7 +11,15 @@ const MENU_EVENT_APP_ACTION = "app-menu-action";
 
 let appMenuSyncQueue: Promise<void> = Promise.resolve();
 let appMenuSyncWarningShown = false;
-let alwaysOnTopToggleQueue: Promise<void> = Promise.resolve();
+let alwaysOnTopUpdateQueue: Promise<void> = Promise.resolve();
+
+function enqueueAlwaysOnTopUpdate(
+  update: () => Promise<void>,
+): Promise<void> {
+  const nextUpdate = alwaysOnTopUpdateQueue.then(update);
+  alwaysOnTopUpdateQueue = nextUpdate.catch(() => undefined);
+  return nextUpdate;
+}
 
 interface AppMenuActionPayload {
   version: number;
@@ -167,14 +175,11 @@ export function useAppMenu() {
     void enqueueMenuSync(menuState);
   }, [enqueueMenuSync, menuState]);
 
-  useEffect(() => {
-    let disposed = false;
-
-    const handleAction = async (payload: AppMenuActionPayload) => {
-      if (disposed) {
-        return;
-      }
-
+  const latestMenuActionHandlerRef = useRef<
+    (payload: AppMenuActionPayload) => Promise<void>
+  >(async () => undefined);
+  useLayoutEffect(() => {
+    latestMenuActionHandlerRef.current = async (payload) => {
       try {
         switch (payload.action) {
           case "open_log_file_dialog":
@@ -217,12 +222,11 @@ export function useAppMenu() {
             toggleInfoPane();
             return;
           case "toggle_always_on_top": {
-            const nextToggle = alwaysOnTopToggleQueue.then(async () => {
+            const nextToggle = enqueueAlwaysOnTopUpdate(async () => {
               const next = !useUiStore.getState().alwaysOnTop;
               await invoke("set_always_on_top", { enabled: next });
               useUiStore.getState().setAlwaysOnTop(next);
             });
-            alwaysOnTopToggleQueue = nextToggle.catch(() => undefined);
             await nextToggle;
             return;
           }
@@ -406,16 +410,23 @@ export function useAppMenu() {
         });
       }
     };
+  });
+
+  useEffect(() => {
+    let active = true;
 
     const unlistenActionPromise = listen<AppMenuActionPayload>(
       MENU_EVENT_APP_ACTION,
       async (event) => {
-        await handleAction(event.payload);
+        if (!active) {
+          return;
+        }
+        await latestMenuActionHandlerRef.current(event.payload);
       }
     );
 
     return () => {
-      disposed = true;
+      active = false;
 
       unlistenActionPromise
         .then((unlisten) => unlisten())
@@ -425,30 +436,7 @@ export function useAppMenu() {
           });
         });
     };
-  }, [
-    decreaseLogListTextSize,
-    enqueueMenuSync,
-    findNext,
-    findPrevious,
-    increaseLogListTextSize,
-    openKnownSourceCatalogAction,
-    openRecentEntry,
-    openSourceFileDialog,
-    openSourceFolderDialog,
-    refreshActiveSource,
-    resetLogListTextSize,
-    showSettingsDialog,
-    showAboutDialog,
-    showErrorLookupDialog,
-    showEvidenceBundleDialog,
-    showFilterDialog,
-    showFindBar,
-    switchWorkspace,
-    toggleDetailsPane,
-    toggleInfoPane,
-    togglePauseResume,
-    toggleSidebar,
-  ]);
+  }, []);
 
   // Re-apply the persisted "Always on Top" preference on startup so the window
   // and the native menu checkmark reflect the restored state. Only the enabled
@@ -460,10 +448,8 @@ export function useAppMenu() {
       return;
     }
 
-    let disposed = false;
-    void (async () => {
+    void enqueueAlwaysOnTopUpdate(async () => {
       try {
-        if (disposed) return;
         await invoke("set_always_on_top", { enabled: true });
       } catch (error) {
         console.error(
@@ -471,10 +457,6 @@ export function useAppMenu() {
           error,
         );
       }
-    })();
-
-    return () => {
-      disposed = true;
-    };
+    });
   }, []);
 }
