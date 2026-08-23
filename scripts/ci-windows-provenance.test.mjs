@@ -124,13 +124,41 @@ test("an explicit Windows SDK root takes precedence over PATH", (t) => {
   assert.equal(result.stdout.trim(), expected);
 });
 
-test("Windows SDK enumeration errors are terminating", () => {
-  const source = readFileSync(resolveMtPath, "utf8");
-
-  assert.match(
-    source,
-    /Get-ChildItem\s+-LiteralPath\s+\$SdkBinRoot\s+-Directory\s+-ErrorAction\s+Stop/,
+test("Windows SDK enumeration errors retain their original diagnostic", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-denied-"));
+  const harness = join(root, "probe.ps1");
+  writeFixture(
+    harness,
+    `param([string] $Resolver, [string] $SdkRoot)
+function global:Get-ChildItem {
+    [CmdletBinding()]
+    param([string] $LiteralPath, [switch] $Directory)
+    Write-Error "SDK_ENUMERATION_INCOMPLETE"
+}
+& $Resolver -SdkBinRoot $SdkRoot
+`,
   );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    "pwsh",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-File",
+      harness,
+      "-Resolver",
+      resolveMtPath,
+      "-SdkRoot",
+      root,
+    ],
+    { encoding: "utf8" },
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /SDK_ENUMERATION_INCOMPLETE/);
+  assert.doesNotMatch(output, /mt\.exe was not found under/);
 });
 
 test("writes exact-head Windows executable and installer provenance", (t) => {
