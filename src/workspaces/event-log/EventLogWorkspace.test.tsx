@@ -284,6 +284,50 @@ describe("event-viewer shared font metrics", () => {
     expect(flatRow.firstElementChild).toHaveAttribute("role", "gridcell");
   });
 
+  it("names channel-folder disclosure and selection controls", () => {
+    useEvtxStore.setState({
+      channels: [
+        {
+          name: "Contoso",
+          eventCount: 1,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+        {
+          name: "Contoso/Operational",
+          eventCount: 1,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+        {
+          name: "Fabrikam/Operational",
+          eventCount: 1,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+      sourceMode: "files",
+    });
+
+    render(<ChannelPicker />);
+
+    const appServicesDisclosure = screen.getByRole("button", {
+      name: "Expand Applications and Services Logs",
+    });
+    expect(appServicesDisclosure).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(appServicesDisclosure);
+
+    const providerDisclosure = screen.getByRole("button", {
+      name: "Expand Contoso",
+    });
+    expect(providerDisclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("checkbox", { name: "Select Contoso" })).not.toBeChecked();
+
+    fireEvent.click(providerDisclosure);
+    expect(providerDisclosure).toHaveAccessibleName("Collapse Contoso");
+    expect(providerDisclosure).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });

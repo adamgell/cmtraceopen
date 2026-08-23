@@ -659,6 +659,8 @@ const FolderRow = memo(function FolderRow({
       <button
         type="button"
         onClick={onToggle}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+        aria-expanded={expanded}
         style={{
           width: "14px",
           flexShrink: 0,
@@ -680,6 +682,7 @@ const FolderRow = memo(function FolderRow({
           type="checkbox"
           checked={selected ?? false}
           onChange={onChannelToggle}
+          aria-label={`Select ${channel?.name ?? label}`}
           style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
         />
       )}
