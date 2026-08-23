@@ -281,10 +281,40 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RETAINED_RECORDS: usize = 1_000_000;
 const MAX_TOTAL_RECORDS: u64 = MAX_RETAINED_RECORDS as u64;
 const MAX_MANIFEST_VECTOR_ITEMS: usize = MAX_SOURCE_MANIFEST_ENTRIES;
+const MAX_OPEN_SPOOL_RUNS: usize = 32;
+
+struct SpoolRun {
+    path: tempfile::TempPath,
+    level: u32,
+}
+
+fn write_spool_run<I>(directory: &Path, records: I) -> Result<tempfile::TempPath, String>
+where
+    I: IntoIterator<Item = io::Result<EvtxRecord>>,
+{
+    let mut run = tempfile::NamedTempFile::new_in(directory)
+        .map_err(|error| format!("cannot create export spool run: {error}"))?;
+    {
+        let mut writer = BufWriter::new(run.as_file_mut());
+        for record in records {
+            let record =
+                record.map_err(|error| format!("cannot read export spool record: {error}"))?;
+            serde_json::to_writer(&mut writer, &record)
+                .map_err(|error| format!("cannot encode export spool record: {error}"))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|error| format!("cannot write export spool record: {error}"))?;
+        }
+        writer
+            .flush()
+            .map_err(|error| format!("cannot flush export spool run: {error}"))?;
+    }
+    Ok(run.into_temp_path())
+}
 
 struct RecordSpool {
     directory: tempfile::TempDir,
-    runs: Vec<tempfile::NamedTempFile>,
+    runs: Vec<SpoolRun>,
 }
 
 impl RecordSpool {
@@ -301,23 +331,11 @@ impl RecordSpool {
             return Ok(());
         }
         records.sort_by_key(|record| record.timestamp_epoch);
-        let mut run = tempfile::NamedTempFile::new_in(self.directory.path())
-            .map_err(|error| format!("cannot create export spool run: {error}"))?;
-        {
-            let mut writer = BufWriter::new(run.as_file_mut());
-            for record in records {
-                serde_json::to_writer(&mut writer, &record)
-                    .map_err(|error| format!("cannot encode export spool record: {error}"))?;
-                writer
-                    .write_all(b"\n")
-                    .map_err(|error| format!("cannot write export spool record: {error}"))?;
-            }
-            writer
-                .flush()
-                .map_err(|error| format!("cannot flush export spool run: {error}"))?;
-        }
-        self.runs.push(run);
-        Ok(())
+        self.runs.push(SpoolRun {
+            path: write_spool_run(self.directory.path(), records.into_iter().map(Ok))?,
+            level: 0,
+        });
+        self.compact_tail()
     }
 
     #[cfg(test)]
@@ -325,11 +343,55 @@ impl RecordSpool {
         self.runs.len()
     }
 
+    fn merge_run_group(&self, runs: &[SpoolRun], level: u32) -> Result<SpoolRun, String> {
+        let records = MergedRuns::new(runs)
+            .map_err(|error| format!("cannot read export spool runs: {error}"))?;
+        Ok(SpoolRun {
+            path: write_spool_run(self.directory.path(), records)?,
+            level,
+        })
+    }
+
+    fn compact_tail(&mut self) -> Result<(), String> {
+        loop {
+            let Some(start) = self.runs.len().checked_sub(MAX_OPEN_SPOOL_RUNS) else {
+                return Ok(());
+            };
+            let level = self.runs[start].level;
+            if self.runs[start..].iter().any(|run| run.level != level) {
+                return Ok(());
+            }
+
+            let merged = self.merge_run_group(&self.runs[start..], level.saturating_add(1))?;
+            self.runs.truncate(start);
+            self.runs.push(merged);
+        }
+    }
+
+    fn compact_for_prepare(&mut self) -> Result<(), String> {
+        while self.runs.len() > MAX_OPEN_SPOOL_RUNS {
+            let runs = std::mem::take(&mut self.runs);
+            let mut compacted = Vec::with_capacity(runs.len().div_ceil(MAX_OPEN_SPOOL_RUNS));
+            for group in runs.chunks(MAX_OPEN_SPOOL_RUNS) {
+                let level = group
+                    .iter()
+                    .map(|run| run.level)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                compacted.push(self.merge_run_group(group, level)?);
+            }
+            self.runs = compacted;
+        }
+        Ok(())
+    }
+
     fn prepare(
-        self,
+        mut self,
         filter: &PreparedFilter,
         format: ExportFormat,
     ) -> Result<PreparedSpool, String> {
+        self.compact_for_prepare()?;
         let mut records = MergedRuns::new(&self.runs)
             .map_err(|error| format!("cannot read export spool runs: {error}"))?;
         let mut filtered = tempfile::NamedTempFile::new_in(self.directory.path())
@@ -448,11 +510,11 @@ struct MergedRuns {
 }
 
 impl MergedRuns {
-    fn new(runs: &[tempfile::NamedTempFile]) -> io::Result<Self> {
+    fn new(runs: &[SpoolRun]) -> io::Result<Self> {
         let mut readers = Vec::with_capacity(runs.len());
         let mut pending = BinaryHeap::new();
         for (run_index, run) in runs.iter().enumerate() {
-            let mut reader = BufReader::new(run.reopen()?);
+            let mut reader = BufReader::new(File::open(&run.path)?);
             if let Some(record) = read_spooled_record(&mut reader)? {
                 pending.push(PendingRecord { record, run_index });
             }
@@ -1501,7 +1563,7 @@ mod tests {
         parse_event_id_selectors, parse_event_ids, prepare_record_batches,
         reject_source_destination, run_with_args, run_with_args_and_source_parser,
         write_prepared_spool_to_writer, Cli, Coverage, EventIdSelector, Filter, QuickFilter,
-        RecordSpool, MAX_EVENT_ID_FILTER_SELECTORS,
+        RecordSpool, MAX_EVENT_ID_FILTER_SELECTORS, MAX_OPEN_SPOOL_RUNS,
     };
     use app_lib::event_log::export::{mapped_columns_iter, MAX_MAPPED_COLUMNS};
     use app_lib::event_log::maps::MappedColumn;
@@ -2574,6 +2636,54 @@ mod tests {
             .push_batch(vec![make_record()])
             .expect("second batch is spooled");
         assert_eq!(spool.run_count(), 2);
+    }
+
+    #[test]
+    fn multi_batch_spool_bounds_merge_runs_without_reordering_equal_timestamps() {
+        const BATCH_COUNT: usize = 300;
+
+        let expected_messages = (0..BATCH_COUNT)
+            .map(|index| format!("batch-{index}"))
+            .collect::<Vec<_>>();
+        let mut spool = RecordSpool::new().expect("record spool");
+        for message in &expected_messages {
+            let mut record = make_record();
+            record.timestamp_epoch = 42;
+            record.message = message.clone();
+            spool.push_batch(vec![record]).expect("batch is spooled");
+        }
+
+        assert!(
+            spool.run_count() <= MAX_OPEN_SPOOL_RUNS,
+            "the merge frontier must leave descriptor headroom"
+        );
+
+        let prepared = spool
+            .prepare(
+                &super::PreparedFilter::new(&Filter::default()).expect("filter"),
+                app_lib::event_log::export::ExportFormat::Json,
+            )
+            .expect("prepared spool");
+        let records = prepared
+            .records()
+            .expect("spool records")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read spool records");
+
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.message.as_str())
+                .collect::<Vec<_>>(),
+            expected_messages
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            records.iter().map(|record| record.id).collect::<Vec<_>>(),
+            (0..BATCH_COUNT as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
