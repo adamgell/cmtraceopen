@@ -697,7 +697,12 @@ mod tests {
         assert!(hook.contains(
             "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Nightly\" \"CMTraceOpenNightly\""
         ));
-        assert!(!hook.contains("CMTrace Open Lite"));
+        assert!(hook.contains(
+            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Lite\" \"CMTraceOpenLite\""
+        ));
+        assert!(hook.contains(
+            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Lite Nightly\" \"CMTraceOpenLiteNightly\""
+        ));
         for extension in LOG_FILE_EXTENSIONS {
             assert!(
                 hook.contains(&format!("Software\\Classes\\{extension}\\OpenWithProgids")),

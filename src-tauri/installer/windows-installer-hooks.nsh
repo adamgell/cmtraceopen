@@ -41,14 +41,24 @@ done:
   ${EndIf}
 
   ; Tauri's NSIS package contains one edition. Remove only that package's
-  ; stable or nightly runtime identity; never remove Lite or another channel.
-  StrCmp "${PRODUCTNAME}" "CMTrace Open" 0 association_cleanup_nightly
+  ; runtime identity; never remove another edition or channel.
+  StrCmp "${PRODUCTNAME}" "CMTrace Open" 0 association_cleanup_lite
   !insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open" "CMTraceOpen"
   Goto association_cleanup_notify
 
+association_cleanup_lite:
+  StrCmp "${PRODUCTNAME}" "CMTrace Open Lite" 0 association_cleanup_nightly
+  !insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Lite" "CMTraceOpenLite"
+  Goto association_cleanup_notify
+
 association_cleanup_nightly:
-  StrCmp "${PRODUCTNAME}" "CMTrace Open Nightly" 0 association_cleanup_done
+  StrCmp "${PRODUCTNAME}" "CMTrace Open Nightly" 0 association_cleanup_lite_nightly
   !insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Nightly" "CMTraceOpenNightly"
+  Goto association_cleanup_notify
+
+association_cleanup_lite_nightly:
+  StrCmp "${PRODUCTNAME}" "CMTrace Open Lite Nightly" 0 association_cleanup_done
+  !insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Lite Nightly" "CMTraceOpenLiteNightly"
 
 association_cleanup_notify:
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, p 0, p 0)'
