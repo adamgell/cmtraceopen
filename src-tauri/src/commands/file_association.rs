@@ -419,6 +419,78 @@ fn launch_windows_default_apps(
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
+async fn run_initialized_file_association_thread<I, G, F, R>(
+    initialize: I,
+    operation: F,
+) -> Result<R, crate::error::AppError>
+where
+    I: FnOnce() -> Result<G, crate::error::AppError> + Send + 'static,
+    F: FnOnce() -> Result<R, crate::error::AppError> + Send + 'static,
+    R: Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("file-association-shell-sta".to_string())
+        .spawn(move || {
+            let result = initialize().and_then(|_apartment| operation());
+            let _ = sender.send(result);
+        })
+        .map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "FileAssociationStaThreadStartFailed: {error}"
+            ))
+        })?;
+
+    receiver.await.map_err(|error| {
+        crate::error::AppError::Internal(format!("FileAssociationStaThreadFailed: {error}"))
+    })?
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsStaApartment;
+
+#[cfg(target_os = "windows")]
+impl WindowsStaApartment {
+    fn initialize() -> Result<Self, crate::error::AppError> {
+        use windows::Win32::System::Com::{
+            CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+        };
+
+        // SAFETY: this is a new dedicated thread. A successful initialization is
+        // paired with CoUninitialize by the guard's Drop implementation below.
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }
+            .ok()
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "Windows Default Apps COM initialization failed: {error}"
+                ))
+            })?;
+
+        Ok(Self)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsStaApartment {
+    fn drop(&mut self) {
+        use windows::Win32::System::Com::CoUninitialize;
+
+        // SAFETY: this guard is dropped on the same dedicated thread that
+        // successfully called CoInitializeEx.
+        unsafe { CoUninitialize() };
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn run_windows_shell_operation<F, R>(operation: F) -> Result<R, crate::error::AppError>
+where
+    F: FnOnce() -> Result<R, crate::error::AppError> + Send + 'static,
+    R: Send + 'static,
+{
+    run_initialized_file_association_thread(WindowsStaApartment::initialize, operation).await
+}
+
 async fn run_file_association_operation<F, R>(operation: F) -> Result<R, crate::error::AppError>
 where
     F: FnOnce() -> Result<R, crate::error::AppError> + Send + 'static,
@@ -485,7 +557,7 @@ pub async fn register_log_file_handler(app: AppHandle) -> Result<(), crate::erro
 pub async fn open_windows_default_apps(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
-        run_file_association_operation(move || {
+        run_windows_shell_operation(move || {
             let identity = file_association_identity(app.config().product_name.as_deref())?;
             launch_windows_default_apps(&identity)
         })
@@ -527,8 +599,122 @@ mod tests {
 
     use super::{
         file_association_identity, has_visible_application_capabilities, optional_registry_entry,
-        run_file_association_operation, LOG_FILE_EXTENSIONS,
+        run_file_association_operation, run_initialized_file_association_thread,
+        LOG_FILE_EXTENSIONS,
     };
+
+    #[cfg(target_os = "windows")]
+    use super::run_windows_shell_operation;
+
+    struct TestApartment {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, std::thread::ThreadId)>>>,
+    }
+
+    impl Drop for TestApartment {
+        fn drop(&mut self) {
+            self.events
+                .lock()
+                .expect("test apartment events lock")
+                .push(("uninitialize", std::thread::current().id()));
+        }
+    }
+
+    #[test]
+    fn shell_operation_uses_one_dedicated_initialized_thread() {
+        let caller = std::thread::current().id();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let initialize_events = std::sync::Arc::clone(&events);
+        let operation_events = std::sync::Arc::clone(&events);
+
+        let worker = tauri::async_runtime::block_on(run_initialized_file_association_thread(
+            move || {
+                let worker = std::thread::current().id();
+                initialize_events
+                    .lock()
+                    .expect("test apartment events lock")
+                    .push(("initialize", worker));
+                Ok(TestApartment {
+                    events: initialize_events,
+                })
+            },
+            move || {
+                let worker = std::thread::current().id();
+                operation_events
+                    .lock()
+                    .expect("test apartment events lock")
+                    .push(("operation", worker));
+                Ok(worker)
+            },
+        ))
+        .expect("dedicated shell operation completes");
+
+        assert_ne!(worker, caller, "shell work must leave the caller thread");
+        assert_eq!(
+            *events.lock().expect("test apartment events lock"),
+            [
+                ("initialize", worker),
+                ("operation", worker),
+                ("uninitialize", worker),
+            ]
+        );
+    }
+
+    #[test]
+    fn shell_operation_uninitializes_the_thread_after_an_operation_error() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let initialize_events = std::sync::Arc::clone(&events);
+        let operation_events = std::sync::Arc::clone(&events);
+
+        let result: Result<(), crate::error::AppError> =
+            tauri::async_runtime::block_on(run_initialized_file_association_thread(
+                move || {
+                    initialize_events
+                        .lock()
+                        .expect("test apartment events lock")
+                        .push(("initialize", std::thread::current().id()));
+                    Ok(TestApartment {
+                        events: initialize_events,
+                    })
+                },
+                move || {
+                    operation_events
+                        .lock()
+                        .expect("test apartment events lock")
+                        .push(("operation", std::thread::current().id()));
+                    Err(crate::error::AppError::Internal(
+                        "expected shell failure".to_string(),
+                    ))
+                },
+            ));
+
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::Internal(message))
+                if message == "expected shell failure"
+        ));
+        let events = events.lock().expect("test apartment events lock");
+        assert_eq!(
+            events.iter().map(|(event, _)| *event).collect::<Vec<_>>(),
+            ["initialize", "operation", "uninitialize"]
+        );
+        assert!(events.windows(2).all(|events| events[0].1 == events[1].1));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_shell_operation_runs_inside_an_sta_com_apartment() {
+        use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+
+        let incompatible_mode = tauri::async_runtime::block_on(run_windows_shell_operation(|| {
+            // SAFETY: this deliberately requests the incompatible MTA mode to inspect
+            // the apartment already established by run_windows_shell_operation.
+            Ok(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) })
+        }))
+        .expect("STA shell operation completes");
+
+        assert_eq!(incompatible_mode, RPC_E_CHANGED_MODE);
+    }
 
     #[test]
     fn file_association_operations_run_on_the_blocking_pool() {

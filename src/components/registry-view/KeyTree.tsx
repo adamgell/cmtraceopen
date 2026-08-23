@@ -31,6 +31,22 @@ export function KeyTree() {
   const parentRef = useRef<HTMLDivElement>(null);
   const disclosurePointerRef = useRef(false);
 
+  useEffect(() => {
+    const clearDisclosurePointer = () => {
+      disclosurePointerRef.current = false;
+    };
+
+    document.addEventListener("pointerup", clearDisclosurePointer, true);
+    document.addEventListener("pointercancel", clearDisclosurePointer, true);
+    window.addEventListener("blur", clearDisclosurePointer);
+
+    return () => {
+      document.removeEventListener("pointerup", clearDisclosurePointer, true);
+      document.removeEventListener("pointercancel", clearDisclosurePointer, true);
+      window.removeEventListener("blur", clearDisclosurePointer);
+    };
+  }, []);
+
   // Scroll selected row into view when search navigates.
   const selectedIndex = useMemo(
     () =>
@@ -243,12 +259,6 @@ export function KeyTree() {
                   if (hasChildren && e.button === 0) {
                     disclosurePointerRef.current = true;
                   }
-                }}
-                onPointerCancel={() => {
-                  disclosurePointerRef.current = false;
-                }}
-                onPointerUp={() => {
-                  disclosurePointerRef.current = false;
                 }}
                 onLostPointerCapture={() => {
                   disclosurePointerRef.current = false;

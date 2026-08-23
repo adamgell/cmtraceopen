@@ -65,17 +65,12 @@ describe("SourcePicker remote source", () => {
   it("offers remote computer selection without username or password inputs", async () => {
     render(<SourcePicker />);
 
-    const input = document.querySelector('input[aria-label="Remote computer name"]');
-    expect(input).not.toBeNull();
+    const input = screen.getByLabelText("Remote computer name");
     expect(document.querySelector('input[type="password"]')).toBeNull();
     expect(document.querySelector('input[aria-label*="username" i]')).toBeNull();
 
-    fireEvent.change(input!, { target: { value: "lab-host" } });
-    const remoteButton = Array.from(document.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Remote computer")
-    );
-    expect(remoteButton).not.toBeUndefined();
-    fireEvent.click(remoteButton!);
+    fireEvent.change(input, { target: { value: "lab-host" } });
+    fireEvent.click(screen.getByText("Remote computer", { selector: "button" }));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("evtx_enumerate_remote_channels", { machine: "lab-host" })

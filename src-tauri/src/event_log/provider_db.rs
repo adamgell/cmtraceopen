@@ -1264,6 +1264,8 @@ pub struct ProviderStore {
     /// caching only one loses definitions from other keys. Each metadata value is shared because
     /// this lookup runs once per event and a provider can carry a large definition catalog.
     version_cache: Mutex<HashMap<String, CachedProviderVersions>>,
+    #[cfg(test)]
+    cold_lookup_barrier: Option<Arc<std::sync::Barrier>>,
     /// The registered databases, opened once at registration and reused for every lookup.
     open_databases: Mutex<Vec<ProviderDb>>,
     info: Vec<ProviderDbInfo>,
@@ -1434,10 +1436,24 @@ impl ProviderStore {
             return Ok(cached);
         }
 
+        #[cfg(test)]
+        if let Some(barrier) = &self.cold_lookup_barrier {
+            barrier.wait();
+        }
+
         let open = self
             .open_databases
             .lock()
             .map_err(|_| "provider store lock was poisoned".to_string())?;
+        if let Some(cached) = self
+            .version_cache
+            .lock()
+            .map_err(|_| "provider version cache lock was poisoned".to_string())?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
         let mut rows = Vec::new();
         for database in open.iter() {
             rows.extend(database.provider_versions(provider_name)?);
@@ -2229,6 +2245,36 @@ mod tests {
         assert!(
             Arc::ptr_eq(&first, &direct),
             "provider and event lookup must share the ordered version cache",
+        );
+    }
+
+    #[test]
+    fn concurrent_cold_provider_lookups_reuse_cached_metadata_allocation() {
+        let dir = temp_dir("concurrent-cold-lookup-cache");
+        let path = dir.join("capture.db");
+        build_db(&path, &[("Concurrent-Provider", 26200, EVENTS)]);
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("loads");
+        store.cold_lookup_barrier = Some(Arc::new(std::sync::Barrier::new(2)));
+        let store = Arc::new(store);
+
+        let lookup = || {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                store
+                    .provider("Concurrent-Provider")
+                    .expect("provider lookup succeeds")
+                    .expect("provider metadata exists")
+            })
+        };
+        let first = lookup();
+        let second = lookup();
+        let first = first.join().expect("first lookup joins");
+        let second = second.join().expect("second lookup joins");
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "concurrent cold lookups must share the same cached metadata allocation",
         );
     }
 
