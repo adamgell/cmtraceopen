@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CATEGORIES, type Marker } from "../types/markers";
+import {
+  DEFAULT_CATEGORIES,
+  type Marker,
+  type MarkerFile,
+} from "../types/markers";
+import { deferred } from "../test-utils/deferred";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -15,6 +20,18 @@ function marker(lineId: number, category = "bug", identity?: string): Marker {
   };
 }
 
+function markerFile(filePath: string, markers: Marker[]): MarkerFile {
+  return {
+    version: 1,
+    sourcePath: filePath,
+    sourceSize: 0,
+    created: "2026-08-19T00:00:00.000Z",
+    modified: "2026-08-19T00:00:00.000Z",
+    markers,
+    categories: [...DEFAULT_CATEGORIES],
+  };
+}
+
 describe("marker load merge", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -25,6 +42,7 @@ describe("marker load merge", () => {
       loadingFiles: new Set(),
       clearRevisions: new Map(),
       createdTimestamps: new Map(),
+      markerPersistenceByFile: new Map(),
     });
   });
   it("preserves edits made while a file load is in flight", () => {
@@ -194,6 +212,35 @@ describe("marker load merge", () => {
     expect(outcome).toBe("missing");
   });
 
+  it("caches a successful marker read for repeated requests in one persistence session", async () => {
+    const filePath = "cached-load.log";
+    invoke.mockResolvedValue(null);
+
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "missing",
+    );
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "missing",
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads a marker file after its persistence session state is replaced", async () => {
+    const filePath = "fresh-persistence-session.log";
+    invoke
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(markerFile(filePath, [marker(1)]));
+
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "missing",
+    );
+    useMarkerStore.setState({ markerPersistenceByFile: new Map() });
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "loaded",
+    );
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
   it("reports backend load rejection as a failed outcome", async () => {
     const consoleError = vi
       .spyOn(console, "error")
@@ -214,7 +261,7 @@ describe("marker load merge", () => {
     useMarkerStore.setState({
       markersByFile: new Map([[filePath, new Map([[1, marker(1)]])]]),
     });
-    invoke.mockResolvedValueOnce(undefined);
+    invoke.mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
 
     expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
       "saved",
@@ -233,7 +280,7 @@ describe("marker load merge", () => {
 
   it("reports successful and failed marker deletion outcomes", async () => {
     const filePath = "delete-outcome.evtx";
-    invoke.mockResolvedValueOnce(undefined);
+    invoke.mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
 
     expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
       "deleted",
@@ -246,6 +293,190 @@ describe("marker load merge", () => {
     expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
       "failed",
     );
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
+  });
+
+  it("blocks a generic save after read failure until a successful retry merges the dirty marker", async () => {
+    const filePath = "generic-failed-load.log";
+    const diskMarker = marker(1, "confirmed", "disk-marker");
+    const localMarker = marker(2, "bug", "local-marker");
+    let loadAttempts = 0;
+    const writes: MarkerFile[] = [];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") {
+          loadAttempts += 1;
+          return loadAttempts === 1
+            ? Promise.reject(new Error("marker file is unreadable"))
+            : Promise.resolve(markerFile(filePath, [diskMarker]));
+        }
+        if (command === "save_markers" && args?.markerFile) {
+          writes.push(args.markerFile);
+          return Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
+
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "failed",
+    );
+    useMarkerStore
+      .getState()
+      .toggleMarker(filePath, localMarker.lineId, localMarker.identity);
+
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "failed",
+    );
+    expect(loadAttempts).toBe(1);
+    expect(writes).toEqual([]);
+
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "loaded",
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0].markers.map((item) => item.identity)).toEqual([
+      "disk-marker",
+      "local-marker",
+    ]);
+    consoleError.mockRestore();
+  });
+
+  it("serializes direct generic save requests so an older snapshot cannot finish last", async () => {
+    const filePath = "generic-save-order.log";
+    const firstWrite = deferred<void>();
+    const writes: MarkerFile[] = [];
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") return Promise.resolve(null);
+        if (command === "save_markers" && args?.markerFile) {
+          writes.push(args.markerFile);
+          return writes.length === 1
+            ? firstWrite.promise
+            : Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
+    await useMarkerStore.getState().loadMarkers(filePath);
+    useMarkerStore.getState().toggleMarker(filePath, 1, "first");
+
+    const firstSave = useMarkerStore.getState().saveMarkers(filePath);
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    useMarkerStore.getState().toggleMarker(filePath, 2, "second");
+    const secondSave = useMarkerStore.getState().saveMarkers(filePath);
+
+    await Promise.resolve();
+    expect(writes).toHaveLength(1);
+    firstWrite.resolve();
+    await Promise.all([firstSave, secondSave]);
+
+    expect(
+      writes.map((item) => item.markers.map((entry) => entry.identity)),
+    ).toEqual([["first"], ["first", "second"]]);
+  });
+
+  it("persists a trailing snapshot when a marker changes during a generic save", async () => {
+    const filePath = "generic-save-mutation.log";
+    const firstWrite = deferred<void>();
+    const writes: MarkerFile[] = [];
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") return Promise.resolve(null);
+        if (command === "save_markers" && args?.markerFile) {
+          writes.push(args.markerFile);
+          return writes.length === 1
+            ? firstWrite.promise
+            : Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
+    await useMarkerStore.getState().loadMarkers(filePath);
+    useMarkerStore.getState().toggleMarker(filePath, 1, "first");
+
+    const saving = useMarkerStore.getState().saveMarkers(filePath);
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    useMarkerStore.getState().toggleMarker(filePath, 2, "second");
+    firstWrite.resolve();
+    await saving;
+
+    expect(
+      writes.map((item) => item.markers.map((entry) => entry.identity)),
+    ).toEqual([["first"], ["first", "second"]]);
+  });
+
+  it("honors a load retry requested while the previous load is still in flight", async () => {
+    const filePath = "generic-inflight-load-retry.log";
+    const firstLoad = deferred<MarkerFile | null>();
+    let loadAttempts = 0;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command !== "load_markers") {
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      }
+      loadAttempts += 1;
+      return loadAttempts === 1
+        ? firstLoad.promise
+        : Promise.resolve(markerFile(filePath, [marker(7)]));
+    });
+
+    const firstRequest = useMarkerStore.getState().loadMarkers(filePath);
+    const retryRequest = useMarkerStore.getState().loadMarkers(filePath);
+    firstLoad.reject(new Error("transient marker read failure"));
+
+    expect(await firstRequest).toBe("failed");
+    expect(await retryRequest).toBe("loaded");
+    expect(loadAttempts).toBe(2);
+    expect(useMarkerStore.getState().markersByFile.get(filePath)?.size).toBe(1);
+    consoleError.mockRestore();
+  });
+
+  it("retries a failed delete when a load request arrives during the delete", async () => {
+    const filePath = "generic-delete-retry.log";
+    const firstDelete = deferred<void>();
+    let deleteAttempts = 0;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_markers") {
+        return Promise.resolve(markerFile(filePath, [marker(1)]));
+      }
+      if (command === "delete_markers") {
+        deleteAttempts += 1;
+        return deleteAttempts === 1
+          ? firstDelete.promise
+          : Promise.resolve(undefined);
+      }
+      return Promise.reject(new Error(`Unexpected marker command: ${command}`));
+    });
+    await useMarkerStore.getState().loadMarkers(filePath);
+    useMarkerStore.getState().removeMarker(filePath, 1);
+
+    const deleting = useMarkerStore.getState().saveMarkers(filePath);
+    await vi.waitFor(() => expect(deleteAttempts).toBe(1));
+    const retrying = useMarkerStore.getState().loadMarkers(filePath);
+    firstDelete.reject(new Error("transient marker delete failure"));
+
+    expect(await deleting).toBe("failed");
+    expect(await retrying).toBe("loaded");
+    expect(deleteAttempts).toBe(2);
+    expect(useMarkerStore.getState().markersByFile.get(filePath)?.size).toBe(0);
     expect(consoleError).toHaveBeenCalledOnce();
     consoleError.mockRestore();
   });

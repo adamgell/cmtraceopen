@@ -67,6 +67,7 @@ describe("EVTX marker identity adapter", () => {
       loadingFiles: new Set(),
       clearRevisions: new Map(),
       createdTimestamps: new Map(),
+      markerPersistenceByFile: new Map(),
       loadMarkers: vi.fn().mockResolvedValue("missing"),
       saveMarkers: vi.fn().mockResolvedValue("saved"),
     });
@@ -276,34 +277,25 @@ describe("EVTX marker identity adapter", () => {
       color: "#22c55e",
       added: "2026-08-18T11:00:00Z",
     };
-    const pendingLoad = deferred<void>();
+    const pendingLoad = deferred<MarkerFile | null>();
     const persistedSnapshots: Marker[][] = [];
 
     useMarkerStore.setState({
-      loadMarkers: vi.fn(async (loadedFileKey: string) => {
-        await pendingLoad.promise;
-        const state = useMarkerStore.getState();
-        const next = new Map(state.markersByFile);
-        next.set(
-          loadedFileKey,
-          new Map([
-            [diskMarker.lineId, diskMarker],
-            ...(state.markersByFile.get(loadedFileKey) ?? new Map()).entries(),
-          ]),
-        );
-        useMarkerStore.setState({ markersByFile: next });
-        return "loaded" as const;
-      }),
-      saveMarkers: vi.fn(async (savedFileKey: string) => {
-        persistedSnapshots.push([
-          ...(
-            useMarkerStore.getState().markersByFile.get(savedFileKey) ??
-            new Map()
-          ).values(),
-        ]);
-        return "saved" as const;
-      }),
+      loadMarkers: productionLoadMarkers,
+      saveMarkers: productionSaveMarkers,
     });
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") return pendingLoad.promise;
+        if (command === "save_markers" && args?.markerFile) {
+          persistedSnapshots.push(args.markerFile.markers);
+          return Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
 
     loadEvtxMarkers([sourceLabel]);
     toggleEvtxTag(editedRecord);
@@ -311,7 +303,7 @@ describe("EVTX marker identity adapter", () => {
     await Promise.resolve();
     expect(persistedSnapshots).toEqual([]);
 
-    pendingLoad.resolve();
+    pendingLoad.resolve(markerFile(sourceLabel, [diskMarker]));
     await vi.waitFor(() => expect(persistedSnapshots).toHaveLength(1));
 
     expect(persistedSnapshots[0].map((marker) => marker.identity)).toEqual([
