@@ -1954,6 +1954,34 @@ mod tests {
     }
 
     #[test]
+    fn publisher_safety_bound_prevents_publishing_a_captured_prefix() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("providers.db");
+        std::fs::write(&destination, b"existing provider database").expect("seed destination");
+        let writes = std::cell::Cell::new(0usize);
+
+        let error = finalize_provider_capture(1, Vec::new(), true, || {
+            writes.set(writes.get() + 1);
+            std::fs::write(&destination, b"captured prefix").map_err(|error| error.to_string())
+        })
+        .expect_err("hitting the publisher bound makes capture incomplete");
+
+        assert_eq!(error.kind, CaptureErrorKind::ProviderFailures);
+        assert_eq!(
+            error.failures,
+            vec![ProviderCaptureFailure {
+                provider_name: "<publisher enumeration>".to_string(),
+                error: "publisher enumeration exceeded bound".to_string(),
+            }]
+        );
+        assert_eq!(writes.get(), 0);
+        assert_eq!(
+            std::fs::read(&destination).expect("read preserved destination"),
+            b"existing provider database"
+        );
+    }
+
+    #[test]
     fn clean_capture_publishes_once_after_documented_exhaustion() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let destination = directory.path().join("providers.db");
