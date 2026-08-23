@@ -120,3 +120,32 @@ test.describe("registry tree interaction", () => {
     expect(focusStyle.outlineWidth).toBeGreaterThan(0);
   });
 });
+
+test.describe("registry tree touch interaction", () => {
+  test.use({ hasTouch: true });
+
+  test("a disclosure tap toggles without selecting a different row", async ({ page }) => {
+    await page.goto("/");
+    await dismissSplash(page);
+    await seedRegistry(page, 3);
+
+    const targetPath = "HKEY_LOCAL_MACHINE\\Branch002";
+    const target = page.getByTitle(targetPath, { exact: true }).locator("..");
+    await expect(target).toHaveAttribute("aria-expanded", "true");
+
+    await target.locator("[data-registry-disclosure]").tap();
+
+    await expect
+      .poll(() =>
+        page.evaluate(async (path) => {
+          const { useRegistryStore } =
+            await import("/src/stores/registry-store.ts");
+          return {
+            expanded: useRegistryStore.getState().expandedPaths.has(path),
+            selected: useRegistryStore.getState().selectedKeyPath,
+          };
+        }, targetPath),
+      )
+      .toEqual({ expanded: false, selected: null });
+  });
+});

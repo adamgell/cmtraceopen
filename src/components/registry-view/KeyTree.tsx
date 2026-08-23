@@ -260,6 +260,14 @@ export function KeyTree() {
                     disclosurePointerRef.current = true;
                   }
                 }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  if (hasChildren && e.button === 0) {
+                    // A touch tap emits this compatibility event after pointerup. Restore the
+                    // disclosure intent before its following focus event reaches the tree.
+                    disclosurePointerRef.current = true;
+                  }
+                }}
                 onLostPointerCapture={() => {
                   disclosurePointerRef.current = false;
                 }}
