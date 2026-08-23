@@ -416,6 +416,7 @@ fn query_channel_inner(
     let mut publisher_metadata = HashMap::<String, PublisherMetadata>::new();
     let mut unparsable = 0usize;
     let mut unrenderable = 0usize;
+    let mut first_render_error = None;
     let mut message_failures = 0usize;
     let mut metadata_failures = HashSet::<String>::new();
     let mut gaps = Vec::new();
@@ -503,17 +504,12 @@ fn query_channel_inner(
                 Ok(xml) => xml,
                 Err(error) => {
                     unrenderable += 1;
-                    push_bounded_tail_coverage_gap(
-                        &mut gaps,
-                        format!(
-                            "{coverage_channel}: event could not be rendered ({})",
-                            format_source_error("EvtRender", &error, remote)
-                        ),
-                    );
+                    let detail = format_source_error("EvtRender", &error, remote);
                     if unrenderable == 1 {
+                        first_render_error = Some(detail.clone());
                         log::warn!(
                             "event=evtx_render_failed channel=\"{channel}\" error=\"{}\"",
-                            format_source_error("EvtRender", &error, remote)
+                            detail
                         );
                     }
                     continue;
@@ -606,10 +602,16 @@ fn query_channel_inner(
             ),
         );
     }
-    // Render and message failures already append one classified gap per failed event above.
-    // Keep the counters in logs only so one failure cannot appear twice in coverage UI.
     if unrenderable > 0 {
         log::warn!("event=evtx_live_query_gap channel=\"{channel}\" unrenderable={unrenderable}");
+        push_bounded_tail_coverage_gap(
+            &mut gaps,
+            format!(
+                "{coverage_channel}: {unrenderable} events could not be rendered and are missing \
+                 from this view ({})",
+                first_render_error.unwrap_or_else(|| "EvtRender failed".to_string())
+            ),
+        );
     }
     if message_failures > 0 {
         log::warn!(
