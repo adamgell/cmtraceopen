@@ -6,7 +6,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 import { buildUnifiedTimeline } from "./evtx-store";
 import { selectVisibleRecords } from "./evtx-filter";
-import { filterTimelineToRecords } from "./unified-timeline";
+import {
+  filterTimelineToRecords,
+  stableRecordIdentity,
+} from "./unified-timeline";
 import type { EvtxRecord } from "./types";
 
 const record: EvtxRecord = {
@@ -113,18 +116,41 @@ describe("buildUnifiedTimeline", () => {
     });
   });
   it("filters a large cached record set without rebuilding the backend payload", async () => {
-    const timeline = { items: [], unplaced: [] };
-    vi.mocked(invoke).mockResolvedValue(timeline);
     const records = Array.from({ length: 512 }, (_, index) => ({
       ...record,
       id: index,
       eventRecordId: index + 1,
     }));
+    const timeline = {
+      items: records.map((cachedRecord) => ({
+        timestampMs: cachedRecord.timestampEpoch,
+        severity: "info",
+        message: cachedRecord.message,
+        origin: {
+          kind: "event",
+          stableId: stableRecordIdentity(cachedRecord),
+          source: cachedRecord.sourceLabel,
+          machine: cachedRecord.computer,
+          bundle: null,
+          channel: cachedRecord.channel,
+          provider: cachedRecord.provider,
+          processId: null,
+          eventId: cachedRecord.eventId,
+          recordId: cachedRecord.eventRecordId,
+        },
+      })),
+      unplaced: [],
+    };
+    vi.mocked(invoke).mockResolvedValue(timeline);
 
     const cached = await buildUnifiedTimeline(records);
-    filterTimelineToRecords(cached, records.slice(0, 1));
-    filterTimelineToRecords(cached, records.slice(256, 257));
+    const first = filterTimelineToRecords(cached, records.slice(0, 1), records);
+    const middle = filterTimelineToRecords(cached, records.slice(256, 257), records);
 
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0].origin.recordId).toBe(1);
+    expect(middle.items).toHaveLength(1);
+    expect(middle.items[0].origin.recordId).toBe(257);
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
@@ -268,9 +294,32 @@ describe("buildUnifiedTimeline", () => {
   });
 
   it("accepts legacy timelines that omit optional correlation fields", async () => {
-    const timeline = { items: [], unplaced: [] };
+    const timeline = {
+      items: [],
+      unplaced: [],
+      edges: [
+        {
+          id: "legacy-edge",
+          fromId: "from",
+          toId: null,
+          key: { kind: "activityId", value: "activity" },
+          strength: "exact",
+          confidence: "high",
+          coverage: { state: "covered" },
+        },
+      ],
+    };
     vi.mocked(invoke).mockResolvedValue(timeline);
 
-    await expect(buildUnifiedTimeline([record])).resolves.toEqual(timeline);
+    await expect(buildUnifiedTimeline([record])).resolves.toEqual({
+      ...timeline,
+      edges: [
+        {
+          ...timeline.edges[0],
+          candidateIds: [],
+          evidence: [],
+        },
+      ],
+    });
   });
 });

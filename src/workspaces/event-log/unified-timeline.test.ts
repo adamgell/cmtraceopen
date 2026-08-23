@@ -30,7 +30,7 @@ const logOrigin: TimelineOrigin = {
 
 const eventOrigin: TimelineOrigin = {
   stableId:
-    "source4:Live|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
+    "source4:Live|machine6:HOST-A|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
   kind: "event",
   source: "Live",
   machine: "HOST-A",
@@ -106,7 +106,7 @@ describe("originDetail", () => {
     expect(detail).toContain("process 4321");
     expect(detail).toContain("activity {activity}");
     expect(detail).toContain(
-      "stable source4:Live|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
+      "stable source4:Live|machine6:HOST-A|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
     );
   });
 
@@ -218,6 +218,7 @@ describe("filterTimelineToRecords", () => {
   it("keeps only visible event items and their unplaced coverage", () => {
     const visibleRecord = {
       sourceLabel: eventOrigin.source,
+      computer: "HOST-A",
       channel: eventOrigin.channel,
       eventRecordId: eventOrigin.recordId,
       eventId: eventOrigin.eventId,
@@ -227,7 +228,7 @@ describe("filterTimelineToRecords", () => {
       ...eventOrigin,
       source: "Other",
       stableId:
-        "source5:Other|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
+        "source5:Other|machine6:HOST-A|channel72:Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin|record1234",
     };
     const filtered = filterTimelineToRecords(
       timeline({
@@ -256,6 +257,7 @@ describe("filterTimelineToRecords", () => {
   it("retains the aggregate correlation coverage marker when event rows are filtered", () => {
     const visibleRecord = {
       sourceLabel: eventOrigin.source,
+      computer: "HOST-A",
       channel: eventOrigin.channel,
       eventRecordId: eventOrigin.recordId,
       eventId: eventOrigin.eventId,
@@ -356,6 +358,7 @@ describe("filterTimelineToRecords", () => {
   it("drops edges that retain a hidden endpoint or candidate", () => {
     const visibleRecord = {
       sourceLabel: eventOrigin.source,
+      computer: "HOST-A",
       channel: eventOrigin.channel,
       eventRecordId: eventOrigin.recordId,
       eventId: eventOrigin.eventId,

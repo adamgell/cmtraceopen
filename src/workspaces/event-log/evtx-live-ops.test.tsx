@@ -46,6 +46,7 @@ describe("event-log live operations", () => {
       records: [],
       loadedChannels: new Set(["Application", "System"]),
       selectedChannels: new Set(["Application", "System"]),
+      selectedRecordId: null,
       coverageGaps: [],
       tailCoverageGaps: [],
       tailMode: null,
@@ -309,18 +310,13 @@ describe("event-log live operations", () => {
 
     await useEvtxStore.getState().startLiveTail();
     const sourceQuery = useEvtxStore.getState().queryChannels(["Application"]);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(staleReject).toBeDefined();
+    await waitFor(() => expect(staleReject).toBeDefined());
 
     staleReject(new Error("same failure"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(useEvtxStore.getState().tailCoverageGaps).toContain(
-      "Application: live tail stop failed (same failure)"
+    await waitFor(() =>
+      expect(useEvtxStore.getState().tailCoverageGaps).toContain(
+        "Application: live tail stop failed (same failure)"
+      )
     );
 
     const nextTail = useEvtxStore.getState().startLiveTail();
@@ -328,9 +324,7 @@ describe("event-log live operations", () => {
     expect(useEvtxStore.getState().tailRequestId).toBe(currentTailRequestId);
 
     const stopCurrent = useEvtxStore.getState().stopLiveTail();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(currentReject).toBeDefined();
+    await waitFor(() => expect(currentReject).toBeDefined());
     currentReject(new Error("same failure"));
     await stopCurrent;
 
@@ -346,11 +340,7 @@ describe("event-log live operations", () => {
       nextSequence: 0,
       coverageGaps: [],
     });
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await Promise.resolve();
 
     expect(useEvtxStore.getState().tailCoverageGaps).toContain(
       "Application: live tail stop failed (same failure)"

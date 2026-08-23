@@ -137,6 +137,7 @@ describe("EventDiagnosisPanel", () => {
   it("renders finding class, severity, coverage, and lossless error token", () => {
     render(<EventDiagnosisPanel summary={summary} />);
     expect(screen.getAllByText("confirmedFailure")).toHaveLength(2);
+    expect(screen.getByText("MDM enrollment failed")).toBeTruthy();
     expect(screen.getByText("error")).toBeTruthy();
     expect(screen.getByText(/Access is denied/)).toBeTruthy();
     expect(screen.getByText(/IntuneManagementExtension\.log \(absent\)/)).toBeTruthy();
