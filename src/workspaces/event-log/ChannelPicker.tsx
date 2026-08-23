@@ -122,6 +122,11 @@ export function ChannelPicker() {
   const [clearTarget, setClearTarget] = useState<string | null>(null);
   const clearTargetRef = useRef<string | null>(null);
   const clearInFlightRef = useRef<string | null>(null);
+  const clearSelectRef = useRef<HTMLSelectElement | null>(null);
+  const clearStatusRef = useRef<HTMLDivElement | null>(null);
+  const clearAlertRef = useRef<HTMLDivElement | null>(null);
+  const channelFilterRef = useRef<HTMLInputElement | null>(null);
+  const restoreClearFocusRef = useRef(false);
   const [clearingChannel, setClearingChannel] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const ownsClearConfirmation = useModalOwnership(
@@ -147,6 +152,21 @@ export function ChannelPicker() {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["Windows Logs"]));
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    if (clearingChannel !== null) {
+      restoreClearFocusRef.current = true;
+      clearStatusRef.current?.focus();
+      return;
+    }
+    if (!restoreClearFocusRef.current) return;
+    restoreClearFocusRef.current = false;
+    if (clearError !== null) {
+      clearAlertRef.current?.focus();
+    } else {
+      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
+    }
+  }, [clearingChannel, clearError]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -217,6 +237,7 @@ export function ChannelPicker() {
           }}
         >
           <Input
+            ref={channelFilterRef}
             value={search}
             onChange={(_, data) => setSearch(data.value)}
             placeholder="Filter channels..."
@@ -292,6 +313,7 @@ export function ChannelPicker() {
               </div>
               <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                 <Select
+                  ref={clearSelectRef}
                   aria-label="Channel to clear"
                   value={clearTarget ?? ""}
                   disabled={clearingChannel !== null}
@@ -323,13 +345,20 @@ export function ChannelPicker() {
                 </Button>
               </div>
               {clearingChannel !== null && (
-                <div role="status" style={{ fontSize: `${smallFontSize}px` }}>
+                <div
+                  ref={clearStatusRef}
+                  role="status"
+                  tabIndex={-1}
+                  style={{ fontSize: `${smallFontSize}px` }}
+                >
                   Clearing {clearingChannel}…
                 </div>
               )}
               {clearError && (
                 <div
+                  ref={clearAlertRef}
                   role="alert"
+                  tabIndex={-1}
                   style={{
                     color: tokens.colorPaletteRedForeground1,
                     fontSize: `${smallFontSize}px`,

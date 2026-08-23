@@ -52,6 +52,7 @@ function confirmChannelClear(channel = "Application") {
   const confirmButton = Array.from(document.querySelectorAll("button")).find(
     (button) => button.textContent?.trim() === "Clear channel",
   )!;
+  confirmButton.focus();
   fireEvent.click(confirmButton);
   return { channelSelect, clearButton };
 }
@@ -777,9 +778,9 @@ describe("event-log live operations", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(channelSelect).toBeDisabled();
     expect(clearButton).toBeDisabled();
-    expect(document.querySelector('[role="status"]')).toHaveTextContent(
-      "Clearing Application…",
-    );
+    const clearStatus = document.querySelector('[role="status"]');
+    expect(clearStatus).toHaveTextContent("Clearing Application…");
+    await waitFor(() => expect(clearStatus).toHaveFocus());
     fireEvent.click(clearButton);
     expect(invoke.mock.calls.filter(([name]) => name === "evtx_clear_channel")).toHaveLength(1);
 
@@ -789,7 +790,9 @@ describe("event-log live operations", () => {
     });
     await waitFor(() => {
       expect(channelSelect).not.toBeDisabled();
-      expect(document.querySelector('[role="alert"]')).toHaveTextContent("Access denied");
+      const alert = document.querySelector('[role="alert"]');
+      expect(alert).toHaveTextContent("Access denied");
+      expect(alert).toHaveFocus();
     });
     expect(channelSelect.value).toBe("Application");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -814,6 +817,7 @@ describe("event-log live operations", () => {
     await waitFor(() => {
       expect(channelSelect).not.toBeDisabled();
       expect(channelSelect.value).toBe("");
+      expect(channelSelect).toHaveFocus();
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.querySelector('[role="status"]')).toBeNull();
@@ -837,7 +841,9 @@ describe("event-log live operations", () => {
       const { channelSelect } = confirmChannelClear();
 
       await waitFor(() => {
-        expect(document.querySelector('[role="alert"]')).toHaveTextContent(message);
+        const alert = document.querySelector('[role="alert"]');
+        expect(alert).toHaveTextContent(message);
+        expect(alert).toHaveFocus();
       });
       expect(channelSelect).not.toBeDisabled();
       expect(channelSelect.value).toBe("Application");
@@ -855,9 +861,9 @@ describe("event-log live operations", () => {
     const { channelSelect } = confirmChannelClear();
 
     await waitFor(() => {
-      expect(document.querySelector('[role="alert"]')).toHaveTextContent(
-        "Command 'evtx_clear_channel' failed.",
-      );
+      const alert = document.querySelector('[role="alert"]');
+      expect(alert).toHaveTextContent("Command 'evtx_clear_channel' failed.");
+      expect(alert).toHaveFocus();
     });
     expect(channelSelect).not.toBeDisabled();
     expect(channelSelect.value).toBe("Application");
