@@ -104,6 +104,17 @@ function ConvertTo-SafeFileName {
     return $safeValue
 }
 
+function New-CollectorBundleId {
+    param(
+        [AllowEmptyString()]
+        [string]$DeviceName
+    )
+
+    $safeDeviceName = ConvertTo-SafeFileName -Value $DeviceName
+    $nonce = [Guid]::NewGuid().ToString('N').ToLowerInvariant()
+    return 'CMTRACE-{0}-{1}-{2}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $safeDeviceName, $nonce
+}
+
 function Join-RelativePath {
     param(
         [Parameter(Mandatory = $true)]
@@ -988,7 +999,7 @@ try {
 
     Write-Step 'Gathering device metadata'
     $deviceContext = Get-DeviceContext
-    $bundleId = 'CMTRACE-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), (ConvertTo-SafeFileName -Value $deviceContext.device.deviceName)
+    $bundleId = New-CollectorBundleId -DeviceName $deviceContext.device.deviceName
     $bundleRoot = Join-Path $OutputRoot $bundleId
     $evidenceRoot = Join-Path $bundleRoot 'evidence'
 

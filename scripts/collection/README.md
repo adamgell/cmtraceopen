@@ -76,7 +76,7 @@ For Intune Remediations, upload `Detect-CmtraceEvidenceBootstrap.ps1` as the det
 The script creates a bundle root like this:
 
 ```text
-CMTRACE-20260311-153000-DEVICE/
+CMTRACE-20260311-153000-DEVICE-0123456789abcdef0123456789abcdef/
 ├── manifest.json
 ├── notes.md
 └── evidence/

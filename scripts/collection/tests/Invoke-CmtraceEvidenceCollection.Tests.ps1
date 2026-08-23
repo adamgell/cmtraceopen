@@ -20,6 +20,8 @@ BeforeAll {
         'Assert-ProfileRequiredString',
         'Assert-ProfileRequiredArray',
         'Assert-CollectorProfileShape',
+        'ConvertTo-SafeFileName',
+        'New-CollectorBundleId',
         'Join-RelativePath',
         'Get-LocaleMetadataRelativePath',
         'Get-LocaleMetadataLcid',
@@ -80,6 +82,17 @@ BeforeAll {
                 }
             )
         }
+    }
+}
+
+Describe 'New-CollectorBundleId' {
+    It 'emits the canonical collector format with a unique lowercase nonce' {
+        $first = New-CollectorBundleId -DeviceName 'DEVICE-01'
+        $second = New-CollectorBundleId -DeviceName 'DEVICE-01'
+
+        $first | Should -Match '^CMTRACE-\d{8}-\d{6}-DEVICE-01-[0-9a-f]{32}$'
+        $second | Should -Match '^CMTRACE-\d{8}-\d{6}-DEVICE-01-[0-9a-f]{32}$'
+        $second | Should -Not -BeExactly $first
     }
 }
 
