@@ -1400,17 +1400,19 @@ impl ProviderStore {
             return Ok(None);
         };
         let channel_score =
-            |event: &cmtraceopen_parser::provider::ProviderEvent| match event.log_name.as_deref() {
-                Some(expected) if expected.eq_ignore_ascii_case(channel) => 2u8,
-                None => 1u8,
-                _ => 0u8,
+            |metadata: &ProviderMetadata, event: &cmtraceopen_parser::provider::ProviderEvent| {
+                match event.log_name.as_deref() {
+                    Some(expected) if expected.eq_ignore_ascii_case(channel) => 2u8,
+                    None if !metadata.unavailable_categories.contains("channels") => 1u8,
+                    _ => 0u8,
+                }
             };
         let find_matching = |requested_version: Option<u32>, minimum_score: u8| {
             rows.iter().find(|row| {
                 row.metadata.events.iter().any(|event| {
                     event.id == event_id
                         && requested_version.is_none_or(|value| event.version == value)
-                        && channel_score(event) >= minimum_score
+                        && channel_score(&row.metadata, event) >= minimum_score
                 })
             })
         };
@@ -2195,6 +2197,39 @@ mod tests {
             Some("old-row"),
             "an exact event/version match must beat the highest provider row"
         );
+    }
+
+    #[test]
+    fn provider_lookup_does_not_treat_unavailable_channels_as_a_wildcard() {
+        let dir = temp_dir("unavailable-channel-lookup");
+        let path = dir.join("capture.db");
+        let metadata = ProviderMetadata {
+            provider_name: "Channel-Gap".to_string(),
+            events: vec![cmtraceopen_parser::provider::ProviderEvent {
+                id: 42,
+                version: 0,
+                description: Some("definition from an unknown channel".to_string()),
+                ..Default::default()
+            }],
+            unavailable_categories: ["channels".to_string()].into_iter().collect(),
+            ..ProviderMetadata::default()
+        };
+        write_provider_database(
+            &path,
+            &[CapturedProviderMetadata {
+                metadata,
+                version_key: "channel-gap".to_string(),
+            }],
+        )
+        .expect("write");
+
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("loads");
+
+        assert!(store
+            .provider_for_event("Channel-Gap", "Channel-Gap/Operational", 42, Some(0))
+            .expect("lookup succeeds")
+            .is_none());
     }
 
     #[test]
