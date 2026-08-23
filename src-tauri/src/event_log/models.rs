@@ -41,6 +41,8 @@ pub struct EvtxCoverageGap {
     pub chunk_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_record_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_record_id_text: Option<String>,
 }
 
 impl EvtxCoverageGap {
@@ -55,7 +57,13 @@ impl EvtxCoverageGap {
             reason: reason.into(),
             chunk_id: None,
             event_record_id: None,
+            event_record_id_text: None,
         }
+    }
+
+    pub fn set_event_record_id(&mut self, event_record_id: u64) {
+        self.event_record_id = Some(event_record_id);
+        self.event_record_id_text = Some(event_record_id.to_string());
     }
 }
 #[derive(Debug, Deserialize)]

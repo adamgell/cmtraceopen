@@ -1398,7 +1398,7 @@ fn coverage_gap_from_evtx_error(source: &str, error: &evtx::err::EvtxError) -> E
         evtx::err::EvtxError::FailedToParseRecord { record_id, .. } => {
             let mut gap =
                 EvtxCoverageGap::new(source, EvtxCoverageGapKind::Record, error.to_string());
-            gap.event_record_id = Some(*record_id);
+            gap.set_event_record_id(*record_id);
             gap
         }
         _ => EvtxCoverageGap::new(source, EvtxCoverageGapKind::File, error.to_string()),
@@ -1415,7 +1415,7 @@ fn coverage_gap_for_record_xml(
         EvtxCoverageGapKind::Xml,
         format!("event XML could not be parsed: {reason}"),
     );
-    gap.event_record_id = Some(event_record_id);
+    gap.set_event_record_id(event_record_id);
     gap
 }
 
@@ -2202,7 +2202,7 @@ where
                             .join(", ")
                     ),
                 );
-                gap.event_record_id = Some(event_record_id);
+                gap.set_event_record_id(event_record_id);
                 messages.push(format_coverage_gap(&gap));
                 coverage_gaps.push(gap);
                 payload
@@ -2220,7 +2220,7 @@ where
                         "provider metadata lookup failed for {provider} event {event_id}: {error}"
                     ),
                 );
-                gap.event_record_id = Some(event_record_id);
+                gap.set_event_record_id(event_record_id);
                 messages.push(format_coverage_gap(&gap));
                 coverage_gaps.push(gap);
                 payload
@@ -2273,7 +2273,9 @@ where
             EvtxCoverageGapKind::Limit,
             format!("reader stopped at {MAX_ENTRIES_PER_FILE} events; the source may contain more"),
         );
-        gap.event_record_id = records.last().map(|record| record.event_record_id);
+        if let Some(event_record_id) = records.last().map(|record| record.event_record_id) {
+            gap.set_event_record_id(event_record_id);
+        }
         coverage_gaps.push(gap);
         messages.push(format!(
             "{}: stopped at {} events, the most this reader loads from one file. The file holds more.",
@@ -2791,6 +2793,20 @@ mod tests {
 
         assert_eq!(record_gap.chunk_id, None);
         assert_eq!(record_gap.event_record_id, Some(42));
+        assert_eq!(record_gap.event_record_id_text.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn coverage_gap_serialization_preserves_the_exact_u64_record_id() {
+        let gap = coverage_gap_for_record_xml("dirty.evtx", u64::MAX, "damaged XML");
+        let serialized = serde_json::to_value(gap).expect("coverage gap serializes");
+
+        assert_eq!(
+            serialized
+                .get("eventRecordIdText")
+                .and_then(|value| value.as_str()),
+            Some("18446744073709551615")
+        );
     }
     #[test]
     fn damaged_gap_reporting_is_bounded_with_an_explicit_aggregate_gap() {
@@ -2798,7 +2814,7 @@ mod tests {
             .map(|record_id| {
                 let mut gap =
                     EvtxCoverageGap::new("dirty.evtx", EvtxCoverageGapKind::Record, "unreadable");
-                gap.event_record_id = Some(record_id as u64);
+                gap.set_event_record_id(record_id as u64);
                 gap
             })
             .collect();
@@ -2920,7 +2936,7 @@ mod tests {
             EvtxCoverageGapKind::Record,
             "record 2 could not be decoded",
         );
-        gap.event_record_id = Some(2);
+        gap.set_event_record_id(2);
 
         attach_recovery_gaps(&mut parsed, [gap]);
 

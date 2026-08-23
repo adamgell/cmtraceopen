@@ -82,6 +82,8 @@ export interface EvtxCoverageGap {
   reason: string;
   chunkId?: number;
   eventRecordId?: number;
+  /** Exact decimal u64 identity when the JSON number is outside JavaScript's safe range. */
+  eventRecordIdText?: string;
 }
 
 export type EvtxArchiveMemberKind = "evtx" | "text" | "registry" | "binary";

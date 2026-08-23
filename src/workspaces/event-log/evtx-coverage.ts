@@ -37,6 +37,17 @@ const ARCHIVE_MEMBER_OUTCOMES = [
   "duplicate",
   "limit",
 ] as const;
+const MAX_U64 = 18_446_744_073_709_551_615n;
+
+function parseU64Text(value: unknown): bigint | null {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  try {
+    const parsed = BigInt(value);
+    return parsed <= MAX_U64 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function isArchiveMember(value: unknown): value is EvtxArchiveMember {
   if (typeof value !== "object" || value === null) return false;
@@ -90,6 +101,18 @@ function parseOptionalArray<T>(
 function isCoverageGap(value: unknown): value is EvtxCoverageGap {
   if (typeof value !== "object" || value === null) return false;
   const gap = value as Partial<EvtxCoverageGap>;
+  const recordIdText =
+    gap.eventRecordIdText === undefined
+      ? null
+      : parseU64Text(gap.eventRecordIdText);
+  const recordIdIsValid =
+    gap.eventRecordId === undefined ||
+    (typeof gap.eventRecordId === "number" &&
+      Number.isFinite(gap.eventRecordId) &&
+      Number.isInteger(gap.eventRecordId) &&
+      gap.eventRecordId >= 0 &&
+      (Number.isSafeInteger(gap.eventRecordId) || recordIdText !== null) &&
+      (recordIdText === null || Number(recordIdText) === gap.eventRecordId));
   return (
     typeof gap.source === "string" &&
     typeof gap.reason === "string" &&
@@ -97,10 +120,8 @@ function isCoverageGap(value: unknown): value is EvtxCoverageGap {
     COVERAGE_GAP_KINDS[gap.kind as EvtxCoverageGapKind] === true &&
     (gap.chunkId === undefined ||
       (typeof gap.chunkId === "number" && Number.isSafeInteger(gap.chunkId) && gap.chunkId >= 0)) &&
-    (gap.eventRecordId === undefined ||
-      (typeof gap.eventRecordId === "number" &&
-        Number.isSafeInteger(gap.eventRecordId) &&
-        gap.eventRecordId >= 0))
+    recordIdIsValid &&
+    (gap.eventRecordIdText === undefined || recordIdText !== null)
   );
 }
 
@@ -109,14 +130,22 @@ export function formatCoverageGap(gap: EvtxCoverageGap): string {
   const location =
     gap.chunkId !== undefined
       ? ` chunk ${gap.chunkId}`
-      : gap.eventRecordId !== undefined
-        ? ` record ${gap.eventRecordId}`
+      : gap.eventRecordIdText !== undefined
+        ? ` record ${gap.eventRecordIdText}`
+        : gap.eventRecordId !== undefined
+          ? ` record ${gap.eventRecordId}`
         : "";
   return `${gap.source}${location}: ${gap.reason}`;
 }
 
 function coverageGapKey(gap: EvtxCoverageGap): string {
-  return JSON.stringify([gap.source, gap.kind, gap.reason, gap.chunkId, gap.eventRecordId]);
+  return JSON.stringify([
+    gap.source,
+    gap.kind,
+    gap.reason,
+    gap.chunkId,
+    gap.eventRecordIdText ?? gap.eventRecordId,
+  ]);
 }
 
 /** Accumulates structured gaps without duplicating a rejected region on refresh. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
+  formatCoverageGap,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
   summarizeCoverageGaps,
@@ -222,6 +223,52 @@ describe("assertParseResultShape", () => {
             kind: "record",
             reason: "unreadable record",
             eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("preserves an unsafe coverage-gap record ID through its exact u64 text", () => {
+    const eventRecordIdText = "18446744073709551615";
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        {
+          source: "oversized.evtx",
+          kind: "record",
+          reason: "unreadable record",
+          eventRecordId: Number(eventRecordIdText),
+          eventRecordIdText,
+        },
+      ],
+    });
+
+    expect(shape.coverageGaps).toEqual([
+      expect.objectContaining({ eventRecordIdText }),
+    ]);
+    expect(formatCoverageGap(shape.coverageGaps[0])).toBe(
+      `oversized.evtx record ${eventRecordIdText}: unreadable record`
+    );
+  });
+
+  it.each([
+    ["outside u64", "18446744073709551616", Number("18446744073709551616")],
+    ["non-decimal", "record-42", 42],
+    ["mismatched", "42", Number.MAX_SAFE_INTEGER + 1],
+  ])("rejects %s coverage-gap record ID text", (_label, eventRecordIdText, eventRecordId) => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "invalid.evtx",
+            kind: "record",
+            reason: "unreadable record",
+            eventRecordId,
+            eventRecordIdText,
           },
         ],
       })
