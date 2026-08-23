@@ -10,6 +10,7 @@ import { useMarkerStore } from "../../stores/marker-store";
 import {
   evtxMarkerKey,
   getEvtxMarker,
+  isEvtxMarkerAddressable,
   loadEvtxMarkers,
   matchesEvtxQuickFilter,
   toggleEvtxBookmark,
@@ -59,18 +60,12 @@ function compareRecords(
   }
   return direction === "asc" ? cmp : -cmp;
 }
-function hasUsableRecordId(record: EvtxRecord): boolean {
-  const textId = record.eventRecordIdText?.trim() ?? "";
-  if (textId !== "") return /^\d+$/.test(textId) && !/^0+$/.test(textId);
-  return Number.isSafeInteger(record.eventRecordId) && record.eventRecordId > 0;
-}
-
 function evtxRowKeys(rows: readonly EvtxRow[]): string[] {
   const occurrencesByFingerprint = new Map<string, number>();
   return rows.map((row) => {
     if (row.kind === "group") return `group:${row.key}`;
     const key = `event:${evtxMarkerKey(row.record)}`;
-    if (hasUsableRecordId(row.record)) return key;
+    if (isEvtxMarkerAddressable(row.record)) return key;
 
     const occurrence = occurrencesByFingerprint.get(key) ?? 0;
     occurrencesByFingerprint.set(key, occurrence + 1);

@@ -296,25 +296,28 @@ export function EventLogWorkspace() {
     timelineInputsRef.current = null;
     setTimelineError(null);
 
-    void buildUnifiedTimeline(records, scopedLogEntries)
-      .then((nextTimeline) => {
-        if (cancelled) return;
-        setTimelinePending(false);
-        timelineInputsRef.current = { records, entries: scopedLogEntries };
-        setTimeline(nextTimeline);
-        setTimelineError(null);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setTimelinePending(false);
-        const message = error instanceof Error ? error.message : String(error);
-        timelineInputsRef.current = null;
-        setTimeline(EMPTY_TIMELINE);
-        setTimelineError(`Unified timeline could not be built: ${message}`);
-      });
+    const timer = window.setTimeout(() => {
+      void buildUnifiedTimeline(records, scopedLogEntries)
+        .then((nextTimeline) => {
+          if (cancelled) return;
+          setTimelinePending(false);
+          timelineInputsRef.current = { records, entries: scopedLogEntries };
+          setTimeline(nextTimeline);
+          setTimelineError(null);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setTimelinePending(false);
+          const message = error instanceof Error ? error.message : String(error);
+          timelineInputsRef.current = null;
+          setTimeline(EMPTY_TIMELINE);
+          setTimelineError(`Unified timeline could not be built: ${message}`);
+        });
+    }, DIAGNOSIS_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [scopedLogEntries, records]);
 

@@ -1,5 +1,5 @@
 import type * as EvtxStoreModule from "./evtx-store";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
@@ -96,5 +96,44 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
 
     expect(mocks.buildTimeline).toHaveBeenCalledWith([RECORD], []);
     expect(mocks.diagnose).toHaveBeenCalledWith([RECORD], [], TIMELINE, []);
+  });
+
+  it("coalesces a burst of record changes into one timeline rebuild", async () => {
+    const newer = {
+      ...RECORD,
+      id: 2,
+      eventRecordId: 102,
+      message: "Newer event",
+    };
+    const newest = {
+      ...RECORD,
+      id: 3,
+      eventRecordId: 103,
+      message: "Newest event",
+    };
+    useEvtxStore.setState({
+      records: [RECORD],
+      channels: [
+        {
+          name: "Application",
+          eventCount: 3,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set(["Application"]),
+      sourceMode: "files",
+      timeWindow: "all",
+    });
+
+    render(<EventLogWorkspace />);
+    act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
+    act(() => useEvtxStore.setState({ records: [RECORD, newer, newest] }));
+
+    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
+    expect(mocks.buildTimeline).toHaveBeenCalledWith(
+      [RECORD, newer, newest],
+      [],
+    );
   });
 });
