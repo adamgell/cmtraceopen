@@ -883,6 +883,41 @@ describe("event-log live operations", () => {
     expect(filter).toHaveFocus();
   });
 
+  it("recovers focus when a successful clear removes the focused live control", async () => {
+    const clearResult = deferred<{
+      channel: string;
+      result: { status: "cleared" };
+    }>();
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_clear_channel") return clearResult.promise;
+      return undefined;
+    });
+    useEvtxStore.setState({
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+    });
+    render(<ChannelPicker />);
+
+    confirmChannelClear();
+    const filter = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Filter channels..."]',
+    )!;
+    const liveTailButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Start live tail",
+    )!;
+    await waitFor(() => expect(document.querySelector('[role="status"]')).toHaveFocus());
+    liveTailButton.focus();
+    expect(liveTailButton).toHaveFocus();
+
+    clearResult.resolve({ channel: "Application", result: { status: "cleared" } });
+
+    await waitFor(() => {
+      expect(liveTailButton.isConnected).toBe(false);
+      expect(filter).toHaveFocus();
+    });
+  });
+
   it.each([
     ["cancelled", "Clear was cancelled."],
     ["empty", "Application is already empty."],

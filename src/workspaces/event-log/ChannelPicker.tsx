@@ -128,6 +128,7 @@ export function ChannelPicker() {
   const channelFilterRef = useRef<HTMLInputElement | null>(null);
   const restoreClearFocusRef = useRef(false);
   const clearWorkflowOwnsFocusRef = useRef(false);
+  const clearExternalFocusTargetRef = useRef<HTMLElement | null>(null);
   const clearDialogWasOpenRef = useRef(false);
   const clearDialogSubmittedRef = useRef(false);
   const [clearingChannel, setClearingChannel] = useState<string | null>(null);
@@ -163,12 +164,40 @@ export function ChannelPicker() {
     }
     if (!restoreClearFocusRef.current) return;
     restoreClearFocusRef.current = false;
+    clearExternalFocusTargetRef.current = null;
     if (clearError !== null) {
       clearAlertRef.current?.focus();
     } else {
       (clearSelectRef.current ?? channelFilterRef.current)?.focus();
     }
   }, [clearingChannel, clearError]);
+
+  useEffect(() => {
+    if (clearingChannel === null) {
+      const previousTarget = clearExternalFocusTargetRef.current;
+      clearExternalFocusTargetRef.current = null;
+      if (
+        previousTarget !== null &&
+        !previousTarget.isConnected &&
+        document.activeElement === document.body &&
+        useUiStore.getState().modalOwner === null
+      ) {
+        channelFilterRef.current?.focus();
+      }
+      return;
+    }
+
+    const rememberExternalFocus = (event: FocusEvent) => {
+      if (
+        event.target instanceof HTMLElement &&
+        event.target !== clearStatusRef.current
+      ) {
+        clearExternalFocusTargetRef.current = event.target;
+      }
+    };
+    document.addEventListener("focusin", rememberExternalFocus);
+    return () => document.removeEventListener("focusin", rememberExternalFocus);
+  }, [clearingChannel]);
 
   useEffect(() => {
     if (confirmClear) {
@@ -418,6 +447,7 @@ export function ChannelPicker() {
                     const channel = clearTarget;
                     clearDialogSubmittedRef.current = true;
                     clearWorkflowOwnsFocusRef.current = true;
+                    clearExternalFocusTargetRef.current = null;
                     clearInFlightRef.current = channel;
                     setClearingChannel(channel);
                     setClearError(null);
