@@ -886,7 +886,10 @@ fn streaming_writer_forwards_output_before_the_iterator_finishes() {
 
     impl Write for SharedWriter {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.lock().expect("output lock").extend_from_slice(buffer);
+            self.0
+                .lock()
+                .expect("output lock")
+                .extend_from_slice(buffer);
             Ok(buffer.len())
         }
 
@@ -914,13 +917,9 @@ fn streaming_writer_forwards_output_before_the_iterator_finishes() {
     });
     let mut writer = SharedWriter(std::sync::Arc::clone(&output));
 
-    let stats = super::writer::write_record_stream_to_writer(
-        &mut writer,
-        records,
-        ExportFormat::Json,
-        &[],
-    )
-    .expect("stream succeeds");
+    let stats =
+        super::writer::write_record_stream_to_writer(&mut writer, records, ExportFormat::Json, &[])
+            .expect("stream succeeds");
 
     assert_eq!(stats.records, 2);
 }
