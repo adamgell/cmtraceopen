@@ -18,8 +18,18 @@ function Remove-RegistryTreeIfPresent {
 function Remove-EmptyRegistryKey {
     param([Parameter(Mandatory = $true)][string] $Path)
 
-    $key = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
-    if ($null -ne $key -and $key.SubKeyCount -eq 0 -and $key.ValueCount -eq 0) {
+    $key = $null
+    $remove = $false
+    try {
+        $key = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+        $remove = $null -ne $key -and $key.SubKeyCount -eq 0 -and $key.ValueCount -eq 0
+    }
+    finally {
+        if ($null -ne $key) {
+            $key.Dispose()
+        }
+    }
+    if ($remove) {
         Remove-Item -LiteralPath $Path -Force
     }
 }
@@ -34,11 +44,21 @@ function Remove-AssociationIdentity {
     $capabilitiesPath = "Software\$RegistryStem\Capabilities"
     $progId = "$RegistryStem.LogFile"
     $registeredApplicationsPath = "$UserRoot\Software\RegisteredApplications"
-    $registeredApplications = Get-Item -LiteralPath $registeredApplicationsPath -ErrorAction SilentlyContinue
-    if (
-        $null -ne $registeredApplications -and
-        [string] $registeredApplications.GetValue($ApplicationName) -eq $capabilitiesPath
-    ) {
+    $registeredApplications = $null
+    $removeRegisteredApplication = $false
+    try {
+        $registeredApplications = Get-Item -LiteralPath $registeredApplicationsPath -ErrorAction SilentlyContinue
+        $removeRegisteredApplication = (
+            $null -ne $registeredApplications -and
+            [string] $registeredApplications.GetValue($ApplicationName) -eq $capabilitiesPath
+        )
+    }
+    finally {
+        if ($null -ne $registeredApplications) {
+            $registeredApplications.Dispose()
+        }
+    }
+    if ($removeRegisteredApplication) {
         Remove-ItemProperty -LiteralPath $registeredApplicationsPath -Name $ApplicationName
     }
 
@@ -48,38 +68,111 @@ function Remove-AssociationIdentity {
 
     foreach ($extension in $extensions) {
         $openWithPath = "$UserRoot\Software\Classes\$extension\OpenWithProgids"
-        $openWithKey = Get-Item -LiteralPath $openWithPath -ErrorAction SilentlyContinue
-        if ($null -ne $openWithKey -and $null -ne $openWithKey.GetValue($progId, $null)) {
+        $openWithKey = $null
+        $removeProgId = $false
+        try {
+            $openWithKey = Get-Item -LiteralPath $openWithPath -ErrorAction SilentlyContinue
+            $removeProgId = $null -ne $openWithKey -and $null -ne $openWithKey.GetValue($progId, $null)
+        }
+        finally {
+            if ($null -ne $openWithKey) {
+                $openWithKey.Dispose()
+            }
+        }
+        if ($removeProgId) {
             Remove-ItemProperty -LiteralPath $openWithPath -Name $progId
             Remove-EmptyRegistryKey $openWithPath
         }
     }
 }
 
+function Invoke-RegistryHiveOperation {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("LOAD", "UNLOAD")][string] $Operation,
+        [Parameter(Mandatory = $true)][string] $HiveName,
+        [string] $HivePath
+    )
+
+    $arguments = @($Operation, $HiveName)
+    if ($Operation -eq "LOAD") {
+        $arguments += ('"{0}"' -f $HivePath)
+    }
+    $registryExecutable = Join-Path $env:SystemRoot "System32\reg.exe"
+    $process = Start-Process `
+        -FilePath $registryExecutable `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden
+    return [int] $process.ExitCode
+}
+
 $profileListPath = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
 $failures = [System.Collections.Generic.List[string]]::new()
-foreach ($profile in Get-ChildItem -LiteralPath $profileListPath) {
-    $userRoot = "Registry::HKEY_USERS\$($profile.PSChildName)"
-    if (-not (Test-Path -LiteralPath $userRoot)) {
-        continue
-    }
+foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
+    $sid = $profileKey.PSChildName
+    $userRoot = "Registry::HKEY_USERS\$sid"
+    $hiveName = "HKU\$sid"
+    $loadedByCleanup = $false
+    try {
+        if (-not (Test-Path -LiteralPath $userRoot)) {
+            [string] $profileImagePath = Get-ItemPropertyValue `
+                -LiteralPath $profileKey.PSPath `
+                -Name "ProfileImagePath"
+            $profileImagePath = [Environment]::ExpandEnvironmentVariables($profileImagePath)
+            if ([string]::IsNullOrWhiteSpace($profileImagePath)) {
+                throw "ProfileImagePath is empty"
+            }
 
-    foreach ($identity in $associationIdentities) {
-        try {
-            Remove-AssociationIdentity -UserRoot $userRoot @identity
+            $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+            if (-not (Test-Path -LiteralPath $ntUserPath -PathType Leaf)) {
+                throw "profile hive does not exist: $ntUserPath"
+            }
+
+            $loadExitCode = Invoke-RegistryHiveOperation `
+                -Operation "LOAD" `
+                -HiveName $hiveName `
+                -HivePath $ntUserPath
+            if ($loadExitCode -eq 0) {
+                $loadedByCleanup = $true
+            }
+            elseif (-not (Test-Path -LiteralPath $userRoot)) {
+                throw "reg.exe LOAD $hiveName failed with exit code $loadExitCode"
+            }
         }
-        catch {
-            $failures.Add("$($profile.PSChildName)/$($identity.ApplicationName): $($_.Exception.Message)")
+
+        foreach ($identity in $associationIdentities) {
+            try {
+                Remove-AssociationIdentity -UserRoot $userRoot @identity
+            }
+            catch {
+                $failures.Add("$sid/$($identity.ApplicationName): $($_.Exception.Message)")
+            }
+        }
+    }
+    catch {
+        $failures.Add("$sid/profile: $($_.Exception.Message)")
+    }
+    finally {
+        if ($loadedByCleanup) {
+            try {
+                $unloadExitCode = Invoke-RegistryHiveOperation `
+                    -Operation "UNLOAD" `
+                    -HiveName $hiveName
+                if ($unloadExitCode -ne 0) {
+                    throw "reg.exe UNLOAD $hiveName failed with exit code $unloadExitCode"
+                }
+            }
+            catch {
+                $failures.Add("$sid/unload: $($_.Exception.Message)")
+            }
         }
     }
 }
 
-if ($failures.Count -gt 0) {
-    throw "File-association cleanup failed: $($failures -join '; ')"
-}
-
-if (-not ("CMTraceOpen.AssociationChange" -as [type])) {
-    Add-Type -TypeDefinition @"
+try {
+    if (-not ("CMTraceOpen.AssociationChange" -as [type])) {
+        Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 namespace CMTraceOpen {
@@ -89,5 +182,13 @@ namespace CMTraceOpen {
     }
 }
 "@
+    }
+    [CMTraceOpen.AssociationChange]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
 }
-[CMTraceOpen.AssociationChange]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
+catch {
+    $failures.Add("association notification: $($_.Exception.Message)")
+}
+
+if ($failures.Count -gt 0) {
+    throw "File-association cleanup failed: $($failures -join '; ')"
+}
