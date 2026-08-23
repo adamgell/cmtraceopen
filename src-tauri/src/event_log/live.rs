@@ -1068,7 +1068,7 @@ fn start_polling_tail(
     channel: String,
     filter: EventQueryFilter,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
-    remote_machine: Option<String>,
+    remote_session: Option<(OwnedEvtHandle, String)>,
     fallback_gap: String,
 ) -> Result<EvtxTailStatus, String> {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1080,10 +1080,6 @@ fn start_polling_tail(
     let worker_request = request_id.clone();
     let worker_channel = channel.clone();
     let worker_fallback_gap = fallback_gap.clone();
-    let remote_session = remote_machine
-        .as_deref()
-        .map(open_remote_session)
-        .transpose()?;
     let worker_session = remote_session
         .as_ref()
         .map(|(session, _machine)| session.raw());
@@ -1236,6 +1232,7 @@ pub fn start_channel_tail(
         .as_deref()
         .map(open_remote_session)
         .transpose()?;
+    let remote = remote_session.is_some();
     let session_handle = remote_session.as_ref().map(|(session, _)| session.raw());
     let source_label = remote_session
         .as_ref()
@@ -1315,7 +1312,7 @@ pub fn start_channel_tail(
             let fallback_gap = format!(
                 "{}: EvtSubscribe unavailable; polling fallback is active ({})",
                 channel,
-                format_source_error("EvtSubscribe", &error, remote_machine.is_some()),
+                format_source_error("EvtSubscribe", &error, remote),
             );
             drop(context);
             start_polling_tail(
@@ -1324,17 +1321,13 @@ pub fn start_channel_tail(
                 channel,
                 filter,
                 fallback_maps,
-                remote_machine,
+                remote_session,
                 fallback_gap,
             )
         }
         Err(error) => {
             drop(context);
-            Err(format_source_error(
-                "EvtSubscribe",
-                &error,
-                remote_machine.is_some(),
-            ))
+            Err(format_source_error("EvtSubscribe", &error, remote))
         }
     }
 }
