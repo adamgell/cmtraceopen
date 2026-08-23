@@ -487,11 +487,8 @@ function missingRecordDigest(record: EvtxRecord): string {
 
 function eventIdentityPrefix(record: EvtxRecord): string {
   const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
-  const hasComputer = record.computer !== undefined;
-  const machineValue = record.computer?.trim() ?? "";
-  const machine = hasComputer
-    ? `machine${utf8Encoder.encode(machineValue).length}:${machineValue}|`
-    : "";
+  const machineValue = record.computer.trim();
+  const machine = `machine${utf8Encoder.encode(machineValue).length}:${machineValue}|`;
   const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
   return `${source}|${machine}${channel}`;
 }
