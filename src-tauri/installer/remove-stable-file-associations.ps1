@@ -107,6 +107,44 @@ function Invoke-RegistryHiveOperation {
     return [int] $process.ExitCode
 }
 
+function Mount-ProfileHiveIfMissing {
+    param(
+        [Parameter(Mandatory = $true)] $ProfileKey,
+        [Parameter(Mandatory = $true)][string] $UserRoot,
+        [Parameter(Mandatory = $true)][string] $HiveName
+    )
+
+    if (Test-Path -LiteralPath $UserRoot) {
+        return $false
+    }
+
+    [string] $profileImagePath = Get-ItemPropertyValue `
+        -LiteralPath $ProfileKey.PSPath `
+        -Name "ProfileImagePath"
+    $profileImagePath = [Environment]::ExpandEnvironmentVariables($profileImagePath)
+    if ([string]::IsNullOrWhiteSpace($profileImagePath)) {
+        throw "ProfileImagePath is empty"
+    }
+
+    $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+    if (-not (Test-Path -LiteralPath $ntUserPath -PathType Leaf)) {
+        throw "profile hive does not exist: $ntUserPath"
+    }
+
+    $loadExitCode = Invoke-RegistryHiveOperation `
+        -Operation "LOAD" `
+        -HiveName $HiveName `
+        -HivePath $ntUserPath
+    if ($loadExitCode -eq 0) {
+        return $true
+    }
+    if (Test-Path -LiteralPath $UserRoot) {
+        return $false
+    }
+
+    throw "reg.exe LOAD $HiveName failed with exit code $loadExitCode"
+}
+
 $profileListPath = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
 $failures = [System.Collections.Generic.List[string]]::new()
 foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
@@ -115,30 +153,17 @@ foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
     $hiveName = "HKU\$sid"
     $loadedByCleanup = $false
     try {
-        if (-not (Test-Path -LiteralPath $userRoot)) {
-            [string] $profileImagePath = Get-ItemPropertyValue `
-                -LiteralPath $profileKey.PSPath `
-                -Name "ProfileImagePath"
-            $profileImagePath = [Environment]::ExpandEnvironmentVariables($profileImagePath)
-            if ([string]::IsNullOrWhiteSpace($profileImagePath)) {
-                throw "ProfileImagePath is empty"
-            }
-
-            $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
-            if (-not (Test-Path -LiteralPath $ntUserPath -PathType Leaf)) {
-                throw "profile hive does not exist: $ntUserPath"
-            }
-
-            $loadExitCode = Invoke-RegistryHiveOperation `
-                -Operation "LOAD" `
-                -HiveName $hiveName `
-                -HivePath $ntUserPath
-            if ($loadExitCode -eq 0) {
-                $loadedByCleanup = $true
-            }
-            elseif (-not (Test-Path -LiteralPath $userRoot)) {
-                throw "reg.exe LOAD $hiveName failed with exit code $loadExitCode"
-            }
+        $loadedByCleanup = Mount-ProfileHiveIfMissing `
+            -ProfileKey $profileKey `
+            -UserRoot $userRoot `
+            -HiveName $hiveName
+        if (-not $loadedByCleanup) {
+            # A loaded profile can disappear here when its user logs off. Probe
+            # once more immediately before cleanup so the offline hive is not skipped.
+            $loadedByCleanup = Mount-ProfileHiveIfMissing `
+                -ProfileKey $profileKey `
+                -UserRoot $userRoot `
+                -HiveName $hiveName
         }
 
         foreach ($identity in $associationIdentities) {

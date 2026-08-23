@@ -172,6 +172,83 @@ namespace CMTraceOpen.Tests {
         }
     }
 
+    It "reloads a <Name> profile that logs off before association cleanup" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1006"
+        $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+        $userRoot = "Registry::HKEY_USERS\$sid"
+        $profileImagePath = Join-Path $TestDrive "Logging Off User"
+        $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+        $state = [pscustomobject]@{
+            InitialUserRootCheck = $true
+            LoadedByCleanup = $false
+            CleanedRegistryStems = [System.Collections.Generic.List[string]]::new()
+        }
+        $originalSystemRoot = $env:SystemRoot
+        $env:SystemRoot = Join-Path $TestDrive "Windows"
+
+        Mock Get-ChildItem {
+            [pscustomobject]@{
+                PSChildName = $sid
+                PSPath = $profileKey
+            }
+        }
+        Mock Get-ItemPropertyValue { $profileImagePath }
+        Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                if ($state.InitialUserRootCheck) {
+                    $state.InitialUserRootCheck = $false
+                    return $true
+                }
+                return $state.LoadedByCleanup
+            }
+            if ($LiteralPath -eq $ntUserPath) {
+                return $true
+            }
+            foreach ($registryStem in $RegistryStems) {
+                if ($LiteralPath -eq "$userRoot\Software\$registryStem\Capabilities") {
+                    if ($state.LoadedByCleanup) {
+                        $state.CleanedRegistryStems.Add($registryStem)
+                    }
+                    return $state.LoadedByCleanup
+                }
+            }
+            return $false
+        }
+        Mock Get-Item { $null }
+        Mock Remove-Item {}
+        Mock Remove-ItemProperty {}
+        Mock Start-Process {
+            if ($ArgumentList[0] -eq "LOAD") {
+                $state.LoadedByCleanup = $true
+            }
+            elseif ($ArgumentList[0] -eq "UNLOAD") {
+                $state.LoadedByCleanup = $false
+            }
+            [pscustomobject]@{ ExitCode = 0 }
+        }
+
+        try {
+            & (Join-Path $PSScriptRoot $ScriptName)
+        }
+        finally {
+            $env:SystemRoot = $originalSystemRoot
+        }
+
+        Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "LOAD" -and
+            $ArgumentList[1] -eq "HKU\$sid" -and
+            $ArgumentList[2] -eq ('"{0}"' -f $ntUserPath)
+        }
+        $state.CleanedRegistryStems | Should -HaveCount $RegistryStems.Count
+        foreach ($registryStem in $RegistryStems) {
+            $state.CleanedRegistryStems | Should -Contain $registryStem
+        }
+        Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "UNLOAD" -and
+            $ArgumentList[1] -eq "HKU\$sid"
+        }
+    }
+
     It "unloads its <Name> hive in finally and aggregates cleanup failures" -ForEach $scriptCases {
         $sid = "S-1-5-21-1003"
         $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
