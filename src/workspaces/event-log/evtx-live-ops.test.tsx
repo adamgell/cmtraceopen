@@ -145,6 +145,41 @@ describe("event-log live operations", () => {
     );
     expect(useEvtxStore.getState().tailMode).toBeNull();
   });
+
+  it("allows a channel clear after a live tail stops successfully", async () => {
+    await useEvtxStore.getState().startLiveTail();
+    await useEvtxStore.getState().stopLiveTail();
+
+    const result = await useEvtxStore.getState().clearChannel("Application", true);
+
+    expect(result).toEqual({ status: "cleared" });
+    expect(invoke).toHaveBeenCalledWith("evtx_clear_channel", {
+      channel: "Application",
+      confirmed: true,
+      remoteMachine: null,
+    });
+  });
+
+  it("releases live-tail ownership after clearing its last channel", async () => {
+    useEvtxStore.setState({
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+    });
+    await useEvtxStore.getState().startLiveTail();
+
+    expect(await useEvtxStore.getState().clearChannel("Application", true)).toEqual({
+      status: "cleared",
+    });
+    expect(await useEvtxStore.getState().clearChannel("System", true)).toEqual({
+      status: "cleared",
+    });
+    expect(invoke).toHaveBeenCalledWith("evtx_clear_channel", {
+      channel: "System",
+      confirmed: true,
+      remoteMachine: null,
+    });
+  });
+
   it("preserves a coverage gap when stopping a live tail fails", async () => {
     invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
       if (name === "evtx_start_tail") {

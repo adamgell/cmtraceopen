@@ -1613,10 +1613,6 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         return [channel, received] as const;
       })
     );
-    if (activeTailRequestId === requestId) {
-      activeTailSourceRequestId = null;
-      activeTailChannels = new Set<string>();
-    }
     const outcomes = await Promise.all(
       channels.map((channel) => stopTailRequest(requestId, channel))
     );
@@ -1676,6 +1672,18 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     const remainingChannels = new Set(
       channels.filter((channel) => !successfulChannels.has(channel) || failedChannels.has(channel))
     );
+    if (
+      activeTailRequestId === requestId &&
+      activeTailSourceRequestId === sourceRequestId
+    ) {
+      if (remainingChannels.size > 0) {
+        activeTailChannels = new Set(remainingChannels);
+      } else {
+        activeTailRequestId = null;
+        activeTailSourceRequestId = null;
+        activeTailChannels = new Set<string>();
+      }
+    }
     if (remainingChannels.size > 0) {
       set((current) => ({
         tailMode: current.tailMode,
@@ -1795,6 +1803,19 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         : activeTailRequestId === requestId &&
           activeTailSourceRequestId === sourceRequestId);
     if (result.status === "cleared" && canMutateCurrentTail) {
+      const remainingTailChannels = new Set(
+        [...currentAfterClear.tailChannels].filter((name) => name !== channel)
+      );
+      if (
+        wasTailing &&
+        remainingTailChannels.size === 0 &&
+        activeTailRequestId === requestId &&
+        activeTailSourceRequestId === sourceRequestId
+      ) {
+        activeTailRequestId = null;
+        activeTailSourceRequestId = null;
+        activeTailChannels = new Set<string>();
+      }
       set((current) => {
         const tailChannels = new Set(
           [...current.tailChannels].filter((name) => name !== channel)
