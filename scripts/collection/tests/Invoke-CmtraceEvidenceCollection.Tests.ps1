@@ -17,6 +17,7 @@ BeforeAll {
     $functionNames = @(
         'Get-ObjectPropertyValue',
         'Test-ArrayValue',
+        'ConvertTo-UtcTimestamp',
         'Assert-ProfileRequiredString',
         'Assert-ProfileRequiredArray',
         'Assert-CollectorProfileShape',
@@ -121,6 +122,31 @@ Describe 'New-CollectorBundleId' {
         }
 
         $bundleId | Should -Match '^CMTRACE-20260521-123456-DEVICE-01-[0-9a-f]{32}$'
+    }
+}
+
+Describe 'Get-UtcTimestamp' {
+    It 'serializes UTC with the invariant Gregorian calendar' {
+        $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
+        $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
+        Mock Get-Date {
+            [datetime]::new(2026, 5, 21, 12, 34, 56, [DateTimeKind]::Utc)
+        }
+
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+            [System.Globalization.CultureInfo]::CurrentUICulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+
+            $timestamp = Get-UtcTimestamp
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $originalCulture
+            [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
+        }
+
+        $timestamp | Should -BeExactly '2026-05-21T12:34:56Z'
     }
 }
 

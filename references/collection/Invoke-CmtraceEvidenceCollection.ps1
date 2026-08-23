@@ -52,8 +52,20 @@ function Write-Step {
     Write-Host "==> $sanitizedMessage" -ForegroundColor Cyan
 }
 
+function ConvertTo-UtcTimestamp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [datetime]$Value
+    )
+
+    return $Value.ToUniversalTime().ToString(
+        'yyyy-MM-ddTHH:mm:ssZ',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
+}
+
 function Get-UtcTimestamp {
-    return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    return ConvertTo-UtcTimestamp -Value (Get-Date)
 }
 
 function Initialize-Directory {
@@ -226,7 +238,11 @@ function Write-TextFile {
 
 function Start-CollectorTranscript {
     $logRoot = Join-Path $env:ProgramData 'CmtraceOpen\Logs\Collection'
-    $logFileName = 'collector-{0}-{1}-{2}.log' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), (ConvertTo-SafeFileName -Value $env:COMPUTERNAME), $PID
+    $timestamp = (Get-Date).ToString(
+        'yyyyMMdd-HHmmss',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
+    $logFileName = 'collector-{0}-{1}-{2}.log' -f $timestamp, (ConvertTo-SafeFileName -Value $env:COMPUTERNAME), $PID
     $script:CollectorRunLogPath = Join-Path $logRoot $logFileName
 
     Initialize-Directory -Path $logRoot
@@ -639,7 +655,7 @@ function Add-GeneratedCommandArtifacts {
             Initialize-ParentDirectory -Path $destinationPath
             Copy-Item -LiteralPath $resolvedSourcePath -Destination $destinationPath -Force
             $sourceFile = Get-Item -LiteralPath $resolvedSourcePath -ErrorAction Stop
-            $artifact = New-ArtifactRecord -Category 'export' -Family $family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'collected' -ParseHints $parseHints -FilePath $destinationPath -Notes $notes -StartUtc $sourceFile.CreationTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') -EndUtc $sourceFile.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $artifact = New-ArtifactRecord -Category 'export' -Family $family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'collected' -ParseHints $parseHints -FilePath $destinationPath -Notes $notes -StartUtc (ConvertTo-UtcTimestamp -Value $sourceFile.CreationTimeUtc) -EndUtc (ConvertTo-UtcTimestamp -Value $sourceFile.LastWriteTimeUtc)
         }
         catch {
             $artifact = New-ArtifactRecord -Category 'export' -Family $family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'failed' -ParseHints $parseHints -Notes $_.Exception.Message
@@ -1050,7 +1066,7 @@ try {
             try {
                 Initialize-ParentDirectory -Path $destinationPath
                 Copy-Item -LiteralPath $sourceFile.FullName -Destination $destinationPath -Force
-                $artifact = New-ArtifactRecord -Category 'log' -Family $logItem.family -RelativePath $relativePath -OriginPath $sourceFile.FullName -Status 'collected' -ParseHints $logItem.parseHints -FilePath $destinationPath -Notes $logItem.notes -StartUtc $sourceFile.CreationTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') -EndUtc $sourceFile.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                $artifact = New-ArtifactRecord -Category 'log' -Family $logItem.family -RelativePath $relativePath -OriginPath $sourceFile.FullName -Status 'collected' -ParseHints $logItem.parseHints -FilePath $destinationPath -Notes $logItem.notes -StartUtc (ConvertTo-UtcTimestamp -Value $sourceFile.CreationTimeUtc) -EndUtc (ConvertTo-UtcTimestamp -Value $sourceFile.LastWriteTimeUtc)
             }
             catch {
                 $artifact = New-ArtifactRecord -Category 'log' -Family $logItem.family -RelativePath $relativePath -OriginPath $sourceFile.FullName -Status 'failed' -ParseHints $logItem.parseHints -Notes (Protect-SecretText -Text $_.Exception.Message)
@@ -1144,7 +1160,7 @@ try {
             Initialize-ParentDirectory -Path $destinationPath
             Copy-Item -LiteralPath $resolvedSourcePath -Destination $destinationPath -Force
             $sourceFile = Get-Item -LiteralPath $resolvedSourcePath -ErrorAction Stop
-            $artifact = New-ArtifactRecord -Category 'export' -Family $exportItem.family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'collected' -ParseHints $exportItem.parseHints -FilePath $destinationPath -Notes $exportItem.notes -StartUtc $sourceFile.CreationTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') -EndUtc $sourceFile.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $artifact = New-ArtifactRecord -Category 'export' -Family $exportItem.family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'collected' -ParseHints $exportItem.parseHints -FilePath $destinationPath -Notes $exportItem.notes -StartUtc (ConvertTo-UtcTimestamp -Value $sourceFile.CreationTimeUtc) -EndUtc (ConvertTo-UtcTimestamp -Value $sourceFile.LastWriteTimeUtc)
         }
         catch {
             $artifact = New-ArtifactRecord -Category 'export' -Family $exportItem.family -RelativePath $relativePath -OriginPath $resolvedSourcePath -Status 'failed' -ParseHints $exportItem.parseHints -Notes (Protect-SecretText -Text $_.Exception.Message)
