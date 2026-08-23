@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -94,6 +95,42 @@ test("selects the newest semantic Windows SDK x64 manifest tool", (t) => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), expected);
+});
+
+test("an explicit Windows SDK root takes precedence over PATH", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-explicit-"));
+  const pathRoot = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-path-"));
+  const expected = join(root, "10.0.26100.0", "x64", "mt.exe");
+  const pathTool = join(pathRoot, "mt.exe");
+  writeFixture(expected, "sdk");
+  writeFixture(pathTool, "path");
+  chmodSync(pathTool, 0o755);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => rmSync(pathRoot, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    "pwsh",
+    ["-NoLogo", "-NoProfile", "-File", resolveMtPath, "-SdkBinRoot", root],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${pathRoot}${delimiter}${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), expected);
+});
+
+test("Windows SDK enumeration errors are terminating", () => {
+  const source = readFileSync(resolveMtPath, "utf8");
+
+  assert.match(
+    source,
+    /Get-ChildItem\s+-LiteralPath\s+\$SdkBinRoot\s+-Directory\s+-ErrorAction\s+Stop/,
+  );
 });
 
 test("writes exact-head Windows executable and installer provenance", (t) => {

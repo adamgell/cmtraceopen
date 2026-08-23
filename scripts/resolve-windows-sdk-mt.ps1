@@ -3,17 +3,19 @@ param(
     [string]$SdkBinRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
 )
 
-$pathCommand = Get-Command mt.exe -ErrorAction SilentlyContinue
-if ($null -ne $pathCommand -and -not [string]::IsNullOrWhiteSpace($pathCommand.Source)) {
-    $pathCommand.Source
-    exit 0
+if (-not $PSBoundParameters.ContainsKey('SdkBinRoot')) {
+    $pathCommand = Get-Command mt.exe -ErrorAction SilentlyContinue
+    if ($null -ne $pathCommand -and -not [string]::IsNullOrWhiteSpace($pathCommand.Source)) {
+        $pathCommand.Source
+        exit 0
+    }
 }
 
 if (-not (Test-Path -LiteralPath $SdkBinRoot -PathType Container)) {
     throw "Windows SDK bin directory was not found: $SdkBinRoot"
 }
 
-$candidate = Get-ChildItem -LiteralPath $SdkBinRoot -Directory | ForEach-Object {
+$candidate = Get-ChildItem -LiteralPath $SdkBinRoot -Directory -ErrorAction Stop | ForEach-Object {
     try {
         $sdkVersion = [version]$_.Name
     }
