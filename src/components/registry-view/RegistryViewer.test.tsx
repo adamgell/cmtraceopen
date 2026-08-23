@@ -151,10 +151,14 @@ describe("RegistryViewer", () => {
     const target = screen
       .getByTitle(fixture.keys[0].path)
       .closest('[role="treeitem"]');
-    const disclosure = target?.firstElementChild;
+    const disclosure = target?.querySelector("[data-registry-disclosure]");
     if (!target || !disclosure) {
       throw new Error("Expected the target registry row disclosure");
     }
+
+    expect(disclosure).toHaveAttribute("role", "presentation");
+    expect(disclosure).toHaveAttribute("aria-hidden", "true");
+    expect(target.querySelector('[role="button"]')).toBeNull();
 
     fireEvent.pointerDown(disclosure, { button: 0 });
     fireEvent.click(disclosure);
@@ -172,7 +176,7 @@ describe("RegistryViewer", () => {
     const target = screen
       .getByTitle(fixture.keys[0].path)
       .closest('[role="treeitem"]');
-    const disclosure = target?.firstElementChild;
+    const disclosure = target?.querySelector("[data-registry-disclosure]");
     if (!target || !disclosure) {
       throw new Error("Expected the lower registry row disclosure");
     }

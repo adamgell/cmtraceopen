@@ -73,7 +73,8 @@ test.describe("registry tree interaction", () => {
     const target = page.getByTitle(targetPath, { exact: true }).locator("..");
     await expect(target).toBeVisible();
     await expect(target).toHaveAttribute("aria-expanded", "true");
-    const disclosure = target.getByRole("button", { name: "Collapse Branch120" });
+    const disclosure = target.locator("[data-registry-disclosure]");
+    await expect(disclosure).toHaveAttribute("aria-hidden", "true");
     const box = await disclosure.boundingBox();
     if (!box) throw new Error("Lower disclosure did not have a browser layout box");
 

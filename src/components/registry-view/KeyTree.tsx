@@ -226,13 +226,9 @@ export function KeyTree() {
             >
               {/* Expand/collapse chevron */}
               <span
-                role={hasChildren ? "button" : undefined}
-                aria-label={
-                  hasChildren
-                    ? `${isExpanded ? "Collapse" : "Expand"} ${row.node.name}`
-                    : undefined
-                }
-                aria-hidden={hasChildren ? undefined : true}
+                data-registry-disclosure
+                role="presentation"
+                aria-hidden="true"
                 style={{
                   width: "16px",
                   display: "inline-flex",
