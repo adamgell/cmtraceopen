@@ -221,4 +221,26 @@ describe("EvtxTimelineRow triage state", () => {
     expect(screen.getByRole("option")).toHaveAttribute("data-evtx-filter-match", "true");
     expect(screen.getByText("Match")).toBeInTheDocument();
   });
+
+  it("highlights only substrings matched by the quick-filter regular expression", () => {
+    renderRow({
+      record: {
+        ...record(),
+        provider: "é",
+        channel: "Å",
+        message: "é",
+      },
+      quickFilter: {
+        mode: "oneString",
+        query: "e",
+        scope: "allColumns",
+        action: "show",
+        caseSensitive: false,
+        highlight: true,
+      },
+      quickFilterMatch: true,
+    });
+
+    expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
+  });
 });

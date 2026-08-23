@@ -64,13 +64,10 @@ function highlightValue(
   if (!pattern) return value;
   const matcher = new RegExp(`(${pattern})`, caseSensitive ? "g" : "gi");
   return value.split(matcher).map((part, index) => {
-    const matched = terms.some(
-      (term) =>
-        term.length > 0 &&
-        part.localeCompare(term, undefined, {
-          sensitivity: caseSensitive ? "case" : "base",
-        }) === 0
-    );
+    // The single outer capture means odd split positions are exact regex matches. Re-testing with
+    // localeCompare widened matching (for example, treating é as e) and highlighted text that the
+    // quick-filter regular expression never matched.
+    const matched = index % 2 === 1;
     return matched ? (
       <mark key={`${part}-${index}`} aria-label="Quick-filter match">
         {part}
