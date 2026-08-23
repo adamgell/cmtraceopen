@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // tree, and both are needed by the live path as well as this one. Keeping the data extractor here
 // while the live path scanned raw XML for itself is what let the two drift apart.
 use super::event_node::{extract_event_data, EventFields};
-use super::provider_db::ProviderStore;
+use super::provider_db::{ProviderEventLookup, ProviderStore};
 
 use super::models::{
     ChannelSourceType, EvtxArchiveMember, EvtxArchiveMemberKind, EvtxArchiveMemberOutcome,
@@ -2371,55 +2371,26 @@ where
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = match describe_event(
-            &providers,
+        let (message, provider_gap) = resolve_event_message(
+            describe_event(
+                &providers,
+                &provider,
+                &channel,
+                event_id,
+                system.version,
+                &insertions,
+            ),
+            &source_path,
+            event_record_id,
             &provider,
-            &channel,
             event_id,
-            system.version,
-            &insertions,
-        ) {
-            Ok(Some(DescriptionOutcome::Rendered(text))) => text,
-            Ok(Some(DescriptionOutcome::MissingInsertions(missing))) => {
-                let mut gap = EvtxCoverageGap::new(
-                    &source_path,
-                    EvtxCoverageGapKind::Provider,
-                    format!(
-                        "provider description for {provider} event {event_id} is missing \
-                         insertion(s): {}",
-                        missing
-                            .iter()
-                            .map(u32::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                );
-                gap.set_event_record_id(event_record_id);
-                messages.push(format_coverage_gap(&gap));
-                coverage_gaps.push(gap);
-                payload
-                    .clone()
-                    .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields))
-            }
-            Ok(None) => payload
-                .clone()
-                .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields)),
-            Err(error) => {
-                let mut gap = EvtxCoverageGap::new(
-                    &source_path,
-                    EvtxCoverageGapKind::Provider,
-                    format!(
-                        "provider metadata lookup failed for {provider} event {event_id}: {error}"
-                    ),
-                );
-                gap.set_event_record_id(event_record_id);
-                messages.push(format_coverage_gap(&gap));
-                coverage_gaps.push(gap);
-                payload
-                    .clone()
-                    .unwrap_or_else(|| super::rendered::build_event_data_summary(&fields))
-            }
-        };
+            payload.as_deref(),
+            &fields,
+        );
+        if let Some(gap) = provider_gap {
+            messages.push(format_coverage_gap(&gap));
+            coverage_gaps.push(gap);
+        }
 
         let mapped = super::maps::apply_registered(&maps, &channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
@@ -2497,13 +2468,65 @@ where
 enum DescriptionOutcome {
     Rendered(String),
     MissingInsertions(Vec<u32>),
+    ChannelMetadataUnavailable { channel: String },
+}
+
+fn resolve_event_message(
+    described: Result<Option<DescriptionOutcome>, String>,
+    source_path: &str,
+    event_record_id: u64,
+    provider: &str,
+    event_id: u32,
+    payload: Option<&str>,
+    fields: &[EvtxField],
+) -> (String, Option<EvtxCoverageGap>) {
+    let raw_message = || {
+        payload
+            .map(str::to_string)
+            .unwrap_or_else(|| super::rendered::build_event_data_summary(fields))
+    };
+    let coverage_gap = |reason| {
+        let mut gap = EvtxCoverageGap::new(source_path, EvtxCoverageGapKind::Provider, reason);
+        gap.set_event_record_id(event_record_id);
+        gap
+    };
+
+    match described {
+        Ok(Some(DescriptionOutcome::Rendered(message))) => (message, None),
+        Ok(Some(DescriptionOutcome::MissingInsertions(missing))) => (
+            raw_message(),
+            Some(coverage_gap(format!(
+                "provider description for {provider} event {event_id} is missing insertion(s): {}",
+                missing
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        ),
+        Ok(Some(DescriptionOutcome::ChannelMetadataUnavailable { channel })) => (
+            raw_message(),
+            Some(coverage_gap(format!(
+                "provider channel metadata is unavailable for {provider} event {event_id} on \
+                 {channel}; the raw event data is shown instead"
+            ))),
+        ),
+        Ok(None) => (raw_message(), None),
+        Err(error) => (
+            raw_message(),
+            Some(coverage_gap(format!(
+                "provider metadata lookup failed for {provider} event {event_id}: {error}"
+            ))),
+        ),
+    }
 }
 
 /// Renders the provider's own description for this event, when metadata for it is loaded.
 ///
 /// Returns `Ok(None)` when no database is loaded, the provider is absent from it, or the provider
 /// does not define this event on the captured channel. Provider payload failures are returned as
-/// errors so callers can attach a coverage gap instead of presenting a normal metadata miss.
+/// errors and unavailable captured channel metadata is returned as a structured outcome, so the
+/// caller can attach a coverage gap instead of presenting either as a normal metadata miss.
 fn describe_event(
     store: &ProviderStore,
     provider: &str,
@@ -2512,8 +2535,14 @@ fn describe_event(
     version: Option<u32>,
     insertions: &[String],
 ) -> Result<Option<DescriptionOutcome>, String> {
-    let Some(metadata) = store.provider_for_event(provider, channel, event_id, version)? else {
-        return Ok(None);
+    let metadata = match store.provider_for_event(provider, channel, event_id, version)? {
+        ProviderEventLookup::Found(metadata) => metadata,
+        ProviderEventLookup::Missing => return Ok(None),
+        ProviderEventLookup::ChannelMetadataUnavailable => {
+            return Ok(Some(DescriptionOutcome::ChannelMetadataUnavailable {
+                channel: channel.to_string(),
+            }));
+        }
     };
     let Some(event) = metadata.event(event_id, version, Some(channel)) else {
         return Ok(None);
@@ -4553,6 +4582,135 @@ mod description_tests {
             DescriptionOutcome::MissingInsertions(vec![2]),
             "missing insertion positions must remain structured coverage"
         );
+    }
+
+    #[test]
+    fn unavailable_channel_metadata_uses_raw_fields_and_emits_provider_coverage() {
+        use super::super::provider_db::{write_provider_database, CapturedProviderMetadata};
+        use cmtraceopen_parser::provider::{ProviderEvent, ProviderMetadata};
+
+        let directory = tempfile::tempdir().expect("provider directory");
+        write_provider_database(
+            &directory.path().join("provider.db"),
+            &[CapturedProviderMetadata {
+                metadata: ProviderMetadata {
+                    provider_name: "Channel-Gap".to_string(),
+                    events: vec![ProviderEvent {
+                        id: 42,
+                        version: 0,
+                        description: Some("unsafe description %1".to_string()),
+                        ..ProviderEvent::default()
+                    }],
+                    unavailable_categories: ["channels".to_string()].into_iter().collect(),
+                    ..ProviderMetadata::default()
+                },
+                version_key: "channel-gap".to_string(),
+            }],
+        )
+        .expect("write provider database");
+        let mut store = ProviderStore::default();
+        store
+            .load_directory(directory.path())
+            .expect("load provider database");
+        let fields = vec![EvtxField {
+            name: "Value".to_string(),
+            value: "raw evidence".to_string(),
+        }];
+
+        let (message, gap) = resolve_event_message(
+            describe_event(
+                &store,
+                "Channel-Gap",
+                "Channel-Gap/Operational",
+                42,
+                Some(0),
+                &insertions(&[("Value", "raw evidence")]),
+            ),
+            "coverage.evtx",
+            91,
+            "Channel-Gap",
+            42,
+            None,
+            &fields,
+        );
+        let gap = gap.expect("unavailable channel metadata emits provider coverage");
+
+        assert_eq!(message, "Value: raw evidence");
+        assert_eq!(gap.kind, EvtxCoverageGapKind::Provider);
+        assert_eq!(gap.event_record_id, Some(91));
+        assert_eq!(gap.event_record_id_text.as_deref(), Some("91"));
+        assert!(gap.reason.contains("channel metadata is unavailable"));
+        assert!(gap.reason.contains("Channel-Gap/Operational"));
+    }
+
+    #[test]
+    fn exact_channel_metadata_renders_without_an_unavailable_sibling_gap() {
+        use super::super::provider_db::{write_provider_database, CapturedProviderMetadata};
+        use cmtraceopen_parser::provider::{ProviderEvent, ProviderMetadata};
+
+        let directory = tempfile::tempdir().expect("provider directory");
+        let event = |description: &str, log_name: Option<&str>| ProviderEvent {
+            id: 42,
+            version: 0,
+            description: Some(description.to_string()),
+            log_name: log_name.map(str::to_string),
+            ..ProviderEvent::default()
+        };
+        write_provider_database(
+            &directory.path().join("provider.db"),
+            &[
+                CapturedProviderMetadata {
+                    metadata: ProviderMetadata {
+                        provider_name: "Channel-Coverage".to_string(),
+                        events: vec![event("unsafe newer %1", None)],
+                        unavailable_categories: ["channels".to_string()].into_iter().collect(),
+                        source_os_build: Some(26200),
+                        ..ProviderMetadata::default()
+                    },
+                    version_key: "newer-ambiguous".to_string(),
+                },
+                CapturedProviderMetadata {
+                    metadata: ProviderMetadata {
+                        provider_name: "Channel-Coverage".to_string(),
+                        events: vec![event(
+                            "exact description %1",
+                            Some("Channel-Coverage/Operational"),
+                        )],
+                        source_os_build: Some(26100),
+                        ..ProviderMetadata::default()
+                    },
+                    version_key: "older-exact".to_string(),
+                },
+            ],
+        )
+        .expect("write provider database");
+        let mut store = ProviderStore::default();
+        store
+            .load_directory(directory.path())
+            .expect("load provider database");
+        let fields = vec![EvtxField {
+            name: "Value".to_string(),
+            value: "raw evidence".to_string(),
+        }];
+        let (message, gap) = resolve_event_message(
+            describe_event(
+                &store,
+                "Channel-Coverage",
+                "Channel-Coverage/Operational",
+                42,
+                Some(0),
+                &insertions(&[("Value", "raw evidence")]),
+            ),
+            "coverage.evtx",
+            92,
+            "Channel-Coverage",
+            42,
+            None,
+            &fields,
+        );
+
+        assert_eq!(message, "exact description raw evidence");
+        assert!(gap.is_none(), "exact channel metadata must not emit a gap");
     }
 
     #[test]

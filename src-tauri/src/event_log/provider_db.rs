@@ -1239,6 +1239,16 @@ pub fn packaged_provider_directory(resource_dir: &Path) -> Result<PathBuf, Strin
 
 // ── Store ───────────────────────────────────────────────────────────────────
 
+/// Outcome of selecting captured metadata for one event on one channel.
+#[derive(Debug, Clone)]
+pub enum ProviderEventLookup {
+    Found(Arc<ProviderMetadata>),
+    Missing,
+    /// Matching event definitions exist, but their channel references were unavailable during
+    /// capture, so none can safely be applied to the requested channel.
+    ChannelMetadataUnavailable,
+}
+
 /// Registered provider databases and the metadata read from them.
 ///
 /// Owned by `AppState` rather than held as a process global. A global made every test share one
@@ -1388,16 +1398,17 @@ impl ProviderStore {
     ///
     /// An exact event version and captured channel win even when they live in an older row. If the
     /// requested version is absent, the first row defining the event on that channel is the
-    /// deterministic fallback.
+    /// deterministic fallback. A matching definition whose channel references were unavailable
+    /// is reported separately from an ordinary miss so callers can expose the coverage gap.
     pub fn provider_for_event(
         &self,
         provider_name: &str,
         channel: &str,
         event_id: u32,
         version: Option<u32>,
-    ) -> Result<Option<Arc<ProviderMetadata>>, String> {
+    ) -> Result<ProviderEventLookup, String> {
         let Some(rows) = self.provider_versions_cached(provider_name)? else {
-            return Ok(None);
+            return Ok(ProviderEventLookup::Missing);
         };
         let channel_score =
             |metadata: &ProviderMetadata, event: &cmtraceopen_parser::provider::ProviderEvent| {
@@ -1421,7 +1432,22 @@ impl ProviderStore {
             .or_else(|| version.and_then(|value| find_matching(Some(value), 1)))
             .or_else(|| find_matching(None, 2))
             .or_else(|| find_matching(None, 1));
-        Ok(selected.map(|row| Arc::new(row.metadata.clone())))
+        if let Some(row) = selected {
+            return Ok(ProviderEventLookup::Found(Arc::new(row.metadata.clone())));
+        }
+        let channel_metadata_unavailable = rows.iter().any(|row| {
+            row.metadata.unavailable_categories.contains("channels")
+                && row
+                    .metadata
+                    .events
+                    .iter()
+                    .any(|event| event.id == event_id && event.log_name.is_none())
+        });
+        Ok(if channel_metadata_unavailable {
+            ProviderEventLookup::ChannelMetadataUnavailable
+        } else {
+            ProviderEventLookup::Missing
+        })
     }
 
     fn provider_versions_cached(
@@ -2188,10 +2214,12 @@ mod tests {
         let mut store = ProviderStore::default();
         store.load_directory(&dir).expect("loads");
 
-        let metadata = store
+        let ProviderEventLookup::Found(metadata) = store
             .provider_for_event("Multi-Version", "Some-Channel", 7, Some(0))
             .expect("lookup succeeds")
-            .expect("matching event exists");
+        else {
+            panic!("matching event must exist");
+        };
         assert_eq!(
             metadata.events[0].description.as_deref(),
             Some("old-row"),
@@ -2226,10 +2254,12 @@ mod tests {
         let mut store = ProviderStore::default();
         store.load_directory(&dir).expect("loads");
 
-        assert!(store
-            .provider_for_event("Channel-Gap", "Channel-Gap/Operational", 42, Some(0))
-            .expect("lookup succeeds")
-            .is_none());
+        assert!(matches!(
+            store
+                .provider_for_event("Channel-Gap", "Channel-Gap/Operational", 42, Some(0))
+                .expect("lookup succeeds"),
+            ProviderEventLookup::ChannelMetadataUnavailable
+        ));
     }
 
     #[test]
