@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn event_origin_preserves_source_machine_process_and_activity() {
         let mut source = record(1, "x", EvtxLevel::Information);
-        source.source_label = "/captures/bundle-789/bundle/evidence/events.evtx".to_string();
+        source.source_label = "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-fedcba9876543210fedcba9876543210/evidence/event-logs/Application.evtx".to_string();
         source.computer = "HOST-A".to_string();
         source.process_id = Some(4321);
         source.raw_xml =
@@ -622,9 +622,12 @@ mod tests {
                 activity_id,
                 ..
             } => {
-                assert_eq!(source, "/captures/bundle-789/bundle/evidence/events.evtx");
+                assert_eq!(source, "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-fedcba9876543210fedcba9876543210/evidence/event-logs/Application.evtx");
                 assert_eq!(machine.as_deref(), Some("HOST-A"));
-                assert_eq!(bundle.as_deref(), Some("bundle-789"));
+                assert_eq!(
+                    bundle.as_deref(),
+                    Some("CMTRACE-20260822-120000-HOST-fedcba9876543210fedcba9876543210")
+                );
                 assert_eq!(*process_id, Some(4321));
                 assert_eq!(activity_id.as_deref(), Some("{1234}"));
             }

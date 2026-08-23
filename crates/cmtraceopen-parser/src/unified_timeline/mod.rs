@@ -1155,20 +1155,47 @@ pub fn correlate_timeline(
     correlate_observations(&observations)
 }
 
-/// Returns the bundle identifier immediately before a case-insensitive
-/// `bundle` path marker.
-pub fn bundle_from_source(source: &str) -> Option<String> {
-    let mut segments = source
-        .split(['/', '\\'])
-        .filter(|segment| !segment.is_empty());
-    let mut previous = segments.next()?;
-    for segment in segments {
-        if segment.eq_ignore_ascii_case("bundle") {
-            return Some(previous.to_string());
-        }
-        previous = segment;
+/// Validates the collector's generated bundle-directory identifier.
+fn is_collector_bundle_id(segment: &str) -> bool {
+    const PREFIX: &str = "CMTRACE-";
+    const NONCE_LENGTH: usize = 32;
+
+    let Some(prefix) = segment.get(..PREFIX.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(PREFIX) {
+        return false;
     }
-    None
+    let mut parts = segment[PREFIX.len()..].splitn(3, '-');
+    let (Some(date), Some(time), Some(host_and_nonce)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let Some((hostname, nonce)) = host_and_nonce.rsplit_once('-') else {
+        return false;
+    };
+    date.len() == 8
+        && date.bytes().all(|byte| byte.is_ascii_digit())
+        && time.len() == 6
+        && time.bytes().all(|byte| byte.is_ascii_digit())
+        && !hostname.is_empty()
+        && nonce.len() == NONCE_LENGTH
+        && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Returns the bundle identifier from the collector's bundle-id/evidence directory layout.
+pub fn bundle_from_source(source: &str) -> Option<String> {
+    let segments = source
+        .split(['/', '\\'])
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    segments.windows(2).find_map(|pair| {
+        let [bundle_id, evidence] = pair else {
+            return None;
+        };
+        (evidence.eq_ignore_ascii_case("evidence") && is_collector_bundle_id(bundle_id))
+            .then(|| (*bundle_id).to_string())
+    })
 }
 
 /// Converts a parsed log entry, or reports why it cannot be placed.
@@ -1666,7 +1693,10 @@ mod tests {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.id = 99;
         entry.host_name = Some("LEASED-CLIENT".into());
-        entry.source_file = Some("/captures/bundle-123/bundle/evidence/dhcp.log".into());
+        entry.source_file = Some(
+            "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-0123456789abcdef0123456789abcdef/evidence/dhcp.log"
+                .into(),
+        );
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
@@ -1677,9 +1707,15 @@ mod tests {
                 record_id,
                 ..
             } => {
-                assert_eq!(source, "/captures/bundle-123/bundle/evidence/dhcp.log");
+                assert_eq!(
+                    source,
+                    "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-0123456789abcdef0123456789abcdef/evidence/dhcp.log"
+                );
                 assert_eq!(machine, &None);
-                assert_eq!(bundle.as_deref(), Some("bundle-123"));
+                assert_eq!(
+                    bundle.as_deref(),
+                    Some("CMTRACE-20260822-120000-HOST-0123456789abcdef0123456789abcdef")
+                );
                 assert_eq!(*record_id, 99);
             }
             other => panic!("expected a log origin, got {other:?}"),
@@ -1690,7 +1726,7 @@ mod tests {
     fn log_origin_keeps_physical_file_separate_from_parser_source_token() {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.source_file = Some("store.cs:1".into());
-        entry.file_path = r"C:\captures\bundle-456\Bundle\evidence\ccm.log".into();
+        entry.file_path = r"C:\ProgramData\CmtraceOpen\Evidence\CMTRACE-20260822-120000-HOST-abcdef0123456789abcdef0123456789\evidence\ccm.log".into();
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
@@ -1700,12 +1736,32 @@ mod tests {
                 bundle,
                 ..
             } => {
-                assert_eq!(file, r"C:\captures\bundle-456\Bundle\evidence\ccm.log");
+                assert_eq!(
+                    file,
+                    r"C:\ProgramData\CmtraceOpen\Evidence\CMTRACE-20260822-120000-HOST-abcdef0123456789abcdef0123456789\evidence\ccm.log"
+                );
                 assert_eq!(source, "store.cs:1");
-                assert_eq!(bundle.as_deref(), Some("bundle-456"));
+                assert_eq!(
+                    bundle.as_deref(),
+                    Some("CMTRACE-20260822-120000-HOST-abcdef0123456789abcdef0123456789")
+                );
             }
             other => panic!("expected a log origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bundle_provenance_rejects_paths_that_are_not_collector_output() {
+        assert_eq!(
+            bundle_from_source("/captures/arbitrary/bundle/evidence/event.evtx"),
+            None
+        );
+        assert_eq!(
+            bundle_from_source(
+                "/captures/CMTRACE-20260822-120000-HOST-not-a-uuid/evidence/event.evtx"
+            ),
+            None
+        );
     }
 
     #[test]
