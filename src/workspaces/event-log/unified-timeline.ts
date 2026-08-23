@@ -19,7 +19,7 @@ function logEntryBelongsToSource(
   const root = source.kind === "known" ? source.defaultPath : source.path;
   const normalize = (value: string) => {
     const normalized = value
-      .replace(/[\\/]+/g, "/")
+      .replace(platform === "windows" ? /[\\/]+/g : /\/+/g, "/")
       .replace(/\/+$/, "");
     return platform === "windows" ? normalized.toLowerCase() : normalized;
   };

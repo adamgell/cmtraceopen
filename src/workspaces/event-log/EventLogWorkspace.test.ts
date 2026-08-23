@@ -71,6 +71,44 @@ describe("scopeLogEntries", () => {
     },
   );
 
+  it.each(["macos", "linux"] as const)(
+    "does not treat a backslash in a %s file name as a separator",
+    (platform) => {
+      const entries = [
+        entry("/logs/a\\b.log", "backslash file name"),
+        entry("/logs/a/b.log", "nested file"),
+      ];
+
+      expect(
+        scopeLogEntries(
+          entries,
+          { kind: "file", path: "/logs/a\\b.log" },
+          "single-file",
+          platform,
+        ),
+      ).toEqual([entries[0]]);
+    },
+  );
+
+  it.each(["macos", "linux"] as const)(
+    "does not treat a backslash in a %s folder name as a separator",
+    (platform) => {
+      const entries = [
+        entry("/logs/a\\b/inside.log", "backslash folder name"),
+        entry("/logs/a/b/inside.log", "nested folder"),
+      ];
+
+      expect(
+        scopeLogEntries(
+          entries,
+          { kind: "folder", path: "/logs/a\\b" },
+          "aggregate-folder",
+          platform,
+        ),
+      ).toEqual([entries[0]]);
+    },
+  );
+
   it("keeps aggregate entries when unrelated Windows volumes yield a root scope", () => {
     const entries = [
       entry("C:\\logs\\first.log", "first source"),
