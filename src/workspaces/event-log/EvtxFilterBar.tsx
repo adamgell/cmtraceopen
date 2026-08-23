@@ -16,6 +16,7 @@ import {
   EVTX_QUICK_FILTER_ACTIONS,
   EVTX_QUICK_FILTER_MODES,
   EVTX_QUICK_FILTER_SCOPES,
+  parseEventIdSelectors,
   type EvtxGroupField,
   type EvtxQuickFilterMode,
   type EvtxQuickFilterScope,
@@ -45,6 +46,7 @@ import {
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
+const EVENT_ID_VALIDATION_HELP = "Use decimal Event IDs or ranges from 0 to 4294967295.";
 
 const GROUP_FIELDS: EvtxGroupField[] = ["level", "provider", "channel", "eventId", "day"];
 
@@ -106,6 +108,16 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const setFilterSearch = useEvtxStore((s) => s.setFilterSearch);
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const setQuickFilter = useEvtxStore((s) => s.setQuickFilter);
+  const eventIdInputInvalid = useMemo(
+    () => parseEventIdSelectors(filterEventIds).invalid,
+    [filterEventIds]
+  );
+  const quickEventIdInputInvalid = useMemo(
+    () =>
+      quickFilter.mode === "eventIds" &&
+      parseEventIdSelectors(quickFilter.query).invalid,
+    [quickFilter.mode, quickFilter.query]
+  );
   const sortField = useEvtxStore((s) => s.sortField);
   const setSortField = useEvtxStore((s) => s.setSortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
@@ -355,15 +367,34 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         }}
       />
 
-      <Input
-        input={{ style: { fontSize: controlFontSize } }}
-        aria-label="Event IDs"
-        value={filterEventIds}
-        onChange={(_, data) => setFilterEventIds(data.value)}
-        placeholder="Event IDs (comma sep.)"
-        size="small"
-        style={{ width: "160px" }}
-      />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+        <Input
+          input={{ style: { fontSize: controlFontSize } }}
+          aria-label="Event IDs"
+          aria-invalid={eventIdInputInvalid}
+          aria-describedby={eventIdInputInvalid ? "event-id-filter-error" : undefined}
+          title={eventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
+          value={filterEventIds}
+          onChange={(_, data) => setFilterEventIds(data.value)}
+          placeholder="Event IDs (comma sep.)"
+          size="small"
+          style={{
+            width: "160px",
+            borderColor: eventIdInputInvalid ? tokens.colorPaletteRedBorder2 : undefined,
+          }}
+        />
+        {eventIdInputInvalid && (
+          <span
+            id="event-id-filter-error"
+            role="alert"
+            aria-label="Invalid Event IDs"
+            title={EVENT_ID_VALIDATION_HELP}
+            style={{ color: tokens.colorPaletteRedForeground1, fontSize: controlFontSize }}
+          >
+            Invalid Event IDs
+          </span>
+        )}
+      </span>
 
       <Dropdown
         button={{ style: { fontSize: controlFontSize } }}
@@ -543,15 +574,36 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         </span>
       )}
 
-      <Input
-        input={{ style: { fontSize: controlFontSize } }}
-        value={quickFilter.query}
-        onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
-        placeholder={quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."}
-        aria-label="Quick filter query"
-        size="small"
-        style={{ width: "180px" }}
-      />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+        <Input
+          input={{ style: { fontSize: controlFontSize } }}
+          value={quickFilter.query}
+          onChange={(_, data) => setQuickFilter({ ...quickFilter, query: data.value })}
+          placeholder={
+            quickFilter.mode === "eventIds" ? "Quick IDs (e.g. 4624-4626)" : "Quick filter..."
+          }
+          aria-label="Quick filter query"
+          aria-invalid={quickEventIdInputInvalid}
+          aria-describedby={quickEventIdInputInvalid ? "quick-event-id-filter-error" : undefined}
+          title={quickEventIdInputInvalid ? EVENT_ID_VALIDATION_HELP : undefined}
+          size="small"
+          style={{
+            width: "180px",
+            borderColor: quickEventIdInputInvalid ? tokens.colorPaletteRedBorder2 : undefined,
+          }}
+        />
+        {quickEventIdInputInvalid && (
+          <span
+            id="quick-event-id-filter-error"
+            role="alert"
+            aria-label="Invalid quick Event IDs"
+            title={EVENT_ID_VALIDATION_HELP}
+            style={{ color: tokens.colorPaletteRedForeground1, fontSize: controlFontSize }}
+          >
+            Invalid quick Event IDs
+          </span>
+        )}
+      </span>
       <Dropdown
         button={{ style: { fontSize: controlFontSize } }}
         size="small"

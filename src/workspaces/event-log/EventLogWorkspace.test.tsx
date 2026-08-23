@@ -857,6 +857,38 @@ describe("EventLogWorkspace fixtures", () => {
     expect(errorToggle).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("identifies invalid ordinary and quick Event ID filters", () => {
+    seedFixtureEvents();
+    useEvtxStore.setState((state) => ({
+      filterEventIds: "1000,broken",
+      quickFilter: {
+        ...state.quickFilter,
+        mode: "eventIds",
+        query: "1000,broken",
+      },
+    }));
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    const eventIds = screen.getByRole("textbox", { name: "Event IDs" });
+    expect(eventIds).toHaveAttribute("aria-invalid", "true");
+    expect(eventIds).toHaveAccessibleDescription("Invalid Event IDs");
+
+    const quickEventIds = screen.getByRole("textbox", { name: "Quick filter query" });
+    expect(quickEventIds).toHaveAttribute("aria-invalid", "true");
+    expect(quickEventIds).toHaveAccessibleDescription("Invalid quick Event IDs");
+
+    expect(screen.getByRole("alert", { name: "Invalid Event IDs" })).toBeVisible();
+    expect(screen.getByRole("alert", { name: "Invalid quick Event IDs" })).toBeVisible();
+
+    fireEvent.change(eventIds, { target: { value: "1000" } });
+    fireEvent.change(quickEventIds, { target: { value: "1000" } });
+
+    expect(eventIds).toHaveAttribute("aria-invalid", "false");
+    expect(quickEventIds).toHaveAttribute("aria-invalid", "false");
+    expect(screen.queryByRole("alert", { name: "Invalid Event IDs" })).toBeNull();
+    expect(screen.queryByRole("alert", { name: "Invalid quick Event IDs" })).toBeNull();
+  });
+
   it("names the sort-direction action that the button will perform", () => {
     seedFixtureEvents();
     render(<EvtxFilterBar nowEpoch={Date.now()} />);
