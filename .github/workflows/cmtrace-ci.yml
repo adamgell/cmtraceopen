@@ -273,15 +273,8 @@ jobs:
             throw "The full application test binary was not produced."
           }
 
-          $mtPath = (Get-Command mt.exe -ErrorAction SilentlyContinue).Source
-          if ([string]::IsNullOrWhiteSpace($mtPath)) {
-            $mtPath = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Filter mt.exe -Recurse |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1 -ExpandProperty FullName
-          }
-          if ([string]::IsNullOrWhiteSpace($mtPath)) {
-            throw "Windows SDK mt.exe was not found."
-          }
+          $mtPath = & ./scripts/resolve-windows-sdk-mt.ps1
+          Write-Host "Using Windows SDK manifest tool: $mtPath"
 
           $manifestPath = Join-Path $env:RUNNER_TEMP "cmtrace-open-test.manifest.xml"
           & $mtPath "-inputresource:$($testBinary.FullName);#1" "-out:$manifestPath"
