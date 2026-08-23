@@ -94,6 +94,34 @@ Describe 'New-CollectorBundleId' {
         $second | Should -Match '^CMTRACE-\d{8}-\d{6}-DEVICE-01-[0-9a-f]{32}$'
         $second | Should -Not -BeExactly $first
     }
+
+    It 'uses the invariant Gregorian calendar under a non-Gregorian culture' {
+        $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
+        $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
+        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56)
+        Mock Get-Date {
+            param([string]$Format)
+            if ([string]::IsNullOrEmpty($Format)) {
+                return $testDate
+            }
+            return $testDate.ToString($Format, [System.Globalization.CultureInfo]::CurrentCulture)
+        }
+
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+            [System.Globalization.CultureInfo]::CurrentUICulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+
+            $bundleId = New-CollectorBundleId -DeviceName 'DEVICE-01'
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $originalCulture
+            [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
+        }
+
+        $bundleId | Should -Match '^CMTRACE-20260521-123456-DEVICE-01-[0-9a-f]{32}$'
+    }
 }
 
 Describe 'Intune evidence profile contracts' {

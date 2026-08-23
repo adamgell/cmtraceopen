@@ -112,7 +112,11 @@ function New-CollectorBundleId {
 
     $safeDeviceName = ConvertTo-SafeFileName -Value $DeviceName
     $nonce = [Guid]::NewGuid().ToString('N').ToLowerInvariant()
-    return 'CMTRACE-{0}-{1}-{2}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $safeDeviceName, $nonce
+    $timestamp = (Get-Date).ToString(
+        'yyyyMMdd-HHmmss',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    )
+    return 'CMTRACE-{0}-{1}-{2}' -f $timestamp, $safeDeviceName, $nonce
 }
 
 function Join-RelativePath {
