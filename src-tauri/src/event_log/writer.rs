@@ -564,7 +564,13 @@ where
     I: IntoIterator<Item = R>,
     R: Borrow<EvtxRecord>,
 {
-    write_record_stream_inner(writer, format, records, mapped_columns, |_, _| Ok(()))
+    write_record_stream_inner(
+        writer,
+        format,
+        records.into_iter().map(Ok::<R, io::Error>),
+        mapped_columns,
+        |_, _| Ok(()),
+    )
 }
 
 /// Streams records directly to `writer`, applying the export redaction projection
@@ -587,7 +593,7 @@ where
     write_record_stream_inner(
         writer,
         format,
-        records,
+        records.into_iter().map(Ok::<R, io::Error>),
         mapped_columns,
         validate_raw_xml_record,
     )
@@ -602,7 +608,7 @@ fn write_record_stream_inner<W, I, R, V>(
 ) -> io::Result<ExportStats>
 where
     W: Write + ?Sized,
-    I: IntoIterator<Item = R>,
+    I: IntoIterator<Item = io::Result<R>>,
     R: Borrow<EvtxRecord>,
     V: FnMut(&EvtxRecord, ExportFormat) -> io::Result<()>,
 {
@@ -624,6 +630,7 @@ where
                 delimiter,
             )?;
             for item in records {
+                let item = item?;
                 let redacted = export::redact_record(item.borrow());
                 write_delimited_row(
                     &mut writer,
@@ -637,6 +644,7 @@ where
             writer.write_all(b"[")?;
             let mut first = true;
             for item in records {
+                let item = item?;
                 validate(item.borrow(), format)?;
                 if !first {
                     writer.write_all(b",")?;
@@ -651,6 +659,7 @@ where
         ExportFormat::Xml => {
             writer.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Events>\n")?;
             for item in records {
+                let item = item?;
                 validate(item.borrow(), format)?;
                 let redacted = export::redact_record(item.borrow());
                 writer
@@ -662,6 +671,7 @@ where
         }
         ExportFormat::RawXml => {
             for item in records {
+                let item = item?;
                 validate(item.borrow(), format)?;
                 let redacted = export::redact_record(item.borrow());
                 writer.write_all(redacted.raw_xml.trim().as_bytes())?;
@@ -683,6 +693,7 @@ where
             )?;
             writer.write_all(b"</thead><tbody>\n")?;
             for item in records {
+                let item = item?;
                 let redacted = export::redact_record(item.borrow());
                 write_html_row(
                     &mut writer,
@@ -810,6 +821,31 @@ where
     write_record_stream(output, format, records, mapped_columns).map_err(|error| error.to_string())
 }
 
+/// Writes a fallible record stream to an already-open sink.
+///
+/// This is used by disk-backed producers so a read or decode failure interrupts serialization
+/// instead of being mistaken for the end of the record stream.
+pub fn write_fallible_record_stream_to_writer<W, I, R>(
+    output: &mut W,
+    records: I,
+    format: ExportFormat,
+    mapped_columns: &[String],
+) -> Result<ExportStats, String>
+where
+    W: Write + ?Sized,
+    I: IntoIterator<Item = io::Result<R>>,
+    R: Borrow<EvtxRecord>,
+{
+    write_record_stream_inner(
+        output,
+        format,
+        records,
+        mapped_columns,
+        validate_raw_xml_record,
+    )
+    .map_err(|error| error.to_string())
+}
+
 /// Streams an iterator directly to stdout, or atomically replaces a file destination.
 pub fn write_record_stream_to_destination<I, R>(
     records: I,
@@ -830,6 +866,35 @@ where
     let path = destination.expect("destination checked above");
     write_to_staged_destination(path, |file| {
         write_record_stream(file, format, records, mapped_columns)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))
+    })
+}
+
+/// Streams fallible records to stdout, or atomically replaces a file destination.
+pub fn write_fallible_record_stream_to_destination<I, R>(
+    records: I,
+    format: ExportFormat,
+    destination: Option<&Path>,
+    mapped_columns: &[String],
+) -> Result<ExportStats, String>
+where
+    I: IntoIterator<Item = io::Result<R>>,
+    R: Borrow<EvtxRecord>,
+{
+    if destination.is_some_and(|path| path.as_os_str() == "-") || destination.is_none() {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        return write_fallible_record_stream_to_writer(
+            &mut stdout,
+            records,
+            format,
+            mapped_columns,
+        );
+    }
+
+    let path = destination.expect("destination checked above");
+    write_to_staged_destination(path, |file| {
+        write_fallible_record_stream_to_writer(file, records, format, mapped_columns)
             .map_err(|error| format!("cannot write {}: {error}", path.display()))
     })
 }
@@ -1049,6 +1114,31 @@ fn failed_file_validation_preserves_existing_destination() {
         super::writer::write_records_to_destination(&[invalid], ExportFormat::Xml, Some(&path))
             .expect_err("malformed XML fails");
     assert!(error.contains("malformed") || error.contains("incomplete"));
+    assert_eq!(
+        std::fs::read_to_string(path).expect("destination"),
+        "sentinel"
+    );
+}
+
+#[test]
+fn fallible_stream_preserves_existing_destination_on_a_midstream_read_error() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let path = directory.path().join("events.json");
+    std::fs::write(&path, "sentinel").expect("seed destination");
+    let records = [
+        Ok(record("first")),
+        Err(io::Error::other("spool read failed")),
+    ];
+
+    let error = super::writer::write_fallible_record_stream_to_destination(
+        records,
+        ExportFormat::Json,
+        Some(&path),
+        &[],
+    )
+    .expect_err("read failure must abort the staged export");
+
+    assert!(error.contains("spool read failed"));
     assert_eq!(
         std::fs::read_to_string(path).expect("destination"),
         "sentinel"

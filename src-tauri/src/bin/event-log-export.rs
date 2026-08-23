@@ -1,11 +1,14 @@
 use serde::de::{self, SeqAccess, Visitor};
 use serde::Deserialize;
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 #[cfg(test)]
 use std::collections::BTreeSet;
+use std::collections::BinaryHeap;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::RwLock;
@@ -13,7 +16,7 @@ use std::sync::RwLock;
 use app_lib::event_log::export::ExportFormat;
 use app_lib::event_log::models::{EvtxLevel, EvtxRecord};
 use app_lib::event_log::parser::{
-    build_source_manifest, parse_evtx_manifest, EventLogSource, EventLogSourceManifest,
+    build_source_manifest, parse_evtx_manifest_batches, EventLogSource, EventLogSourceManifest,
     SourceCoverage, MAX_SOURCE_MANIFEST_ENTRIES,
 };
 use app_lib::event_log::provider_db::ProviderStore;
@@ -278,6 +281,290 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RETAINED_RECORDS: usize = 1_000_000;
 const MAX_TOTAL_RECORDS: u64 = MAX_RETAINED_RECORDS as u64;
 const MAX_MANIFEST_VECTOR_ITEMS: usize = MAX_SOURCE_MANIFEST_ENTRIES;
+
+struct RecordSpool {
+    directory: tempfile::TempDir,
+    runs: Vec<tempfile::NamedTempFile>,
+}
+
+impl RecordSpool {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            directory: tempfile::tempdir()
+                .map_err(|error| format!("cannot create export spool: {error}"))?,
+            runs: Vec::new(),
+        })
+    }
+
+    fn push_batch(&mut self, mut records: Vec<EvtxRecord>) -> Result<(), String> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        records.sort_by_key(|record| record.timestamp_epoch);
+        let mut run = tempfile::NamedTempFile::new_in(self.directory.path())
+            .map_err(|error| format!("cannot create export spool run: {error}"))?;
+        {
+            let mut writer = BufWriter::new(run.as_file_mut());
+            for record in records {
+                serde_json::to_writer(&mut writer, &record)
+                    .map_err(|error| format!("cannot encode export spool record: {error}"))?;
+                writer
+                    .write_all(b"\n")
+                    .map_err(|error| format!("cannot write export spool record: {error}"))?;
+            }
+            writer
+                .flush()
+                .map_err(|error| format!("cannot flush export spool run: {error}"))?;
+        }
+        self.runs.push(run);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn run_count(&self) -> usize {
+        self.runs.len()
+    }
+
+    fn prepare(
+        self,
+        filter: &PreparedFilter,
+        format: ExportFormat,
+    ) -> Result<PreparedSpool, String> {
+        let mut records = MergedRuns::new(&self.runs)
+            .map_err(|error| format!("cannot read export spool runs: {error}"))?;
+        let mut filtered = tempfile::NamedTempFile::new_in(self.directory.path())
+            .map_err(|error| format!("cannot create filtered export spool: {error}"))?;
+        {
+            let mut writer = BufWriter::new(filtered.as_file_mut());
+            for record in &mut records {
+                let record =
+                    record.map_err(|error| format!("cannot read export spool record: {error}"))?;
+                if !filter.matches(&record) {
+                    continue;
+                }
+                app_lib::event_log::writer::validate_raw_xml_iter([&record], format)
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_writer(&mut writer, &record)
+                    .map_err(|error| format!("cannot encode filtered export spool: {error}"))?;
+                writer
+                    .write_all(b"\n")
+                    .map_err(|error| format!("cannot write filtered export spool: {error}"))?;
+            }
+            writer
+                .flush()
+                .map_err(|error| format!("cannot flush filtered export spool: {error}"))?;
+        }
+
+        let mut mapped_records = CapturedRecordErrors::new(SpoolRecords::open(&filtered)?);
+        let mapped_columns = app_lib::event_log::export::mapped_columns_iter(&mut mapped_records)?;
+        if let Some(error) = mapped_records.error {
+            return Err(format!("cannot read filtered export spool: {error}"));
+        }
+
+        Ok(PreparedSpool {
+            _directory: self.directory,
+            records: filtered,
+            mapped_columns,
+        })
+    }
+}
+
+struct PreparedSpool {
+    _directory: tempfile::TempDir,
+    records: tempfile::NamedTempFile,
+    mapped_columns: Vec<String>,
+}
+
+impl PreparedSpool {
+    fn records(&self) -> Result<SpoolRecords, String> {
+        SpoolRecords::open(&self.records)
+    }
+}
+
+#[cfg(test)]
+fn prepare_record_batches<T, P>(
+    filter: &PreparedFilter,
+    format: ExportFormat,
+    produce: P,
+) -> Result<(PreparedSpool, T), String>
+where
+    P: FnOnce(&mut dyn FnMut(Vec<EvtxRecord>) -> Result<(), String>) -> Result<T, String>,
+{
+    let mut spool = RecordSpool::new()?;
+    let summary = produce(&mut |records| spool.push_batch(records))?;
+    Ok((spool.prepare(filter, format)?, summary))
+}
+
+#[cfg(test)]
+fn write_prepared_spool_to_writer(
+    spool: &PreparedSpool,
+    output: &mut dyn Write,
+    format: ExportFormat,
+) -> Result<app_lib::event_log::writer::ExportStats, String> {
+    app_lib::event_log::writer::write_fallible_record_stream_to_writer(
+        output,
+        spool.records()?,
+        format,
+        &spool.mapped_columns,
+    )
+}
+
+#[derive(Debug)]
+struct PendingRecord {
+    record: EvtxRecord,
+    run_index: usize,
+}
+
+impl PartialEq for PendingRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.record.timestamp_epoch == other.record.timestamp_epoch
+            && self.run_index == other.run_index
+    }
+}
+
+impl Eq for PendingRecord {}
+
+impl PartialOrd for PendingRecord {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PendingRecord {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .record
+            .timestamp_epoch
+            .cmp(&self.record.timestamp_epoch)
+            .then_with(|| other.run_index.cmp(&self.run_index))
+    }
+}
+
+struct MergedRuns {
+    readers: Vec<BufReader<File>>,
+    pending: BinaryHeap<PendingRecord>,
+    next_id: u64,
+    failed: bool,
+}
+
+impl MergedRuns {
+    fn new(runs: &[tempfile::NamedTempFile]) -> io::Result<Self> {
+        let mut readers = Vec::with_capacity(runs.len());
+        let mut pending = BinaryHeap::new();
+        for (run_index, run) in runs.iter().enumerate() {
+            let mut reader = BufReader::new(run.reopen()?);
+            if let Some(record) = read_spooled_record(&mut reader)? {
+                pending.push(PendingRecord { record, run_index });
+            }
+            readers.push(reader);
+        }
+        Ok(Self {
+            readers,
+            pending,
+            next_id: 0,
+            failed: false,
+        })
+    }
+}
+
+impl Iterator for MergedRuns {
+    type Item = io::Result<EvtxRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
+        let pending = self.pending.pop()?;
+        match read_spooled_record(&mut self.readers[pending.run_index]) {
+            Ok(Some(record)) => self.pending.push(PendingRecord {
+                record,
+                run_index: pending.run_index,
+            }),
+            Ok(None) => {}
+            Err(error) => {
+                self.failed = true;
+                return Some(Err(error));
+            }
+        }
+        let mut record = pending.record;
+        record.id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        Some(Ok(record))
+    }
+}
+
+struct SpoolRecords {
+    reader: BufReader<File>,
+    failed: bool,
+}
+
+impl SpoolRecords {
+    fn open(file: &tempfile::NamedTempFile) -> Result<Self, String> {
+        Ok(Self {
+            reader: BufReader::new(
+                file.reopen()
+                    .map_err(|error| format!("cannot reopen export spool: {error}"))?,
+            ),
+            failed: false,
+        })
+    }
+}
+
+impl Iterator for SpoolRecords {
+    type Item = io::Result<EvtxRecord>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
+        match read_spooled_record(&mut self.reader) {
+            Ok(Some(record)) => Some(Ok(record)),
+            Ok(None) => None,
+            Err(error) => {
+                self.failed = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+struct CapturedRecordErrors {
+    records: SpoolRecords,
+    error: Option<io::Error>,
+}
+
+impl CapturedRecordErrors {
+    fn new(records: SpoolRecords) -> Self {
+        Self {
+            records,
+            error: None,
+        }
+    }
+}
+
+impl Iterator for CapturedRecordErrors {
+    type Item = EvtxRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.records.next()? {
+            Ok(record) => Some(record),
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
+fn read_spooled_record(reader: &mut BufReader<File>) -> io::Result<Option<EvtxRecord>> {
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    serde_json::from_str(&line)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
 
 struct BoundedVecVisitor<T> {
     marker: PhantomData<T>,
@@ -984,22 +1271,9 @@ fn load_cli(mut cli: Cli) -> Result<Cli, String> {
     }
 
     if cli.records.is_empty() && !cli.sources.is_empty() {
-        let maps = RwLock::new(MapRegistry::default());
-        let providers = RwLock::new(ProviderStore::default());
-        let mut coverage = cli.coverage.clone();
-        let result = if let Some(source_manifest) = cli.source_manifest.as_ref() {
-            parse_evtx_manifest(source_manifest, &maps, &providers)?
-        } else {
-            let source_manifest = build_source_manifest(&cli.sources)?;
-            let result = parse_evtx_manifest(&source_manifest, &maps, &providers)?;
-            cli.source_manifest = Some(source_manifest);
-            result
-        };
-        coverage.total_records = result.total_records;
-        coverage.parse_errors = coverage.parse_errors.max(result.parse_errors);
-        append_unique_messages(&mut coverage.error_messages, result.error_messages);
-        cli.coverage = coverage;
-        cli.records = result.records;
+        if cli.source_manifest.is_none() {
+            cli.source_manifest = Some(build_source_manifest(&cli.sources)?);
+        }
     } else if cli.coverage.total_records == 0 {
         cli.coverage.total_records = cli.records.len() as u64;
     }
@@ -1028,9 +1302,34 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    run_with_args_and_source_parser(args, stdout, |manifest, emit| {
+        let maps = RwLock::new(MapRegistry::default());
+        let providers = RwLock::new(ProviderStore::default());
+        let result = parse_evtx_manifest_batches(manifest, &maps, &providers, emit)?;
+        Ok(Coverage {
+            total_records: result.total_records,
+            parse_errors: result.parse_errors,
+            error_messages: result.error_messages,
+        })
+    })
+}
+
+fn run_with_args_and_source_parser<I, S, P>(
+    args: I,
+    stdout: &mut dyn Write,
+    parse_source: P,
+) -> Result<String, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+    P: FnOnce(
+        &EventLogSourceManifest,
+        &mut dyn FnMut(Vec<EvtxRecord>) -> Result<(), String>,
+    ) -> Result<Coverage, String>,
+{
     let parsed = parse_args(args)?;
     let manifest_path = parsed.manifest.clone();
-    let cli = load_cli(parsed)?;
+    let mut cli = load_cli(parsed)?;
     let mut protected_sources = cli.sources.clone();
     protected_sources.extend(
         cli.records
@@ -1060,6 +1359,63 @@ where
     }
     reject_source_destination(&protected_sources, cli.output.as_deref())?;
     let prepared_filter = PreparedFilter::new(&cli.filter)?;
+
+    if !cli.sources.is_empty() {
+        let source_manifest = cli
+            .source_manifest
+            .as_ref()
+            .expect("source manifest is built during CLI loading");
+        let mut spool = RecordSpool::new()?;
+        let parsed_coverage =
+            parse_source(source_manifest, &mut |records| spool.push_batch(records))?;
+        cli.coverage.total_records = parsed_coverage.total_records;
+        cli.coverage.parse_errors = cli.coverage.parse_errors.max(parsed_coverage.parse_errors);
+        append_unique_messages(
+            &mut cli.coverage.error_messages,
+            parsed_coverage.error_messages,
+        );
+        let prepared = spool
+            .prepare(&prepared_filter, cli.format)
+            .map_err(|error| {
+                format!(
+                    "{}\nexport failed: {error}",
+                    coverage_report(&cli.coverage, "unknown")
+                )
+            })?;
+        let records = prepared.records().map_err(|error| {
+            format!(
+                "{}\nexport failed: {error}",
+                coverage_report(&cli.coverage, "unknown")
+            )
+        })?;
+        let stats = match cli
+            .output
+            .as_deref()
+            .filter(|output| *output != "-")
+            .map(Path::new)
+        {
+            Some(path) => app_lib::event_log::writer::write_fallible_record_stream_to_destination(
+                records,
+                cli.format,
+                Some(path),
+                &prepared.mapped_columns,
+            ),
+            None => app_lib::event_log::writer::write_fallible_record_stream_to_writer(
+                stdout,
+                records,
+                cli.format,
+                &prepared.mapped_columns,
+            ),
+        }
+        .map_err(|error| {
+            format!(
+                "{}\nexport failed: {error}",
+                coverage_report(&cli.coverage, "unknown")
+            )
+        })?;
+        return Ok(coverage_report(&cli.coverage, &stats.records.to_string()));
+    }
+
     app_lib::event_log::writer::validate_raw_xml_iter(
         filter_with(cli.records.iter(), &prepared_filter),
         cli.format,
@@ -1142,8 +1498,10 @@ mod tests {
     use super::utf8_arguments;
     use super::{
         displayed_timestamp, event_id_matches, filtered_records, parse_args,
-        parse_event_id_selectors, parse_event_ids, reject_source_destination, run_with_args, Cli,
-        EventIdSelector, Filter, QuickFilter, MAX_EVENT_ID_FILTER_SELECTORS,
+        parse_event_id_selectors, parse_event_ids, prepare_record_batches,
+        reject_source_destination, run_with_args, run_with_args_and_source_parser,
+        write_prepared_spool_to_writer, Cli, Coverage, EventIdSelector, Filter, QuickFilter,
+        RecordSpool, MAX_EVENT_ID_FILTER_SELECTORS,
     };
     use app_lib::event_log::export::{mapped_columns_iter, MAX_MAPPED_COLUMNS};
     use app_lib::event_log::maps::MappedColumn;
@@ -2200,6 +2558,347 @@ mod tests {
         assert!(
             error.contains("mapped-column") && error.contains("budget"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn multi_batch_spool_flushes_each_batch_before_accepting_the_next() {
+        let mut spool = RecordSpool::new().expect("record spool");
+
+        spool
+            .push_batch(vec![make_record()])
+            .expect("first batch is spooled");
+        assert_eq!(spool.run_count(), 1);
+
+        spool
+            .push_batch(vec![make_record()])
+            .expect("second batch is spooled");
+        assert_eq!(spool.run_count(), 2);
+    }
+
+    #[test]
+    fn multi_batch_spool_matches_the_in_memory_export_and_mapped_column_union() {
+        let mut later = make_record();
+        later.timestamp_epoch = 30;
+        later.message = "later".into();
+        later.mapped = vec![MappedColumn {
+            property: "LaterColumn".into(),
+            text: "later-value".into(),
+            complete: true,
+        }];
+        let mut first_tie = make_record();
+        first_tie.timestamp_epoch = 20;
+        first_tie.message = "first-tie".into();
+        first_tie.mapped = vec![MappedColumn {
+            property: "FirstTieColumn".into(),
+            text: "first-tie-value".into(),
+            complete: true,
+        }];
+        let mut early = make_record();
+        early.timestamp_epoch = 10;
+        early.message = "early".into();
+        early.mapped = vec![MappedColumn {
+            property: "EarlyColumn".into(),
+            text: "early-value".into(),
+            complete: true,
+        }];
+        let mut second_tie = make_record();
+        second_tie.timestamp_epoch = 20;
+        second_tie.message = "second-tie".into();
+
+        let first_batch = vec![later.clone(), first_tie.clone()];
+        let second_batch = vec![early.clone(), second_tie.clone()];
+        let mut expected_records = vec![later, first_tie, early, second_tie];
+        expected_records.sort_by_key(|record| record.timestamp_epoch);
+        for (index, record) in expected_records.iter_mut().enumerate() {
+            record.id = index as u64;
+        }
+        let expected_columns = mapped_columns_iter(expected_records.iter()).expect("mapped union");
+        let mut expected = Vec::new();
+        app_lib::event_log::writer::write_record_stream_to_writer(
+            &mut expected,
+            expected_records,
+            app_lib::event_log::export::ExportFormat::Csv,
+            &expected_columns,
+        )
+        .expect("in-memory export");
+
+        let mut spool = RecordSpool::new().expect("record spool");
+        spool.push_batch(first_batch).expect("first batch");
+        spool.push_batch(second_batch).expect("second batch");
+        let prepared = spool
+            .prepare(
+                &super::PreparedFilter::new(&Filter::default()).expect("filter"),
+                app_lib::event_log::export::ExportFormat::Csv,
+            )
+            .expect("prepared spool");
+        let mut actual = Vec::new();
+        write_prepared_spool_to_writer(
+            &prepared,
+            &mut actual,
+            app_lib::event_log::export::ExportFormat::Csv,
+        )
+        .expect("spooled export");
+
+        assert_eq!(actual, expected);
+        let header = String::from_utf8(actual)
+            .expect("CSV")
+            .lines()
+            .next()
+            .expect("header")
+            .to_owned();
+        assert!(header.ends_with("EarlyColumn,FirstTieColumn,LaterColumn"));
+    }
+
+    #[test]
+    fn multi_batch_spool_is_byte_identical_for_every_export_format() {
+        let mut first = make_record();
+        first.timestamp_epoch = 20;
+        first.message = "first equal timestamp".into();
+        first.raw_xml = "<Event><Data>first</Data></Event>".into();
+        let mut earlier = make_record();
+        earlier.timestamp_epoch = 10;
+        earlier.message = "earlier".into();
+        earlier.raw_xml = "<Event><Data>earlier</Data></Event>".into();
+        earlier.mapped = vec![MappedColumn {
+            property: "AcrossBatches".into(),
+            text: "mapped-value".into(),
+            complete: true,
+        }];
+        let mut second = make_record();
+        second.timestamp_epoch = 20;
+        second.message = "second equal timestamp".into();
+        second.raw_xml = "<Event><Data>second</Data></Event>".into();
+
+        for format in [
+            app_lib::event_log::export::ExportFormat::Csv,
+            app_lib::event_log::export::ExportFormat::Tsv,
+            app_lib::event_log::export::ExportFormat::Json,
+            app_lib::event_log::export::ExportFormat::Xml,
+            app_lib::event_log::export::ExportFormat::Html,
+            app_lib::event_log::export::ExportFormat::RawXml,
+        ] {
+            let mut expected_records = vec![first.clone(), earlier.clone(), second.clone()];
+            expected_records.sort_by_key(|record| record.timestamp_epoch);
+            for (index, record) in expected_records.iter_mut().enumerate() {
+                record.id = index as u64;
+            }
+            let expected_columns =
+                mapped_columns_iter(expected_records.iter()).expect("mapped union");
+            let mut expected = Vec::new();
+            app_lib::event_log::writer::write_record_stream_to_writer(
+                &mut expected,
+                expected_records,
+                format,
+                &expected_columns,
+            )
+            .expect("in-memory export");
+
+            let (prepared, batch_count) = prepare_record_batches(
+                &super::PreparedFilter::new(&Filter::default()).expect("filter"),
+                format,
+                |emit| {
+                    emit(vec![first.clone()])?;
+                    emit(vec![earlier.clone(), second.clone()])?;
+                    Ok(2usize)
+                },
+            )
+            .expect("prepared batches");
+            assert_eq!(batch_count, 2);
+            let mut actual = Vec::new();
+            write_prepared_spool_to_writer(&prepared, &mut actual, format).expect("spooled export");
+
+            assert_eq!(actual, expected, "{format:?} output must not change");
+        }
+    }
+
+    #[test]
+    fn source_batches_use_the_spool_path_and_preserve_coverage() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let source = directory.path().join("events.evtx");
+        std::fs::write(&source, b"placeholder source").expect("source");
+        let mut later = make_record();
+        later.timestamp_epoch = 20;
+        later.message = "later".into();
+        let mut earlier = make_record();
+        earlier.timestamp_epoch = 10;
+        earlier.message = "earlier".into();
+        let mut stdout = Vec::new();
+
+        let report = run_with_args_and_source_parser(
+            [
+                "event-log-export",
+                "--source",
+                source.to_str().expect("source path"),
+                "--format",
+                "json",
+                "--output",
+                "-",
+            ],
+            &mut stdout,
+            |manifest, emit| {
+                assert_eq!(manifest.entries.len(), 1);
+                emit(vec![later])?;
+                emit(vec![earlier])?;
+                Ok(Coverage {
+                    total_records: 2,
+                    parse_errors: 1,
+                    error_messages: vec!["events.evtx: damaged chunk".into()],
+                })
+            },
+        )
+        .expect("source export");
+
+        let output: Vec<serde_json::Value> = serde_json::from_slice(&stdout).expect("JSON output");
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["message"], "earlier");
+        assert_eq!(output[0]["id"], 0);
+        assert_eq!(output[1]["message"], "later");
+        assert_eq!(output[1]["id"], 1);
+        assert!(report.contains("sourceRecords=2 exportedRecords=2 parseErrors=1 gaps=1"));
+        assert!(report.contains("coverage-gap: events.evtx: damaged chunk"));
+    }
+
+    #[test]
+    fn source_manifest_entries_keep_stable_prefilter_ids_for_equal_timestamps() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let first_source = directory.path().join("first.evtx");
+        let second_source = directory.path().join("second.evtx");
+        let manifest_path = directory.path().join("manifest.json");
+        std::fs::write(&first_source, b"first source").expect("first source");
+        std::fs::write(&second_source, b"second source").expect("second source");
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({
+                "entries": [
+                    {
+                        "sourceId": "first",
+                        "path": first_source.to_str().expect("first source path"),
+                        "kind": "file",
+                    },
+                    {
+                        "sourceId": "second",
+                        "path": second_source.to_str().expect("second source path"),
+                        "kind": "file",
+                    },
+                ],
+                "beforeLoad": {"selectedChannels": ["Keep"]},
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+        let mut dropped = make_record();
+        dropped.timestamp_epoch = 20;
+        dropped.channel = "Drop".into();
+        dropped.message = "first equal timestamp".into();
+        let mut kept = make_record();
+        kept.timestamp_epoch = 20;
+        kept.channel = "Keep".into();
+        kept.message = "second equal timestamp".into();
+        let mut stdout = Vec::new();
+
+        let report = run_with_args_and_source_parser(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("manifest path"),
+                "--format",
+                "json",
+                "--output",
+                "-",
+            ],
+            &mut stdout,
+            |manifest, emit| {
+                assert_eq!(manifest.entries.len(), 2);
+                emit(vec![dropped])?;
+                emit(vec![kept])?;
+                Ok(Coverage {
+                    total_records: 2,
+                    ..Coverage::default()
+                })
+            },
+        )
+        .expect("source manifest export");
+
+        let output: Vec<serde_json::Value> = serde_json::from_slice(&stdout).expect("JSON output");
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["message"], "second equal timestamp");
+        assert_eq!(output[0]["id"], 1);
+        assert!(report.contains("sourceRecords=2 exportedRecords=1"));
+    }
+
+    #[test]
+    fn source_validation_failure_does_not_write_stdout() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let source = directory.path().join("events.evtx");
+        std::fs::write(&source, b"placeholder source").expect("source");
+        let mut malformed = make_record();
+        malformed.raw_xml = "<Event>".into();
+        let mut stdout = Vec::new();
+
+        let error = run_with_args_and_source_parser(
+            [
+                "event-log-export",
+                "--source",
+                source.to_str().expect("source path"),
+                "--format",
+                "xml",
+                "--output",
+                "-",
+            ],
+            &mut stdout,
+            |_manifest, emit| {
+                emit(vec![malformed])?;
+                Ok(Coverage {
+                    total_records: 1,
+                    ..Coverage::default()
+                })
+            },
+        )
+        .expect_err("malformed source XML must fail");
+
+        assert!(error.contains("raw XML is incomplete"));
+        assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn source_validation_failure_preserves_the_destination_and_reports_one_export_error() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let source = directory.path().join("events.evtx");
+        let destination = directory.path().join("events.xml");
+        std::fs::write(&source, b"placeholder source").expect("source");
+        std::fs::write(&destination, b"existing destination").expect("destination");
+        let mut malformed = make_record();
+        malformed.raw_xml = "<Event>".into();
+        let mut stdout = Vec::new();
+
+        let error = run_with_args_and_source_parser(
+            [
+                "event-log-export",
+                "--source",
+                source.to_str().expect("source path"),
+                "--format",
+                "xml",
+                "--output",
+                destination.to_str().expect("destination path"),
+            ],
+            &mut stdout,
+            |_manifest, emit| {
+                emit(vec![malformed])?;
+                Ok(Coverage {
+                    total_records: 1,
+                    parse_errors: 1,
+                    error_messages: vec!["events.evtx: damaged record".into()],
+                })
+            },
+        )
+        .expect_err("malformed source XML must fail");
+
+        assert!(error.contains("sourceRecords=1 exportedRecords=unknown parseErrors=1 gaps=1"));
+        assert_eq!(error.matches("export failed:").count(), 1, "{error}");
+        assert_eq!(
+            std::fs::read(&destination).expect("destination"),
+            b"existing destination"
         );
     }
 }

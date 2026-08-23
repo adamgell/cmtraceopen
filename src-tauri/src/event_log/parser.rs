@@ -1533,13 +1533,59 @@ pub fn parse_evtx_files(
     parse_evtx_manifest(&manifest, maps, providers)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvtxParseSummary {
+    pub total_records: u64,
+    pub parse_errors: u32,
+    pub error_messages: Vec<String>,
+}
+
 pub fn parse_evtx_manifest(
     manifest: &EventLogSourceManifest,
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
 ) -> Result<EvtxParseResult, String> {
+    let mut records = Vec::new();
+    let mut result = parse_evtx_manifest_with_batches(manifest, maps, providers, |batch| {
+        records.extend(batch);
+        Ok(())
+    })?;
+    records.sort_by_key(|record| record.timestamp_epoch);
+    for (index, record) in records.iter_mut().enumerate() {
+        record.id = index as u64;
+    }
+    result.total_records = records.len() as u64;
+    result.records = records;
+    Ok(result)
+}
+
+pub fn parse_evtx_manifest_batches<F>(
+    manifest: &EventLogSourceManifest,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+    emit: F,
+) -> Result<EvtxParseSummary, String>
+where
+    F: FnMut(Vec<EvtxRecord>) -> Result<(), String>,
+{
+    let result = parse_evtx_manifest_with_batches(manifest, maps, providers, emit)?;
+    Ok(EvtxParseSummary {
+        total_records: result.total_records,
+        parse_errors: result.parse_errors,
+        error_messages: result.error_messages,
+    })
+}
+
+fn parse_evtx_manifest_with_batches<F>(
+    manifest: &EventLogSourceManifest,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+    mut emit: F,
+) -> Result<EvtxParseResult, String>
+where
+    F: FnMut(Vec<EvtxRecord>) -> Result<(), String>,
+{
     let manifest = validate_source_manifest(manifest);
-    let mut all_records = Vec::new();
     let mut channels = Vec::new();
     let mut parse_errors = manifest.coverage.len() as u32;
     let mut coverage_gaps: Vec<EvtxCoverageGap> = manifest
@@ -1582,12 +1628,34 @@ pub fn parse_evtx_manifest(
         }
         total_source_bytes = total_source_bytes.saturating_add(source_bytes);
         if is_archive_container_source(source, is_directory) {
-            match super::archive::parse_archive(
+            let mut emit_error = None;
+            let archive = super::archive::parse_archive_batches(
                 path,
                 maps,
                 providers,
                 MAX_SOURCE_RECORDS.saturating_sub(total_source_records),
-            ) {
+                |member| match append_parsed_file(
+                    &member.source_label,
+                    member.parsed,
+                    &mut channels,
+                    &mut parse_errors,
+                    &mut coverage_gaps,
+                    &mut error_messages,
+                    &mut total_source_records,
+                    &mut record_budget_gap_added,
+                    &mut emit,
+                ) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        emit_error = Some(error);
+                        false
+                    }
+                },
+            );
+            if let Some(error) = emit_error {
+                return Err(error);
+            }
+            match archive {
                 Ok(archive) => {
                     parse_errors = parse_errors.saturating_add(archive.parse_errors);
                     coverage_gaps.extend(archive.coverage);
@@ -1600,19 +1668,6 @@ pub fn parse_evtx_manifest(
                     }
                     archive_members.extend(archive.metadata.into_iter().take(remaining_metadata));
                     error_messages.extend(archive.messages);
-                    for member in archive.members {
-                        append_parsed_file(
-                            &member.source_label,
-                            member.parsed,
-                            &mut all_records,
-                            &mut channels,
-                            &mut parse_errors,
-                            &mut coverage_gaps,
-                            &mut error_messages,
-                            &mut total_source_records,
-                            &mut record_budget_gap_added,
-                        );
-                    }
                 }
                 Err(gap) => {
                     log::warn!(
@@ -1630,14 +1685,14 @@ pub fn parse_evtx_manifest(
                 Ok(file) => append_parsed_file(
                     &source.path,
                     file,
-                    &mut all_records,
                     &mut channels,
                     &mut parse_errors,
                     &mut coverage_gaps,
                     &mut error_messages,
                     &mut total_source_records,
                     &mut record_budget_gap_added,
-                ),
+                    &mut emit,
+                )?,
                 Err(gap) => {
                     log::warn!(
                         "event=evtx_parse_error file=\"{}\" error=\"{}\"",
@@ -1694,14 +1749,9 @@ pub fn parse_evtx_manifest(
     }
     bound_result_coverage(&mut coverage_gaps, &mut error_messages);
 
-    all_records.sort_by_key(|record| record.timestamp_epoch);
-    for (index, record) in all_records.iter_mut().enumerate() {
-        record.id = index as u64;
-    }
-
     Ok(EvtxParseResult {
-        total_records: all_records.len() as u64,
-        records: all_records,
+        total_records: total_source_records as u64,
+        records: Vec::new(),
         channels,
         parse_errors,
         error_messages,
@@ -1712,17 +1762,20 @@ pub fn parse_evtx_manifest(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_parsed_file(
+fn append_parsed_file<F>(
     source_path: &str,
     file: ParsedFile,
-    all_records: &mut Vec<EvtxRecord>,
     channels: &mut Vec<EvtxChannelInfo>,
     parse_errors: &mut u32,
     coverage_gaps: &mut Vec<EvtxCoverageGap>,
     error_messages: &mut Vec<String>,
     total_source_records: &mut usize,
     record_budget_gap_added: &mut bool,
-) {
+    emit: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<EvtxRecord>) -> Result<(), String> + ?Sized,
+{
     let mut records = file.records;
     for record in &mut records {
         record.source_label = source_path.to_string();
@@ -1806,7 +1859,10 @@ fn append_parsed_file(
                 }),
         );
     }
-    all_records.extend(records);
+    if !records.is_empty() {
+        emit(records)?;
+    }
+    Ok(())
 }
 
 /// What one file yielded, including why anything was missing from it.
@@ -2480,7 +2536,7 @@ fn describe_event(
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Error, Read, Seek, SeekFrom};
+    use std::io::{Cursor, Error, Read, Seek, SeekFrom, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
@@ -2584,6 +2640,99 @@ mod tests {
     }
 
     #[test]
+    fn manifest_batch_parser_emits_archive_members_without_aggregating_their_records() {
+        let temporary = tempfile::tempdir().expect("temp directory");
+        let path = temporary.path().join("events.zip");
+        let file = fs::File::create(&path).expect("create archive fixture");
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, content) in [
+            ("logs/first.log", b"first archive record" as &[u8]),
+            ("logs/second.log", b"second archive record" as &[u8]),
+        ] {
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .expect("create archive member");
+            archive.write_all(content).expect("write archive member");
+        }
+        archive.finish().expect("finish archive fixture");
+        let archive_path = path.to_string_lossy().into_owned();
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
+        let mut batch_sizes = Vec::new();
+        let mut messages = Vec::new();
+
+        let summary = parse_evtx_manifest_batches(
+            &EventLogSourceManifest {
+                entries: vec![EventLogSource {
+                    source_id: archive_path.clone(),
+                    path: archive_path,
+                    kind: EventLogSourceKind::Archive,
+                }],
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+            |records| {
+                batch_sizes.push(records.len());
+                messages.extend(records.into_iter().map(|record| record.message));
+                Ok(())
+            },
+        )
+        .expect("archive batches parse");
+
+        assert_eq!(batch_sizes, vec![1, 1]);
+        assert_eq!(
+            messages,
+            vec!["first archive record", "second archive record"]
+        );
+        assert_eq!(summary.total_records, 2);
+        assert_eq!(summary.parse_errors, 0);
+    }
+
+    #[test]
+    fn manifest_batch_parser_stops_archive_after_consumer_failure() {
+        let temporary = tempfile::tempdir().expect("temp directory");
+        let path = temporary.path().join("events.zip");
+        let file = fs::File::create(&path).expect("create archive fixture");
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, content) in [
+            ("logs/first.log", b"first archive record" as &[u8]),
+            ("logs/second.log", b"second archive record" as &[u8]),
+        ] {
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .expect("create archive member");
+            archive.write_all(content).expect("write archive member");
+        }
+        archive.finish().expect("finish archive fixture");
+        let archive_path = path.to_string_lossy().into_owned();
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
+        let mut emitted_batches = 0usize;
+
+        let error = parse_evtx_manifest_batches(
+            &EventLogSourceManifest {
+                entries: vec![EventLogSource {
+                    source_id: archive_path.clone(),
+                    path: archive_path,
+                    kind: EventLogSourceKind::Archive,
+                }],
+                coverage: Vec::new(),
+            },
+            &maps,
+            &providers,
+            |_records| {
+                emitted_batches += 1;
+                Err("injected spool write failure".into())
+            },
+        )
+        .expect_err("consumer failure must abort archive parsing");
+
+        assert_eq!(error, "injected spool write failure");
+        assert_eq!(emitted_batches, 1);
+    }
+
+    #[test]
     fn append_parsed_file_keeps_source_qualified_text_diagnostic_once() {
         let source = "bundle.zip::logs/app.log";
         let mut records = Vec::new();
@@ -2593,6 +2742,10 @@ mod tests {
         let mut error_messages = Vec::new();
         let mut total_source_records = 0;
         let mut record_budget_gap_added = false;
+        let mut emit = |batch| {
+            records.extend(batch);
+            Ok(())
+        };
 
         append_parsed_file(
             source,
@@ -2602,14 +2755,15 @@ mod tests {
                 messages: vec![format!("{source}: text member is empty")],
                 coverage_gaps: Vec::new(),
             },
-            &mut records,
             &mut channels,
             &mut parse_errors,
             &mut coverage_gaps,
             &mut error_messages,
             &mut total_source_records,
             &mut record_budget_gap_added,
-        );
+            &mut emit,
+        )
+        .expect("batch emits");
 
         assert_eq!(
             error_messages,
@@ -2632,6 +2786,10 @@ mod tests {
         let mut error_messages = Vec::new();
         let mut total_source_records = 0;
         let mut record_budget_gap_added = false;
+        let mut emit = |batch| {
+            records.extend(batch);
+            Ok(())
+        };
 
         append_parsed_file(
             source,
@@ -2641,14 +2799,15 @@ mod tests {
                 messages: vec![format_coverage_gap(&first_gap)],
                 coverage_gaps: vec![first_gap.clone(), second_gap.clone()],
             },
-            &mut records,
             &mut channels,
             &mut parse_errors,
             &mut coverage_gaps,
             &mut error_messages,
             &mut total_source_records,
             &mut record_budget_gap_added,
-        );
+            &mut emit,
+        )
+        .expect("batch emits");
 
         assert_eq!(
             error_messages,
@@ -2668,6 +2827,10 @@ mod tests {
         let mut error_messages = Vec::new();
         let mut total_source_records = MAX_SOURCE_RECORDS - 1;
         let mut record_budget_gap_added = false;
+        let mut emit = |batch| {
+            records.extend(batch);
+            Ok(())
+        };
 
         append_parsed_file(
             source,
@@ -2677,14 +2840,15 @@ mod tests {
                 messages: Vec::new(),
                 coverage_gaps: Vec::new(),
             },
-            &mut records,
             &mut channels,
             &mut parse_errors,
             &mut coverage_gaps,
             &mut error_messages,
             &mut total_source_records,
             &mut record_budget_gap_added,
-        );
+            &mut emit,
+        )
+        .expect("first batch emits");
         append_parsed_file(
             source,
             ParsedFile {
@@ -2693,14 +2857,15 @@ mod tests {
                 messages: Vec::new(),
                 coverage_gaps: Vec::new(),
             },
-            &mut records,
             &mut channels,
             &mut parse_errors,
             &mut coverage_gaps,
             &mut error_messages,
             &mut total_source_records,
             &mut record_budget_gap_added,
-        );
+            &mut emit,
+        )
+        .expect("second batch emits");
 
         assert_eq!(
             coverage_gaps

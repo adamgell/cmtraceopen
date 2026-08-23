@@ -165,7 +165,6 @@ pub(crate) struct ArchiveMember {
 
 #[derive(Debug, Default)]
 pub(crate) struct ArchiveParseResult {
-    pub(crate) members: Vec<ArchiveMember>,
     pub(crate) metadata: Vec<EvtxArchiveMember>,
     pub(crate) coverage: Vec<EvtxCoverageGap>,
     pub(crate) parse_errors: u32,
@@ -174,12 +173,16 @@ pub(crate) struct ArchiveParseResult {
 }
 
 /// Parse EVTX members directly from a bounded ZIP stream. No extracted path escapes this call.
-pub(crate) fn parse_archive(
+pub(crate) fn parse_archive_batches<F>(
     path: &Path,
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
     max_records: usize,
-) -> Result<ArchiveParseResult, EvtxCoverageGap> {
+    mut emit: F,
+) -> Result<ArchiveParseResult, EvtxCoverageGap>
+where
+    F: FnMut(ArchiveMember) -> bool,
+{
     let source = path.to_string_lossy().into_owned();
     let mut file = File::open(path).map_err(|error| {
         EvtxCoverageGap::new(
@@ -251,9 +254,10 @@ pub(crate) fn parse_archive(
     let mut total_bytes = 0u64;
     let mut total_compressed_bytes = 0u64;
     let mut total_records = 0usize;
+    let mut emitted_members = 0usize;
     let member_count = archive.len();
 
-    for index in bounded_member_indices(member_count) {
+    'members: for index in bounded_member_indices(member_count) {
         let mut entry = match archive.by_index(index) {
             Ok(entry) => entry,
             Err(error) => {
@@ -506,10 +510,13 @@ pub(crate) fn parse_archive(
                                     Some(digest),
                                     outcome,
                                 );
-                                result.members.push(ArchiveMember {
+                                emitted_members = emitted_members.saturating_add(1);
+                                if !emit(ArchiveMember {
                                     source_label: normalized_label,
                                     parsed,
-                                });
+                                }) {
+                                    break 'members;
+                                }
                             }
                             Err(error) => {
                                 let limited = text_parse_error_is_limit(&error);
@@ -662,10 +669,13 @@ pub(crate) fn parse_archive(
                     Some(digest.clone()),
                     parsed_member_outcome(&parsed),
                 );
-                result.members.push(ArchiveMember {
+                emitted_members = emitted_members.saturating_add(1);
+                if !emit(ArchiveMember {
                     source_label: normalized_label,
                     parsed,
-                });
+                }) {
+                    break 'members;
+                }
             }
             Err(mut gap) => {
                 push_metadata(
@@ -700,7 +710,7 @@ pub(crate) fn parse_archive(
         );
     }
 
-    if result.members.is_empty() && result.coverage.is_empty() {
+    if emitted_members == 0 && result.coverage.is_empty() {
         push_gap(
             &mut result,
             &source,
@@ -708,7 +718,7 @@ pub(crate) fn parse_archive(
             "archive contains no supported EVTX or inventory members",
         );
     }
-    if result.members.is_empty() {
+    if emitted_members == 0 {
         result.messages.push(format!(
             "{source}: no readable EVTX members were found; archive coverage is reported below"
         ));
@@ -1124,15 +1134,31 @@ mod tests {
     use super::{
         account_archive_bytes, archive_budget_allows, archive_member_count, archive_member_kind,
         archive_record_budget_allows, archive_text_parser_admission_allows, bounded_member_indices,
-        is_evtx_name, parse_archive, parse_text_member, push_existing_gap,
-        text_parse_error_is_limit, validate_member_name, ArchiveParseResult, MemberReadError,
-        MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES, MAX_ARCHIVE_COVERAGE, MAX_ARCHIVE_MEMBERS,
-        MAX_ARCHIVE_TEXT_PARSE_BYTES, MAX_ARCHIVE_TEXT_RECORDS, MAX_ARCHIVE_TOTAL_BYTES,
+        is_evtx_name, parse_archive_batches, parse_text_member, push_existing_gap,
+        text_parse_error_is_limit, validate_member_name, ArchiveMember, ArchiveParseResult,
+        MemberReadError, MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES, MAX_ARCHIVE_COVERAGE,
+        MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_TEXT_PARSE_BYTES, MAX_ARCHIVE_TEXT_RECORDS,
+        MAX_ARCHIVE_TOTAL_BYTES,
     };
     use cmtraceopen_parser::eventmap::MapRegistry;
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::RwLock;
+
+    fn collect_archive(
+        path: &std::path::Path,
+        maps: &RwLock<MapRegistry>,
+        providers: &RwLock<super::super::provider_db::ProviderStore>,
+        max_records: usize,
+    ) -> Result<(ArchiveParseResult, Vec<ArchiveMember>), EvtxCoverageGap> {
+        let mut members = Vec::new();
+        let parsed = parse_archive_batches(path, maps, providers, max_records, |member| {
+            members.push(member);
+            true
+        })?;
+        Ok((parsed, members))
+    }
+
     #[test]
     fn evtx_member_names_require_a_real_extension_or_numeric_rotation() {
         for name in [
@@ -1400,6 +1426,45 @@ mod tests {
     }
 
     #[test]
+    fn archive_batch_consumer_can_stop_before_later_members_are_retained() {
+        let temporary = tempfile::tempdir().expect("temp directory");
+        let path = temporary.path().join("events.zip");
+        let file = File::create(&path).expect("create archive fixture");
+        let mut writer = zip::ZipWriter::new(file);
+        for (name, content) in [
+            ("logs/first.log", b"first archive record" as &[u8]),
+            ("logs/second.log", b"second archive record" as &[u8]),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .expect("create archive member");
+            writer.write_all(content).expect("write archive member");
+        }
+        writer.finish().expect("finish archive fixture");
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
+        let mut emitted = Vec::new();
+
+        let parsed = parse_archive_batches(&path, &maps, &providers, usize::MAX, |member| {
+            emitted.push(member.source_label);
+            false
+        })
+        .expect("first archive batch parses");
+
+        assert_eq!(emitted.len(), 1);
+        assert!(emitted[0].ends_with("logs/first.log"));
+        assert_eq!(parsed.metadata.len(), 1);
+        assert!(!parsed
+            .messages
+            .iter()
+            .any(|message| message.contains("no readable EVTX members")));
+        assert!(!parsed
+            .coverage
+            .iter()
+            .any(|gap| gap.kind == EvtxCoverageGapKind::Empty));
+    }
+
+    #[test]
     fn archive_record_budget_skips_later_text_members_before_admission() {
         let path = std::env::temp_dir().join(format!(
             "cmtraceopen-event-archive-record-limit-{}.zip",
@@ -1418,10 +1483,11 @@ mod tests {
 
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let parsed = parse_archive(&path, &maps, &providers, 1).expect("archive should parse");
+        let (parsed, members) =
+            collect_archive(&path, &maps, &providers, 1).expect("archive should parse");
 
-        assert_eq!(parsed.members.len(), 1);
-        assert_eq!(parsed.members[0].parsed.records.len(), 1);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].parsed.records.len(), 1);
         assert_eq!(parsed.metadata.len(), 2);
         assert_eq!(parsed.metadata[1].outcome, EvtxArchiveMemberOutcome::Limit);
         assert!(parsed.coverage.iter().any(|gap| {
@@ -1459,7 +1525,7 @@ mod tests {
 
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let parsed = parse_archive(&path, &maps, &providers, usize::MAX)
+        let parsed = parse_archive_batches(&path, &maps, &providers, usize::MAX, |_| true)
             .expect("malformed member should remain covered");
 
         assert_eq!(parsed.metadata.len(), 1);
@@ -1526,7 +1592,7 @@ mod tests {
         );
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let error = parse_archive(&path, &maps, &providers, usize::MAX)
+        let error = parse_archive_batches(&path, &maps, &providers, usize::MAX, |_| true)
             .expect_err("forged large member count should be rejected");
 
         assert_eq!(error.kind, EvtxCoverageGapKind::Limit);
@@ -1561,7 +1627,7 @@ mod tests {
 
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let error = parse_archive(&path, &maps, &providers, usize::MAX)
+        let error = parse_archive_batches(&path, &maps, &providers, usize::MAX, |_| true)
             .expect_err("forged central directory size should be rejected");
 
         assert_eq!(error.kind, EvtxCoverageGapKind::Limit);
@@ -1664,13 +1730,13 @@ mod tests {
 
         let maps = RwLock::new(MapRegistry::new());
         let providers = RwLock::new(super::super::provider_db::ProviderStore::default());
-        let parsed =
-            parse_archive(&path, &maps, &providers, usize::MAX).expect("archive should parse");
+        let (parsed, members) =
+            collect_archive(&path, &maps, &providers, usize::MAX).expect("archive should parse");
         let expected_path = format!("{}::logs/app.log", path.to_string_lossy());
 
-        assert_eq!(parsed.members.len(), 1);
-        assert_eq!(parsed.members[0].parsed.records.len(), 1);
-        assert_eq!(parsed.members[0].source_label, expected_path);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].parsed.records.len(), 1);
+        assert_eq!(members[0].source_label, expected_path);
         assert_eq!(parsed.metadata.len(), 1);
         assert_eq!(parsed.metadata[0].path, expected_path);
         assert_eq!(parsed.metadata[0].kind, EvtxArchiveMemberKind::Text);
