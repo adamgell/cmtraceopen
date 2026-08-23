@@ -7,6 +7,7 @@ const parseManifest = vi.hoisted(() => vi.fn());
 const parseFiles = vi.hoisted(() => vi.fn());
 const setLoadError = vi.hoisted(() => vi.fn());
 const supersedePendingLoad = vi.hoisted(() => vi.fn());
+const loadState = vi.hoisted(() => ({ generation: 0 }));
 
 vi.mock("../../lib/commands", () => ({ expandEventLogSources }));
 vi.mock("./evtx-store", () => ({
@@ -16,6 +17,7 @@ vi.mock("./evtx-store", () => ({
       parseFiles,
       setLoadError,
       supersedePendingLoad,
+      loadGeneration: loadState.generation,
     }),
   },
 }));
@@ -28,7 +30,11 @@ beforeEach(() => {
   parseManifest.mockReset();
   parseFiles.mockReset();
   setLoadError.mockReset();
-  supersedePendingLoad.mockReset();
+  loadState.generation = 0;
+  supersedePendingLoad.mockReset().mockImplementation(() => {
+    loadState.generation += 1;
+    return loadState.generation;
+  });
 });
 
 function manifestFor(path: string): EventLogSourceManifest {

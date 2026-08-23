@@ -704,7 +704,7 @@ loadGeneration: number;
   tailRequestId: string | null;
   tailChannels: Set<string>;
   tailCoverageGaps: string[];
-  supersedePendingLoad: () => void;
+  supersedePendingLoad: () => number;
   parseFiles: (paths: string[]) => Promise<void>;
   parseManifest: (manifest: EventLogSourceManifest) => Promise<void>;
   enumerateChannels: () => Promise<void>;
@@ -864,8 +864,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   tailRequestId: null,
   tailChannels: new Set<string>(),
   tailCoverageGaps: [],
-  supersedePendingLoad: () =>
-    set((state) => ({ loadGeneration: state.loadGeneration + 1 })),
+  supersedePendingLoad: () => {
+    const generation = get().loadGeneration + 1;
+    set({ loadGeneration: generation });
+    return generation;
+  },
   parseFiles: async (paths) => {
     const previousTimeWindow = get().timeWindow;
     const generation = get().loadGeneration + 1;
@@ -1187,6 +1190,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     await get().enumerateChannels();
   },
   enumerateRemoteChannels: async (machine) => {
+    get().supersedePendingLoad();
     beginRequest();
     set({
       remoteMachine: null,

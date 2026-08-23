@@ -104,6 +104,59 @@ describe("source-open integration", () => {
     expect(useEvtxStore.getState().loadError).toBe("newer expansion failed");
   });
 
+  it("does not parse an older expansion after local enumeration becomes current", async () => {
+    const olderManifest = manifest("/logs/older/Application.evtx");
+    const olderExpansion = deferred<EventLogSourceManifest>();
+    expandEventLogSources.mockReturnValueOnce(olderExpansion.promise);
+    invoke.mockImplementation((command: string) => {
+      if (command === "evtx_enumerate_channels") return Promise.resolve([]);
+      if (command === "evtx_parse_manifest") {
+        return Promise.resolve(parseResult(record("Older")));
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const olderOpen = openEventLogSources([
+      { kind: "folder", path: "/logs/older" },
+    ]);
+    await useEvtxStore.getState().enumerateLocalChannels();
+    olderExpansion.resolve(olderManifest);
+    await olderOpen;
+
+    expect(invoke).not.toHaveBeenCalledWith("evtx_parse_manifest", {
+      manifest: olderManifest,
+    });
+    expect(useEvtxStore.getState().sourceMode).toBe("live");
+    expect(useEvtxStore.getState().records).toEqual([]);
+  });
+
+  it("does not parse an older expansion after remote validation becomes current", async () => {
+    const olderManifest = manifest("/logs/older/Application.evtx");
+    const olderExpansion = deferred<EventLogSourceManifest>();
+    expandEventLogSources.mockReturnValueOnce(olderExpansion.promise);
+    invoke.mockImplementation((command: string) => {
+      if (command === "evtx_parse_manifest") {
+        return Promise.resolve(parseResult(record("Older")));
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const olderOpen = openEventLogSources([
+      { kind: "folder", path: "/logs/older" },
+    ]);
+    await useEvtxStore.getState().enumerateRemoteChannels("bad\0host");
+    olderExpansion.resolve(olderManifest);
+    await olderOpen;
+
+    expect(invoke).not.toHaveBeenCalledWith("evtx_parse_manifest", {
+      manifest: olderManifest,
+    });
+    expect(useEvtxStore.getState().sourceMode).toBeNull();
+    expect(useEvtxStore.getState().loadError).toBe(
+      "Enter a valid remote computer name.",
+    );
+  });
+
   it("keeps stable live data and tailing when a new expansion fails", async () => {
     const existingRecord = record("Application");
     useEvtxStore.setState({
@@ -117,7 +170,7 @@ describe("source-open integration", () => {
         Promise.resolve({
           requestId: args.requestId,
           channel: args.channel,
-          mode: "poll",
+          mode: "polling",
           active: true,
           nextSequence: 0,
           coverageGaps: [],
@@ -136,7 +189,7 @@ describe("source-open integration", () => {
 
     const state = useEvtxStore.getState();
     expect(state.records).toEqual([existingRecord]);
-    expect(state.tailMode).toBe("poll");
+    expect(state.tailMode).toBe("polling");
     expect(state.tailRequestId).toBe(tailRequestId);
     expect(state.tailChannels).toEqual(new Set(["Application"]));
     expect(invoke).not.toHaveBeenCalledWith(
