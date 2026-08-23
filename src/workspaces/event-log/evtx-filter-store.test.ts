@@ -127,6 +127,64 @@ describe("useSavedFilterStore", () => {
     expect(migrated.savedFilters).toHaveLength(1);
   });
 
+  it("sanitizes current-version v2 filters during ordinary hydration", async () => {
+    localStorage.setItem(
+      "cmtraceopen-evtx-saved-filters",
+      JSON.stringify({
+        version: 2,
+        state: {
+          savedFilters: [
+            {
+              id: "unsafe",
+              name: "  Current schema  ",
+              favorite: "yes",
+              tags: [" triage ", 42, "triage"],
+              lastUsed: "recently",
+              criteria: {
+                beforeLoad: {
+                  levels: ["NotALevel"],
+                  timeWindow: "forever",
+                },
+                onLoad: {
+                  quickFilter: {
+                    mode: "unknown",
+                    query: 42,
+                    scope: "everything",
+                    action: "remove",
+                    caseSensitive: "yes",
+                    highlight: "yes",
+                  },
+                },
+                afterLoad: { groupBy: ["not-a-group"] },
+              },
+            },
+            { id: "nameless" },
+          ],
+        },
+      })
+    );
+
+    await useSavedFilterStore.persist.rehydrate();
+
+    expect(useSavedFilterStore.getState().savedFilters).toEqual([
+      {
+        id: "unsafe",
+        name: "Current schema",
+        favorite: false,
+        tags: ["triage"],
+        lastUsed: null,
+        criteria: sanitizeCriteria({}),
+      },
+    ]);
+  });
+
+  it("hydrates an absent saved-filter store as an empty library", async () => {
+    localStorage.clear();
+
+    await expect(useSavedFilterStore.persist.rehydrate()).resolves.toBeUndefined();
+    expect(useSavedFilterStore.getState().savedFilters).toEqual([]);
+  });
+
   it("refuses a whitespace-only name instead of storing one that vanishes", () => {
     // sanitizeSavedFilter drops an empty name on rehydration, so storing it would show the filter
     // in the list and then lose it on restart, which reads as the app losing the operator's work.

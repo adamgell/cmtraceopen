@@ -108,6 +108,12 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       name: "cmtraceopen-evtx-saved-filters",
       version: 2,
       migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
+      // Zustand only calls migrate when the stored version differs. Current-version data still
+      // crosses an untrusted localStorage boundary, so validate it before merging state too.
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePersistedSavedFilters(persisted, 2),
+      }),
     }
   )
 );

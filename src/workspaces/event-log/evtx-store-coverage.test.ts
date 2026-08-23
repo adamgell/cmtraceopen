@@ -1060,7 +1060,6 @@ describe("the time window reaches the service", () => {
     expect(gaps[0]).toContain("invalid errorMessages at index 1");
     expect(gaps[0]).not.toContain("real gap");
   });
-});
   it("refetches loaded live channels when before-load levels broaden", async () => {
     useEvtxStore.setState({
       sourceMode: "live",
@@ -1189,6 +1188,8 @@ describe("the time window reaches the service", () => {
 
     expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([2]);
   });
+});
+
 describe("records that arrive in batches while the query runs", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -1250,6 +1251,37 @@ describe("records that arrive in batches while the query runs", () => {
     const state = useEvtxStore.getState();
     expect(state.records).toHaveLength(3);
     expect(state.coverageGaps).toEqual([]);
+  });
+  it("coalesces same-turn batches into one visible records update", async () => {
+    let resolveQuery!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveQuery = resolve;
+        })
+    );
+    const query = useEvtxStore.getState().queryChannels(["System"]);
+    await Promise.resolve();
+    const latestCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+    const requestId = (latestCall?.[1] as { requestId?: string } | undefined)?.requestId;
+    if (!requestId) throw new Error("query request did not include a request ID");
+
+    let recordsUpdates = 0;
+    const unsubscribe = useEvtxStore.subscribe((state, previous) => {
+      if (state.records !== previous.records) recordsUpdates += 1;
+    });
+    emitBatch("System", 0, [record("System", 3)], requestId);
+    emitBatch("System", 1, [record("System", 1)], requestId);
+    emitBatch("System", 2, [record("System", 2)], requestId);
+    await Promise.resolve();
+    unsubscribe();
+
+    expect(recordsUpdates).toBe(1);
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([1, 2, 3]);
+
+    emitTerminal("System", 3, 3, requestId);
+    resolveQuery(streamedReply("System", 3));
+    await query;
   });
   it("deduplicates an equivalent producerless terminal record after a streamed batch", async () => {
     const streamed = {

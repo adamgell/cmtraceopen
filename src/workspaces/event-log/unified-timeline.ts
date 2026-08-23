@@ -496,14 +496,28 @@ function eventIdentityPrefix(record: EvtxRecord): string {
   return `${source}|${machine}${channel}`;
 }
 
-function exactRecordIdText(record: EvtxRecord): string | null {
-  const text = record.eventRecordIdText?.trim();
+function exactNonzeroDecimalText(value: string | null | undefined): string | null {
+  const text = value?.trim();
   if (!text || !/^\d+$/.test(text)) return null;
   try {
     return BigInt(text) === 0n ? null : text;
   } catch {
     return null;
   }
+}
+
+function exactRecordIdText(record: EvtxRecord): string | null {
+  return exactNonzeroDecimalText(record.eventRecordIdText);
+}
+
+function hasUnsafeEventRecordIdentity(
+  origin: Extract<TimelineOrigin, { kind: "event" }>,
+): boolean {
+  return (
+    origin.recordId !== 0 &&
+    !Number.isSafeInteger(origin.recordId) &&
+    exactNonzeroDecimalText(origin.recordIdText) === null
+  );
 }
 
 function stableRecordBase(record: EvtxRecord): string {
@@ -575,6 +589,7 @@ export function filterTimelineToRecords(
   const unsafeOriginCounts = new Map<string, number>();
   for (const item of [...timeline.items, ...timeline.unplaced]) {
     if (item.origin.kind !== "event") continue;
+    if (!hasUnsafeEventRecordIdentity(item.origin)) continue;
     const marker = item.origin.stableId.lastIndexOf("|record");
     if (marker < 0) continue;
     const prefix = item.origin.stableId.replace(/record\d+$/, "record");
@@ -592,6 +607,7 @@ export function filterTimelineToRecords(
     const prefix = origin.stableId.replace(/record\d+$/, "record");
     return (
       marker >= 0 &&
+      hasUnsafeEventRecordIdentity(origin) &&
       unsafePrefixes.has(prefix) &&
       unsafeOriginCounts.get(prefix) === 1
     );

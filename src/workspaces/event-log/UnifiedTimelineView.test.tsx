@@ -146,4 +146,29 @@ describe("UnifiedTimelineView", () => {
       screen.getByText(/coverage: coverage gap limit reached; 2 additional gaps omitted/),
     ).toBeInTheDocument();
   });
+
+  it("bounds coverage-gap details and gives duplicate gaps collision-free keys", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <UnifiedTimelineView
+          timeline={{
+            ...timeline,
+            coverageGaps: Array.from({ length: 105 }, () => ({
+              source: "event-record-identity",
+              reason: "duplicate gap",
+            })),
+          }}
+        />,
+      );
+
+      expect(screen.getAllByTestId("correlation-gap")).toHaveLength(100);
+      expect(
+        screen.getByText("Showing the first 100 of 105 coverage gaps; 5 omitted."),
+      ).toBeInTheDocument();
+      expect(consoleError.mock.calls.flat().join(" ")).not.toMatch(/same key/i);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });

@@ -597,6 +597,41 @@ describe("filterTimelineToRecords", () => {
     expect(filtered.items.map((item) => item.message)).toEqual(["unsafe"]);
   });
 
+  it("does not let safe sibling origins make one unsafe origin ambiguous", () => {
+    const prefix = "source4:Live|machine4:HOST|channel8:Security|record";
+    const unsafeOrigin: TimelineOrigin = {
+      ...eventOrigin,
+      stableId: `${prefix}9007199254740993`,
+      machine: "HOST",
+      channel: "Security",
+      recordId: Number.MAX_SAFE_INTEGER + 2,
+    };
+    const safeOrigin: TimelineOrigin = {
+      ...unsafeOrigin,
+      stableId: `${prefix}42`,
+      recordId: 42,
+    };
+    const unsafeRecord = {
+      sourceLabel: "Live",
+      computer: "HOST",
+      channel: "Security",
+      eventRecordId: Number.MAX_SAFE_INTEGER + 2,
+    } as EvtxRecord;
+
+    const filtered = filterTimelineToRecords(
+      timeline({
+        items: [
+          { timestampMs: 1, severity: "info", message: "unsafe", origin: unsafeOrigin },
+          { timestampMs: 2, severity: "info", message: "safe", origin: safeOrigin },
+        ],
+      }),
+      [unsafeRecord],
+    );
+
+    expect(filtered.items.map((item) => item.message)).toEqual(["unsafe"]);
+    expect(filtered.coverageGaps).toEqual([]);
+  });
+
   it("does not leak hidden unsafe-ID rows sharing a source prefix", () => {
     const visible = {
       ...eventOrigin,

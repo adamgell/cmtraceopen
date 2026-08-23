@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseEventIdFilter, selectVisibleRecords, sortRecords, isWithinTimeWindow } from "./evtx-filter";
+import * as evtxColumns from "./evtx-columns";
 import type { EvtxRecord } from "./types";
 
 const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
@@ -94,6 +95,9 @@ describe("quick filter modes", () => {
   it("accepts newline-separated strings", () => {
     expect(visible(quick({ mode: "allStrings", query: "Boot\ncompleted" }))).toHaveLength(1);
   });
+  it("accepts carriage-return-separated strings", () => {
+    expect(visible(quick({ mode: "allStrings", query: "Boot\rcompleted" }))).toHaveLength(1);
+  });
   it("requires every word in all-words mode", () => {
     expect(
       visible(quick({ mode: "allWords", query: "Boot Ada", scope: "visibleColumns" }))
@@ -129,6 +133,22 @@ describe("quick filter semantics", () => {
     expect(
       visible(quick({ query: "Ada", scope: "allColumns" }))
     ).toHaveLength(1);
+  });
+  it("discovers all-column fields once for a visible-record pass", () => {
+    const records = [
+      record({ id: 1, eventRecordId: 1 }),
+      record({ id: 2, eventRecordId: 2 }),
+      record({ id: 3, eventRecordId: 3 }),
+    ];
+    const discovery = vi.spyOn(evtxColumns, "discoverMappedProperties");
+
+    try {
+      expect(visible(quick({ query: "Boot", scope: "allColumns" }), records)).toHaveLength(3);
+      expect(discovery).toHaveBeenCalledTimes(1);
+      expect(discovery).toHaveBeenCalledWith(records);
+    } finally {
+      discovery.mockRestore();
+    }
   });
   it("keeps visible-column quick filters out of hidden provider values", () => {
     const providerOnly = record({

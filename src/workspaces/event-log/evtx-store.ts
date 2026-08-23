@@ -26,12 +26,11 @@ import type {
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
 import type { LogEntry } from "../../types/log";
+import {
+  clearEventLogChannel,
+  type EvtxClearStatusResult,
+} from "../../lib/commands";
 import { assertUnifiedTimelineShape, type UnifiedTimeline } from "./unified-timeline";
-
-type EvtxClearStatusResult =
-  | { status: "cleared" | "cancelled" | "empty" }
-  | { status: "denied" | "unavailable" | "unsupported"; detail: string };
-type EvtxClearResponse = { channel: string; result: EvtxClearStatusResult };
 
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
@@ -1781,9 +1780,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         detail: `${channel}: clear cancelled because the event-log source or live tail changed`,
       };
     }
-    const response = await invoke<EvtxClearResponse>(
-      "evtx_clear_channel",
-      { channel, confirmed, remoteMachine: get().remoteMachine }
+    const response = await clearEventLogChannel(
+      channel,
+      confirmed,
+      get().remoteMachine
     );
     const result = response.result;
     const currentAfterClear = get();
@@ -2009,6 +2009,60 @@ const activeRequestIds = new Map<string, string>();
 function streamKey(channel: string, requestId: string): string {
   return `${requestId}\u0000${channel}`;
 }
+
+interface QueuedVisibleBatch {
+  channel: string;
+  requestId: string;
+  records: EvtxRecord[];
+}
+
+const queuedVisibleBatches = new Map<string, QueuedVisibleBatch>();
+let visibleBatchFlushScheduled = false;
+
+function flushQueuedVisibleBatches(): void {
+  visibleBatchFlushScheduled = false;
+  const queued = [...queuedVisibleBatches.values()];
+  queuedVisibleBatches.clear();
+  const recordsByRequest = new Map<string, EvtxRecord[]>();
+  for (const batch of queued) {
+    if (
+      !isCurrentRequest(batch.requestId) ||
+      activeRequestIds.get(batch.channel) !== batch.requestId
+    ) {
+      continue;
+    }
+    recordsByRequest.set(
+      batch.requestId,
+      appendUniqueRecords(recordsByRequest.get(batch.requestId) ?? [], batch.records).records
+    );
+  }
+  for (const [requestId, records] of recordsByRequest) {
+    if (!isCurrentRequest(requestId) || records.length === 0) continue;
+    const state = useEvtxStore.getState();
+    useEvtxStore.setState(
+      mergeRecordsPreservingSelection(
+        state.records,
+        state.selectedRecordId,
+        records,
+        { preserveMissingSelection: true }
+      )
+    );
+  }
+}
+
+function queueVisibleBatch(channel: string, requestId: string, records: EvtxRecord[]): void {
+  const key = streamKey(channel, requestId);
+  const existing = queuedVisibleBatches.get(key);
+  queuedVisibleBatches.set(key, {
+    channel,
+    requestId,
+    records: appendUniqueRecords(existing?.records ?? [], records).records,
+  });
+  if (visibleBatchFlushScheduled) return;
+  visibleBatchFlushScheduled = true;
+  queueMicrotask(flushQueuedVisibleBatches);
+}
+
 function createPendingStream(channel: string, requestId: string): PendingStream {
   const pending: PendingStream = {
     channel,
@@ -2194,16 +2248,9 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
     if (records.length > 0) {
       pending.records = appendUniqueRecords(pending.records, records).records;
 
-      // Batches are visible while a request is running. Use the same identity-preserving merge as all
-      // reply/refresh paths so a late, out-of-order batch cannot move the operator's selection.
-      const state = useEvtxStore.getState();
-      const merged = mergeRecordsPreservingSelection(
-        state.records,
-        state.selectedRecordId,
-        records,
-        { preserveMissingSelection: true }
-      );
-      useEvtxStore.setState(merged);
+      // Batches remain visible while a request is running, but same-turn deliveries share one
+      // identity-preserving merge/sort instead of repeatedly sorting the full visible set.
+      queueVisibleBatch(channel, requestId, records);
     }
 
     // A terminal can race the final batch. Keep the pending state until the consumer acknowledges
@@ -2324,10 +2371,12 @@ export function resetStreamedRecords(channels: string[], requestId: string): voi
   for (const channel of channels) {
     const activeRequestId = activeRequestIds.get(channel);
     if (activeRequestId !== undefined) {
+      queuedVisibleBatches.delete(streamKey(channel, activeRequestId));
       const activePending = pendingFor(channel, activeRequestId);
       if (activePending) cancelPendingStream(activePending);
       pendingBatches.delete(streamKey(channel, activeRequestId));
     }
+    queuedVisibleBatches.delete(streamKey(channel, requestId));
     activeRequestIds.set(channel, requestId);
     createPendingStream(channel, requestId);
   }

@@ -81,6 +81,15 @@ export interface FileAssociationPromptStatus {
   isRegistered: boolean;
 }
 
+export type EvtxClearStatusResult =
+  | { status: "cleared" | "cancelled" | "empty" }
+  | { status: "denied" | "unavailable" | "unsupported"; detail: string };
+
+export interface EvtxClearResponse {
+  channel: string;
+  result: EvtxClearStatusResult;
+}
+
 export interface SystemDateTimePreferences {
   datePattern: string;
   timePattern: string;
@@ -1242,6 +1251,27 @@ function decodeEventLogParseResult(
   return result;
 
 }
+function decodeEventLogClearResponse(
+  value: unknown,
+  commandName: string,
+): EvtxClearResponse {
+  const response = decodeRecordResponse<EvtxClearResponse>(value, commandName, {
+    channel: (field) => typeof field === "string",
+    result: isCommandRecord,
+  });
+  const status = response.result.status;
+  if (status === "cleared" || status === "cancelled" || status === "empty") {
+    return response;
+  }
+  if (
+    (status === "denied" || status === "unavailable" || status === "unsupported") &&
+    typeof response.result.detail === "string"
+  ) {
+    return response;
+  }
+  return invalidCommandResponse(commandName);
+}
+
 export async function expandEventLogSources(
   sources: EventLogSourceSelection[],
 ): Promise<EventLogSourceManifest> {
@@ -1256,6 +1286,23 @@ export async function parseEventLogManifest(
 ): Promise<EvtxParseResult> {
   return invokeCommand("evtx_parse_manifest", { manifest });
 }
+
+export async function clearEventLogChannel(
+  channel: string,
+  confirmed: boolean,
+  remoteMachine: string | null,
+): Promise<EvtxClearResponse> {
+  const response = await invokeCommand("evtx_clear_channel", {
+    channel,
+    confirmed,
+    remoteMachine,
+  });
+  if (response.channel !== channel) {
+    return invalidCommandResponse("evtx_clear_channel");
+  }
+  return response;
+}
+
 const DIAGNOSIS_COVERAGE_STATES = new Set([
   "covered",
   "unknown",
@@ -2486,6 +2533,7 @@ const COMMAND_DECODERS = {
   load_markers: decodeMarkerFile,
   evtx_expand_sources: decodeEventLogSourceManifest,
   evtx_parse_manifest: decodeEventLogParseResult,
+  evtx_clear_channel: decodeEventLogClearResponse,
   evtx_diagnose_records: decodeDiagnosisSummary,
   build_timeline_cmd: decodeTimelineBundle,
   inspect_evidence_bundle: (value, commandName) =>

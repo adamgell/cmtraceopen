@@ -72,6 +72,8 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
   const unplacedOmittedCount = unplacedCount - unplacedPreview.length;
   const correlationPreview = correlationEdges.slice(0, UNPLACED_PREVIEW_LIMIT);
   const correlationOmittedCount = correlationEdges.length - correlationPreview.length;
+  const coverageGapPreview = coverageGaps.slice(0, UNPLACED_PREVIEW_LIMIT);
+  const coverageGapOmittedCount = coverageGaps.length - coverageGapPreview.length;
 
   const fontSize = metrics.fontSize;
   const smallFontSize = Math.max(9, fontSize - 3);
@@ -193,11 +195,18 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
               )}
             </div>
           ))}
-          {coverageGaps.map((gap) => (
-            <div key={`${gap.source}-${gap.reason}`} data-testid="correlation-gap">
+          {coverageGapPreview.map((gap, index) => (
+            <div key={`coverage-gap-${index}`} data-testid="correlation-gap">
               coverage: {gap.reason} ({gap.source})
             </div>
           ))}
+          {coverageGapOmittedCount > 0 && (
+            <div>
+              Showing the first {coverageGapPreview.length.toLocaleString()} of{" "}
+              {coverageGaps.length.toLocaleString()} coverage gaps;{" "}
+              {coverageGapOmittedCount.toLocaleString()} omitted.
+            </div>
+          )}
           {correlationOmittedCount > 0 && (
             <div>
               Showing the first {correlationPreview.length.toLocaleString()} of{" "}

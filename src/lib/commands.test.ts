@@ -14,6 +14,7 @@ import {
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   diagnoseEventRecords,
+  clearEventLogChannel,
   openLogFile,
   parseEventLogManifest,
   expandEventLogSources,
@@ -1128,6 +1129,40 @@ describe("event-log manifest commands", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "evtx_parse_manifest", {
       manifest,
     });
+  });
+
+  it("validates a channel-clear reply at the shared command boundary", async () => {
+    const response = {
+      channel: "Application",
+      result: { status: "denied", detail: "administrator access is required" },
+    };
+    invokeMock.mockResolvedValueOnce(response);
+
+    await expect(
+      clearEventLogChannel("Application", true, "lab-host"),
+    ).resolves.toEqual(response);
+    expect(invokeMock).toHaveBeenCalledWith("evtx_clear_channel", {
+      channel: "Application",
+      confirmed: true,
+      remoteMachine: "lab-host",
+    });
+  });
+
+  it.each([
+    [null],
+    [{ channel: "Application" }],
+    [{ channel: "Application", result: { status: "unknown" } }],
+    [{ channel: "Application", result: { status: "denied" } }],
+    [{ channel: "System", result: { status: "cleared" } }],
+    [{ channel: 42, result: { status: "cleared" } }],
+  ])("rejects malformed channel-clear replies (%s)", async (reply) => {
+    invokeMock.mockResolvedValueOnce(reply);
+
+    await expect(
+      clearEventLogChannel("Application", true, null),
+    ).rejects.toThrow(
+      "Command 'evtx_clear_channel' returned an invalid response.",
+    );
   });
 
   const validEventRecord = {

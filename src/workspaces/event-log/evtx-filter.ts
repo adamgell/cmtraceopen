@@ -265,12 +265,14 @@ function searchableValues(
   scope: EvtxQuickFilterScope,
   visibleColumns: readonly EvtxColumnId[] | undefined,
   caseSensitive: boolean,
-  timeZoneMode: EvtxTimeZoneMode
+  timeZoneMode: EvtxTimeZoneMode,
+  discoveredColumns?: readonly EvtxColumnId[]
 ): string[] {
   const columns =
     scope === "visibleColumns" && visibleColumns
       ? visibleColumns
-      : availableColumns(discoverMappedProperties([record])).map((column) => column.id);
+      : discoveredColumns ??
+        availableColumns(discoverMappedProperties([record])).map((column) => column.id);
   const values = columns.map((id) => columnValue(record, id, timeZoneMode));
   if (scope === "allColumns") values.push(...record.eventData.map((field) => field.value));
   return values.map((value) => normalizeText(value, caseSensitive)).filter(Boolean);
@@ -282,7 +284,8 @@ export function matchesQuickFilter(
   quickFilter: EvtxQuickFilter,
   visibleColumns?: readonly EvtxColumnId[],
   timeZoneMode: EvtxTimeZoneMode = "local",
-  parsedEventIdSelectors?: EvtxEventIdSelectorParseResult
+  parsedEventIdSelectors?: EvtxEventIdSelectorParseResult,
+  discoveredColumns?: readonly EvtxColumnId[]
 ): boolean {
   const query = quickFilter.query.trim();
   if (!query) return false;
@@ -299,7 +302,8 @@ export function matchesQuickFilter(
     quickFilter.scope,
     visibleColumns,
     quickFilter.caseSensitive,
-    timeZoneMode
+    timeZoneMode,
+    discoveredColumns
   );
   const normalizedQuery = normalizeText(query, quickFilter.caseSensitive);
   const contains = (term: string) => values.some((value) => value.includes(term));
@@ -312,7 +316,7 @@ export function matchesQuickFilter(
       return words.length > 0 && words.some(contains);
     }
     case "multipleStrings": {
-      const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
+      const strings = queryParts(query, /[,;\r\n]+/, quickFilter.caseSensitive);
       return strings.length > 0 && strings.some(contains);
     }
     case "allWords": {
@@ -320,7 +324,7 @@ export function matchesQuickFilter(
       return words.length > 0 && words.every(contains);
     }
     case "allStrings": {
-      const strings = queryParts(query, /[,;\u000a]+/, quickFilter.caseSensitive);
+      const strings = queryParts(query, /[,;\r\n]+/, quickFilter.caseSensitive);
       return strings.length > 0 && strings.every(contains);
     }
   }
@@ -337,6 +341,7 @@ export function recordMatchesVisibleFilter(
     visibleColumns?: readonly EvtxColumnId[];
     eventIdSelectors?: EvtxEventIdSelectorParseResult;
     quickEventIdSelectors?: EvtxEventIdSelectorParseResult;
+    quickFilterColumns?: readonly EvtxColumnId[];
     timeWindow?: EvtxTimeWindow;
     timeZoneMode?: EvtxTimeZoneMode;
     nowEpoch?: number;
@@ -386,7 +391,8 @@ export function recordMatchesVisibleFilter(
     quickFilter,
     input.visibleColumns,
     input.timeZoneMode,
-    input.quickEventIdSelectors
+    input.quickEventIdSelectors,
+    input.quickFilterColumns
   );
   return quickFilter.action === "hide" ? !matched : matched;
 }
@@ -399,6 +405,12 @@ export function recordMatchesVisibleFilter(
  * worse than no export at all.
  */
 export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
+  const quickFilterColumns =
+    input.quickFilter?.query.trim() &&
+    input.quickFilter.mode !== "eventIds" &&
+    (input.quickFilter.scope === "allColumns" || input.visibleColumns === undefined)
+      ? availableColumns(discoverMappedProperties(input.records)).map((column) => column.id)
+      : undefined;
   const predicateInput = {
     ...input,
     nowEpoch: input.nowEpoch ?? Date.now(),
@@ -410,6 +422,7 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
       input.quickFilter?.mode === "eventIds" && input.quickFilter.query.trim()
         ? parseEventIdSelectors(input.quickFilter.query)
         : undefined,
+    quickFilterColumns,
   };
   return input.records.filter((record) => recordMatchesVisibleFilter(record, predicateInput));
 }
