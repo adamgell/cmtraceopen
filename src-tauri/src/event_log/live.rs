@@ -829,10 +829,12 @@ impl Drop for ActiveTail {
             context.batcher.flush();
         }
         self.context.take();
-        self.session.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        // A polling worker borrows the raw handle owned by this tail. Close the session only after
+        // the stop flag has been observed and the worker has exited.
+        self.session.take();
     }
 }
 #[cfg(target_os = "windows")]
@@ -1076,31 +1078,32 @@ fn start_polling_tail(
     let worker_request = request_id.clone();
     let worker_channel = channel.clone();
     let worker_fallback_gap = fallback_gap.clone();
+    let remote_session = remote_machine
+        .as_deref()
+        .map(open_remote_session)
+        .transpose()?;
+    let worker_session = remote_session
+        .as_ref()
+        .map(|(session, _machine)| session.raw());
+    let worker_source_label = remote_session
+        .as_ref()
+        .map(|(_session, machine)| format!("Remote: {machine}"))
+        .unwrap_or_else(|| "Live".to_string());
     let worker = thread::spawn(move || {
         let mut seen = HashSet::<(String, u64)>::new();
         let mut seen_order = VecDeque::<(String, u64)>::new();
         let mut first_poll = true;
         while !worker_stop.load(Ordering::Acquire) {
-            let outcome = if let Some(machine) = remote_machine.as_deref() {
-                query_remote_channel_streamed(
-                    machine,
-                    &worker_channel,
-                    &filter,
-                    &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
-                    Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| {},
-                    |_| Ok(()),
-                )
-            } else {
-                query_channel_streamed(
-                    &worker_channel,
-                    &filter,
-                    &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
-                    Some(EVENT_FETCH_BATCH as u64),
-                    |_, _| {},
-                    |_| Ok(()),
-                )
-            };
+            let outcome = query_channel_inner(
+                &worker_channel,
+                &filter,
+                &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                Some(EVENT_FETCH_BATCH as u64),
+                worker_session,
+                &worker_source_label,
+                |_, _| {},
+                |_| Ok(()),
+            );
 
             match outcome {
                 Ok(scan) => {
@@ -1206,7 +1209,7 @@ fn start_polling_tail(
                 coverage_gaps,
                 subscription: None,
                 context: None,
-                session: None,
+                session: remote_session.map(|(session, _machine)| session),
                 worker: Some(worker),
             },
         );
