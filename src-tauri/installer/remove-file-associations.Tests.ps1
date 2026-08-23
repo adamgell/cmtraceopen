@@ -29,9 +29,13 @@ namespace CMTraceOpen {
 }
 namespace CMTraceOpen.Tests {
     public sealed class DisposableRegistryKey : IDisposable {
-        public int SubKeyCount { get; set; } = 1;
-        public int ValueCount { get; set; } = 1;
+        public int SubKeyCount { get; set; }
+        public int ValueCount { get; set; }
         public bool IsDisposed { get; private set; }
+        public DisposableRegistryKey() {
+            SubKeyCount = 1;
+            ValueCount = 1;
+        }
         public object GetValue(string name) { return null; }
         public object GetValue(string name, object defaultValue) { return null; }
         public void Dispose() { IsDisposed = true; }
