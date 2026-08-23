@@ -72,6 +72,23 @@ export type EvtxQuickFilterScope = "allColumns" | "visibleColumns";
 
 /** Whether matching records are retained or removed. */
 export type EvtxQuickFilterAction = "show" | "hide";
+
+export const EVTX_QUICK_FILTER_MODES: readonly EvtxQuickFilterMode[] = [
+  "oneString",
+  "multipleWords",
+  "multipleStrings",
+  "allWords",
+  "allStrings",
+  "eventIds",
+];
+export const EVTX_QUICK_FILTER_SCOPES: readonly EvtxQuickFilterScope[] = [
+  "allColumns",
+  "visibleColumns",
+];
+export const EVTX_QUICK_FILTER_ACTIONS: readonly EvtxQuickFilterAction[] = [
+  "show",
+  "hide",
+];
 /** Interactive filter state shared by local evaluation, persistence, and the UI. */
 export interface EvtxQuickFilter {
   mode: EvtxQuickFilterMode;
@@ -126,12 +143,7 @@ export function isWithinTimeWindow(
   return timestampEpoch >= nowEpoch - EVTX_TIME_WINDOW_MS[window];
 }
 
-/**
- * Parses the Event ID filter box into a set, or null when it constrains nothing.
- *
- * Accepts comma or space separated ids and inclusive `low-high` ranges, matching what operators
- * expect from the incumbent tools.
- */
+/** One parsed Event ID or inclusive range from the filter grammar. */
 export interface EvtxEventIdSelector {
   kind: "single" | "range";
   id?: number;
@@ -195,38 +207,10 @@ function eventIdMatchesSelectors(eventId: number, parsed: EvtxEventIdSelectorPar
 
 
 /**
- * Largest unsigned 32-bit Event ID accepted by the Event Log query contract.
- * Range expansion is separately capped below; valid IDs must not be rejected due to a 16-bit
- * assumption.
+ * Largest unsigned 32-bit Event ID accepted by the Event Log query contract. Ranges are matched
+ * without expansion, so valid IDs are not rejected due to a 16-bit assumption.
  */
 const MAX_EVENT_ID = 0xffffffff;
-const MAX_EXPANDED_EVENT_IDS = 65536;
-/** Parses the Event ID filter box into a bounded set for legacy callers. */
-export function parseEventIdFilter(raw: string): Set<number> | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const ids = new Set<number>();
-  for (const token of trimmed.split(/[\s,]+/).filter(Boolean)) {
-    const range = token.match(/^(\d+)-(\d+)$/);
-    if (range) {
-      const low = Number(range[1]);
-      const high = Number(range[2]);
-      const [from, to] = low <= high ? [low, high] : [high, low];
-      if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to)) continue;
-      const boundedFrom = Math.max(0, from);
-      const boundedTo = Math.min(to, MAX_EXPANDED_EVENT_IDS - 1);
-      if (boundedFrom <= boundedTo) {
-        for (let id = boundedFrom; id <= boundedTo; id += 1) ids.add(id);
-      }
-      continue;
-    }
-    if (!/^\d+$/.test(token)) continue;
-    const single = Number(token);
-    if (Number.isSafeInteger(single) && single <= MAX_EVENT_ID) ids.add(single);
-  }
-  return ids;
-}
-
 /** The subset of store state that decides which records are on screen. */
 export interface VisibleRecordsInput {
   records: EvtxRecord[];
@@ -244,8 +228,6 @@ export interface VisibleRecordsInput {
   /** Injectable clock for deterministic boundary tests; production uses Date.now(). */
   nowEpoch?: number;
   /** Parsed once by selectVisibleRecords for the whole visible-record pass. */
-  eventIdSet?: Set<number> | null;
-  /** Parsed once by selectVisibleRecords for bounded, non-expanding range matching. */
   eventIdSelectors?: EvtxEventIdSelectorParseResult;
 }
 
@@ -345,7 +327,6 @@ export function recordMatchesVisibleFilter(
     timeWindow?: EvtxTimeWindow;
     timeZoneMode?: EvtxTimeZoneMode;
     nowEpoch?: number;
-    eventIdSet?: Set<number> | null;
   }
 ): boolean {
   if (!input.selectedChannels.has(record.channel)) return false;
@@ -358,10 +339,7 @@ export function recordMatchesVisibleFilter(
   if (!input.filterLevels.has(record.level)) return false;
   if (input.eventIdSelectors) {
     if (!eventIdMatchesSelectors(record.eventId, input.eventIdSelectors)) return false;
-  } else if (input.eventIdSet && !input.eventIdSet.has(record.eventId)) {
-    return false;
   } else if (
-    !input.eventIdSet &&
     input.filterEventIds.trim() &&
     !eventIdMatchesSelectors(record.eventId, parseEventIdSelectors(input.filterEventIds))
   ) {
@@ -384,7 +362,7 @@ export function recordMatchesVisibleFilter(
       input.quickEventIdSelectors.invalid ||
       input.quickEventIdSelectors.selectors.length === 0)
   ) {
-    return false;
+    return quickFilter.action === "hide";
   }
   const matched = matchesQuickFilter(
     record,
@@ -414,7 +392,6 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
   const predicateInput = {
     ...input,
     nowEpoch: input.nowEpoch ?? Date.now(),
-    eventIdSet: undefined,
     eventIdSelectors: input.filterEventIds.trim()
       ? parseEventIdSelectors(input.filterEventIds)
       : undefined,

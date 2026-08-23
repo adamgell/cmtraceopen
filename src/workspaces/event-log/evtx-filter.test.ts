@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseEventIdFilter, selectVisibleRecords, sortRecords, isWithinTimeWindow } from "./evtx-filter";
+import {
+  isWithinTimeWindow,
+  parseEventIdSelectors,
+  selectVisibleRecords,
+  sortRecords,
+  type EvtxQuickFilter,
+} from "./evtx-filter";
 import * as evtxColumns from "./evtx-columns";
 import type { EvtxRecord } from "./types";
 
@@ -20,7 +26,7 @@ const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
   ...overrides,
 });
 
-const quick = (overrides: Partial<import("./evtx-filter").EvtxQuickFilter> = {}): import("./evtx-filter").EvtxQuickFilter => ({
+const quick = (overrides: Partial<EvtxQuickFilter> = {}): EvtxQuickFilter => ({
   mode: "oneString",
   query: "",
   scope: "allColumns",
@@ -31,7 +37,7 @@ const quick = (overrides: Partial<import("./evtx-filter").EvtxQuickFilter> = {})
 });
 
 const visible = (
-  quickFilter: import("./evtx-filter").EvtxQuickFilter,
+  quickFilter: EvtxQuickFilter,
   records: EvtxRecord[] = [record()]
 ) =>
   selectVisibleRecords({
@@ -43,42 +49,29 @@ const visible = (
     quickFilter,
     visibleColumns: ["message"],
   });
-describe("parseEventIdFilter", () => {
-  it("returns null when the box constrains nothing", () => {
-    expect(parseEventIdFilter("")).toBeNull();
-    expect(parseEventIdFilter("   ")).toBeNull();
+
+describe("Event ID selectors", () => {
+  it("returns no selectors for an empty filter", () => {
+    expect(parseEventIdSelectors("   ")).toEqual({ selectors: [], invalid: false });
   });
 
-  it("parses a comma separated list", () => {
-    expect(parseEventIdFilter("4624,4625")).toEqual(new Set([4624, 4625]));
+  it("parses singles and normalized ranges without expanding them", () => {
+    expect(parseEventIdSelectors("1, 8-5 4294967295")).toEqual({
+      selectors: [
+        { kind: "single", id: 1 },
+        { kind: "range", low: 5, high: 8 },
+        { kind: "single", id: 4294967295 },
+      ],
+      invalid: false,
+    });
   });
 
-  it("tolerates spaces as separators and around commas", () => {
-    expect(parseEventIdFilter("4624 4625")).toEqual(new Set([4624, 4625]));
-    expect(parseEventIdFilter(" 4624 , 4625 ")).toEqual(new Set([4624, 4625]));
-  });
-
-  it("expands an inclusive range", () => {
-    expect(parseEventIdFilter("5-8")).toEqual(new Set([5, 6, 7, 8]));
-  });
-
-  it("normalizes a reversed range rather than yielding nothing", () => {
-    expect(parseEventIdFilter("8-5")).toEqual(new Set([5, 6, 7, 8]));
-  });
-
-  it("mixes singles and ranges", () => {
-    expect(parseEventIdFilter("1, 4-6, 9")).toEqual(new Set([1, 4, 5, 6, 9]));
-  });
-
-  it("ignores tokens that are not ids instead of failing the whole filter", () => {
-    // A half-typed filter should narrow by what is parseable, not silently match everything.
-    expect(parseEventIdFilter("4624, abc")).toEqual(new Set([4624]));
-  });
-
-  it("returns an empty set when a nonempty selector has no valid IDs", () => {
-    expect(parseEventIdFilter("abc, def")).toEqual(new Set());
+  it("marks the whole selector invalid when any token is malformed or out of range", () => {
+    expect(parseEventIdSelectors("4624,not-an-id").invalid).toBe(true);
+    expect(parseEventIdSelectors("4294967296").invalid).toBe(true);
   });
 });
+
 describe("quick filter modes", () => {
   it("matches one string as a single substring", () => {
     expect(visible(quick({ query: "Boot completed" }))).toHaveLength(1);
@@ -189,11 +182,11 @@ describe("quick filter semantics", () => {
     expect(visible(quick({ query: "Other", action: "hide" }))).toHaveLength(1);
   });
 
-  it("does not broaden invalid Event ID quick filters under show or hide", () => {
+  it("treats an invalid Event ID query as matching nothing for either action", () => {
     expect(visible(quick({ mode: "eventIds", query: "not-an-id" }))).toHaveLength(0);
     expect(
       visible(quick({ mode: "eventIds", query: "99999999999", action: "hide" }))
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it("does not constrain an empty quick filter", () => {
@@ -204,7 +197,7 @@ describe("quick filter semantics", () => {
   });
 });
 describe("ordinary Event ID invalid input", () => {
-  it.each(["70000", "-1", "not-an-id"])("matches no records for %s", (filterEventIds) => {
+  it.each(["4294967296", "-1", "not-an-id"])("matches no records for %s", (filterEventIds) => {
     expect(
       selectVisibleRecords({
         records: [record()],
@@ -230,42 +223,7 @@ it("excludes records outside the selected level set", () => {
 
 
 
-describe("event id range bounds", () => {
-  it("does not expand past the 16-bit event id space", () => {
-    // Typed on every keystroke. Unbounded, "4624-46240000" builds a set of tens of millions on the
-    // UI thread and the tab stops responding before the operator finishes typing.
-    const started = Date.now();
-    const ids = parseEventIdFilter("4624-46240000");
-    expect(Date.now() - started).toBeLessThan(1000);
-    expect(ids).not.toBeNull();
-    expect(ids!.size).toBeLessThanOrEqual(65536);
-    expect(ids!.has(4624)).toBe(true);
-    expect(ids!.has(65535)).toBe(true);
-    expect(ids!.has(65536)).toBe(false);
-  });
-
-  it("clamps the first value beyond the bounded range", () => {
-    const ids = parseEventIdFilter("1-65536");
-    expect(ids?.size).toBe(65535);
-    expect(ids?.has(1)).toBe(true);
-    expect(ids?.has(65535)).toBe(true);
-    expect(ids?.has(65536)).toBe(false);
-  });
-
-  it("preserves the complete 16-bit event ID space", () => {
-    expect(parseEventIdFilter("0-65535")?.size).toBe(65536);
-    expect(parseEventIdFilter("1-65535,0")?.size).toBe(65536);
-  });
-
-  it("yields an empty set for a range entirely above the id space", () => {
-    expect(parseEventIdFilter("100000-200000")).toEqual(new Set());
-  });
-
-  it("still expands an ordinary range", () => {
-    const ids = parseEventIdFilter("4624-4626");
-    expect([...ids!].sort((a, b) => a - b)).toEqual([4624, 4625, 4626]);
-  });
-
+describe("event id range matching", () => {
   it("handles a large Event ID range across many records in one visible pass", () => {
     const records = Array.from({ length: 5000 }, (_, index) =>
       record({ eventId: index % 65536 })
@@ -311,9 +269,9 @@ describe("time-window boundaries", () => {
 describe("sortRecords", () => {
   it("preserves the active timeline order for exports", () => {
     const records = [
-      { eventId: 2, timestampEpoch: 20, level: "Information", provider: "P", channel: "C" },
-      { eventId: 1, timestampEpoch: 10, level: "Error", provider: "P", channel: "C" },
-    ] as EvtxRecord[];
+      record({ eventId: 2, timestampEpoch: 20, level: "Information", provider: "P", channel: "C" }),
+      record({ eventId: 1, timestampEpoch: 10, level: "Error", provider: "P", channel: "C" }),
+    ];
     expect(sortRecords(records, "time", "asc").map((record) => record.eventId)).toEqual([1, 2]);
     expect(sortRecords(records, "time", "desc").map((record) => record.eventId)).toEqual([2, 1]);
   });

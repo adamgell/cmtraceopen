@@ -13,6 +13,9 @@ import {
   selectVisibleRecords,
   sortRecords,
   EVTX_GROUP_LABELS,
+  EVTX_QUICK_FILTER_ACTIONS,
+  EVTX_QUICK_FILTER_MODES,
+  EVTX_QUICK_FILTER_SCOPES,
   type EvtxGroupField,
   type EvtxQuickFilterMode,
   type EvtxQuickFilterScope,
@@ -81,14 +84,6 @@ const QUICK_FILTER_MODE_LABELS: Record<EvtxQuickFilterMode, string> = {
   allStrings: "All strings",
   eventIds: "Event IDs",
 };
-const QUICK_FILTER_MODES: EvtxQuickFilterMode[] = [
-  "oneString",
-  "multipleWords",
-  "multipleStrings",
-  "allWords",
-  "allStrings",
-  "eventIds",
-];
 const QUICK_FILTER_SCOPE_LABELS: Record<EvtxQuickFilterScope, string> = {
   allColumns: "All columns",
   visibleColumns: "Visible columns",
@@ -573,7 +568,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           }
         }}
       >
-        {QUICK_FILTER_MODES.map((mode) => (
+        {EVTX_QUICK_FILTER_MODES.map((mode) => (
           <Option
             key={mode}
             value={mode}
@@ -599,7 +594,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           }
         }}
       >
-          {(Object.keys(QUICK_FILTER_SCOPE_LABELS) as EvtxQuickFilterScope[]).map((scope) => (
+          {EVTX_QUICK_FILTER_SCOPES.map((scope) => (
             <Option
               key={scope}
               value={scope}
@@ -625,7 +620,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           }
         }}
       >
-          {(Object.keys(QUICK_FILTER_ACTION_LABELS) as EvtxQuickFilterAction[]).map((action) => (
+          {EVTX_QUICK_FILTER_ACTIONS.map((action) => (
             <Option
               key={action}
               value={action}

@@ -81,7 +81,7 @@ describe("sanitizeCriteria", () => {
   it("tolerates a completely wrong shape", () => {
     expect(sanitizeCriteria(null).beforeLoad.eventIds).toBe("");
     expect(sanitizeCriteria(42).onLoad.search).toBe("");
-    expect(sanitizeCriteria(["a"]).beforeLoad.levels).toHaveLength(5);
+    expect(sanitizeCriteria(["a"]).beforeLoad.levels).toEqual(ALL_LEVELS);
   });
 });
 

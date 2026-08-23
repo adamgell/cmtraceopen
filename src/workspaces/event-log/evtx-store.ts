@@ -32,8 +32,8 @@ import {
 } from "../../lib/commands";
 import { assertUnifiedTimelineShape, type UnifiedTimeline } from "./unified-timeline";
 
-// Re-exported so callers have one import site; the implementations live in a Tauri-free module.
-export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
+// Re-exported so callers have one import site; the implementation lives in a Tauri-free module.
+export { selectVisibleRecords } from "./evtx-filter";
 import {
   DEFAULT_QUICK_FILTER,
   parseEventIdSelectors,

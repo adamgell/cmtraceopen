@@ -1,26 +1,12 @@
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
 import type { EvtxColumnId } from "./evtx-columns";
-import * as filterModule from "./evtx-filter";
+import { matchesQuickFilter, type EvtxQuickFilter } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 
 const saveQueues = new Map<string, Promise<void>>();
-/** The quick-filter shape is repeated here so this lane can be applied beside the filter lane. */
-export interface EvtxQuickFilterLike {
-  mode:
-    | "oneString"
-    | "multipleWords"
-    | "multipleStrings"
-    | "allWords"
-    | "allStrings"
-    | "eventIds";
-  query: string;
-  scope: "allColumns" | "visibleColumns";
-  action: "show" | "hide";
-  caseSensitive: boolean;
-  highlight: boolean;
-}
+export type EvtxQuickFilterLike = EvtxQuickFilter;
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilterLike = {
   mode: "oneString",
@@ -277,29 +263,14 @@ export function toggleEvtxBookmark(record: EvtxRecord): void {
   persistEvtxMarkers(record.sourceLabel);
 }
 
-/**
- * Use Task 5's centralized matcher for both visibility and row highlighting. Returning false when
- * the dependent export is absent is deliberately fail-closed; this lane must not invent a second
- * matching grammar or broaden the visible set during branch integration.
- */
+/** Use the centralized matcher for both visibility and row highlighting. */
 export function matchesEvtxQuickFilter(
   record: EvtxRecord,
   quickFilter: EvtxQuickFilterLike,
   visibleColumns?: readonly EvtxColumnId[],
   timeZoneMode: EvtxTimeZoneMode = "local",
 ): boolean {
-  const centralized = (
-    filterModule as typeof filterModule & {
-      matchesQuickFilter?: (
-        record: EvtxRecord,
-        quickFilter: EvtxQuickFilterLike,
-        visibleColumns?: readonly EvtxColumnId[],
-        timeZoneMode?: EvtxTimeZoneMode,
-      ) => boolean;
-    }
-  ).matchesQuickFilter;
-  if (!centralized) return false;
-  return centralized(record, quickFilter, visibleColumns, timeZoneMode);
+  return matchesQuickFilter(record, quickFilter, visibleColumns, timeZoneMode);
 }
 
 /** Select the terms rendered as <mark> nodes; row visibility still comes from the centralized matcher. */

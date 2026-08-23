@@ -9,7 +9,6 @@ import {
   isEvtxMarkerAddressable,
   evtxQuickFilterTerms,
   getEvtxMarker,
-  toggleEvtxBookmark,
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
 import { useMarkerStore } from "../../stores/marker-store";
