@@ -113,7 +113,7 @@ Both editions read the same log formats and share the same viewer, so a log you 
 - **Text highlighting** — configurable keyword highlighting
 - **Error code lookup** — 700+ embedded Windows, Windows Update, BITS, ConfigMgr, Intune, MSI, and PSADT error codes
 - **Flexible input** — open files, folders, drag and drop, or use built-in source presets
-- **File association** — set as default `.log` file handler on Windows
+- **File association** — register as an available Windows log-file handler and open Default Apps to choose it
 
 ### Intune Diagnostics Workspace
 
