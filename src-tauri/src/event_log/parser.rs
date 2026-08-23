@@ -1478,6 +1478,11 @@ fn source_prefixed_message(source_path: &str, message: String) -> String {
     }
 }
 fn bound_coverage_gaps(gaps: &mut Vec<EvtxCoverageGap>, source: &str) {
+    let mut provider_reasons = BTreeSet::new();
+    gaps.retain(|gap| {
+        gap.kind != EvtxCoverageGapKind::Provider
+            || provider_reasons.insert((gap.source.clone(), gap.reason.clone()))
+    });
     if gaps.len() <= MAX_COVERAGE_GAPS_PER_FILE {
         return;
     }
@@ -2269,6 +2274,7 @@ where
     let mut parse_errors = 0u32;
     let mut messages = Vec::new();
     let mut coverage_gaps = Vec::new();
+    let mut provider_gap_reasons = BTreeSet::new();
     let mut truncated = false;
 
     // Locked once for the whole file rather than per record. A hundred thousand lock round trips
@@ -2388,8 +2394,10 @@ where
             &fields,
         );
         if let Some(gap) = provider_gap {
-            messages.push(format_coverage_gap(&gap));
-            coverage_gaps.push(gap);
+            if provider_gap_reasons.insert(gap.reason.clone()) {
+                messages.push(format_coverage_gap(&gap));
+                coverage_gaps.push(gap);
+            }
         }
 
         let mapped = super::maps::apply_registered(&maps, &channel, &provider, event_id, &parsed);
@@ -3203,6 +3211,46 @@ mod tests {
         assert!(gaps
             .last()
             .is_some_and(|gap| gap.reason.contains("additional")));
+    }
+
+    #[test]
+    fn repeated_provider_gaps_do_not_hide_later_recovery_diagnostics() {
+        let provider_reason = "provider description for Example event 7 is incomplete";
+        let mut gaps = (0..MAX_COVERAGE_GAPS_PER_FILE)
+            .map(|record_id| {
+                let mut gap = EvtxCoverageGap::new(
+                    "dirty.evtx",
+                    EvtxCoverageGapKind::Provider,
+                    provider_reason,
+                );
+                gap.set_event_record_id(record_id as u64);
+                gap
+            })
+            .collect::<Vec<_>>();
+        let mut distinct_provider_gap = EvtxCoverageGap::new(
+            "dirty.evtx",
+            EvtxCoverageGapKind::Provider,
+            "provider description for Other event 8 is incomplete",
+        );
+        distinct_provider_gap.set_event_record_id(u64::MAX - 1);
+        gaps.push(distinct_provider_gap);
+        gaps.push(coverage_gap_for_record_xml(
+            "dirty.evtx",
+            u64::MAX,
+            "damaged XML",
+        ));
+
+        bound_coverage_gaps(&mut gaps, "dirty.evtx");
+
+        assert_eq!(gaps.len(), 3);
+        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Provider);
+        assert_eq!(gaps[0].event_record_id, Some(0));
+        assert_eq!(gaps[1].kind, EvtxCoverageGapKind::Provider);
+        assert_eq!(gaps[1].event_record_id, Some(u64::MAX - 1));
+        assert_eq!(gaps[2].kind, EvtxCoverageGapKind::Xml);
+        assert!(!gaps
+            .iter()
+            .any(|gap| gap.kind == EvtxCoverageGapKind::Limit));
     }
 
     #[test]
