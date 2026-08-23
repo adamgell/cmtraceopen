@@ -1730,7 +1730,7 @@ pub fn adapt_timeline_edge(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosisOverview {
     /// Stable, non-causal outcome selected from finding precedence.
@@ -1740,6 +1740,19 @@ pub struct DiagnosisOverview {
     pub coverage_gap_count: usize,
     pub evidence_count: usize,
     pub correlation_count: usize,
+}
+
+impl Default for DiagnosisOverview {
+    fn default() -> Self {
+        Self {
+            outcome: "noFindings".to_string(),
+            headline: "No actionable diagnosis was produced.".to_string(),
+            finding_count: 0,
+            coverage_gap_count: 0,
+            evidence_count: 0,
+            correlation_count: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2095,6 +2108,13 @@ mod tests {
         EventLogChannel, EventLogEntry, EventLogSeverity, FindingClass,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn default_overview_uses_a_valid_no_findings_outcome() {
+        let overview = super::DiagnosisOverview::default();
+        assert_eq!(overview.outcome, "noFindings");
+        assert_eq!(overview.headline, "No actionable diagnosis was produced.");
+    }
 
     #[test]
     fn malformed_token_is_visible_without_normalized_value() {
