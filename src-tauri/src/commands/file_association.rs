@@ -418,6 +418,21 @@ fn launch_windows_default_apps(
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
+async fn run_file_association_operation<F, R>(operation: F) -> Result<R, crate::error::AppError>
+where
+    F: FnOnce() -> Result<R, crate::error::AppError> + Send + 'static,
+    R: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "FileAssociationRegistrationTaskFailed: {error}"
+            ))
+        })?
+}
+
 #[tauri::command]
 pub fn get_file_association_prompt_status(
     app: AppHandle,
@@ -449,11 +464,14 @@ pub fn get_file_association_prompt_status(
 }
 
 #[tauri::command]
-pub fn register_log_file_handler(app: AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn register_log_file_handler(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
         let identity = file_association_identity(app.config().product_name.as_deref())?;
-        register_log_file_handler_for_current_user(&identity)
+        run_file_association_operation(move || {
+            register_log_file_handler_for_current_user(&identity)
+        })
+        .await
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -505,8 +523,19 @@ mod tests {
 
     use super::{
         file_association_identity, has_visible_application_capabilities, optional_registry_entry,
-        LOG_FILE_EXTENSIONS,
+        run_file_association_operation, LOG_FILE_EXTENSIONS,
     };
+
+    #[test]
+    fn registration_operations_run_on_the_blocking_pool() {
+        let caller = std::thread::current().id();
+        let worker = tauri::async_runtime::block_on(run_file_association_operation(|| {
+            Ok(std::thread::current().id())
+        }))
+        .expect("blocking registration operation completes");
+
+        assert_ne!(worker, caller, "registry I/O must leave the caller thread");
+    }
 
     #[test]
     fn handler_identity_is_bounded_and_distinct_for_every_shipped_product() {
