@@ -29,14 +29,11 @@ export function EvtxCoverageBanner() {
     () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
     [legacyGaps, tailGaps, structuredGaps]
   );
-  const displayedGaps = useMemo(() => {
-    if (gaps.length <= MAX_DISPLAYED_COVERAGE_GAPS) return gaps;
-    const omitted = gaps.length - (MAX_DISPLAYED_COVERAGE_GAPS - 1);
-    return [
-      ...gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS - 1),
-      `<coverage gaps: ${omitted} omitted by display limit>`,
-    ];
-  }, [gaps]);
+  const displayedGaps = useMemo(
+    () => gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS),
+    [gaps],
+  );
+  const omittedGaps = gaps.length - displayedGaps.length;
   const displayedArchiveMembers = useMemo(
     () => archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS),
     [archiveMembers]
@@ -108,6 +105,9 @@ export function EvtxCoverageBanner() {
                   </li>
                 ))}
               </ul>
+              {omittedGaps > 0 && (
+                <div>{`<coverage gaps: ${omittedGaps} omitted by display limit>`}</div>
+              )}
               {archiveMemberMessages.length > 0 && (
                 <details>
                   <summary>Archive member provenance ({archiveMembers.length})</summary>
