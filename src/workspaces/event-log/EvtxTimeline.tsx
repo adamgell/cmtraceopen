@@ -396,12 +396,14 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
   return (
     <div
       ref={parentRef}
-      // A flat list is a listbox; once grouped it is a tree, because a group header is not an
-      // option and a listbox may only own option and group children. Declaring the wrong one let
-      role={groupBy.length > 0 ? "tree" : "listbox"}
+      // Rows contain real marker buttons. A grid permits those controls inside a gridcell while a
+      // treegrid also carries the grouped rows' hierarchy and disclosure state.
+      role={groupBy.length > 0 ? "treegrid" : "grid"}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
+      aria-rowcount={rows.length}
+      aria-colcount={1}
       style={{
         overflowY: "auto",
         height: "100%",
@@ -436,7 +438,8 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                   key={uiRowKeys[virtualRow.index] ?? virtualRow.key}
                   ref={measureRow}
                   data-index={virtualRow.index}
-                  role="treeitem"
+                  role="row"
+                  aria-rowindex={virtualRow.index + 1}
                   aria-level={row.depth + 1}
                   // Focusable and activated by keyboard. It was reachable only by pointer, so a
                   // keyboard user could not expand or collapse a group at all.
@@ -461,7 +464,6 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                     width: "100%",
                     display: "flex",
                     alignItems: "center",
-                    gap: "6px",
                     paddingLeft: `${8 + row.depth * 16}px`,
                     height: `${metrics.rowHeight}px`,
                     boxSizing: "border-box",
@@ -474,9 +476,21 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                   }}
                   title={`${row.count} events`}
                 >
-                  <span style={{ width: "10px" }}>{row.collapsed ? "\u25B8" : "\u25BE"}</span>
-                  <span>{row.label}</span>
-                  <span style={{ color: tokens.colorNeutralForeground4 }}>({row.count})</span>
+                  <div
+                    role="gridcell"
+                    aria-colindex={1}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      width: "100%",
+                      minWidth: 0,
+                    }}
+                  >
+                    <span style={{ width: "10px" }}>{row.collapsed ? "\u25B8" : "\u25BE"}</span>
+                    <span>{row.label}</span>
+                    <span style={{ color: tokens.colorNeutralForeground4 }}>({row.count})</span>
+                  </div>
                 </div>
               );
             }

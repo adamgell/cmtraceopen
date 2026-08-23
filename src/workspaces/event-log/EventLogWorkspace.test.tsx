@@ -17,10 +17,8 @@ const virtualizerState = vi.hoisted(() => ({
   visibleCount: null as number | null,
   recalculate: () => undefined,
   measureElementSize: (element: HTMLElement) => {
-    const hasLevelBadge = Array.from(element.children).some(
-      (child) => (child as HTMLElement).hasAttribute("data-evtx-level-badge"),
-    );
-    return element.getAttribute("role") === "treeitem" &&
+    const hasLevelBadge = element.querySelector("[data-evtx-level-badge]") !== null;
+    return element.getAttribute("role") === "row" &&
       !element.hasAttribute("data-evtx-marker-key")
       ? Number.parseFloat(element.style.height)
       : Number.parseFloat(element.style.lineHeight) +
@@ -214,7 +212,7 @@ function seedEventLog() {
   });
 }
 
-function recordTreeItems(root: HTMLElement): HTMLElement[] {
+function recordGridRows(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>("[data-evtx-marker-key]"));
 }
 describe("event-viewer shared font metrics", () => {
@@ -237,6 +235,53 @@ describe("event-viewer shared font metrics", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("uses valid grid ownership for flat and grouped rows with interactive marker controls", () => {
+    seedEventLog();
+    useEvtxStore.setState({ groupBy: ["level"] });
+
+    const grouped = render(<EvtxTimeline />);
+    const treegrid = grouped.getByRole("treegrid", {
+      name: "Event log timeline - 1 records",
+    });
+    expect(treegrid).toHaveAttribute("aria-rowcount", "2");
+    expect(treegrid).toHaveAttribute("aria-colcount", "1");
+
+    const [groupRow, recordRow] = grouped.getAllByRole("row");
+    const [groupCell, recordCell] = grouped.getAllByRole("gridcell");
+    expect(groupRow).toHaveAttribute("aria-rowindex", "1");
+    expect(groupRow).toHaveAttribute("aria-level", "1");
+    expect(groupRow).toHaveAttribute("aria-expanded", "true");
+    expect(groupRow.firstElementChild).toBe(groupCell);
+    expect(groupCell).toHaveAttribute("aria-colindex", "1");
+    expect(recordRow).toHaveAttribute("aria-rowindex", "2");
+    expect(recordRow).toHaveAttribute("aria-level", "2");
+    expect(recordRow).toHaveAttribute("aria-selected", "true");
+    expect(recordRow.firstElementChild).toBe(recordCell);
+    expect(recordCell).toHaveAttribute("aria-colindex", "1");
+    expect(recordCell).toContainElement(grouped.getByRole("button", { name: "Tag event" }));
+    expect(recordCell).toContainElement(
+      grouped.getByRole("button", { name: "Bookmark event" }),
+    );
+
+    fireEvent.click(groupRow);
+    expect(groupRow).toHaveAttribute("aria-expanded", "false");
+    expect(treegrid).toHaveAttribute("aria-rowcount", "1");
+    grouped.unmount();
+
+    useEvtxStore.setState({ groupBy: [], selectedRecordId: RECORD.id });
+    const flat = render(<EvtxTimeline />);
+    const grid = flat.getByRole("grid", {
+      name: "Event log timeline - 1 records",
+    });
+    const flatRow = flat.getByRole("row");
+    expect(grid).toHaveAttribute("aria-rowcount", "1");
+    expect(grid).toHaveAttribute("aria-colcount", "1");
+    expect(flatRow).toHaveAttribute("aria-rowindex", "1");
+    expect(flatRow).toHaveAttribute("aria-selected", "true");
+    expect(flatRow).not.toHaveAttribute("aria-level");
+    expect(flatRow.firstElementChild).toHaveAttribute("role", "gridcell");
   });
 
   it("keeps row, virtualizer, pickers, filter, and detail metrics aligned at persisted limits", () => {
@@ -278,7 +323,7 @@ describe("event-viewer shared font metrics", () => {
     );
     filter.unmount();
     const timeline = render(<EvtxTimeline />);
-    const [groupRow, recordRow] = screen.getAllByRole("treeitem");
+    const [groupRow, recordRow] = screen.getAllByRole("row");
     expect(recordRow.style.fontSize).toBe(`${smallList.fontSize}px`);
     expect(recordRow.style.lineHeight).toBe(`${smallList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRow);
@@ -345,7 +390,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.measured.length = 0;
     virtualizerState.items.length = 0;
     const timelineLarge = render(<EvtxTimeline />);
-    const [, recordRowLarge] = screen.getAllByRole("treeitem");
+    const [, recordRowLarge] = screen.getAllByRole("row");
     expect(recordRowLarge.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.measured).toContain(recordRowLarge);
     expect(virtualizerState.items[1]).toMatchObject({
@@ -353,7 +398,7 @@ describe("event-viewer shared font metrics", () => {
       size: largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET,
       start: largeList.rowHeight,
     });
-    const groupRowLarge = screen.getAllByRole("treeitem")[0];
+    const groupRowLarge = screen.getAllByRole("row")[0];
     expect(virtualizerState.totalSize).toBe(
       largeList.rowHeight + largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET
     );
@@ -398,7 +443,7 @@ describe("event-viewer shared font metrics", () => {
     const filter = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     const filterButton = filter.getByRole("button", { name: "Toggle Critical events" });
     const timeline = render(<EvtxTimeline />);
-    const recordRow = recordTreeItems(timeline.container)[0];
+    const recordRow = recordGridRows(timeline.container)[0];
     const initialMeasureCalls = virtualizerState.measureCalls;
     const smallList = getLogListMetrics(MIN_LOG_LIST_FONT_SIZE);
     expect(virtualizerState.initialItems[1].size).toBe(
@@ -424,7 +469,7 @@ describe("event-viewer shared font metrics", () => {
     expect(channelRow.style.height).toBe(`${largeList.rowHeight}px`);
     expect(filter.getByRole("button", { name: "Toggle Critical events" })).toBe(filterButton);
     expect(filterButton.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE - 1}px`);
-    expect(recordTreeItems(timeline.container)[0]).toBe(recordRow);
+    expect(recordGridRows(timeline.container)[0]).toBe(recordRow);
     expect(recordRow.style.fontSize).toBe(`${MAX_LOG_LIST_FONT_SIZE}px`);
     expect(recordRow.style.lineHeight).toBe(`${largeList.rowLineHeight}px`);
     expect(virtualizerState.resizedSizes.get(0)).toBe(largeList.rowHeight);
@@ -449,7 +494,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    expect(recordTreeItems(timeline.container)).toHaveLength(1);
+    expect(recordGridRows(timeline.container)).toHaveLength(1);
     const initialResizeItemCalls = virtualizerState.resizeItemCalls;
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     virtualizerState.resizedSizes.clear();
@@ -485,12 +530,12 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    const recordRow = recordTreeItems(timeline.container)[0];
+    const recordRow = recordGridRows(timeline.container)[0];
     act(() => {
       useEvtxStore.setState({ groupBy: ["level"] });
     });
-    expect(recordTreeItems(timeline.container)[0]).toBe(recordRow);
-    expect(recordRow.getAttribute("role")).toBe("treeitem");
+    expect(recordGridRows(timeline.container)[0]).toBe(recordRow);
+    expect(recordRow.getAttribute("role")).toBe("row");
 
     setListFontSize(MAX_LOG_LIST_FONT_SIZE);
     const largeList = getLogListMetrics(MAX_LOG_LIST_FONT_SIZE);
@@ -510,7 +555,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    expect(timeline.getAllByRole("option")).toHaveLength(2);
+    expect(timeline.getAllByRole("row")).toHaveLength(2);
     expect(virtualizerState.measuredSizes.has(1)).toBe(true);
     const initialCacheResetCalls = virtualizerState.cacheResetCalls;
 
@@ -540,7 +585,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    const row = timeline.getByRole("option");
+    const row = timeline.getByRole("row");
     Object.defineProperty(row, "getBoundingClientRect", {
       configurable: true,
       value: () => ({ height: 5 }),
@@ -563,7 +608,7 @@ describe("event-viewer shared font metrics", () => {
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
 
     const timeline = render(<EvtxTimeline />);
-    expect(recordTreeItems(timeline.container)).toHaveLength(1);
+    expect(recordGridRows(timeline.container)).toHaveLength(1);
     expect(virtualizerState.initialItems[1].size).toBe(
       getLogListMetrics(MIN_LOG_LIST_FONT_SIZE).rowLineHeight + LEVEL_BADGE_ABSENT_OFFSET
     );
@@ -669,7 +714,7 @@ describe("EventLogWorkspace fixtures", () => {
   it("keeps a later source load error visible while prior events remain loaded", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
-    expect(recordTreeItems(document.body)).toHaveLength(1);
+    expect(recordGridRows(document.body)).toHaveLength(1);
 
     const message =
       "No .evtx files were found. Source diagnostics: C:/protected/Security.evtx: Access is denied";
@@ -678,7 +723,7 @@ describe("EventLogWorkspace fixtures", () => {
     });
 
     expect(screen.getByText(message)).toHaveAttribute("role", "alert");
-    expect(recordTreeItems(document.body)).toHaveLength(1);
+    expect(recordGridRows(document.body)).toHaveLength(1);
   });
 
   it("offers CSV, TSV, JSON, and Event XML export of visible events", () => {
@@ -744,14 +789,14 @@ describe("EventLogWorkspace fixtures", () => {
         timeWindow: "1h",
       });
       render(<EventLogWorkspace />);
-      expect(recordTreeItems(document.body).length).toBeGreaterThan(0);
+      expect(recordGridRows(document.body).length).toBeGreaterThan(0);
 
       await act(async () => {
         vi.advanceTimersByTime(30_000);
         await Promise.resolve();
       });
 
-      expect(recordTreeItems(document.body)).toHaveLength(0);
+      expect(recordGridRows(document.body)).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -796,7 +841,7 @@ describe("EventLogWorkspace fixtures", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
 
-    const eventRow = recordTreeItems(document.body)[0];
+    const eventRow = recordGridRows(document.body)[0];
     expect(eventRow).toBeDefined();
     fireEvent.click(eventRow!);
 

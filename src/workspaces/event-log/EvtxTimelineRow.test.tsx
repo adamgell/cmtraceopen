@@ -96,8 +96,11 @@ describe("EvtxTimelineRow triage state", () => {
     });
 
     expect(screen.getAllByLabelText("Quick-filter match").length).toBeGreaterThan(0);
-    expect(screen.getByRole("option")).toHaveAttribute("data-quick-filter-match", "true");
-    expect(screen.getByRole("option")).toHaveAttribute("aria-description", expect.stringContaining("Quick-filter match"));
+    expect(screen.getByRole("row")).toHaveAttribute("data-quick-filter-match", "true");
+    expect(screen.getByRole("row")).toHaveAttribute(
+      "aria-description",
+      expect.stringContaining("Quick-filter match"),
+    );
     expect(screen.getByText("Match")).toBeInTheDocument();
   });
 
@@ -106,11 +109,15 @@ describe("EvtxTimelineRow triage state", () => {
     const onBookmark = vi.fn();
     renderRow({ marker: tagged, isSelected: true, onTag, onBookmark });
 
-    const row = screen.getByRole("option");
+    const row = screen.getByRole("row");
     expect(row).toHaveAttribute("aria-selected", "true");
+    expect(row).toHaveAttribute("aria-rowindex", "1");
     expect(row).toHaveAttribute("data-marker-category", "investigate");
     const tagButton = screen.getByRole("button", { name: "Remove event tag" });
     const bookmarkButton = screen.getByRole("button", { name: "Bookmark event" });
+    const cell = screen.getByRole("gridcell");
+    expect(cell).toContainElement(tagButton);
+    expect(cell).toContainElement(bookmarkButton);
     expect(tagButton).toHaveAttribute("aria-pressed", "true");
     expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(tagButton);
@@ -132,7 +139,7 @@ describe("EvtxTimelineRow triage state", () => {
       onBookmark,
     });
 
-    const row = screen.getByRole("option");
+    const row = screen.getByRole("row");
     expect(row).toHaveAttribute(
       "aria-description",
       expect.stringContaining("Markers unavailable: EventRecordID is missing")
@@ -156,7 +163,8 @@ describe("EvtxTimelineRow triage state", () => {
     const onBookmark = vi.fn();
     renderRow({ grouped: true, onTag, onBookmark, tabIndex: 0 });
 
-    const row = screen.getByRole("treeitem");
+    const row = screen.getByRole("row");
+    expect(row).toHaveAttribute("aria-level", "1");
     expect(screen.getByRole("button", { name: "Bookmark event" })).toHaveAttribute("tabindex", "-1");
     row.focus();
     fireEvent.keyDown(row, { key: "t" });
@@ -177,7 +185,7 @@ describe("EvtxTimelineRow triage state", () => {
     const onBookmark = vi.fn();
     renderRow({ onTag, onBookmark });
 
-    const row = screen.getByRole("option");
+    const row = screen.getByRole("row");
     fireEvent.keyDown(row, { key: "t", ...modifier });
     fireEvent.keyDown(row, { key: "b", ...modifier });
 
@@ -190,8 +198,9 @@ describe("EvtxTimelineRow triage state", () => {
     const onBookmark = vi.fn();
     renderRow({ onTag, onBookmark, tabIndex: 0 });
 
-    const row = screen.getByRole("option");
+    const row = screen.getByRole("row");
     expect(row).toHaveAttribute("tabindex", "0");
+    expect(row).not.toHaveAttribute("aria-level");
     expect(screen.getByRole("button", { name: "Tag event" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("button", { name: "Bookmark event" })).toHaveAttribute("tabindex", "-1");
 
@@ -217,8 +226,8 @@ describe("EvtxTimelineRow triage state", () => {
     });
 
     expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
-    expect(screen.getByRole("option")).toHaveAttribute("data-quick-filter-match", "false");
-    expect(screen.getByRole("option")).toHaveAttribute("data-evtx-filter-match", "true");
+    expect(screen.getByRole("row")).toHaveAttribute("data-quick-filter-match", "false");
+    expect(screen.getByRole("row")).toHaveAttribute("data-evtx-filter-match", "true");
     expect(screen.getByText("Match")).toBeInTheDocument();
   });
 
