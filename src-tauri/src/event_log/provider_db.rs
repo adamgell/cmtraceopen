@@ -31,7 +31,7 @@ use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -110,6 +110,7 @@ fn inflate_json<T: serde::de::DeserializeOwned + Default>(blob: &[u8]) -> Result
 pub struct ProviderDb {
     connection: Connection,
     info: ProviderDbInfo,
+    has_capture_state: bool,
 }
 
 impl std::fmt::Debug for ProviderDb {
@@ -181,6 +182,14 @@ impl ProviderDb {
             (Some(low), Some(high)) if low == high => Some(low),
             _ => None,
         };
+        let has_capture_state: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'ProviderCaptureState')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("cannot inspect provider capture state: {error}"))?;
         Ok(Self {
             info: ProviderDbInfo {
                 path: path.display().to_string(),
@@ -188,6 +197,7 @@ impl ProviderDb {
                 source_os_build,
             },
             connection,
+            has_capture_state,
         })
     }
 
@@ -229,16 +239,30 @@ impl ProviderDb {
         &self,
         provider_name: Option<&str>,
     ) -> Result<Vec<CapturedProviderMetadata>, String> {
+        let query = if self.has_capture_state {
+            "SELECT details.ProviderName, details.VersionKey, details.Events, details.Messages,
+                    details.Tasks, details.Keywords, details.Opcodes, details.Maps,
+                    details.Parameters, details.SourceOsBuild, state.UnavailableCategories
+             FROM ProviderDetails AS details
+             LEFT JOIN ProviderCaptureState AS state
+               ON state.ProviderName = details.ProviderName
+              AND ((state.VersionKey = details.VersionKey)
+                   OR (state.VersionKey IS NULL AND details.VersionKey IS NULL))
+             WHERE (?1 IS NULL OR details.ProviderName = ?1)
+             ORDER BY details.ProviderName COLLATE NOCASE ASC, details.ProviderName ASC,
+                      details.SourceOsBuild DESC, details.VersionKey ASC, details.rowid ASC"
+        } else {
+            "SELECT details.ProviderName, details.VersionKey, details.Events, details.Messages,
+                    details.Tasks, details.Keywords, details.Opcodes, details.Maps,
+                    details.Parameters, details.SourceOsBuild, NULL
+             FROM ProviderDetails AS details
+             WHERE (?1 IS NULL OR details.ProviderName = ?1)
+             ORDER BY details.ProviderName COLLATE NOCASE ASC, details.ProviderName ASC,
+                      details.SourceOsBuild DESC, details.VersionKey ASC, details.rowid ASC"
+        };
         let mut statement = self
             .connection
-            .prepare(
-                "SELECT ProviderName, VersionKey, Events, Messages, Tasks, Keywords, Opcodes,
-                        Maps, Parameters, SourceOsBuild
-                 FROM ProviderDetails
-                 WHERE (?1 IS NULL OR ProviderName = ?1)
-                 ORDER BY ProviderName COLLATE NOCASE ASC, ProviderName ASC,
-                          SourceOsBuild DESC, VersionKey ASC, rowid ASC",
-            )
+            .prepare(query)
             .map_err(|error| format!("cannot prepare provider query: {error}"))?;
 
         let rows = statement
@@ -254,6 +278,7 @@ impl ProviderDb {
                     row.get::<_, Option<Vec<u8>>>(7)?.unwrap_or_default(),
                     row.get::<_, Option<Vec<u8>>>(8)?.unwrap_or_default(),
                     row.get::<_, Option<u32>>(9)?,
+                    row.get::<_, Option<Vec<u8>>>(10)?,
                 ))
             })
             .map_err(|error| format!("cannot read provider rows: {error}"))?;
@@ -276,14 +301,14 @@ impl ProviderDb {
                     maps,
                     parameters,
                     source_os_build,
+                    unavailable_categories,
                 )| {
-                    let state_version_key = version_key.as_deref();
                     let levels = levels_from_maps(&maps)?;
-                    let mut unavailable_categories = unavailable_categories_from_state(
-                        &self.connection,
-                        &provider_name,
-                        state_version_key,
-                    )?;
+                    let mut unavailable_categories: BTreeSet<String> = unavailable_categories
+                        .as_deref()
+                        .map(inflate_json)
+                        .transpose()?
+                        .unwrap_or_default();
                     if unavailable_categories.is_empty() {
                         unavailable_categories =
                             unavailable_categories_from_parameters(&parameters)?;
@@ -449,40 +474,6 @@ fn unavailable_categories_from_parameters(blob: &[u8]) -> Result<BTreeSet<String
         .transpose()
         .map_err(|error| format!("provider unavailable categories are not a set: {error}"))?
         .map_or_else(|| Ok(BTreeSet::new()), Ok)
-}
-
-fn unavailable_categories_from_state(
-    connection: &Connection,
-    provider_name: &str,
-    version_key: Option<&str>,
-) -> Result<BTreeSet<String>, String> {
-    let has_table = connection
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ProviderCaptureState'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(|error| format!("cannot inspect provider capture state: {error}"))?
-        .is_some();
-    if !has_table {
-        return Ok(BTreeSet::new());
-    }
-    let Some(blob) = connection
-        .query_row(
-            "SELECT UnavailableCategories FROM ProviderCaptureState \
-             WHERE ProviderName = ?1 \
-               AND ((VersionKey = ?2) OR (VersionKey IS NULL AND ?2 IS NULL))",
-            rusqlite::params![provider_name, version_key],
-            |row| row.get::<_, Option<Vec<u8>>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("cannot read provider capture state: {error}"))?
-        .flatten()
-    else {
-        return Ok(BTreeSet::new());
-    };
-    inflate_json(&blob)
 }
 
 /// Provider metadata captured for one concrete provider version.
@@ -1904,6 +1895,7 @@ mod tests {
         let written = write_provider_database(&path, &[captured.clone(), older]).expect("write");
         assert_eq!(written, 2);
         let database = ProviderDb::open(&path).expect("opens");
+        assert!(database.has_capture_state);
         let read = database
             .provider("Round-Trip-Provider")
             .expect("query")
@@ -2058,8 +2050,9 @@ mod tests {
             .expect("nullable row");
         drop(connection);
 
-        let rows = ProviderDb::open(&path)
-            .expect("opens")
+        let database = ProviderDb::open(&path).expect("opens");
+        assert!(!database.has_capture_state);
+        let rows = database
             .rows()
             .expect("nullable fields are valid imported data");
         assert_eq!(rows.len(), 1);
@@ -2453,6 +2446,24 @@ mod tests {
                 "{provider} must retain event metadata"
             );
         }
+    }
+
+    #[test]
+    fn tauri_package_maps_provider_resources_to_the_runtime_lookup_directory() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json must parse");
+        let source = format!("resources/{PACKAGED_PROVIDER_DATABASE_DIRECTORY}");
+        let destination = config
+            .pointer("/bundle/resources")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|resources| resources.get(&source))
+            .and_then(serde_json::Value::as_str);
+
+        assert_eq!(
+            destination,
+            Some(PACKAGED_PROVIDER_DATABASE_DIRECTORY),
+            "the packaged destination must match packaged_provider_directory(resource_dir)"
+        );
     }
 }
 
