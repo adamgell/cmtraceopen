@@ -636,6 +636,36 @@ mod tests {
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
     }
 
+    fn installer_macro_lines<'a>(asset: &'a str, macro_name: &str) -> Vec<&'a str> {
+        let declaration = format!("!macro {macro_name}");
+        let mut declarations = asset
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.trim() == declaration);
+        let (declaration_index, _) = declarations
+            .next()
+            .unwrap_or_else(|| panic!("missing installer macro {macro_name}"));
+        assert!(
+            declarations.next().is_none(),
+            "installer macro {macro_name} must be declared exactly once"
+        );
+
+        let mut body = Vec::new();
+        let mut found_end = false;
+        for line in asset.lines().skip(declaration_index + 1) {
+            let line = line.trim();
+            if line == "!macroend" {
+                found_end = true;
+                break;
+            }
+            if !line.is_empty() && !line.starts_with(';') {
+                body.push(line);
+            }
+        }
+        assert!(found_end, "installer macro {macro_name} must end");
+        body
+    }
+
     #[test]
     fn windows_packaging_disables_installer_associations_without_removing_other_platforms() {
         let base_config = load_tauri_config("tauri.conf.json");
@@ -681,35 +711,75 @@ mod tests {
 
     #[test]
     fn nsis_uninstall_cleanup_is_scoped_and_preserves_replacement_installs() {
-        let config = load_tauri_config("tauri.conf.json");
+        let base_config = load_tauri_config("tauri.conf.json");
         assert_eq!(
-            config
+            base_config
                 .pointer("/bundle/windows/nsis/installerHooks")
                 .and_then(serde_json::Value::as_str),
             Some("installer/windows-installer-hooks.nsh")
         );
-        let hook = load_installer_asset("windows-installer-hooks.nsh");
+        let lite_overlay = load_tauri_config("tauri.lite.conf.json");
+        let lite_bundle = lite_overlay
+            .get("bundle")
+            .and_then(serde_json::Value::as_object)
+            .expect("the Lite bundle overlay must be an object");
+        assert!(
+            !lite_bundle.contains_key("windows"),
+            "the Lite overlay must inherit the shared NSIS hook from the base config"
+        );
 
-        assert!(hook.contains("${If} $UpdateMode = 1"));
-        assert!(hook.contains("${GetOptions} $R0 \"_?=\" $R1"));
-        assert!(hook
-            .contains("CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open\" \"CMTraceOpen\""));
-        assert!(hook.contains(
-            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Nightly\" \"CMTraceOpenNightly\""
-        ));
-        assert!(hook.contains(
-            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Lite\" \"CMTraceOpenLite\""
-        ));
-        assert!(hook.contains(
-            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Lite Nightly\" \"CMTraceOpenLiteNightly\""
-        ));
-        for extension in LOG_FILE_EXTENSIONS {
-            assert!(
-                hook.contains(&format!("Software\\Classes\\{extension}\\OpenWithProgids")),
-                "NSIS cleanup must remove {extension} OpenWithProgids"
-            );
-        }
-        assert!(hook.contains("SHChangeNotify"));
+        let hook = load_installer_asset("windows-installer-hooks.nsh");
+        assert_eq!(
+            installer_macro_lines(
+                &hook,
+                "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION APPLICATION_NAME REGISTRY_STEM"
+            ),
+            vec![
+                r#"DeleteRegValue HKCU "Software\RegisteredApplications" "${APPLICATION_NAME}""#,
+                r#"DeleteRegKey HKCU "Software\${REGISTRY_STEM}\Capabilities""#,
+                r#"DeleteRegKey /ifempty HKCU "Software\${REGISTRY_STEM}""#,
+                r#"DeleteRegKey HKCU "Software\Classes\${REGISTRY_STEM}.LogFile""#,
+                r#"DeleteRegValue HKCU "Software\Classes\.log\OpenWithProgids" "${REGISTRY_STEM}.LogFile""#,
+                r#"DeleteRegKey /ifempty HKCU "Software\Classes\.log\OpenWithProgids""#,
+                r#"DeleteRegValue HKCU "Software\Classes\.lo_\OpenWithProgids" "${REGISTRY_STEM}.LogFile""#,
+                r#"DeleteRegKey /ifempty HKCU "Software\Classes\.lo_\OpenWithProgids""#,
+                r#"DeleteRegValue HKCU "Software\Classes\.log_\OpenWithProgids" "${REGISTRY_STEM}.LogFile""#,
+                r#"DeleteRegKey /ifempty HKCU "Software\Classes\.log_\OpenWithProgids""#,
+                r#"DeleteRegValue HKCU "Software\Classes\.cmtlog\OpenWithProgids" "${REGISTRY_STEM}.LogFile""#,
+                r#"DeleteRegKey /ifempty HKCU "Software\Classes\.cmtlog\OpenWithProgids""#,
+            ]
+        );
+        assert_eq!(
+            installer_macro_lines(&hook, "NSIS_HOOK_POSTUNINSTALL"),
+            vec![
+                r#"${If} $UpdateMode = 1"#,
+                "Goto association_cleanup_done",
+                r#"${EndIf}"#,
+                r#"${GetParameters} $R0"#,
+                "ClearErrors",
+                r#"${GetOptions} $R0 "_?=" $R1"#,
+                r#"${IfNot} ${Errors}"#,
+                "Goto association_cleanup_done",
+                r#"${EndIf}"#,
+                r#"StrCmp "${PRODUCTNAME}" "CMTrace Open" 0 association_cleanup_lite"#,
+                r#"!insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open" "CMTraceOpen""#,
+                "Goto association_cleanup_notify",
+                "association_cleanup_lite:",
+                r#"StrCmp "${PRODUCTNAME}" "CMTrace Open Lite" 0 association_cleanup_nightly"#,
+                r#"!insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Lite" "CMTraceOpenLite""#,
+                "Goto association_cleanup_notify",
+                "association_cleanup_nightly:",
+                r#"StrCmp "${PRODUCTNAME}" "CMTrace Open Nightly" 0 association_cleanup_lite_nightly"#,
+                r#"!insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Nightly" "CMTraceOpenNightly""#,
+                "Goto association_cleanup_notify",
+                "association_cleanup_lite_nightly:",
+                r#"StrCmp "${PRODUCTNAME}" "CMTrace Open Lite Nightly" 0 association_cleanup_done"#,
+                r#"!insertmacro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION "CMTrace Open Lite Nightly" "CMTraceOpenLiteNightly""#,
+                "association_cleanup_notify:",
+                r#"System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, p 0, p 0)'"#,
+                "association_cleanup_done:",
+            ]
+        );
     }
 
     #[test]
