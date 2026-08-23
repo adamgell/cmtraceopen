@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 
 use cmtraceopen_parser::eventmap::MapRegistry;
 use evtx::EvtxParser;
@@ -1819,46 +1819,6 @@ pub(crate) struct ParsedFile {
     pub(crate) messages: Vec<String>,
     pub(crate) coverage_gaps: Vec<EvtxCoverageGap>,
 }
-/// Finds zeroed chunks between non-empty chunks and a partial trailing chunk.
-///
-/// `evtx` intentionally skips zero-filled chunks while looking for the next usable chunk, and its
-/// calculated chunk count ignores a partial final chunk. Those are useful dirty-file recovery
-/// behaviours, but without this side-channel they look like a clean parse. Keep these diagnostics
-/// separate from parser errors so the readable records still flow through the normal iterator.
-fn detect_missing_chunk_gaps(bytes: &[u8], source: &str) -> Vec<EvtxCoverageGap> {
-    let payload = bytes.len().saturating_sub(EVTX_FILE_HEADER_BYTES);
-    let complete_chunks = payload / EVTX_CHUNK_BYTES;
-    let partial_bytes = payload % EVTX_CHUNK_BYTES;
-    let mut gaps = Vec::new();
-
-    if partial_bytes > 0 {
-        let mut gap = EvtxCoverageGap::new(
-            source,
-            EvtxCoverageGapKind::Chunk,
-            format!(
-                "chunk {complete_chunks} is truncated at the end of the source \
-                 ({partial_bytes} of {EVTX_CHUNK_BYTES} bytes present)"
-            ),
-        );
-        gap.chunk_id = Some(complete_chunks as u64);
-        gaps.push(gap);
-    }
-
-    let mut last_non_empty = None;
-    let mut empty_chunks = Vec::new();
-    for chunk_id in 0..complete_chunks {
-        let start = EVTX_FILE_HEADER_BYTES + chunk_id * EVTX_CHUNK_BYTES;
-        let end = start + EVTX_CHUNK_BYTES;
-        if bytes[start..end].iter().any(|byte| *byte != 0) {
-            last_non_empty = Some(chunk_id);
-        } else {
-            empty_chunks.push(chunk_id);
-        }
-    }
-    append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
-    gaps
-}
-
 fn append_missing_chunk_gaps(
     gaps: &mut Vec<EvtxCoverageGap>,
     source: &str,
@@ -1897,85 +1857,227 @@ fn append_missing_chunk_gaps(
     }
 }
 
-fn detect_missing_chunk_gaps_from_file(
-    path: &Path,
-    source: &str,
-) -> Result<Vec<EvtxCoverageGap>, Vec<EvtxCoverageGap>> {
-    let mut file = fs::File::open(path).map_err(|error| {
-        vec![EvtxCoverageGap::new(
-            source,
-            EvtxCoverageGapKind::File,
-            format!("failed to inspect EVTX chunk boundaries: {error}"),
-        )]
-    })?;
-    let length = file
-        .metadata()
-        .map_err(|error| {
-            vec![EvtxCoverageGap::new(
-                source,
-                EvtxCoverageGapKind::File,
-                format!("failed to inspect EVTX chunk metadata: {error}"),
-            )]
-        })?
-        .len();
-    detect_missing_chunk_gaps_from_reader(&mut file, length, source)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkIoOperation {
+    Read,
+    Seek,
 }
 
-fn detect_missing_chunk_gaps_from_reader<R: Read + Seek>(
-    file: &mut R,
-    length: u64,
-    source: &str,
-) -> Result<Vec<EvtxCoverageGap>, Vec<EvtxCoverageGap>> {
-    let payload = length.saturating_sub(EVTX_FILE_HEADER_BYTES as u64);
-    let complete_chunks = usize::try_from(payload / EVTX_CHUNK_BYTES as u64).unwrap_or(usize::MAX);
-    let partial_bytes = payload % EVTX_CHUNK_BYTES as u64;
-    let mut gaps = Vec::new();
-    if partial_bytes > 0 {
-        let mut gap = EvtxCoverageGap::new(
-            source,
-            EvtxCoverageGapKind::Chunk,
-            format!(
-                "chunk {complete_chunks} is truncated at the end of the source \
-                 ({} of {EVTX_CHUNK_BYTES} bytes present)",
-                partial_bytes
-            ),
-        );
-        gap.chunk_id = Some(complete_chunks as u64);
-        gaps.push(gap);
-    }
-    if complete_chunks == 0 {
-        return Ok(gaps);
+#[derive(Debug)]
+struct ChunkIoFailure {
+    operation: ChunkIoOperation,
+    chunk_id: Option<usize>,
+    detail: String,
+}
+
+/// Coverage observed while the EVTX parser reads its source.
+///
+/// The parser already reads each complete 64 KiB chunk in full. Inspecting those returned bytes
+/// here retains dirty-file coverage without opening and scanning the source a second time. A chunk
+/// is non-empty when any observed byte is nonzero, including bytes after its 512-byte header.
+#[derive(Debug, Default)]
+struct ChunkReadCoverage {
+    stream_length: Option<u64>,
+    observed_chunks: BTreeSet<usize>,
+    nonzero_chunks: BTreeSet<usize>,
+    failures: Vec<ChunkIoFailure>,
+}
+
+impl ChunkReadCoverage {
+    fn chunk_id_at(position: u64) -> Option<usize> {
+        let payload_position = position.checked_sub(EVTX_FILE_HEADER_BYTES as u64)?;
+        usize::try_from(payload_position / EVTX_CHUNK_BYTES as u64).ok()
     }
 
-    let mut chunk = [0u8; EVTX_CHUNK_BYTES];
-    let mut last_non_empty = None;
-    let mut empty_chunks = Vec::new();
-    if let Err(error) = file.seek(SeekFrom::Start(EVTX_FILE_HEADER_BYTES as u64)) {
-        gaps.push(EvtxCoverageGap::new(
-            source,
-            EvtxCoverageGapKind::File,
-            format!("failed to seek EVTX chunks: {error}"),
-        ));
-        return Err(gaps);
+    fn observe(&mut self, position: u64, bytes: &[u8]) {
+        let mut absolute = position;
+        let mut offset = 0usize;
+        if absolute < EVTX_FILE_HEADER_BYTES as u64 {
+            let header_bytes =
+                usize::try_from((EVTX_FILE_HEADER_BYTES as u64 - absolute).min(bytes.len() as u64))
+                    .unwrap_or(bytes.len());
+            absolute = absolute.saturating_add(header_bytes as u64);
+            offset = header_bytes;
+        }
+
+        while offset < bytes.len() {
+            let Some(chunk_id) = Self::chunk_id_at(absolute) else {
+                break;
+            };
+            let within_chunk = usize::try_from(
+                (absolute - EVTX_FILE_HEADER_BYTES as u64) % EVTX_CHUNK_BYTES as u64,
+            )
+            .unwrap_or(0);
+            let available = EVTX_CHUNK_BYTES - within_chunk;
+            let take = available.min(bytes.len() - offset);
+            let observed = &bytes[offset..offset + take];
+            self.observed_chunks.insert(chunk_id);
+            if observed.iter().any(|byte| *byte != 0) {
+                self.nonzero_chunks.insert(chunk_id);
+            }
+            offset += take;
+            absolute = absolute.saturating_add(take as u64);
+        }
     }
-    for chunk_id in 0..complete_chunks {
-        if let Err(error) = file.read_exact(&mut chunk) {
-            append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
-            gaps.push(EvtxCoverageGap::new(
+
+    fn record_failure(
+        &mut self,
+        operation: ChunkIoOperation,
+        chunk_id: Option<usize>,
+        detail: String,
+    ) {
+        if self
+            .failures
+            .iter()
+            .any(|failure| failure.operation == operation && failure.chunk_id == chunk_id)
+        {
+            return;
+        }
+        self.failures.push(ChunkIoFailure {
+            operation,
+            chunk_id,
+            detail,
+        });
+    }
+
+    fn gaps(&self, source: &str) -> Vec<EvtxCoverageGap> {
+        let Some(length) = self.stream_length else {
+            return vec![EvtxCoverageGap::new(
                 source,
                 EvtxCoverageGapKind::File,
-                format!("failed to inspect EVTX chunk {chunk_id}: {error}"),
-            ));
-            return Err(gaps);
+                "the EVTX parser did not expose the source length while reading it",
+            )];
+        };
+        let payload = length.saturating_sub(EVTX_FILE_HEADER_BYTES as u64);
+        let complete_chunks =
+            usize::try_from(payload / EVTX_CHUNK_BYTES as u64).unwrap_or(usize::MAX);
+        let partial_bytes = payload % EVTX_CHUNK_BYTES as u64;
+        let mut gaps = Vec::new();
+
+        if partial_bytes > 0 {
+            let mut gap = EvtxCoverageGap::new(
+                source,
+                EvtxCoverageGapKind::Chunk,
+                format!(
+                    "chunk {complete_chunks} is truncated at the end of the source \
+                     ({partial_bytes} of {EVTX_CHUNK_BYTES} bytes present)"
+                ),
+            );
+            gap.chunk_id = Some(complete_chunks as u64);
+            gaps.push(gap);
         }
-        if chunk.iter().any(|byte| *byte != 0) {
-            last_non_empty = Some(chunk_id);
-        } else {
-            empty_chunks.push(chunk_id);
+
+        let failed_chunks: BTreeSet<usize> = self
+            .failures
+            .iter()
+            .filter_map(|failure| failure.chunk_id)
+            .filter(|chunk_id| *chunk_id < complete_chunks)
+            .collect();
+        let last_non_empty = self
+            .nonzero_chunks
+            .iter()
+            .copied()
+            .rfind(|chunk_id| *chunk_id < complete_chunks);
+        let empty_chunks = self.observed_chunks.iter().copied().filter(|chunk_id| {
+            *chunk_id < complete_chunks
+                && !self.nonzero_chunks.contains(chunk_id)
+                && !failed_chunks.contains(chunk_id)
+        });
+        append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
+
+        for failure in &self.failures {
+            if failure
+                .chunk_id
+                .is_some_and(|chunk_id| chunk_id >= complete_chunks)
+            {
+                continue;
+            }
+            let operation = match failure.operation {
+                ChunkIoOperation::Read => "inspect",
+                ChunkIoOperation::Seek => "seek to",
+            };
+            let location = failure.chunk_id.map_or_else(
+                || "chunks".to_string(),
+                |chunk_id| format!("chunk {chunk_id}"),
+            );
+            let mut gap = EvtxCoverageGap::new(
+                source,
+                EvtxCoverageGapKind::File,
+                format!("failed to {operation} EVTX {location}: {}", failure.detail),
+            );
+            gap.chunk_id = failure.chunk_id.map(|chunk_id| chunk_id as u64);
+            gaps.push(gap);
+        }
+        gaps
+    }
+}
+
+struct ObservedEvtxReader<R> {
+    inner: R,
+    position: u64,
+    coverage: Arc<Mutex<ChunkReadCoverage>>,
+}
+
+impl<R> ObservedEvtxReader<R> {
+    fn new(inner: R) -> (Self, Arc<Mutex<ChunkReadCoverage>>) {
+        let coverage = Arc::new(Mutex::new(ChunkReadCoverage::default()));
+        (
+            Self {
+                inner,
+                position: 0,
+                coverage: Arc::clone(&coverage),
+            },
+            coverage,
+        )
+    }
+
+    fn coverage(&self) -> std::sync::MutexGuard<'_, ChunkReadCoverage> {
+        self.coverage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl<R: Read> Read for ObservedEvtxReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        match self.inner.read(buffer) {
+            Ok(read) => {
+                let position = self.position;
+                self.coverage().observe(position, &buffer[..read]);
+                self.position = self.position.saturating_add(read as u64);
+                Ok(read)
+            }
+            Err(error) => {
+                let chunk_id = ChunkReadCoverage::chunk_id_at(self.position);
+                self.coverage()
+                    .record_failure(ChunkIoOperation::Read, chunk_id, error.to_string());
+                Err(error)
+            }
         }
     }
-    append_missing_chunk_gaps(&mut gaps, source, empty_chunks, last_non_empty);
-    Ok(gaps)
+}
+
+impl<R: Seek> Seek for ObservedEvtxReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match self.inner.seek(position) {
+            Ok(offset) => {
+                if position == SeekFrom::End(0) {
+                    self.coverage().stream_length = Some(offset);
+                }
+                self.position = offset;
+                Ok(offset)
+            }
+            Err(error) => {
+                let chunk_id = match position {
+                    SeekFrom::Start(offset) => ChunkReadCoverage::chunk_id_at(offset),
+                    SeekFrom::End(_) | SeekFrom::Current(_) => None,
+                };
+                self.coverage()
+                    .record_failure(ChunkIoOperation::Seek, chunk_id, error.to_string());
+                Err(error)
+            }
+        }
+    }
 }
 
 fn attach_recovery_gaps(parsed: &mut ParsedFile, gaps: impl IntoIterator<Item = EvtxCoverageGap>) {
@@ -1988,7 +2090,22 @@ fn attach_recovery_gaps(parsed: &mut ParsedFile, gaps: impl IntoIterator<Item = 
         .map(|gap| gap.source.clone())
         .or_else(|| parsed.coverage_gaps.first().map(|gap| gap.source.clone()));
     for gap in gaps {
-        parsed.messages.push(format_coverage_gap(&gap));
+        if gap.kind == EvtxCoverageGapKind::File {
+            if let Some(chunk_id) = gap.chunk_id {
+                parsed.coverage_gaps.retain(|existing| {
+                    !(existing.source == gap.source
+                        && existing.kind == EvtxCoverageGapKind::Chunk
+                        && existing.chunk_id == Some(chunk_id))
+                });
+            }
+        }
+        if parsed.coverage_gaps.iter().any(|existing| existing == &gap) {
+            continue;
+        }
+        let message = format_coverage_gap(&gap);
+        if !parsed.messages.iter().any(|existing| existing == &message) {
+            parsed.messages.push(message);
+        }
         parsed.coverage_gaps.push(gap);
     }
     let before_bound = parsed.coverage_gaps.len();
@@ -2021,24 +2138,21 @@ fn parse_single_file(
     providers: &RwLock<ProviderStore>,
 ) -> Result<ParsedFile, EvtxCoverageGap> {
     let source_path = path.to_string_lossy().into_owned();
-    let parser = EvtxParser::from_path(path).map_err(|error| {
+    let file = fs::File::open(path).map_err(|error| {
         EvtxCoverageGap::new(
             source_path.clone(),
             EvtxCoverageGapKind::File,
             format!("failed to open EVTX file: {error}"),
         )
     })?;
-    let mut parsed = parse_evtx_parser(
-        parser,
+    parse_evtx_reader(
+        file,
         &source_path,
         &source_label_for_path(path),
+        "failed to open EVTX file",
         maps,
         providers,
-    )?;
-    match detect_missing_chunk_gaps_from_file(path, &source_path) {
-        Ok(gaps) | Err(gaps) => attach_recovery_gaps(&mut parsed, gaps),
-    }
-    Ok(parsed)
+    )
 }
 
 pub(crate) fn parse_evtx_buffer(
@@ -2047,16 +2161,38 @@ pub(crate) fn parse_evtx_buffer(
     maps: &RwLock<MapRegistry>,
     providers: &RwLock<ProviderStore>,
 ) -> Result<ParsedFile, EvtxCoverageGap> {
-    let chunk_gaps = detect_missing_chunk_gaps(&bytes, source_label);
-    let parser = EvtxParser::from_buffer(bytes).map_err(|error| {
+    parse_evtx_reader(
+        std::io::Cursor::new(bytes),
+        source_label,
+        source_label,
+        "failed to parse EVTX member",
+        maps,
+        providers,
+    )
+}
+
+fn parse_evtx_reader<R: Read + Seek>(
+    reader: R,
+    source_path: &str,
+    source_label: &str,
+    parser_error_context: &str,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<ParsedFile, EvtxCoverageGap> {
+    let (reader, coverage) = ObservedEvtxReader::new(reader);
+    let parser = EvtxParser::from_read_seek(reader).map_err(|error| {
         EvtxCoverageGap::new(
-            source_label,
+            source_path,
             EvtxCoverageGapKind::File,
-            format!("failed to parse EVTX member: {error}"),
+            format!("{parser_error_context}: {error}"),
         )
     })?;
-    let mut parsed = parse_evtx_parser(parser, source_label, source_label, maps, providers)?;
-    attach_recovery_gaps(&mut parsed, chunk_gaps);
+    let mut parsed = parse_evtx_parser(parser, source_path, source_label, maps, providers)?;
+    let gaps = coverage
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .gaps(source_path);
+    attach_recovery_gaps(&mut parsed, gaps);
     Ok(parsed)
 }
 
@@ -2344,33 +2480,77 @@ fn describe_event(
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
+    use std::io::{Cursor, Error, Read, Seek, SeekFrom};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
 
     use super::*;
 
-    struct FailAfterReads {
+    struct CountingReader {
         inner: Cursor<Vec<u8>>,
-        reads: usize,
-        fail_after: usize,
+        bytes_read: Arc<AtomicU64>,
     }
 
-    impl Read for FailAfterReads {
+    impl Read for CountingReader {
         fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            if self.reads >= self.fail_after {
-                return Err(Error::new(
-                    ErrorKind::UnexpectedEof,
-                    "injected read failure",
-                ));
+            let read = self.inner.read(buffer)?;
+            self.bytes_read.fetch_add(read as u64, Ordering::Relaxed);
+            Ok(read)
+        }
+    }
+
+    impl Seek for CountingReader {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    struct FailOnceAtOffset {
+        inner: Cursor<Vec<u8>>,
+        fail_at: u64,
+        failed: bool,
+    }
+
+    impl Read for FailOnceAtOffset {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if !self.failed && self.inner.position() == self.fail_at {
+                self.failed = true;
+                return Err(Error::other("injected chunk read failure"));
             }
-            self.reads += 1;
             self.inner.read(buffer)
         }
     }
 
-    impl Seek for FailAfterReads {
+    impl Seek for FailOnceAtOffset {
         fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
             self.inner.seek(position)
         }
+    }
+
+    fn minimal_evtx(chunks: impl IntoIterator<Item = Vec<u8>>, partial: &[u8]) -> Vec<u8> {
+        let chunks: Vec<_> = chunks.into_iter().collect();
+        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES];
+        bytes[..8].copy_from_slice(b"ElfFile\0");
+        bytes[32..36].copy_from_slice(&128u32.to_le_bytes());
+        bytes[36..38].copy_from_slice(&1u16.to_le_bytes());
+        bytes[38..40].copy_from_slice(&3u16.to_le_bytes());
+        bytes[40..42].copy_from_slice(&(EVTX_FILE_HEADER_BYTES as u16).to_le_bytes());
+        bytes[42..44].copy_from_slice(&(chunks.len() as u16).to_le_bytes());
+        for chunk in chunks {
+            assert_eq!(chunk.len(), EVTX_CHUNK_BYTES);
+            bytes.extend_from_slice(&chunk);
+        }
+        bytes.extend_from_slice(partial);
+        bytes
+    }
+
+    fn empty_evtx_chunk() -> Vec<u8> {
+        let mut chunk = vec![0u8; EVTX_CHUNK_BYTES];
+        chunk[..8].copy_from_slice(b"ElfChnk\0");
+        chunk[40..44].copy_from_slice(&128u32.to_le_bytes());
+        chunk[44..48].copy_from_slice(&512u32.to_le_bytes());
+        chunk[48..52].copy_from_slice(&512u32.to_le_bytes());
+        chunk
     }
 
     #[cfg(not(windows))]
@@ -2859,68 +3039,187 @@ mod tests {
             message.contains("additional") && message.contains("/damaged/")
         }));
     }
+
+    #[test]
+    fn parser_stream_observation_reads_source_bytes_only_once() {
+        let bytes = minimal_evtx([empty_evtx_chunk(), empty_evtx_chunk()], &[]);
+        let expected_bytes = bytes.len() as u64;
+        let bytes_read = Arc::new(AtomicU64::new(0));
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
+
+        parse_evtx_reader(
+            CountingReader {
+                inner: Cursor::new(bytes),
+                bytes_read: Arc::clone(&bytes_read),
+            },
+            "counting.evtx",
+            "counting.evtx",
+            "failed to parse counting EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("minimal source parses");
+
+        assert_eq!(bytes_read.load(Ordering::Relaxed), expected_bytes);
+    }
+
+    #[test]
+    fn chunk_observation_checks_the_body_when_the_chunk_header_is_zero() {
+        let leading_zero = vec![0u8; EVTX_CHUNK_BYTES];
+        let mut body_only = vec![0u8; EVTX_CHUNK_BYTES];
+        body_only[512] = 1;
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
+
+        let parsed = parse_evtx_reader(
+            Cursor::new(minimal_evtx([leading_zero, body_only], &[])),
+            "body-only.evtx",
+            "body-only.evtx",
+            "failed to parse body-only EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("dirty source remains recoverable");
+
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.chunk_id == Some(0) && gap.reason.contains("missing or zero-filled")
+        }));
+        assert!(!parsed.coverage_gaps.iter().any(|gap| {
+            gap.chunk_id == Some(1) && gap.reason.contains("missing or zero-filled")
+        }));
+    }
+
     #[test]
     fn a_later_chunk_read_failure_keeps_prior_recovery_gaps() {
-        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 3];
-        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES] = 1;
-        let claimed_length = (bytes.len() + 7) as u64;
-        let mut reader = FailAfterReads {
-            inner: Cursor::new(bytes),
-            reads: 0,
-            fail_after: 2,
-        };
+        let bytes = minimal_evtx(
+            [
+                vec![0u8; EVTX_CHUNK_BYTES],
+                empty_evtx_chunk(),
+                empty_evtx_chunk(),
+            ],
+            &[0; 7],
+        );
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
 
-        let gaps = detect_missing_chunk_gaps_from_reader(&mut reader, claimed_length, "dirty.evtx")
-            .expect_err("the injected chunk read must be reported");
+        let parsed = parse_evtx_reader(
+            FailOnceAtOffset {
+                inner: Cursor::new(bytes),
+                fail_at: (EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 2) as u64,
+                failed: false,
+            },
+            "dirty.evtx",
+            "dirty.evtx",
+            "failed to parse dirty EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("later chunks remain recoverable after the injected read failure");
 
-        assert_eq!(gaps.len(), 3);
-        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
-        assert_eq!(gaps[0].chunk_id, Some(3));
-        assert!(gaps[0].reason.contains("truncated"));
-        assert_eq!(gaps[1].kind, EvtxCoverageGapKind::Chunk);
-        assert_eq!(gaps[1].chunk_id, Some(0));
-        assert_eq!(gaps[2].kind, EvtxCoverageGapKind::File);
-        assert!(gaps[2].reason.contains("failed to inspect EVTX chunk 2"));
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Chunk
+                && gap.chunk_id == Some(3)
+                && gap.reason.contains("truncated")
+        }));
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Chunk
+                && gap.chunk_id == Some(0)
+                && gap.reason.contains("readable records after")
+        }));
+        let failed_chunk_gaps: Vec<_> = parsed
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.chunk_id == Some(2))
+            .collect();
+        assert_eq!(failed_chunk_gaps.len(), 1);
+        assert_eq!(failed_chunk_gaps[0].kind, EvtxCoverageGapKind::File);
+        assert!(failed_chunk_gaps[0]
+            .reason
+            .contains("injected chunk read failure"));
     }
 
     #[test]
     fn truncated_tail_is_a_chunk_gap_with_source_identity() {
-        let bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + 7];
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
 
-        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+        let parsed = parse_evtx_reader(
+            Cursor::new(minimal_evtx([], &[0; 7])),
+            "dirty.evtx",
+            "dirty.evtx",
+            "failed to parse dirty EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("a partial tail remains recoverable");
 
-        assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0].source, "dirty.evtx");
-        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
-        assert_eq!(gaps[0].chunk_id, Some(0));
-        assert!(gaps[0].reason.contains("truncated"));
+        let gap = parsed
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.reason.contains("truncated"))
+            .expect("partial tail gap");
+        assert_eq!(gap.source, "dirty.evtx");
+        assert_eq!(gap.kind, EvtxCoverageGapKind::Chunk);
+        assert_eq!(gap.chunk_id, Some(0));
     }
 
     #[test]
     fn zero_filled_internal_chunk_is_reported_but_trailing_zeroes_are_not() {
-        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 3];
-        bytes[EVTX_FILE_HEADER_BYTES] = 1;
-        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 2] = 1;
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
 
-        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+        let parsed = parse_evtx_reader(
+            Cursor::new(minimal_evtx(
+                [
+                    empty_evtx_chunk(),
+                    vec![0u8; EVTX_CHUNK_BYTES],
+                    empty_evtx_chunk(),
+                    vec![0u8; EVTX_CHUNK_BYTES],
+                ],
+                &[],
+            )),
+            "dirty.evtx",
+            "dirty.evtx",
+            "failed to parse dirty EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("zero-filled chunks remain recoverable");
 
-        assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
-        assert_eq!(gaps[0].chunk_id, Some(1));
-        assert!(gaps[0].reason.contains("readable records after"));
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Chunk
+                && gap.chunk_id == Some(1)
+                && gap.reason.contains("readable records after")
+        }));
+        assert!(!parsed.coverage_gaps.iter().any(|gap| {
+            gap.chunk_id == Some(3) && gap.reason.contains("missing or zero-filled")
+        }));
     }
 
     #[test]
     fn leading_zero_chunk_is_reported_before_a_readable_chunk() {
-        let mut bytes = vec![0u8; EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES * 2];
-        bytes[EVTX_FILE_HEADER_BYTES + EVTX_CHUNK_BYTES] = 1;
+        let maps = RwLock::new(MapRegistry::new());
+        let providers = RwLock::new(ProviderStore::default());
 
-        let gaps = detect_missing_chunk_gaps(&bytes, "dirty.evtx");
+        let parsed = parse_evtx_reader(
+            Cursor::new(minimal_evtx(
+                [vec![0u8; EVTX_CHUNK_BYTES], empty_evtx_chunk()],
+                &[],
+            )),
+            "dirty.evtx",
+            "dirty.evtx",
+            "failed to parse dirty EVTX",
+            &maps,
+            &providers,
+        )
+        .expect("leading zero chunk remains recoverable");
 
-        assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0].kind, EvtxCoverageGapKind::Chunk);
-        assert_eq!(gaps[0].chunk_id, Some(0));
-        assert!(gaps[0].reason.contains("readable records after"));
+        assert!(parsed.coverage_gaps.iter().any(|gap| {
+            gap.kind == EvtxCoverageGapKind::Chunk
+                && gap.chunk_id == Some(0)
+                && gap.reason.contains("readable records after")
+        }));
     }
 
     #[test]
