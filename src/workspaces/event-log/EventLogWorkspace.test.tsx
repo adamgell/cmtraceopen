@@ -471,6 +471,15 @@ describe("event-viewer shared font metrics", () => {
         (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2,
     );
   });
+  it("keeps the virtualizer cache when a clock tick leaves row identities unchanged", () => {
+    seedEventLog();
+    const timeline = render(<EvtxTimeline nowEpoch={1_000_000} />);
+    const initialCacheResetCalls = virtualizerState.cacheResetCalls;
+
+    timeline.rerender(<EvtxTimeline nowEpoch={1_030_000} />);
+
+    expect(virtualizerState.cacheResetCalls).toBe(initialCacheResetCalls);
+  });
   it("remeasures a record after a group header shifts its row index", () => {
     seedEventLog();
     setListFontSize(MIN_LOG_LIST_FONT_SIZE);
@@ -715,6 +724,37 @@ describe("EventLogWorkspace fixtures", () => {
         expect.objectContaining({ records: [boundaryRecord] }),
       ),
     );
+  });
+
+  it("ages relative time windows for loaded file sources", async () => {
+    vi.useFakeTimers();
+    const nowEpoch = Date.parse("2026-08-18T13:00:00.000Z");
+    vi.setSystemTime(nowEpoch);
+    try {
+      seedEventLog();
+      useEvtxStore.setState({
+        records: [
+          {
+            ...RECORD,
+            timestamp: "2026-08-18T12:00:00.001Z",
+            timestampEpoch: nowEpoch - 60 * 60 * 1000 + 1,
+          },
+        ],
+        sourceMode: "files",
+        timeWindow: "1h",
+      });
+      render(<EventLogWorkspace />);
+      expect(recordTreeItems(document.body).length).toBeGreaterThan(0);
+
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+        await Promise.resolve();
+      });
+
+      expect(recordTreeItems(document.body)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives level filters descriptive state to keyboard and screen-reader users", () => {

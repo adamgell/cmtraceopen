@@ -149,6 +149,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
 
   const parentRef = useRef<HTMLDivElement>(null);
   const rowElementsRef = useRef(new Set<HTMLElement>());
+  const previousUiRowKeysRef = useRef<readonly string[]>([]);
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
@@ -272,7 +273,21 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
     for (const element of rowElementsRef.current) {
       if (element.isConnected) measureConnectedRow(element);
     }
-  }, [rows, metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
+  }, [metrics.rowHeight, rowEstimate, measureConnectedRow, virtualizer.measure]);
+
+  // Row filtering and the rolling time-window clock may create a new rows array without changing
+  // any rendered identity or dimension. Preserve TanStack's keyed cache in that case. When rows
+  // really move, only the connected DOM rows whose index now owns a different key need a fresh
+  // measurement; offscreen sizes remain keyed to the row identity.
+  useEffect(() => {
+    const previousKeys = previousUiRowKeysRef.current;
+    for (const element of rowElementsRef.current) {
+      if (!element.isConnected) continue;
+      const index = Number(element.dataset.index);
+      if (previousKeys[index] !== uiRowKeys[index]) measureConnectedRow(element);
+    }
+    previousUiRowKeysRef.current = uiRowKeys;
+  }, [measureConnectedRow, uiRowKeys]);
 
   const virtualRows = virtualizer.getVirtualItems();
 
