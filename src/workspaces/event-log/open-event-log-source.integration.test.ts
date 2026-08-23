@@ -104,6 +104,56 @@ describe("source-open integration", () => {
     expect(useEvtxStore.getState().loadError).toBe("newer expansion failed");
   });
 
+  it("does not let an older enumeration replace a newer expanding source", async () => {
+    const existingRecord = record("Existing");
+    const olderEnumeration = deferred<
+      Array<{ name: string; eventCount: number; sourceType: "live" }>
+    >();
+    const newerExpansion = deferred<EventLogSourceManifest>();
+    useEvtxStore.setState({
+      records: [existingRecord],
+      channels: [
+        {
+          name: "Existing",
+          eventCount: 1,
+          sourceType: { file: { path: "Existing.evtx" } },
+        },
+      ],
+      sourceMode: "files",
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "evtx_enumerate_channels") return olderEnumeration.promise;
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    expandEventLogSources.mockReturnValueOnce(newerExpansion.promise);
+
+    const enumerationResult = useEvtxStore.getState().enumerateChannels();
+    const newerResult = openEventLogSources([
+      { kind: "folder", path: "/logs/newer" },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    olderEnumeration.resolve([
+      { name: "Custom", eventCount: 0, sourceType: "live" },
+    ]);
+    await enumerationResult;
+    newerExpansion.reject(new Error("newer expansion failed"));
+    expect(await newerResult).toEqual(new Error("newer expansion failed"));
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toEqual([existingRecord]);
+    expect(state.channels).toEqual([
+      {
+        name: "Existing",
+        eventCount: 1,
+        sourceType: { file: { path: "Existing.evtx" } },
+      },
+    ]);
+    expect(state.sourceMode).toBe("files");
+    expect(state.loadError).toBe("newer expansion failed");
+  });
+
   it("does not parse an older expansion after local enumeration becomes current", async () => {
     const olderManifest = manifest("/logs/older/Application.evtx");
     const olderExpansion = deferred<EventLogSourceManifest>();

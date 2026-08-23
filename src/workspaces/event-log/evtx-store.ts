@@ -1015,7 +1015,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             machine: remoteMachine,
           })
         : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
-      if (!isCurrentRequest(requestId)) return;
+      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
