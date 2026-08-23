@@ -166,13 +166,36 @@ foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
                 -HiveName $hiveName
         }
 
-        foreach ($identity in $associationIdentities) {
-            try {
-                Remove-AssociationIdentity -UserRoot $userRoot @identity
+        for ($cleanupAttempt = 0; $cleanupAttempt -lt 2; $cleanupAttempt++) {
+            $attemptFailures = [System.Collections.Generic.List[string]]::new()
+            foreach ($identity in $associationIdentities) {
+                try {
+                    Remove-AssociationIdentity -UserRoot $userRoot @identity
+                }
+                catch {
+                    $attemptFailures.Add("$sid/$($identity.ApplicationName): $($_.Exception.Message)")
+                }
             }
-            catch {
-                $failures.Add("$sid/$($identity.ApplicationName): $($_.Exception.Message)")
+
+            if (Test-Path -LiteralPath $userRoot) {
+                foreach ($attemptFailure in $attemptFailures) {
+                    $failures.Add($attemptFailure)
+                }
+                break
             }
+            $loadedByCleanup = $false
+            if ($cleanupAttempt -eq 1) {
+                foreach ($attemptFailure in $attemptFailures) {
+                    $failures.Add($attemptFailure)
+                }
+                $failures.Add("$sid/profile: profile hive disappeared during association cleanup")
+                break
+            }
+
+            $loadedByCleanup = Mount-ProfileHiveIfMissing `
+                -ProfileKey $profileKey `
+                -UserRoot $userRoot `
+                -HiveName $hiveName
         }
     }
     catch {

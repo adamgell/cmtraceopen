@@ -51,6 +51,7 @@ namespace CMTraceOpen.Tests {
         $userRoot = "Registry::HKEY_USERS\$sid"
         $profileImagePath = Join-Path $TestDrive "Offline User"
         $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+        $state = [pscustomobject]@{ HiveLoaded = $false }
         $originalSystemRoot = $env:SystemRoot
         $env:SystemRoot = Join-Path $TestDrive "Windows"
 
@@ -62,6 +63,9 @@ namespace CMTraceOpen.Tests {
         }
         Mock Get-ItemPropertyValue { $profileImagePath }
         Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                return $state.HiveLoaded
+            }
             if ($LiteralPath -eq $ntUserPath) {
                 return $true
             }
@@ -70,7 +74,15 @@ namespace CMTraceOpen.Tests {
         Mock Get-Item { $null }
         Mock Remove-Item {}
         Mock Remove-ItemProperty {}
-        Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+        Mock Start-Process {
+            if ($ArgumentList[0] -eq "LOAD") {
+                $state.HiveLoaded = $true
+            }
+            elseif ($ArgumentList[0] -eq "UNLOAD") {
+                $state.HiveLoaded = $false
+            }
+            [pscustomobject]@{ ExitCode = 0 }
+        }
 
         try {
             & (Join-Path $PSScriptRoot $ScriptName)
@@ -249,12 +261,18 @@ namespace CMTraceOpen.Tests {
         }
     }
 
-    It "unloads its <Name> hive in finally and aggregates cleanup failures" -ForEach $scriptCases {
-        $sid = "S-1-5-21-1003"
+    It "retries <Name> cleanup when a loaded profile logs off between identities" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1007"
         $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
         $userRoot = "Registry::HKEY_USERS\$sid"
-        $profileImagePath = Join-Path $TestDrive "Failing User"
+        $profileImagePath = Join-Path $TestDrive "Mid-Cleanup Logoff User"
         $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+        $state = [pscustomobject]@{
+            UserRootChecks = 0
+            FirstIdentityStarted = $false
+            RetryLoaded = $false
+            RetriedRegistryStems = [System.Collections.Generic.List[string]]::new()
+        }
         $originalSystemRoot = $env:SystemRoot
         $env:SystemRoot = Join-Path $TestDrive "Windows"
 
@@ -266,6 +284,142 @@ namespace CMTraceOpen.Tests {
         }
         Mock Get-ItemPropertyValue { $profileImagePath }
         Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                $state.UserRootChecks += 1
+                if ($state.RetryLoaded) {
+                    return $true
+                }
+                return $state.UserRootChecks -le 2
+            }
+            if ($LiteralPath -eq $ntUserPath) {
+                return $true
+            }
+            if ($LiteralPath -eq "$userRoot\Software\$($RegistryStems[0])\Capabilities") {
+                if ($state.RetryLoaded) {
+                    $state.RetriedRegistryStems.Add($RegistryStems[0])
+                    return $true
+                }
+                $state.FirstIdentityStarted = $true
+                return $true
+            }
+            if ($LiteralPath -eq "$userRoot\Software\$($RegistryStems[1])\Capabilities") {
+                if ($state.RetryLoaded) {
+                    $state.RetriedRegistryStems.Add($RegistryStems[1])
+                    return $true
+                }
+                return $false
+            }
+            return $false
+        }
+        Mock Get-Item { $null }
+        Mock Remove-Item {}
+        Mock Remove-ItemProperty {}
+        Mock Start-Process {
+            if ($ArgumentList[0] -eq "LOAD") {
+                $state.RetryLoaded = $true
+            }
+            elseif ($ArgumentList[0] -eq "UNLOAD") {
+                $state.RetryLoaded = $false
+            }
+            [pscustomobject]@{ ExitCode = 0 }
+        }
+
+        try {
+            & (Join-Path $PSScriptRoot $ScriptName)
+        }
+        finally {
+            $env:SystemRoot = $originalSystemRoot
+        }
+
+        $state.FirstIdentityStarted | Should -BeTrue
+        Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "LOAD" -and
+            $ArgumentList[1] -eq "HKU\$sid" -and
+            $ArgumentList[2] -eq ('"{0}"' -f $ntUserPath)
+        }
+        $state.RetriedRegistryStems | Should -HaveCount $RegistryStems.Count
+        foreach ($registryStem in $RegistryStems) {
+            $state.RetriedRegistryStems | Should -Contain $registryStem
+        }
+        Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "UNLOAD" -and
+            $ArgumentList[1] -eq "HKU\$sid"
+        }
+    }
+
+    It "reports a <Name> profile that disappears again during the bounded retry" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1008"
+        $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+        $userRoot = "Registry::HKEY_USERS\$sid"
+        $profileImagePath = Join-Path $TestDrive "Unstable User"
+        $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+        $state = [pscustomobject]@{ UserRootChecks = 0 }
+        $originalSystemRoot = $env:SystemRoot
+        $env:SystemRoot = Join-Path $TestDrive "Windows"
+
+        Mock Get-ChildItem {
+            [pscustomobject]@{
+                PSChildName = $sid
+                PSPath = $profileKey
+            }
+        }
+        Mock Get-ItemPropertyValue { $profileImagePath }
+        Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                $state.UserRootChecks += 1
+                return $state.UserRootChecks -le 2 -or $state.UserRootChecks -eq 5
+            }
+            return $LiteralPath -eq $ntUserPath
+        }
+        Mock Get-Item { $null }
+        Mock Remove-Item {}
+        Mock Remove-ItemProperty {}
+        Mock Start-Process { [pscustomobject]@{ ExitCode = 32 } }
+
+        $caught = $null
+        try {
+            & (Join-Path $PSScriptRoot $ScriptName)
+        }
+        catch {
+            $caught = $_
+        }
+        finally {
+            $env:SystemRoot = $originalSystemRoot
+        }
+
+        $caught | Should -Not -BeNullOrEmpty
+        $caught.Exception.Message | Should -Match ([regex]::Escape("$sid/profile"))
+        $caught.Exception.Message | Should -Match "disappeared during association cleanup"
+        Should -Invoke Start-Process -Times 1 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "LOAD" -and
+            $ArgumentList[1] -eq "HKU\$sid"
+        }
+        Should -Invoke Start-Process -Times 0 -Exactly -ParameterFilter {
+            $ArgumentList[0] -eq "UNLOAD"
+        }
+    }
+
+    It "unloads its <Name> hive in finally and aggregates cleanup failures" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1003"
+        $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+        $userRoot = "Registry::HKEY_USERS\$sid"
+        $profileImagePath = Join-Path $TestDrive "Failing User"
+        $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+        $state = [pscustomobject]@{ HiveLoaded = $false }
+        $originalSystemRoot = $env:SystemRoot
+        $env:SystemRoot = Join-Path $TestDrive "Windows"
+
+        Mock Get-ChildItem {
+            [pscustomobject]@{
+                PSChildName = $sid
+                PSPath = $profileKey
+            }
+        }
+        Mock Get-ItemPropertyValue { $profileImagePath }
+        Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                return $state.HiveLoaded
+            }
             if ($LiteralPath -eq $ntUserPath) {
                 return $true
             }
@@ -278,6 +432,7 @@ namespace CMTraceOpen.Tests {
             if ($ArgumentList[0] -eq "UNLOAD") {
                 return [pscustomobject]@{ ExitCode = 5 }
             }
+            $state.HiveLoaded = $true
             return [pscustomobject]@{ ExitCode = 0 }
         }
 
@@ -311,7 +466,10 @@ namespace CMTraceOpen.Tests {
         $profileImagePath = Join-Path $TestDrive "Disposable User"
         $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
         $keys = [System.Collections.Generic.List[CMTraceOpen.Tests.DisposableRegistryKey]]::new()
-        $state = [pscustomobject]@{ AllDisposedAtUnload = $false }
+        $state = [pscustomobject]@{
+            HiveLoaded = $false
+            AllDisposedAtUnload = $false
+        }
         $originalSystemRoot = $env:SystemRoot
         $env:SystemRoot = Join-Path $TestDrive "Windows"
 
@@ -322,7 +480,12 @@ namespace CMTraceOpen.Tests {
             }
         }
         Mock Get-ItemPropertyValue { $profileImagePath }
-        Mock Test-Path { $LiteralPath -eq $ntUserPath }
+        Mock Test-Path {
+            if ($LiteralPath -eq $userRoot) {
+                return $state.HiveLoaded
+            }
+            return $LiteralPath -eq $ntUserPath
+        }
         Mock Get-Item {
             $key = [CMTraceOpen.Tests.DisposableRegistryKey]::new()
             $keys.Add($key)
@@ -331,10 +494,14 @@ namespace CMTraceOpen.Tests {
         Mock Remove-Item {}
         Mock Remove-ItemProperty {}
         Mock Start-Process {
+            if ($ArgumentList[0] -eq "LOAD") {
+                $state.HiveLoaded = $true
+            }
             if ($ArgumentList[0] -eq "UNLOAD") {
                 $state.AllDisposedAtUnload = @(
                     $keys | Where-Object { -not $_.IsDisposed }
                 ).Count -eq 0
+                $state.HiveLoaded = $false
             }
             return [pscustomobject]@{ ExitCode = 0 }
         }
