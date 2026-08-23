@@ -407,7 +407,17 @@ fn normalized_identity(value: &str) -> Option<String> {
 }
 
 fn source_identity(value: &str) -> Option<String> {
-    normalized_identity(value)
+    let value = identity_value(value)?;
+    let bytes = value.as_bytes();
+    let has_windows_drive = bytes.get(1) == Some(&b':') && bytes[0].is_ascii_alphabetic();
+    let is_windows_shaped = has_windows_drive
+        || value.starts_with("//")
+        || (!value.starts_with('/') && value.contains('\\'));
+    Some(if is_windows_shaped {
+        value.to_ascii_lowercase()
+    } else {
+        value.to_string()
+    })
 }
 
 fn usable_record_text(value: Option<&str>) -> Option<String> {
@@ -2152,10 +2162,46 @@ mod tests {
     }
 
     #[test]
-    fn provider_record_identity_is_case_insensitive_on_every_analysis_host() {
+    fn provider_record_identity_case_folds_windows_shaped_sources() {
+        for (first_source, second_source) in [
+            (r"C:\Captures\Capture.evtx", r"c:\captures\capture.evtx"),
+            (
+                r"\\Server\Share\Capture.evtx",
+                r"\\server\share\capture.evtx",
+            ),
+            (r"Captures\Capture.evtx", r"captures\capture.evtx"),
+        ] {
+            let mut first = event(1_000, "first", TimelineSeverity::Info);
+            let mut second = event(2_000, "second", TimelineSeverity::Info);
+            for (item, source) in [(&mut first, first_source), (&mut second, second_source)] {
+                if let TimelineOrigin::Event {
+                    stable_id,
+                    source: origin_source,
+                    ..
+                } = &mut item.origin
+                {
+                    *origin_source = source.to_string();
+                    *stable_id = format!("{source}/Application#1");
+                }
+            }
+            let observations = [
+                observation_from_origin(&first.origin),
+                observation_from_origin(&second.origin),
+            ];
+
+            let (edges, _) = correlate_observations(&observations);
+            assert_eq!(edges.len(), 1, "{first_source} and {second_source}");
+        }
+    }
+
+    #[test]
+    fn provider_record_identity_preserves_unix_source_case() {
         let mut first = event(1_000, "first", TimelineSeverity::Info);
         let mut second = event(2_000, "second", TimelineSeverity::Info);
-        for (item, source) in [(&mut first, "Capture.evtx"), (&mut second, "capture.evtx")] {
+        for (item, source) in [
+            (&mut first, "/captures/Capture.evtx"),
+            (&mut second, "/captures/capture.evtx"),
+        ] {
             if let TimelineOrigin::Event {
                 stable_id,
                 source: origin_source,
@@ -2172,7 +2218,34 @@ mod tests {
         ];
 
         let (edges, _) = correlate_observations(&observations);
-        assert_eq!(edges.len(), 1);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn provider_record_identity_preserves_backslashes_inside_unix_sources() {
+        let mut first = event(1_000, "first", TimelineSeverity::Info);
+        let mut second = event(2_000, "second", TimelineSeverity::Info);
+        for (item, source) in [
+            (&mut first, r"/captures/Folder\Capture.evtx"),
+            (&mut second, r"/captures/folder\capture.evtx"),
+        ] {
+            if let TimelineOrigin::Event {
+                stable_id,
+                source: origin_source,
+                ..
+            } = &mut item.origin
+            {
+                *origin_source = source.to_string();
+                *stable_id = format!("{source}/Application#1");
+            }
+        }
+        let observations = [
+            observation_from_origin(&first.origin),
+            observation_from_origin(&second.origin),
+        ];
+
+        let (edges, _) = correlate_observations(&observations);
+        assert!(edges.is_empty());
     }
 
     #[test]
