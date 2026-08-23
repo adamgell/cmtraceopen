@@ -171,7 +171,8 @@ describe("SourcePicker remote source", () => {
     await waitFor(() => {
       expect(status.querySelectorAll("li")).toHaveLength(256);
     });
-    expect(status).toHaveTextContent("3 additional coverage gaps omitted by display limit.");
+    expect(status).toHaveTextContent("source-255: coverage gap 255");
+    expect(status).toHaveTextContent("2 additional coverage gaps omitted by display limit.");
     expect(status).not.toHaveTextContent("source-257: coverage gap 257");
   });
 

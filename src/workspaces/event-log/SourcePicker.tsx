@@ -117,17 +117,11 @@ export function SourcePicker() {
 
   };
   const displayError = loadError ?? localError;
-  const omittedCoverageGaps =
-    coverageGaps.length > MAX_DISPLAYED_COVERAGE_GAPS
-      ? coverageGaps.length - (MAX_DISPLAYED_COVERAGE_GAPS - 1)
-      : 0;
-  const displayedCoverageGaps =
-    omittedCoverageGaps > 0
-      ? [
-          ...coverageGaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS - 1),
-          `${omittedCoverageGaps} additional coverage gaps omitted by display limit.`,
-        ]
-      : coverageGaps;
+  const displayedCoverageGaps = coverageGaps.slice(
+    0,
+    MAX_DISPLAYED_COVERAGE_GAPS,
+  );
+  const omittedCoverageGaps = coverageGaps.length - displayedCoverageGaps.length;
 
   return (
     <div
@@ -276,6 +270,12 @@ export function SourcePicker() {
               </li>
             ))}
           </ul>
+        )}
+        {omittedCoverageGaps > 0 && (
+          <div>
+            {omittedCoverageGaps} additional coverage gaps omitted by display
+            limit.
+          </div>
         )}
       </div>
     </div>
