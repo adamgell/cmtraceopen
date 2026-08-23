@@ -190,6 +190,28 @@ impl ProviderDb {
                 |row| row.get(0),
             )
             .map_err(|error| format!("cannot inspect provider capture state: {error}"))?;
+        if has_capture_state {
+            let has_duplicate_capture_state: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ProviderCaptureState \
+                     GROUP BY ProviderName COLLATE NOCASE, VersionKey \
+                     HAVING COUNT(*) > 1)",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| {
+                    format!(
+                        "{} has an invalid ProviderCaptureState table: {error}",
+                        path.display()
+                    )
+                })?;
+            if has_duplicate_capture_state {
+                return Err(format!(
+                    "{} contains duplicate ProviderCaptureState provider/version keys",
+                    path.display()
+                ));
+            }
+        }
         Ok(Self {
             info: ProviderDbInfo {
                 path: path.display().to_string(),
@@ -2060,6 +2082,37 @@ mod tests {
         assert_eq!(rows[0].metadata.provider_name, "Nullable");
         assert!(rows[0].metadata.events.is_empty());
         assert!(rows[0].metadata.messages.is_empty());
+    }
+
+    #[test]
+    fn duplicate_capture_state_keys_are_rejected_before_rows_can_multiply() {
+        let dir = temp_dir("duplicate-capture-state");
+        let path = dir.join("capture.db");
+        build_db(&path, &[("Duplicate-State", 26200, EVENTS)]);
+        let connection = Connection::open(&path).expect("open");
+        connection
+            .execute_batch(
+                r#"CREATE TABLE ProviderCaptureState (
+                    ProviderName TEXT COLLATE NOCASE,
+                    VersionKey TEXT,
+                    UnavailableCategories BLOB
+                );"#,
+            )
+            .expect("capture-state schema without a uniqueness constraint");
+        let unavailable = gzip(r#"["keywords"]"#);
+        for _ in 0..2 {
+            connection
+                .execute(
+                    "INSERT INTO ProviderCaptureState \
+                     (ProviderName, VersionKey, UnavailableCategories) VALUES (?1, ?2, ?3)",
+                    rusqlite::params!["Duplicate-State", "vk1:26200:0", &unavailable],
+                )
+                .expect("duplicate capture state");
+        }
+        drop(connection);
+
+        let error = ProviderDb::open(&path).expect_err("duplicate capture state must be rejected");
+        assert!(error.contains("duplicate ProviderCaptureState"), "{error}");
     }
 
     #[test]
