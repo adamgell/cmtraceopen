@@ -46,6 +46,18 @@
           "condition": "DISABLEUPDATECHECKS=\"1\" AND REMOVE<>\"ALL\"",
           "sequence": "EndOfExecution",
           "continueOnError": false
+        },
+        {
+          "filePath": "src-tauri\\installer\\remove-stable-file-associations.ps1",
+          "condition": "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE AND ProductName=\"CMTrace Open\"",
+          "sequence": "EndOfExecution",
+          "continueOnError": true
+        },
+        {
+          "filePath": "src-tauri\\installer\\remove-nightly-file-associations.ps1",
+          "condition": "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE AND ProductName=\"CMTrace Open Nightly\"",
+          "sequence": "EndOfExecution",
+          "continueOnError": true
         }
       ]
     },

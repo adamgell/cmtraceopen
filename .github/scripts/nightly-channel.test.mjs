@@ -79,6 +79,20 @@ async function withTempRepo(testFn) {
           ],
           msi: {
             upgradeCode: "{E8F1A3B7-5C2D-4F6E-9A8B-1D3E5F7A9C2B}",
+            customActions: {
+              powershell: [
+                {
+                  filePath: "src-tauri\\installer\\remove-stable-file-associations.ps1",
+                  condition:
+                    'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE AND ProductName="CMTrace Open"',
+                },
+                {
+                  filePath: "src-tauri\\installer\\remove-nightly-file-associations.ps1",
+                  condition:
+                    'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE AND ProductName="CMTrace Open Nightly"',
+                },
+              ],
+            },
             installDialog: {
               packageDescription:
                 "Open-source CMTrace log viewer with built-in Intune diagnostics.",
@@ -164,6 +178,18 @@ describe("nightly channel workflow helpers", () => {
       assert.equal(installerPackage.installDir, "%ProgramFiles%\\CMTrace Open Nightly");
       assert.equal(installerPackage.msi.packageName, "CMTrace Open Nightly");
       assert.equal(installerPackage.msi.upgradeCode, "{7B16F0D6-2B7B-4D4B-9F71-4F1A9F64C0E3}");
+      assert.deepEqual(installerPackage.msi.customActions.powershell, [
+        {
+          filePath: "src-tauri\\installer\\remove-stable-file-associations.ps1",
+          condition:
+            'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE AND ProductName="CMTrace Open"',
+        },
+        {
+          filePath: "src-tauri\\installer\\remove-nightly-file-associations.ps1",
+          condition:
+            'REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE AND ProductName="CMTrace Open Nightly"',
+        },
+      ]);
       assert.match(
         installerPackage.msi.installDialog.packageDescription,
         /Nightly signed build 1\.3\.2-nightly\.20260514\.42\.gabc123def456/

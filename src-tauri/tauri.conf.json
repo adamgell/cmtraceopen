@@ -84,7 +84,7 @@
       "nsis": {
         "installMode": "both",
         "displayLanguageSelector": false,
-        "installerHooks": "installer/disable-update-checks.nsh"
+        "installerHooks": "installer/windows-installer-hooks.nsh"
       },
       "wix": {}
     },

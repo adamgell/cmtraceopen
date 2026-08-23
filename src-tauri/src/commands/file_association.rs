@@ -628,6 +628,14 @@ mod tests {
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
     }
 
+    fn load_installer_asset(file_name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("installer")
+            .join(file_name);
+        fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+    }
+
     #[test]
     fn windows_packaging_disables_installer_associations_without_removing_other_platforms() {
         let base_config = load_tauri_config("tauri.conf.json");
@@ -669,6 +677,105 @@ mod tests {
 
         let unique_extensions: HashSet<_> = LOG_FILE_EXTENSIONS.iter().copied().collect();
         assert_eq!(unique_extensions.len(), LOG_FILE_EXTENSIONS.len());
+    }
+
+    #[test]
+    fn nsis_uninstall_cleanup_is_scoped_and_preserves_replacement_installs() {
+        let config = load_tauri_config("tauri.conf.json");
+        assert_eq!(
+            config
+                .pointer("/bundle/windows/nsis/installerHooks")
+                .and_then(serde_json::Value::as_str),
+            Some("installer/windows-installer-hooks.nsh")
+        );
+        let hook = load_installer_asset("windows-installer-hooks.nsh");
+
+        assert!(hook.contains("${If} $UpdateMode = 1"));
+        assert!(hook.contains("${GetOptions} $R0 \"_?=\" $R1"));
+        assert!(hook
+            .contains("CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open\" \"CMTraceOpen\""));
+        assert!(hook.contains(
+            "CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION \"CMTrace Open Nightly\" \"CMTraceOpenNightly\""
+        ));
+        assert!(!hook.contains("CMTrace Open Lite"));
+        for extension in LOG_FILE_EXTENSIONS {
+            assert!(
+                hook.contains(&format!("Software\\Classes\\{extension}\\OpenWithProgids")),
+                "NSIS cleanup must remove {extension} OpenWithProgids"
+            );
+        }
+        assert!(hook.contains("SHChangeNotify"));
+    }
+
+    #[test]
+    fn msi_uninstall_cleanup_covers_each_installed_edition_without_crossing_channels() {
+        let package: serde_json::Value =
+            serde_json::from_str(&load_installer_asset("package.signed.json"))
+                .expect("signed MSI package configuration must be valid JSON");
+        let actions = package
+            .pointer("/msi/customActions/powershell")
+            .and_then(serde_json::Value::as_array)
+            .expect("MSI PowerShell custom actions must be an array");
+
+        let cases = [
+            (
+                "src-tauri\\installer\\remove-stable-file-associations.ps1",
+                "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE AND ProductName=\"CMTrace Open\"",
+                "remove-stable-file-associations.ps1",
+                [
+                    ("CMTrace Open", "CMTraceOpen"),
+                    ("CMTrace Open Lite", "CMTraceOpenLite"),
+                ],
+                "CMTrace Open Nightly",
+            ),
+            (
+                "src-tauri\\installer\\remove-nightly-file-associations.ps1",
+                "REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE AND ProductName=\"CMTrace Open Nightly\"",
+                "remove-nightly-file-associations.ps1",
+                [
+                    ("CMTrace Open Nightly", "CMTraceOpenNightly"),
+                    ("CMTrace Open Lite Nightly", "CMTraceOpenLiteNightly"),
+                ],
+                "CMTrace Open\"; RegistryStem = \"CMTraceOpen\"",
+            ),
+        ];
+
+        for (file_path, condition, script_name, identities, excluded_identity) in cases {
+            let action = actions
+                .iter()
+                .find(|action| {
+                    action.get("filePath").and_then(serde_json::Value::as_str) == Some(file_path)
+                })
+                .unwrap_or_else(|| panic!("missing MSI cleanup action {file_path}"));
+            assert_eq!(
+                action.get("condition").and_then(serde_json::Value::as_str),
+                Some(condition)
+            );
+            assert_eq!(
+                action.get("sequence").and_then(serde_json::Value::as_str),
+                Some("EndOfExecution")
+            );
+            assert_eq!(
+                action
+                    .get("continueOnError")
+                    .and_then(serde_json::Value::as_bool),
+                Some(true)
+            );
+
+            let script = load_installer_asset(script_name);
+            for (application_name, registry_stem) in identities {
+                assert!(script.contains(&format!(
+                    "ApplicationName = \"{application_name}\"; RegistryStem = \"{registry_stem}\""
+                )));
+            }
+            assert!(!script.contains(excluded_identity));
+            for extension in LOG_FILE_EXTENSIONS {
+                assert!(script.contains(&format!("\"{extension}\"")));
+            }
+            assert!(script.contains("Registry::HKEY_USERS"));
+            assert!(script.contains("ProfileList"));
+            assert!(script.contains("SHChangeNotify"));
+        }
     }
 
     #[test]
