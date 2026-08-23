@@ -128,7 +128,7 @@ function Mount-ProfileHiveIfMissing {
 
     $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
     if (-not (Test-Path -LiteralPath $ntUserPath -PathType Leaf)) {
-        throw "profile hive does not exist: $ntUserPath"
+        return $null
     }
 
     $loadExitCode = Invoke-RegistryHiveOperation `
@@ -157,6 +157,9 @@ foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
             -ProfileKey $profileKey `
             -UserRoot $userRoot `
             -HiveName $hiveName
+        if ($null -eq $loadedByCleanup) {
+            continue
+        }
         if (-not $loadedByCleanup) {
             # A loaded profile can disappear here when its user logs off. Probe
             # once more immediately before cleanup so the offline hive is not skipped.
@@ -164,6 +167,9 @@ foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
                 -ProfileKey $profileKey `
                 -UserRoot $userRoot `
                 -HiveName $hiveName
+            if ($null -eq $loadedByCleanup) {
+                continue
+            }
         }
 
         for ($cleanupAttempt = 0; $cleanupAttempt -lt 2; $cleanupAttempt++) {
@@ -196,6 +202,9 @@ foreach ($profileKey in Get-ChildItem -LiteralPath $profileListPath) {
                 -ProfileKey $profileKey `
                 -UserRoot $userRoot `
                 -HiveName $hiveName
+            if ($null -eq $loadedByCleanup) {
+                break
+            }
         }
     }
     catch {

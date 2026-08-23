@@ -111,6 +111,71 @@ namespace CMTraceOpen.Tests {
         }
     }
 
+    It "skips a stale <Name> profile whose hive file is absent" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1009"
+        $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+        $profileImagePath = Join-Path $TestDrive "Removed User"
+
+        Mock Get-ChildItem {
+            [pscustomobject]@{
+                PSChildName = $sid
+                PSPath = $profileKey
+            }
+        }
+        Mock Get-ItemPropertyValue { $profileImagePath }
+        Mock Test-Path { $false }
+        Mock Get-Item { throw "association cleanup should not run" }
+        Mock Remove-Item {}
+        Mock Remove-ItemProperty {}
+        Mock Start-Process { throw "registry hive operations should not run" }
+
+        { & (Join-Path $PSScriptRoot $ScriptName) } | Should -Not -Throw
+
+        Should -Invoke Get-Item -Times 0 -Exactly
+        Should -Invoke Start-Process -Times 0 -Exactly
+        [CMTraceOpen.AssociationChange]::NotifyCount | Should -Be 1
+    }
+
+    It "reports an inaccessible <Name> profile hive" -ForEach $scriptCases {
+        $sid = "S-1-5-21-1010"
+        $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+        $userRoot = "Registry::HKEY_USERS\$sid"
+        $profileImagePath = Join-Path $TestDrive "Inaccessible User"
+        $ntUserPath = Join-Path $profileImagePath "NTUSER.DAT"
+
+        Mock Get-ChildItem {
+            [pscustomobject]@{
+                PSChildName = $sid
+                PSPath = $profileKey
+            }
+        }
+        Mock Get-ItemPropertyValue { $profileImagePath }
+        Mock Test-Path {
+            if ($LiteralPath -eq $ntUserPath) {
+                throw "access denied"
+            }
+            return $false
+        }
+        Mock Get-Item { $null }
+        Mock Remove-Item {}
+        Mock Remove-ItemProperty {}
+        Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+
+        $caught = $null
+        try {
+            & (Join-Path $PSScriptRoot $ScriptName)
+        }
+        catch {
+            $caught = $_
+        }
+
+        $caught | Should -Not -BeNullOrEmpty
+        $caught.Exception.Message | Should -Match ([regex]::Escape("$sid/profile"))
+        $caught.Exception.Message | Should -Match "access denied"
+        Should -Invoke Start-Process -Times 0 -Exactly
+        [CMTraceOpen.AssociationChange]::NotifyCount | Should -Be 1
+    }
+
     It "does not unload an already-loaded <Name> profile" -ForEach $scriptCases {
         $sid = "S-1-5-21-1001"
         $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
