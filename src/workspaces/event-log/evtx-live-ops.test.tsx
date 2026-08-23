@@ -40,6 +40,22 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function confirmChannelClear(channel = "Application") {
+  const channelSelect = document.querySelector<HTMLSelectElement>(
+    'select[aria-label="Channel to clear"]',
+  )!;
+  fireEvent.change(channelSelect, { target: { value: channel } });
+  const clearButton = Array.from(document.querySelectorAll("button")).find(
+    (button) => button.textContent?.trim() === "Clear",
+  )!;
+  fireEvent.click(clearButton);
+  const confirmButton = Array.from(document.querySelectorAll("button")).find(
+    (button) => button.textContent?.trim() === "Clear channel",
+  )!;
+  fireEvent.click(confirmButton);
+  return { channelSelect, clearButton };
+}
+
 describe("event-log live operations", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -756,25 +772,15 @@ describe("event-log live operations", () => {
     });
     render(<ChannelPicker />);
 
-    const channelSelect = document.querySelector<HTMLSelectElement>(
-      'select[aria-label="Channel to clear"]',
-    )!;
-    fireEvent.change(channelSelect, { target: { value: "Application" } });
-    const clearButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Clear",
-    )!;
-    fireEvent.click(clearButton);
-    const confirmButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Clear channel",
-    )!;
+    const { channelSelect, clearButton } = confirmChannelClear();
 
-    fireEvent.click(confirmButton);
-
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(channelSelect).toBeDisabled();
-    expect(confirmButton).toBeDisabled();
-    expect(confirmButton).toHaveTextContent("Clearing…");
-    fireEvent.click(confirmButton);
+    expect(clearButton).toBeDisabled();
+    expect(document.querySelector('[role="status"]')).toHaveTextContent(
+      "Clearing Application…",
+    );
+    fireEvent.click(clearButton);
     expect(invoke.mock.calls.filter(([name]) => name === "evtx_clear_channel")).toHaveLength(1);
 
     clearResult.resolve({
@@ -783,9 +789,79 @@ describe("event-log live operations", () => {
     });
     await waitFor(() => {
       expect(channelSelect).not.toBeDisabled();
-      expect(document.querySelector('[role="dialog"]')).toHaveTextContent("Access denied");
+      expect(document.querySelector('[role="alert"]')).toHaveTextContent("Access denied");
     });
     expect(channelSelect.value).toBe("Application");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("releases the clear controls and selection after a successful clear", async () => {
+    const clearResult = deferred<{
+      channel: string;
+      result: { status: "cleared" };
+    }>();
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_clear_channel") return clearResult.promise;
+      return undefined;
+    });
+    render(<ChannelPicker />);
+
+    const { channelSelect } = confirmChannelClear();
+
+    expect(channelSelect).toBeDisabled();
+    clearResult.resolve({ channel: "Application", result: { status: "cleared" } });
+
+    await waitFor(() => {
+      expect(channelSelect).not.toBeDisabled();
+      expect(channelSelect.value).toBe("");
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="status"]')).toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([
+    ["cancelled", "Clear was cancelled."],
+    ["empty", "Application is already empty."],
+  ] as const)(
+    "announces a %s clear result without reopening confirmation",
+    async (status, message) => {
+      invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+        if (name === "evtx_clear_channel") {
+          return { channel: args.channel, result: { status } };
+        }
+        return undefined;
+      });
+      render(<ChannelPicker />);
+
+      const { channelSelect } = confirmChannelClear();
+
+      await waitFor(() => {
+        expect(document.querySelector('[role="alert"]')).toHaveTextContent(message);
+      });
+      expect(channelSelect).not.toBeDisabled();
+      expect(channelSelect.value).toBe("Application");
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
+
+  it("announces a rejected clear without reopening confirmation", async () => {
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_clear_channel") throw new Error("Remote RPC unavailable");
+      return undefined;
+    });
+    render(<ChannelPicker />);
+
+    const { channelSelect } = confirmChannelClear();
+
+    await waitFor(() => {
+      expect(document.querySelector('[role="alert"]')).toHaveTextContent(
+        "Command 'evtx_clear_channel' failed.",
+      );
+    });
+    expect(channelSelect).not.toBeDisabled();
+    expect(channelSelect.value).toBe("Application");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("queues the channel-clear confirmation behind the active app modal", async () => {
