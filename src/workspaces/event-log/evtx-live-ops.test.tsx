@@ -32,6 +32,14 @@ function AboutAndChannelPicker() {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("event-log live operations", () => {
   beforeEach(() => {
     invoke.mockReset();
@@ -735,6 +743,49 @@ describe("event-log live operations", () => {
     fireEvent.click(cancelButton!);
     await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(invoke).not.toHaveBeenCalledWith("evtx_clear_channel", expect.anything());
+  });
+
+  it("keeps one confirmed channel clear pending until its result settles", async () => {
+    const clearResult = deferred<{
+      channel: string;
+      result: { status: "unavailable"; detail: string };
+    }>();
+    invoke.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === "evtx_clear_channel") return clearResult.promise;
+      return { requestId: args.requestId };
+    });
+    render(<ChannelPicker />);
+
+    const channelSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Channel to clear"]',
+    )!;
+    fireEvent.change(channelSelect, { target: { value: "Application" } });
+    const clearButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Clear",
+    )!;
+    fireEvent.click(clearButton);
+    const confirmButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Clear channel",
+    )!;
+
+    fireEvent.click(confirmButton);
+
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(channelSelect).toBeDisabled();
+    expect(confirmButton).toBeDisabled();
+    expect(confirmButton).toHaveTextContent("Clearing…");
+    fireEvent.click(confirmButton);
+    expect(invoke.mock.calls.filter(([name]) => name === "evtx_clear_channel")).toHaveLength(1);
+
+    clearResult.resolve({
+      channel: "Application",
+      result: { status: "unavailable", detail: "Access denied" },
+    });
+    await waitFor(() => {
+      expect(channelSelect).not.toBeDisabled();
+      expect(document.querySelector('[role="dialog"]')).toHaveTextContent("Access denied");
+    });
+    expect(channelSelect.value).toBe("Application");
   });
 
   it("queues the channel-clear confirmation behind the active app modal", async () => {

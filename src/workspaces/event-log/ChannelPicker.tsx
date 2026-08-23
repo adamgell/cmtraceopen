@@ -120,6 +120,9 @@ export function ChannelPicker() {
   const stopLiveTail = useEvtxStore((s) => s.stopLiveTail);
   const clearChannel = useEvtxStore((s) => s.clearChannel);
   const [clearTarget, setClearTarget] = useState<string | null>(null);
+  const clearTargetRef = useRef<string | null>(null);
+  const clearInFlightRef = useRef<string | null>(null);
+  const [clearingChannel, setClearingChannel] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const ownsClearConfirmation = useModalOwnership(
     "eventLogChannelClear",
@@ -291,8 +294,11 @@ export function ChannelPicker() {
                 <Select
                   aria-label="Channel to clear"
                   value={clearTarget ?? ""}
+                  disabled={clearingChannel !== null}
                   onChange={(_, data) => {
-                    setClearTarget(data.value || null);
+                    const channel = data.value || null;
+                    clearTargetRef.current = channel;
+                    setClearTarget(channel);
                     setClearError(null);
                   }}
                   style={{ flex: 1, minWidth: 0, fontSize: `${metrics.fontSize}px` }}
@@ -305,7 +311,7 @@ export function ChannelPicker() {
                   ))}
                 </Select>
                 <Button
-                  disabled={!clearTarget || isLoading}
+                  disabled={!clearTarget || isLoading || clearingChannel !== null}
                   onClick={() => {
                     if (!clearTarget) return;
                     setClearError(null);
@@ -322,6 +328,7 @@ export function ChannelPicker() {
         <Dialog
           open={ownsClearConfirmation}
           onOpenChange={(_, data) => {
+            if (clearInFlightRef.current !== null) return;
             setConfirmClear(data.open);
             if (data.open) setClearError(null);
           }}
@@ -331,8 +338,8 @@ export function ChannelPicker() {
               <DialogTitle>Clear event channel?</DialogTitle>
               <DialogContent>
                 This permanently removes every event currently stored in{" "}
-                <strong>{clearTarget}</strong>. The action requires an already elevated
-                application and cannot be undone.
+                <strong>{clearingChannel ?? clearTarget}</strong>. The action requires an
+                already elevated application and cannot be undone.
                 {clearError && (
                   <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: "8px" }}>
                     {clearError}
@@ -340,20 +347,40 @@ export function ChannelPicker() {
                 )}
               </DialogContent>
               <DialogActions>
-                <Button appearance="secondary" onClick={() => setConfirmClear(false)}>
+                <Button
+                  appearance="secondary"
+                  disabled={clearingChannel !== null}
+                  onClick={() => setConfirmClear(false)}
+                >
                   Cancel
                 </Button>
                 <Button
                   appearance="primary"
+                  disabled={clearingChannel !== null}
                   onClick={() => {
-                    if (!clearTarget) return;
+                    if (!clearTarget || clearInFlightRef.current !== null) return;
                     const channel = clearTarget;
-                    setConfirmClear(false);
+                    clearInFlightRef.current = channel;
+                    setClearingChannel(channel);
+                    setClearError(null);
+                    const releasePendingClear = () => {
+                      if (clearInFlightRef.current !== channel) return false;
+                      clearInFlightRef.current = null;
+                      setClearingChannel(null);
+                      if (clearTargetRef.current !== channel) {
+                        setConfirmClear(false);
+                        return false;
+                      }
+                      return true;
+                    };
                     void clearChannel(channel, true)
                       .then((result) => {
+                        if (!releasePendingClear()) return;
                         if (result.status === "cleared") {
+                          clearTargetRef.current = null;
                           setClearTarget(null);
                           setClearError(null);
+                          setConfirmClear(false);
                         } else if ("detail" in result) {
                           setClearError(result.detail);
                           setConfirmClear(true);
@@ -367,12 +394,13 @@ export function ChannelPicker() {
                         }
                       })
                       .catch((error: unknown) => {
+                        if (!releasePendingClear()) return;
                         setClearError(error instanceof Error ? error.message : String(error));
                         setConfirmClear(true);
                       });
                   }}
                 >
-                  Clear channel
+                  {clearingChannel !== null ? "Clearing…" : "Clear channel"}
                 </Button>
               </DialogActions>
             </DialogBody>
