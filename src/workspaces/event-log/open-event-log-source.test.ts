@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 import type { EventLogSourceManifest } from "./types";
 
 const expandEventLogSources = vi.hoisted(() => vi.fn());
 const parseManifest = vi.hoisted(() => vi.fn());
 const parseFiles = vi.hoisted(() => vi.fn());
 const setLoadError = vi.hoisted(() => vi.fn());
+const supersedePendingLoad = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/commands", () => ({ expandEventLogSources }));
 vi.mock("./evtx-store", () => ({
   useEvtxStore: {
-    getState: () => ({ parseManifest, parseFiles, setLoadError }),
+    getState: () => ({
+      parseManifest,
+      parseFiles,
+      setLoadError,
+      supersedePendingLoad,
+    }),
   },
 }));
 
@@ -21,6 +28,7 @@ beforeEach(() => {
   parseManifest.mockReset();
   parseFiles.mockReset();
   setLoadError.mockReset();
+  supersedePendingLoad.mockReset();
 });
 
 function manifestFor(path: string): EventLogSourceManifest {
@@ -29,6 +37,54 @@ function manifestFor(path: string): EventLogSourceManifest {
     coverage: [],
   };
 }
+
+describe("source-open generation", () => {
+  it("does not let an older expansion replace a newer source", async () => {
+    const olderExpansion = deferred<EventLogSourceManifest>();
+    const newerManifest = manifestFor("/tmp/newer/Application.evtx");
+    expandEventLogSources
+      .mockReturnValueOnce(olderExpansion.promise)
+      .mockResolvedValueOnce(newerManifest);
+    parseManifest.mockResolvedValue(undefined);
+
+    const olderOpen = openEventLogSources([
+      { kind: "folder", path: "/tmp/older" },
+    ]);
+    await openEventLogSources([{ kind: "folder", path: "/tmp/newer" }]);
+    olderExpansion.resolve(manifestFor("/tmp/older/Application.evtx"));
+    await olderOpen;
+
+    expect(parseManifest).toHaveBeenCalledTimes(1);
+    expect(parseManifest).toHaveBeenCalledWith(newerManifest);
+  });
+
+  it("discards an older expansion failure after a newer error", async () => {
+    const olderExpansion = deferred<EventLogSourceManifest>();
+    expandEventLogSources
+      .mockReturnValueOnce(olderExpansion.promise)
+      .mockRejectedValueOnce(new Error("newer source failed"));
+
+    const olderResult = openEventLogSources([
+      { kind: "folder", path: "/tmp/older" },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const newerResult = openEventLogSource({
+      kind: "folder",
+      path: "/tmp/newer",
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(await newerResult).toEqual(new Error("newer source failed"));
+    olderExpansion.reject(new Error("older source failed"));
+    expect(await olderResult).toBeNull();
+    expect(setLoadError).toHaveBeenCalledTimes(1);
+    expect(setLoadError).toHaveBeenCalledWith("newer source failed");
+  });
+});
 
 describe("openEventLogSources provenance", () => {
   it("keeps backend archive and VSS kinds when the picker reports a generic file", async () => {

@@ -17,6 +17,25 @@ export type EventLogOpenSource =
 
 const MAX_COVERAGE_DETAILS = 3;
 const MAX_DIAGNOSTIC_FIELD_LENGTH = 160;
+let sourceOpenGeneration = 0;
+
+function beginSourceOpen(): number {
+  sourceOpenGeneration += 1;
+  useEvtxStore.getState().supersedePendingLoad();
+  return sourceOpenGeneration;
+}
+
+function isCurrentSourceOpen(generation: number): boolean {
+  return sourceOpenGeneration === generation;
+}
+
+async function expandCurrentSource(
+  sources: EventLogSourceSelection[],
+  generation: number,
+): Promise<EventLogSourceManifest | null> {
+  const manifest = await expandEventLogSources(sources);
+  return isCurrentSourceOpen(generation) ? manifest : null;
+}
 
 function boundedDiagnosticField(value: string): string {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -40,20 +59,23 @@ function formatCoverageDiagnostics(coverage: EventLogSourceCoverage[]): string {
 export async function openEventLogSources(
   sources: EventLogSourceSelection[],
 ): Promise<void> {
-  let manifest: EventLogSourceManifest;
+  const generation = beginSourceOpen();
   try {
-    manifest = await expandEventLogSources(sources);
+    const manifest = await expandCurrentSource(sources, generation);
+    if (!manifest) return;
+    await useEvtxStore.getState().parseManifest(manifest);
   } catch (error) {
-    useEvtxStore.getState().setLoadError(
-      error instanceof Error ? error.message : String(error)
-    );
+    if (!isCurrentSourceOpen(generation)) return;
+    useEvtxStore
+      .getState()
+      .setLoadError(error instanceof Error ? error.message : String(error));
     throw error;
   }
-  await useEvtxStore.getState().parseManifest(manifest);
 }
 
 /** Open a single source while preserving known-source folder discovery. */
 export async function openEventLogSource(source: EventLogOpenSource): Promise<void> {
+  const generation = beginSourceOpen();
   const parseFiles = useEvtxStore.getState().parseFiles;
 
   try {
@@ -62,7 +84,9 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
       source.kind === "archive" ||
       source.kind === "vss"
     ) {
-      await openEventLogSources([source]);
+      const manifest = await expandCurrentSource([source], generation);
+      if (!manifest) return;
+      await useEvtxStore.getState().parseManifest(manifest);
       return;
     }
 
@@ -77,7 +101,11 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
       return;
     }
 
-    const manifest = await expandEventLogSources([{ kind: "folder", path }]);
+    const manifest = await expandCurrentSource(
+      [{ kind: "folder", path }],
+      generation,
+    );
+    if (!manifest) return;
     if (manifest.entries.length === 0) {
       const usefulCoverage = manifest.coverage.filter(
         (coverage) => coverage.kind !== "empty",
@@ -94,9 +122,10 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
     }
     await useEvtxStore.getState().parseManifest(manifest);
   } catch (error) {
-    useEvtxStore.getState().setLoadError(
-      error instanceof Error ? error.message : String(error)
-    );
+    if (!isCurrentSourceOpen(generation)) return;
+    useEvtxStore
+      .getState()
+      .setLoadError(error instanceof Error ? error.message : String(error));
     throw error;
   }
 }
