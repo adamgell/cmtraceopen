@@ -42,6 +42,19 @@ type DiagnosisPump = {
   mounted: boolean;
 };
 
+type TimelineSnapshot = {
+  records: Parameters<typeof buildUnifiedTimeline>[0];
+  entries: Parameters<typeof buildUnifiedTimeline>[1];
+};
+
+type TimelinePump = {
+  pending: TimelineSnapshot | null;
+  running: boolean;
+  timer: number | null;
+  revision: number;
+  mounted: boolean;
+};
+
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
@@ -136,10 +149,14 @@ export function EventLogWorkspace() {
   });
   const [timelinePending, setTimelinePending] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
-  const timelineInputsRef = useRef<{
-    records: typeof records;
-    entries: typeof scopedLogEntries;
-  } | null>(null);
+  const timelineInputsRef = useRef<TimelineSnapshot | null>(null);
+  const timelinePumpRef = useRef<TimelinePump>({
+    pending: null,
+    running: false,
+    timer: null,
+    revision: 0,
+    mounted: false,
+  });
   const timelineIsCurrent =
     timelineInputsRef.current?.records === records &&
     timelineInputsRef.current?.entries === scopedLogEntries;
@@ -192,6 +209,17 @@ export function EventLogWorkspace() {
   }, []);
   useEffect(() => {
     const pump = diagnosisPumpRef.current;
+    pump.mounted = true;
+    return () => {
+      pump.mounted = false;
+      pump.revision += 1;
+      if (pump.timer !== null) window.clearTimeout(pump.timer);
+      pump.timer = null;
+      pump.pending = null;
+    };
+  }, []);
+  useEffect(() => {
+    const pump = timelinePumpRef.current;
     pump.mounted = true;
     return () => {
       pump.mounted = false;
@@ -289,43 +317,69 @@ export function EventLogWorkspace() {
   }, [records, diagnosisCoverageGaps, scopedLogEntries, diagnosisTimeline]);
 
   useEffect(() => {
-    let cancelled = false;
+    const pump = timelinePumpRef.current;
+    const revision = pump.revision + 1;
+    pump.revision = revision;
+    if (pump.timer !== null) window.clearTimeout(pump.timer);
+    pump.timer = null;
+    pump.pending = null;
+
     if (records.length === 0 && scopedLogEntries.length === 0) {
       timelineInputsRef.current = { records, entries: scopedLogEntries };
       setTimelinePending(false);
       setTimeline(EMPTY_TIMELINE);
       setTimelineError(null);
       return () => {
-        cancelled = true;
+        if (pump.timer !== null) window.clearTimeout(pump.timer);
+        pump.timer = null;
+        if (pump.revision !== revision) return;
+        pump.pending = null;
       };
     }
 
+    pump.pending = { records, entries: scopedLogEntries };
     setTimelinePending(true);
     timelineInputsRef.current = null;
     setTimelineError(null);
 
-    const timer = window.setTimeout(() => {
-      void buildUnifiedTimeline(records, scopedLogEntries)
+    const run = () => {
+      pump.timer = null;
+      if (!pump.mounted || pump.running || pump.pending === null) return;
+      const snapshot = pump.pending;
+      pump.pending = null;
+      pump.running = true;
+      const startRevision = pump.revision;
+      void buildUnifiedTimeline(snapshot.records, snapshot.entries)
         .then((nextTimeline) => {
-          if (cancelled) return;
+          if (!pump.mounted || pump.revision !== startRevision) return;
           setTimelinePending(false);
-          timelineInputsRef.current = { records, entries: scopedLogEntries };
+          timelineInputsRef.current = snapshot;
           setTimeline(nextTimeline);
           setTimelineError(null);
         })
         .catch((error: unknown) => {
-          if (cancelled) return;
+          if (!pump.mounted || pump.revision !== startRevision) return;
           setTimelinePending(false);
           const message = error instanceof Error ? error.message : String(error);
           timelineInputsRef.current = null;
           setTimeline(EMPTY_TIMELINE);
           setTimelineError(`Unified timeline could not be built: ${message}`);
+        })
+        .finally(() => {
+          pump.running = false;
+          if (!pump.mounted || pump.pending === null || pump.timer !== null)
+            return;
+          pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
         });
-    }, DIAGNOSIS_DEBOUNCE_MS);
+    };
+
+    pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
 
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+      if (pump.timer !== null) window.clearTimeout(pump.timer);
+      pump.timer = null;
+      if (pump.revision !== revision) return;
+      pump.pending = null;
     };
   }, [scopedLogEntries, records]);
 

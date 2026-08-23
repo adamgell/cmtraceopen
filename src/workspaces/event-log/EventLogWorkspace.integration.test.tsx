@@ -1,6 +1,7 @@
 import type * as EvtxStoreModule from "./evtx-store";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
@@ -135,5 +136,49 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
       [RECORD, newer, newest],
       [],
     );
+  });
+
+  it("serializes timeline builds and runs only the newest queued snapshot", async () => {
+    const firstBuild = deferred<typeof TIMELINE>();
+    const newer = {
+      ...RECORD,
+      id: 2,
+      eventRecordId: 102,
+      message: "Newer event",
+    };
+    mocks.buildTimeline
+      .mockReset()
+      .mockReturnValueOnce(firstBuild.promise)
+      .mockResolvedValue(TIMELINE);
+    useEvtxStore.setState({
+      records: [RECORD],
+      channels: [
+        {
+          name: "Application",
+          eventCount: 2,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set(["Application"]),
+      sourceMode: "files",
+      timeWindow: "all",
+    });
+
+    render(<EventLogWorkspace />);
+    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
+
+    act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
+    expect(mocks.buildTimeline).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstBuild.resolve(TIMELINE);
+      await firstBuild.promise;
+    });
+    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(2));
+    expect(mocks.buildTimeline).toHaveBeenLastCalledWith([RECORD, newer], []);
   });
 });
