@@ -70,6 +70,10 @@ fn evidence_identity_round_trips_without_flattening_native_refs() {
     assert!(refs
         .iter()
         .any(|reference| reference.source_reference().contains("PolicyAgent.log")));
+    assert_eq!(
+        refs.last().expect("event reference").source_reference(),
+        "MDM.evtx#Microsoft-Windows-DeviceManagement:75:12"
+    );
 }
 
 #[test]
@@ -89,6 +93,10 @@ fn event_identity_uses_channel_and_lossless_record_text() {
     assert!(stable_id.contains("Application"));
     assert!(stable_id.contains("9007199254740993"));
     assert!(!stable_id.contains("9007199254740992"));
+    assert_eq!(
+        reference.source_reference(),
+        "Application.evtx/WIN-TEST/Application#Provider:100:9007199254740993"
+    );
 }
 
 #[test]

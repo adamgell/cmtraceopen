@@ -116,7 +116,7 @@ impl EvidenceRef {
             }
             Self::DsregcmdRaw(value) => value.clone(),
             Self::TextLog(value) => value.source_reference(),
-            Self::Event(value) => value.stable_id(),
+            Self::Event(value) => value.source_reference(),
         }
     }
 }
@@ -164,23 +164,51 @@ pub struct EventEvidenceRef {
 }
 
 impl EventEvidenceRef {
-    /// Returns the deterministic ID used for deduplication and UI navigation.
-    pub fn stable_id(&self) -> String {
-        let fallback_record_id = self.record_id.to_string();
-        let record_id = self
-            .record_id_text
+    fn record_identity(&self) -> String {
+        self.record_id_text
             .as_deref()
             .filter(|value| {
                 let trimmed = value.trim();
                 !trimmed.is_empty() && trimmed.chars().any(|character| character != '0')
             })
             .or(self.fallback_identity.as_deref())
-            .unwrap_or(&fallback_record_id);
+            .map(str::to_string)
+            .unwrap_or_else(|| self.record_id.to_string())
+    }
+
+    /// Returns the deterministic ID used for deduplication and UI navigation.
+    pub fn stable_id(&self) -> String {
+        let record_id = self.record_identity();
         let machine = self.machine.as_deref().unwrap_or_default();
         let channel = self.channel.as_deref().unwrap_or_default();
         format!(
             "event:{}:{}:{}:{}:{}:{}",
             self.source, machine, channel, self.provider, self.event_id, record_id
+        )
+    }
+
+    fn source_reference(&self) -> String {
+        let mut scope = vec![self.source.as_str()];
+        if let Some(machine) = self
+            .machine
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            scope.push(machine);
+        }
+        if let Some(channel) = self
+            .channel
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            scope.push(channel);
+        }
+        format!(
+            "{}#{}:{}:{}",
+            scope.join("/"),
+            self.provider,
+            self.event_id,
+            self.record_identity()
         )
     }
 }
