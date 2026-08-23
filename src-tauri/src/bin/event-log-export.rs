@@ -2639,24 +2639,46 @@ mod tests {
     }
 
     #[test]
-    fn multi_batch_spool_bounds_merge_runs_without_reordering_equal_timestamps() {
-        const BATCH_COUNT: usize = 300;
+    fn final_spool_compaction_preserves_order_ids_and_all_format_bytes() {
+        // 95 batches leave two level-1 runs followed by 31 level-0 runs: the smallest
+        // base-32 frontier that exceeds the final merge's descriptor bound.
+        const BATCH_COUNT: usize = 95;
 
-        let expected_messages = (0..BATCH_COUNT)
-            .map(|index| format!("batch-{index}"))
+        let source_records = (0..BATCH_COUNT)
+            .map(|index| {
+                let mut record = make_record();
+                record.id = 10_000 + (BATCH_COUNT - index) as u64;
+                record.timestamp_epoch = 42;
+                record.message = format!("batch-{index}");
+                record.raw_xml = format!("<Event><Data>{index}</Data></Event>");
+                if index == 0 || index + 1 == BATCH_COUNT {
+                    record.mapped = vec![MappedColumn {
+                        property: format!("Frontier{index}"),
+                        text: format!("mapped-{index}"),
+                        complete: true,
+                    }];
+                }
+                record
+            })
             .collect::<Vec<_>>();
+        let mut expected_records = source_records.clone();
+        for (index, record) in expected_records.iter_mut().enumerate() {
+            record.id = index as u64;
+        }
+
         let mut spool = RecordSpool::new().expect("record spool");
-        for message in &expected_messages {
-            let mut record = make_record();
-            record.timestamp_epoch = 42;
-            record.message = message.clone();
+        for record in source_records {
             spool.push_batch(vec![record]).expect("batch is spooled");
         }
 
         assert!(
-            spool.run_count() <= MAX_OPEN_SPOOL_RUNS,
-            "the merge frontier must leave descriptor headroom"
+            spool.run_count() > MAX_OPEN_SPOOL_RUNS,
+            "the fixture must exercise final compaction"
         );
+        spool
+            .compact_for_prepare()
+            .expect("final merge frontier compacts");
+        assert!(spool.run_count() <= MAX_OPEN_SPOOL_RUNS);
 
         let prepared = spool
             .prepare(
@@ -2664,26 +2686,52 @@ mod tests {
                 app_lib::event_log::export::ExportFormat::Json,
             )
             .expect("prepared spool");
-        let records = prepared
+        let actual_records = prepared
             .records()
             .expect("spool records")
             .collect::<Result<Vec<_>, _>>()
             .expect("read spool records");
 
         assert_eq!(
-            records
+            actual_records
                 .iter()
                 .map(|record| record.message.as_str())
                 .collect::<Vec<_>>(),
-            expected_messages
+            expected_records
                 .iter()
-                .map(String::as_str)
+                .map(|record| record.message.as_str())
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            records.iter().map(|record| record.id).collect::<Vec<_>>(),
+            actual_records
+                .iter()
+                .map(|record| record.id)
+                .collect::<Vec<_>>(),
             (0..BATCH_COUNT as u64).collect::<Vec<_>>()
         );
+
+        let expected_columns = mapped_columns_iter(expected_records.iter()).expect("mapped union");
+        for format in [
+            app_lib::event_log::export::ExportFormat::Csv,
+            app_lib::event_log::export::ExportFormat::Tsv,
+            app_lib::event_log::export::ExportFormat::Json,
+            app_lib::event_log::export::ExportFormat::Xml,
+            app_lib::event_log::export::ExportFormat::Html,
+            app_lib::event_log::export::ExportFormat::RawXml,
+        ] {
+            let mut expected = Vec::new();
+            app_lib::event_log::writer::write_record_stream_to_writer(
+                &mut expected,
+                expected_records.clone(),
+                format,
+                &expected_columns,
+            )
+            .expect("in-memory export");
+            let mut actual = Vec::new();
+            write_prepared_spool_to_writer(&prepared, &mut actual, format).expect("spooled export");
+
+            assert_eq!(actual, expected, "{format:?} output must not change");
+        }
     }
 
     #[test]
