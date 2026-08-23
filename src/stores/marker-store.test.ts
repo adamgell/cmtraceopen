@@ -348,6 +348,106 @@ describe("marker load merge", () => {
     consoleError.mockRestore();
   });
 
+  it("preserves a same-identity category edit made before the first marker read", async () => {
+    const filePath = "generic-preload-category.log";
+    const writes: MarkerFile[] = [];
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") {
+          return Promise.resolve(
+            markerFile(filePath, [marker(1, "confirmed", "same-record")]),
+          );
+        }
+        if (command === "save_markers" && args?.markerFile) {
+          writes.push(args.markerFile);
+          return Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
+
+    useMarkerStore.getState().toggleMarker(filePath, 1, "same-record");
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe("saved");
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0].markers).toMatchObject([
+      { identity: "same-record", category: "bug" },
+    ]);
+  });
+
+  it("preserves a same-identity removal made before the first marker read", async () => {
+    const filePath = "generic-preload-removal.log";
+    const residentMarker = marker(1, "confirmed", "same-record");
+    const commands: string[] = [];
+    useMarkerStore.setState({
+      markersByFile: new Map([
+        [filePath, new Map([[residentMarker.lineId, residentMarker]])],
+      ]),
+    });
+    invoke.mockImplementation((command: string) => {
+      commands.push(command);
+      if (command === "load_markers") {
+        return Promise.resolve(markerFile(filePath, [residentMarker]));
+      }
+      if (command === "delete_markers") return Promise.resolve(undefined);
+      if (command === "save_markers") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`Unexpected marker command: ${command}`));
+    });
+
+    useMarkerStore.getState().removeMarker(filePath, 1, "same-record");
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "deleted",
+    );
+
+    expect(commands).toEqual(["load_markers", "delete_markers"]);
+    expect(useMarkerStore.getState().markersByFile.get(filePath)?.size).toBe(0);
+  });
+
+  it("does not restore disk markers after a clear made before the first marker read", async () => {
+    const filePath = "generic-preload-clear.log";
+    const commands: string[] = [];
+    invoke.mockImplementation((command: string) => {
+      commands.push(command);
+      if (command === "load_markers") {
+        return Promise.resolve(
+          markerFile(filePath, [marker(1, "confirmed", "disk-record")]),
+        );
+      }
+      if (command === "delete_markers") return Promise.resolve(undefined);
+      if (command === "save_markers") return Promise.resolve(undefined);
+      return Promise.reject(new Error(`Unexpected marker command: ${command}`));
+    });
+
+    useMarkerStore.getState().clearMarkersForFile(filePath);
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "deleted",
+    );
+
+    expect(commands).toEqual(["load_markers", "delete_markers"]);
+    expect(useMarkerStore.getState().markersByFile.get(filePath)?.size).toBe(0);
+  });
+
+  it("lets the first disk read replace clean resident state", async () => {
+    const filePath = "generic-preload-clean.log";
+    useMarkerStore.setState({
+      markersByFile: new Map([
+        [filePath, new Map([[1, marker(1, "bug", "same-record")]])],
+      ]),
+    });
+    invoke.mockResolvedValue(
+      markerFile(filePath, [marker(1, "confirmed", "same-record")]),
+    );
+
+    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
+      "loaded",
+    );
+    expect(
+      useMarkerStore.getState().markersByFile.get(filePath)?.get(1)?.category,
+    ).toBe("confirmed");
+  });
+
   it("serializes direct generic save requests so an older snapshot cannot finish last", async () => {
     const filePath = "generic-save-order.log";
     const firstWrite = deferred<void>();
