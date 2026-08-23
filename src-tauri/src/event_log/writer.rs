@@ -807,44 +807,10 @@ where
     I: IntoIterator<Item = R>,
     R: Borrow<EvtxRecord>,
 {
-    let temp_dir = std::env::temp_dir();
-    let mut staged = create_staged_file(
-        &temp_dir,
-        |attempt| {
-            format!(
-                "cmtraceopen-event-export-{}-{attempt}.tmp",
-                std::process::id()
-            )
-        },
-        "cannot create temporary stdout output",
-        "cannot allocate temporary stdout output path",
-    )?;
-    let result = write_record_stream(staged.file_mut(), format, records, mapped_columns)
-        .map_err(|error| error.to_string());
-    staged.close();
-    match result {
-        Ok(stats) => {
-            let mut staged_output = fs::File::open(&staged.path)
-                .map_err(|error| format!("cannot reopen temporary stdout output: {error}"))?;
-            let copied = io::copy(&mut staged_output, output)
-                .map_err(|error| format!("cannot write stdout: {error}"))?;
-            output
-                .flush()
-                .map_err(|error| format!("cannot flush stdout: {error}"))?;
-            if copied != stats.bytes {
-                return Err(format!(
-                    "stdout byte count mismatch: staged {} bytes, copied {copied}",
-                    stats.bytes
-                ));
-            }
-            Ok(stats)
-        }
-        Err(error) => Err(error),
-    }
+    write_record_stream(output, format, records, mapped_columns).map_err(|error| error.to_string())
 }
 
-/// Streams an iterator to a destination while retaining the same atomic replacement and
-/// stdout behavior as `write_records_to_destination`.
+/// Streams an iterator directly to stdout, or atomically replaces a file destination.
 pub fn write_record_stream_to_destination<I, R>(
     records: I,
     format: ExportFormat,
@@ -911,6 +877,52 @@ fn streaming_writer_handles_each_record_without_collecting_the_iterator() {
     assert_eq!(stats.records, 10_000);
     let value: serde_json::Value = serde_json::from_slice(output.get_ref()).expect("valid JSON");
     assert_eq!(value.as_array().expect("array").len(), 10_000);
+}
+
+#[test]
+fn streaming_writer_forwards_output_before_the_iterator_finishes() {
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("output lock").extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = std::sync::Arc::clone(&output);
+    let mut index = 0;
+    let records = std::iter::from_fn(move || {
+        if index == 1 {
+            assert!(
+                !observed.lock().expect("observed output lock").is_empty(),
+                "the supplied writer must receive the first record before the next is requested"
+            );
+        }
+        if index >= 2 {
+            return None;
+        }
+        let current = index;
+        index += 1;
+        Some(record(&format!("event-{current}")))
+    });
+    let mut writer = SharedWriter(std::sync::Arc::clone(&output));
+
+    let stats = super::writer::write_record_stream_to_writer(
+        &mut writer,
+        records,
+        ExportFormat::Json,
+        &[],
+    )
+    .expect("stream succeeds");
+
+    assert_eq!(stats.records, 2);
 }
 
 #[test]
