@@ -16,6 +16,8 @@ import {
   type EvtxSavedFilter,
 } from "./evtx-saved-filters";
 
+const SAVED_FILTER_STORAGE_KEY = "cmtraceopen-evtx-saved-filters";
+
 interface SavedFilterState {
   savedFilters: EvtxSavedFilter[];
   /** Returns the stored filter, or null when the name is empty once trimmed. */
@@ -105,7 +107,7 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       ordered: () => orderFilters(get().savedFilters),
     }),
     {
-      name: "cmtraceopen-evtx-saved-filters",
+      name: SAVED_FILTER_STORAGE_KEY,
       version: 2,
       migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
       // Zustand only calls migrate when the stored version differs. Current-version data still
@@ -114,6 +116,17 @@ export const useSavedFilterStore = create<SavedFilterState>()(
         ...current,
         ...migratePersistedSavedFilters(persisted, 2),
       }),
+      onRehydrateStorage: () => (_state, error) => {
+        if (!error) return;
+        try {
+          localStorage.removeItem(SAVED_FILTER_STORAGE_KEY);
+        } catch (cleanupError) {
+          console.error("[event-log] failed to discard invalid saved-filter storage", {
+            error,
+            cleanupError,
+          });
+        }
+      },
     }
   )
 );

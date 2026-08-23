@@ -51,6 +51,20 @@ describe("useSavedFilterStore", () => {
     expect(() => migratePersistedSavedFilters(undefined, 2)).toThrow(/Malformed/);
     expect(() => migratePersistedSavedFilters({ savedFilters: "bad" }, 2)).toThrow(/Malformed/);
   });
+
+  it("clears malformed current-schema storage after rehydration fails", async () => {
+    const storageKey = "cmtraceopen-evtx-saved-filters";
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ version: 2, state: { savedFilters: "bad" } })
+    );
+
+    await expect(useSavedFilterStore.persist.rehydrate()).resolves.toBeUndefined();
+
+    expect(useSavedFilterStore.getState().savedFilters).toEqual([]);
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
   it("persists every quick-filter mode and grouping criterion", () => {
     const saved = useSavedFilterStore.getState().save(
       "Triage",
