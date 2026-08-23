@@ -9,8 +9,8 @@
 use cmtraceopen_parser::eventmap::EventNode;
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem, TimelineOrigin,
-    TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
+    bundle_from_source, correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem,
+    TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
 use super::event_node::{extract_event_identity, extract_system_fields, parse_event_xml};
@@ -232,12 +232,6 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
     }
 }
 
-fn bundle_from_source(source: &str) -> Option<String> {
-    source
-        .split(['/', '\\'])
-        .find(|part| part.eq_ignore_ascii_case("bundle"))
-        .map(str::to_string)
-}
 fn parsed_timestamp_epoch(record: &EvtxRecord) -> Option<i64> {
     if record.timestamp_epoch != 0 {
         return Some(record.timestamp_epoch);
@@ -612,7 +606,7 @@ mod tests {
     #[test]
     fn event_origin_preserves_source_machine_process_and_activity() {
         let mut source = record(1, "x", EvtxLevel::Information);
-        source.source_label = "bundle/evidence/events.evtx".to_string();
+        source.source_label = "/captures/bundle-789/bundle/evidence/events.evtx".to_string();
         source.computer = "HOST-A".to_string();
         source.process_id = Some(4321);
         source.raw_xml =
@@ -628,9 +622,9 @@ mod tests {
                 activity_id,
                 ..
             } => {
-                assert_eq!(source, "bundle/evidence/events.evtx");
+                assert_eq!(source, "/captures/bundle-789/bundle/evidence/events.evtx");
                 assert_eq!(machine.as_deref(), Some("HOST-A"));
-                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(bundle.as_deref(), Some("bundle-789"));
                 assert_eq!(*process_id, Some(4321));
                 assert_eq!(activity_id.as_deref(), Some("{1234}"));
             }

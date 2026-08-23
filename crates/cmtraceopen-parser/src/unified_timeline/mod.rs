@@ -407,15 +407,7 @@ fn normalized_identity(value: &str) -> Option<String> {
 }
 
 fn source_identity(value: &str) -> Option<String> {
-    let value = identity_value(value)?;
-    #[cfg(target_os = "windows")]
-    {
-        Some(value.to_ascii_lowercase())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Some(value.to_string())
-    }
+    normalized_identity(value)
 }
 
 fn usable_record_text(value: Option<&str>) -> Option<String> {
@@ -1163,11 +1155,20 @@ pub fn correlate_timeline(
     correlate_observations(&observations)
 }
 
-fn bundle_from_source(source: &str) -> Option<String> {
-    source
+/// Returns the bundle identifier immediately before a case-insensitive
+/// `bundle` path marker.
+pub fn bundle_from_source(source: &str) -> Option<String> {
+    let mut segments = source
         .split(['/', '\\'])
-        .find(|part| part.eq_ignore_ascii_case("bundle"))
-        .map(str::to_string)
+        .filter(|segment| !segment.is_empty());
+    let mut previous = segments.next()?;
+    for segment in segments {
+        if segment.eq_ignore_ascii_case("bundle") {
+            return Some(previous.to_string());
+        }
+        previous = segment;
+    }
+    None
 }
 
 /// Converts a parsed log entry, or reports why it cannot be placed.
@@ -1665,7 +1666,7 @@ mod tests {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.id = 99;
         entry.host_name = Some("LEASED-CLIENT".into());
-        entry.source_file = Some("bundle/evidence/dhcp.log".into());
+        entry.source_file = Some("/captures/bundle-123/bundle/evidence/dhcp.log".into());
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
@@ -1676,9 +1677,9 @@ mod tests {
                 record_id,
                 ..
             } => {
-                assert_eq!(source, "bundle/evidence/dhcp.log");
+                assert_eq!(source, "/captures/bundle-123/bundle/evidence/dhcp.log");
                 assert_eq!(machine, &None);
-                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(bundle.as_deref(), Some("bundle-123"));
                 assert_eq!(*record_id, 99);
             }
             other => panic!("expected a log origin, got {other:?}"),
@@ -1689,7 +1690,7 @@ mod tests {
     fn log_origin_keeps_physical_file_separate_from_parser_source_token() {
         let mut entry = log_entry(Some(1_000), "line", Severity::Info);
         entry.source_file = Some("store.cs:1".into());
-        entry.file_path = "/bundle/evidence/ccm.log".into();
+        entry.file_path = r"C:\captures\bundle-456\Bundle\evidence\ccm.log".into();
         let timeline = from_log_entries(&[entry]);
 
         match &timeline.items[0].origin {
@@ -1699,9 +1700,9 @@ mod tests {
                 bundle,
                 ..
             } => {
-                assert_eq!(file, "/bundle/evidence/ccm.log");
+                assert_eq!(file, r"C:\captures\bundle-456\Bundle\evidence\ccm.log");
                 assert_eq!(source, "store.cs:1");
-                assert_eq!(bundle.as_deref(), Some("bundle"));
+                assert_eq!(bundle.as_deref(), Some("bundle-456"));
             }
             other => panic!("expected a log origin, got {other:?}"),
         }
@@ -2095,7 +2096,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_record_identity_source_case_behavior_matches_platform() {
+    fn provider_record_identity_is_case_insensitive_on_every_analysis_host() {
         let mut first = event(1_000, "first", TimelineSeverity::Info);
         let mut second = event(2_000, "second", TimelineSeverity::Info);
         for (item, source) in [(&mut first, "Capture.evtx"), (&mut second, "capture.evtx")] {
@@ -2115,10 +2116,7 @@ mod tests {
         ];
 
         let (edges, _) = correlate_observations(&observations);
-        #[cfg(target_os = "windows")]
         assert_eq!(edges.len(), 1);
-        #[cfg(not(target_os = "windows"))]
-        assert!(edges.is_empty());
     }
 
     #[test]

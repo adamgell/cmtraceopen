@@ -13,6 +13,10 @@
 
 const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
 const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
+// Ten bytes cover every decimal `u32` value and an `x` plus every hexadecimal
+// `u32` value. Longer numeric prefixes cannot decode to a Unicode scalar and
+// must not make each `&#` scan an unbounded remainder for a distant semicolon.
+const MAX_NUMERIC_ENTITY_BODY_BYTES: usize = 10;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -333,8 +337,13 @@ fn decode_entity_value(value: &str) -> String {
             cursor += entity.len();
             continue;
         }
-        if let Some(end) = remainder.strip_prefix("&#").and_then(|rest| rest.find(';')) {
-            let number = &remainder[2..end + 2];
+        if let Some((number, consumed)) = remainder.strip_prefix("&#").and_then(|rest| {
+            rest.as_bytes()
+                .iter()
+                .take(MAX_NUMERIC_ENTITY_BODY_BYTES + 1)
+                .position(|byte| *byte == b';')
+                .map(|end| (&rest[..end], end + 3))
+        }) {
             let parsed = number
                 .strip_prefix('x')
                 .or_else(|| number.strip_prefix('X'))
@@ -344,7 +353,7 @@ fn decode_entity_value(value: &str) -> String {
                 );
             if let Some(character) = parsed.and_then(char::from_u32) {
                 decoded.push(character);
-                cursor += end + 3;
+                cursor += consumed;
                 continue;
             }
         }
@@ -433,19 +442,10 @@ fn redact_entity_encoded_fields(value: &str) -> String {
 
 fn is_redaction_token(value: &str) -> bool {
     let value = value.trim_matches(|character| character == '"' || character == '\'');
-    let Some(body) = value
+    value
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
-    else {
-        return false;
-    };
-    let Some((kind, hash)) = body.split_once(':') else {
-        return false;
-    };
-    !kind.is_empty()
-        && kind.chars().all(|character| character.is_ascii_lowercase())
-        && hash.len() == 16
-        && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        .is_some_and(is_token_body)
 }
 
 fn redact_sensitive_field(value: &str) -> String {
@@ -915,7 +915,22 @@ pub fn redact_text(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{preserve_token_mask_tail, redact_text, sid_occurrences};
+    use super::{decode_entity_value, preserve_token_mask_tail, redact_text, sid_occurrences};
+
+    #[test]
+    fn numeric_entities_decode_only_within_a_bounded_prefix() {
+        assert_eq!(decode_entity_value("&#65; &#x41;"), "A A");
+        assert_eq!(decode_entity_value("&#1114111;"), "\u{10ffff}");
+        assert_eq!(decode_entity_value("&#x10FFFF;"), "\u{10ffff}");
+
+        let oversized_decimal = format!("&#{}65;", "0".repeat(32));
+        let oversized_hex = format!("&#x{}41;", "0".repeat(32));
+        assert_eq!(decode_entity_value(&oversized_decimal), oversized_decimal);
+        assert_eq!(decode_entity_value(&oversized_hex), oversized_hex);
+
+        let unterminated = format!("&#{}", "1".repeat(32));
+        assert_eq!(decode_entity_value(&unterminated), unterminated);
+    }
     #[test]
     fn a_json_escaped_windows_path_is_masked() {
         // These logs embed JSON payloads; a path inside one is escaped.
