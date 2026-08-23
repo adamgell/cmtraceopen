@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
 import { DEFAULT_CATEGORIES, type Marker } from "../../types/markers";
+import { deferred } from "../../test-utils/deferred";
 import {
   DEFAULT_EVTX_QUICK_FILTER,
   evtxMarkerFileKey,
@@ -9,6 +10,7 @@ import {
   isEvtxMarkerAddressable,
   evtxQuickFilterTerms,
   getEvtxMarker,
+  loadEvtxMarkers,
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
 import { useMarkerStore } from "../../stores/marker-store";
@@ -235,6 +237,59 @@ describe("EVTX marker identity adapter", () => {
         .markersByFile.get(evtxMarkerFileKey(current.sourceLabel))
         ?.get(lineId)
     ).toMatchObject({ category: "bug", identity });
+  });
+
+  it("persists loaded disk markers together with an edit made while loading", async () => {
+    const sourceLabel = "marker-load-save-race.evtx";
+    const diskRecord = record({ sourceLabel, eventRecordId: 41 });
+    const editedRecord = record({ sourceLabel, eventRecordId: 42 });
+    const diskMarker: Marker = {
+      lineId: evtxMarkerLineId(diskRecord),
+      identity: evtxMarkerKey(diskRecord),
+      category: "confirmed",
+      color: "#22c55e",
+      added: "2026-08-18T11:00:00Z",
+    };
+    const pendingLoad = deferred<void>();
+    const persistedSnapshots: Marker[][] = [];
+
+    useMarkerStore.setState({
+      loadMarkers: vi.fn(async (loadedFileKey: string) => {
+        await pendingLoad.promise;
+        const state = useMarkerStore.getState();
+        const next = new Map(state.markersByFile);
+        next.set(
+          loadedFileKey,
+          new Map([
+            [diskMarker.lineId, diskMarker],
+            ...(state.markersByFile.get(loadedFileKey) ?? new Map()).entries(),
+          ]),
+        );
+        useMarkerStore.setState({ markersByFile: next });
+      }),
+      saveMarkers: vi.fn(async (savedFileKey: string) => {
+        persistedSnapshots.push([
+          ...(
+            useMarkerStore.getState().markersByFile.get(savedFileKey) ??
+            new Map()
+          ).values(),
+        ]);
+      }),
+    });
+
+    loadEvtxMarkers([sourceLabel]);
+    toggleEvtxTag(editedRecord);
+
+    await Promise.resolve();
+    expect(persistedSnapshots).toEqual([]);
+
+    pendingLoad.resolve();
+    await vi.waitFor(() => expect(persistedSnapshots).toHaveLength(1));
+
+    expect(persistedSnapshots[0].map((marker) => marker.identity)).toEqual([
+      evtxMarkerKey(diskRecord),
+      evtxMarkerKey(editedRecord),
+    ]);
   });
 
   it("derives display terms without changing the centralized match predicate", () => {

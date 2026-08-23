@@ -5,7 +5,8 @@ import { matchesQuickFilter, type EvtxQuickFilter } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 
-const saveQueues = new Map<string, Promise<void>>();
+const markerFileQueues = new Map<string, Promise<void>>();
+const markerFileLoads = new Map<string, Promise<void>>();
 export type EvtxQuickFilterLike = EvtxQuickFilter;
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilterLike = {
@@ -180,27 +181,41 @@ export function isEvtxBookmark(marker: Marker | null | undefined): boolean {
   return marker?.category === "bookmark";
 }
 
+function enqueueMarkerFileOperation(
+  filePath: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = markerFileQueues.get(filePath) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  markerFileQueues.set(filePath, next);
+  const clearQueue = () => {
+    if (markerFileQueues.get(filePath) === next)
+      markerFileQueues.delete(filePath);
+  };
+  void next.then(clearQueue, clearQueue);
+  return next;
+}
+
 export function loadEvtxMarkers(sourceLabels: readonly string[]): void {
-  const loadMarkers = useMarkerStore.getState().loadMarkers;
   for (const sourceLabel of sourceLabels) {
-    void loadMarkers(evtxMarkerFileKey(sourceLabel));
+    const filePath = evtxMarkerFileKey(sourceLabel);
+    if (markerFileLoads.has(filePath)) continue;
+    const next = enqueueMarkerFileOperation(filePath, () =>
+      useMarkerStore.getState().loadMarkers(filePath),
+    );
+    markerFileLoads.set(filePath, next);
+    const clearLoad = () => {
+      if (markerFileLoads.get(filePath) === next)
+        markerFileLoads.delete(filePath);
+    };
+    void next.then(clearLoad, clearLoad);
   }
 }
 
 function persistEvtxMarkers(sourceLabel: string): void {
   const filePath = evtxMarkerFileKey(sourceLabel);
-  const previous = saveQueues.get(filePath) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(() => useMarkerStore.getState().saveMarkers(filePath));
-  saveQueues.set(filePath, next);
-  void next.then(
-    () => {
-      if (saveQueues.get(filePath) === next) saveQueues.delete(filePath);
-    },
-    () => {
-      if (saveQueues.get(filePath) === next) saveQueues.delete(filePath);
-    },
+  void enqueueMarkerFileOperation(filePath, () =>
+    useMarkerStore.getState().saveMarkers(filePath),
   );
 }
 interface EvtxMarkerMutation {
