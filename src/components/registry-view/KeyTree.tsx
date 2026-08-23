@@ -240,7 +240,9 @@ export function KeyTree() {
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  if (e.button === 0) disclosurePointerRef.current = true;
+                  if (hasChildren && e.button === 0) {
+                    disclosurePointerRef.current = true;
+                  }
                 }}
                 onPointerCancel={() => {
                   disclosurePointerRef.current = false;

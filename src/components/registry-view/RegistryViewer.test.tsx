@@ -198,6 +198,29 @@ describe("RegistryViewer", () => {
     expect(target).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("does not let a leaf disclosure suppress later tree focus initialization", () => {
+    useLogStore.setState({ openFilePath: null });
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const rows = screen.getAllByRole("treeitem");
+    const leaf = screen
+      .getByTitle(fixture.keys[1].path)
+      .closest('[role="treeitem"]');
+    const disclosure = leaf?.querySelector("[data-registry-disclosure]");
+    if (!leaf || !disclosure) {
+      throw new Error("Expected the leaf registry row disclosure");
+    }
+    expect(leaf).not.toHaveAttribute("aria-expanded");
+
+    fireEvent.pointerDown(disclosure, { button: 0 });
+    fireEvent.click(disclosure);
+    fireEvent.focus(tree);
+
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(tree).toHaveAttribute("aria-activedescendant", rows[0].id);
+  });
+
   it("initializes tree focus and navigates vertically", () => {
     render(<RegistryViewer />);
 
