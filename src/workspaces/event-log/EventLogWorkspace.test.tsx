@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const LEVEL_BADGE_PRESENT_OFFSET = 9;
 const LEVEL_BADGE_ABSENT_OFFSET = 5;
@@ -265,7 +266,7 @@ describe("event-viewer shared font metrics", () => {
     );
     channel.unmount();
 
-    const filter = render(<EvtxFilterBar />);
+    const filter = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
       `${Math.max(11, smallList.fontSize - 1)}px`
     );
@@ -327,7 +328,7 @@ describe("event-viewer shared font metrics", () => {
     );
     channelLarge.unmount();
 
-    const filterLarge = render(<EvtxFilterBar />);
+    const filterLarge = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     expect(screen.getByRole("button", { name: "Toggle Critical events" }).style.fontSize).toBe(
       `${Math.max(11, largeList.fontSize - 1)}px`
     );
@@ -394,7 +395,7 @@ describe("event-viewer shared font metrics", () => {
     const channel = render(<ChannelPicker />);
     const channelInput = channel.getByPlaceholderText("Filter channels...") as HTMLInputElement;
     const channelRow = channel.getByText("Application").closest("label") as HTMLElement;
-    const filter = render(<EvtxFilterBar />);
+    const filter = render(<EvtxFilterBar nowEpoch={Date.now()} />);
     const filterButton = filter.getByRole("button", { name: "Toggle Critical events" });
     const timeline = render(<EvtxTimeline />);
     const recordRow = recordTreeItems(timeline.container)[0];
@@ -640,6 +641,7 @@ describe("EventLogWorkspace fixtures", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     useEvtxStore.getState().reset();
   });
 
@@ -686,6 +688,35 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.getByText("Event XML")).toBeInTheDocument();
   });
 
+  it("exports the records selected by the workspace clock snapshot", async () => {
+    const nowEpoch = Date.parse("2026-08-18T13:00:00.000Z");
+    const boundaryRecord = {
+      ...RECORD,
+      timestamp: "2026-08-18T12:00:00.001Z",
+      timestampEpoch: nowEpoch - 60 * 60 * 1000 + 1,
+    };
+    seedEventLog();
+    useEvtxStore.setState({ records: [boundaryRecord], timeWindow: "1h" });
+    vi.spyOn(Date, "now").mockReturnValue(nowEpoch + 2);
+    vi.mocked(save).mockResolvedValue("/tmp/events.json");
+    invoke.mockResolvedValue(128);
+
+    render(<EvtxFilterBar nowEpoch={nowEpoch} />);
+    fireEvent.click(
+      screen.getByTitle(
+        "Export the events currently shown, using the same filters as the list",
+      ),
+    );
+    fireEvent.click(screen.getByText("JSON"));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "evtx_export_records",
+        expect.objectContaining({ records: [boundaryRecord] }),
+      ),
+    );
+  });
+
   it("gives level filters descriptive state to keyboard and screen-reader users", () => {
     seedFixtureEvents();
     render(<EventLogWorkspace />);
@@ -699,7 +730,7 @@ describe("EventLogWorkspace fixtures", () => {
 
   it("names the sort-direction action that the button will perform", () => {
     seedFixtureEvents();
-    render(<EvtxFilterBar />);
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
 
     const changeToDescending = screen.getByTitle(
       "Change sort direction to descending",

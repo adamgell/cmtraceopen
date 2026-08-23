@@ -48,10 +48,11 @@ export function EventLogWorkspace() {
   const loadError = useEvtxStore((s) => s.loadError);
   const [nowEpoch, setNowEpoch] = useState(() => Date.now());
   useEffect(() => {
-    if (sourceMode !== "live" || timeWindow === "all") return;
+    if (timeWindow === "all") return;
+    setNowEpoch(Date.now());
     const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
     return () => window.clearInterval(timer);
-  }, [sourceMode, timeWindow]);
+  }, [timeWindow]);
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -376,7 +377,7 @@ export function EventLogWorkspace() {
         </div>
       )}
       {isLoading && <ProgressBar style={{ width: "100%", flexShrink: 0 }} />}
-      <EvtxFilterBar />
+      <EvtxFilterBar nowEpoch={nowEpoch} />
       <EvtxCoverageBanner />
       <EventDiagnosisPanel summary={diagnosis} />
 

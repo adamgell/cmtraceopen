@@ -98,7 +98,11 @@ const QUICK_FILTER_ACTION_LABELS: Record<EvtxQuickFilterAction, string> = {
   hide: "Hide matches",
 };
 
-export function EvtxFilterBar() {
+interface EvtxFilterBarProps {
+  nowEpoch: number;
+}
+
+export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const toggleFilterLevel = useEvtxStore((s) => s.toggleFilterLevel);
   const filterEventIds = useEvtxStore((s) => s.filterEventIds);
@@ -201,7 +205,6 @@ export function EvtxFilterBar() {
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
     const state = useEvtxStore.getState();
     const visibleColumns = state.columnConfig.order;
-    const nowEpoch = Date.now();
     const records = sortRecords(
       selectVisibleRecords({
         records: state.records,
