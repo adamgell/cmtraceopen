@@ -81,8 +81,9 @@ describe("marker load merge", () => {
     });
     invoke.mockResolvedValue({ version: "invalid" });
 
-    await useMarkerStore.getState().loadMarkers("file.evtx");
+    const outcome = await useMarkerStore.getState().loadMarkers("file.evtx");
 
+    expect(outcome).toBe("failed");
     expect(useMarkerStore.getState().markersByFile.get("file.evtx")).toBe(
       existing,
     );
@@ -104,8 +105,11 @@ describe("marker load merge", () => {
       categories: [],
     });
 
-    await useMarkerStore.getState().loadMarkers("invalid-date.evtx");
+    const outcome = await useMarkerStore
+      .getState()
+      .loadMarkers("invalid-date.evtx");
 
+    expect(outcome).toBe("failed");
     expect(
       useMarkerStore.getState().markersByFile.get("invalid-date.evtx"),
     ).toBe(existing);
@@ -134,7 +138,8 @@ describe("marker load merge", () => {
       markers: [marker(2)],
       categories: [{ id: "bug", label: "Bug", color: "#ef4444" }],
     });
-    await pending;
+    const outcome = await pending;
+    expect(outcome).toBe("superseded");
     expect(useMarkerStore.getState().markersByFile.has("clear-race.evtx")).toBe(
       false,
     );
@@ -177,6 +182,72 @@ describe("marker load merge", () => {
         { id: "during-load", label: "During load", color: "#123456" },
       ]),
     );
+  });
+
+  it("reports a missing marker file as a successful load outcome", async () => {
+    invoke.mockResolvedValue(null);
+
+    const outcome = await useMarkerStore
+      .getState()
+      .loadMarkers("missing.evtx");
+
+    expect(outcome).toBe("missing");
+  });
+
+  it("reports backend load rejection as a failed outcome", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockRejectedValue(new Error("marker file is unreadable"));
+
+    const outcome = await useMarkerStore
+      .getState()
+      .loadMarkers("unreadable.evtx");
+
+    expect(outcome).toBe("failed");
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
+  });
+
+  it("reports successful and failed marker persistence outcomes", async () => {
+    const filePath = "save-outcome.evtx";
+    useMarkerStore.setState({
+      markersByFile: new Map([[filePath, new Map([[1, marker(1)]])]]),
+    });
+    invoke.mockResolvedValueOnce(undefined);
+
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "saved",
+    );
+
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockRejectedValueOnce(new Error("marker write failed"));
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "failed",
+    );
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
+  });
+
+  it("reports successful and failed marker deletion outcomes", async () => {
+    const filePath = "delete-outcome.evtx";
+    invoke.mockResolvedValueOnce(undefined);
+
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "deleted",
+    );
+
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    invoke.mockRejectedValueOnce(new Error("marker delete failed"));
+    expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
+      "failed",
+    );
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
   });
   it("upgrades a legacy line marker when an EVTX identity is supplied", () => {
     const filePath = "event-log:legacy.evtx";
@@ -252,8 +323,9 @@ describe("marker load merge", () => {
       ],
       categories: [{ id: "bug", label: "Bug", color: "#ef4444" }],
     });
-    await useMarkerStore.getState().loadMarkers(filePath);
+    const outcome = await useMarkerStore.getState().loadMarkers(filePath);
 
+    expect(outcome).toBe("loaded");
     const loaded = useMarkerStore.getState().markersByFile.get(filePath);
     expect(loaded?.size).toBe(2);
     expect([...loaded!.values()].map((item) => item.identity)).toEqual([

@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
-import { DEFAULT_CATEGORIES, type Marker } from "../../types/markers";
+import {
+  DEFAULT_CATEGORIES,
+  type Marker,
+  type MarkerFile,
+} from "../../types/markers";
 import { deferred } from "../../test-utils/deferred";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
 import {
   DEFAULT_EVTX_QUICK_FILTER,
   evtxMarkerFileKey,
@@ -14,6 +22,9 @@ import {
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
 import { useMarkerStore } from "../../stores/marker-store";
+
+const productionLoadMarkers = useMarkerStore.getState().loadMarkers;
+const productionSaveMarkers = useMarkerStore.getState().saveMarkers;
 
 function record(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
   return {
@@ -33,8 +44,22 @@ function record(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
     ...overrides,
   };
 }
+
+function markerFile(sourceLabel: string, markers: Marker[]): MarkerFile {
+  return {
+    version: 1,
+    sourcePath: evtxMarkerFileKey(sourceLabel),
+    sourceSize: 0,
+    created: "2026-08-18T10:00:00.000Z",
+    modified: "2026-08-18T11:00:00.000Z",
+    markers,
+    categories: [...DEFAULT_CATEGORIES],
+  };
+}
+
 describe("EVTX marker identity adapter", () => {
   beforeEach(() => {
+    invoke.mockReset();
     useMarkerStore.setState({
       markersByFile: new Map(),
       categories: [...DEFAULT_CATEGORIES],
@@ -42,7 +67,8 @@ describe("EVTX marker identity adapter", () => {
       loadingFiles: new Set(),
       clearRevisions: new Map(),
       createdTimestamps: new Map(),
-      saveMarkers: vi.fn().mockResolvedValue(undefined),
+      loadMarkers: vi.fn().mockResolvedValue("missing"),
+      saveMarkers: vi.fn().mockResolvedValue("saved"),
     });
   });
   it("uses source and provider record identity, never the mutable row id", () => {
@@ -226,7 +252,7 @@ describe("EVTX marker identity adapter", () => {
         [evtxMarkerFileKey(current.sourceLabel), new Map([[lineId, saved]])],
       ]),
       activeCategory: "bug",
-      saveMarkers: vi.fn().mockResolvedValue(undefined),
+      saveMarkers: vi.fn().mockResolvedValue("saved"),
     });
 
     toggleEvtxTag(current);
@@ -266,6 +292,7 @@ describe("EVTX marker identity adapter", () => {
           ]),
         );
         useMarkerStore.setState({ markersByFile: next });
+        return "loaded" as const;
       }),
       saveMarkers: vi.fn(async (savedFileKey: string) => {
         persistedSnapshots.push([
@@ -274,6 +301,7 @@ describe("EVTX marker identity adapter", () => {
             new Map()
           ).values(),
         ]);
+        return "saved" as const;
       }),
     });
 
@@ -290,6 +318,180 @@ describe("EVTX marker identity adapter", () => {
       evtxMarkerKey(diskRecord),
       evtxMarkerKey(editedRecord),
     ]);
+  });
+
+  it("blocks writes after load failure and flushes the dirty edit after retry", async () => {
+    const sourceLabel = "failed-load-retry.evtx";
+    const fileKey = evtxMarkerFileKey(sourceLabel);
+    const diskRecord = record({ sourceLabel, eventRecordId: 41 });
+    const editedRecord = record({ sourceLabel, eventRecordId: 42 });
+    const diskMarker: Marker = {
+      lineId: evtxMarkerLineId(diskRecord),
+      identity: evtxMarkerKey(diskRecord),
+      category: "confirmed",
+      color: "#22c55e",
+      added: "2026-08-18T10:00:00.000Z",
+    };
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    useMarkerStore.setState({
+      loadMarkers: productionLoadMarkers,
+      saveMarkers: productionSaveMarkers,
+    });
+    invoke.mockRejectedValueOnce(new Error("marker file is unreadable"));
+
+    loadEvtxMarkers([sourceLabel]);
+    toggleEvtxTag(editedRecord);
+
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.some(([command]) => command === "load_markers"),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(useMarkerStore.getState().loadingFiles.has(fileKey)).toBe(false),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      invoke.mock.calls.filter(
+        ([command]) =>
+          command === "save_markers" || command === "delete_markers",
+      ),
+    ).toEqual([]);
+    expect(
+      [
+        ...(
+          useMarkerStore.getState().markersByFile.get(fileKey) ?? new Map()
+        ).values(),
+      ].map((marker) => marker.identity),
+    ).toEqual([evtxMarkerKey(editedRecord)]);
+
+    invoke
+      .mockResolvedValueOnce(markerFile(sourceLabel, [diskMarker]))
+      .mockResolvedValueOnce(undefined);
+    loadEvtxMarkers([sourceLabel]);
+
+    await vi.waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(([command]) => command === "save_markers"),
+      ).toHaveLength(1),
+    );
+
+    const saveCall = invoke.mock.calls.find(
+      ([command]) => command === "save_markers",
+    );
+    expect(
+      (saveCall?.[1] as { markerFile: MarkerFile }).markerFile.markers.map(
+        (marker) => marker.identity,
+      ),
+    ).toEqual([evtxMarkerKey(diskRecord), evtxMarkerKey(editedRecord)]);
+    expect(
+      invoke.mock.calls.filter(([command]) => command === "delete_markers"),
+    ).toEqual([]);
+    consoleError.mockRestore();
+  });
+
+  it("loads before persisting when mutation precedes the load effect", async () => {
+    const sourceLabel = "persist-before-effect.evtx";
+    const editedRecord = record({ sourceLabel, eventRecordId: 51 });
+    useMarkerStore.setState({
+      loadMarkers: productionLoadMarkers,
+      saveMarkers: productionSaveMarkers,
+    });
+    invoke.mockResolvedValueOnce(null).mockResolvedValueOnce(undefined);
+
+    toggleEvtxTag(editedRecord);
+
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      "load_markers",
+      "save_markers",
+    ]);
+    expect(
+      (
+        invoke.mock.calls[1][1] as { markerFile: MarkerFile }
+      ).markerFile.markers.map((marker) => marker.identity),
+    ).toEqual([evtxMarkerKey(editedRecord)]);
+  });
+
+  it("persists a newer mutation after an older save settles", async () => {
+    const sourceLabel = "marker-save-version.evtx";
+    const firstRecord = record({ sourceLabel, eventRecordId: 61 });
+    const secondRecord = record({ sourceLabel, eventRecordId: 62 });
+    const firstSave = deferred<void>();
+    const persistedSnapshots: MarkerFile[] = [];
+    useMarkerStore.setState({
+      loadMarkers: productionLoadMarkers,
+      saveMarkers: productionSaveMarkers,
+    });
+    invoke.mockImplementation(
+      (command: string, args?: { markerFile?: MarkerFile }) => {
+        if (command === "load_markers") return Promise.resolve(null);
+        if (command === "save_markers" && args?.markerFile) {
+          persistedSnapshots.push(args.markerFile);
+          return persistedSnapshots.length === 1
+            ? firstSave.promise
+            : Promise.resolve(undefined);
+        }
+        return Promise.reject(
+          new Error(`Unexpected marker command: ${command}`),
+        );
+      },
+    );
+
+    toggleEvtxTag(firstRecord);
+    await vi.waitFor(() => expect(persistedSnapshots).toHaveLength(1));
+    toggleEvtxTag(secondRecord);
+
+    expect(persistedSnapshots).toHaveLength(1);
+    firstSave.resolve();
+    await vi.waitFor(() => expect(persistedSnapshots).toHaveLength(2));
+
+    expect(
+      persistedSnapshots.map((snapshot) =>
+        snapshot.markers.map((marker) => marker.identity),
+      ),
+    ).toEqual([
+      [evtxMarkerKey(firstRecord)],
+      [evtxMarkerKey(firstRecord), evtxMarkerKey(secondRecord)],
+    ]);
+  });
+
+  it("retains a dirty marker after save failure and retries it on the next load request", async () => {
+    const sourceLabel = "failed-save-retry.evtx";
+    const editedRecord = record({ sourceLabel, eventRecordId: 71 });
+    let saveAttempts = 0;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    useMarkerStore.setState({
+      loadMarkers: productionLoadMarkers,
+      saveMarkers: productionSaveMarkers,
+    });
+    invoke.mockImplementation((command: string) => {
+      if (command === "load_markers") return Promise.resolve(null);
+      if (command === "save_markers") {
+        saveAttempts += 1;
+        return saveAttempts === 1
+          ? Promise.reject(new Error("marker write failed"))
+          : Promise.resolve(undefined);
+      }
+      return Promise.reject(new Error(`Unexpected marker command: ${command}`));
+    });
+
+    toggleEvtxTag(editedRecord);
+    await vi.waitFor(() => expect(saveAttempts).toBe(1));
+    loadEvtxMarkers([sourceLabel]);
+    await vi.waitFor(() => expect(saveAttempts).toBe(2));
+
+    expect(
+      useMarkerStore.getState().markersByFile.get(evtxMarkerFileKey(sourceLabel))
+        ?.size,
+    ).toBe(1);
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
   });
 
   it("derives display terms without changing the centralized match predicate", () => {

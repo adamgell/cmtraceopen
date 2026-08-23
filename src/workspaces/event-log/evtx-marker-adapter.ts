@@ -5,8 +5,15 @@ import { matchesQuickFilter, type EvtxQuickFilter } from "./evtx-filter";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import type { EvtxRecord } from "./types";
 
-const markerFileQueues = new Map<string, Promise<void>>();
-const markerFileLoads = new Map<string, Promise<void>>();
+type MarkerFileLoadState = "unknown" | "loading" | "ready" | "failed";
+interface MarkerFilePersistenceState {
+  loadState: MarkerFileLoadState;
+  mutationVersion: number;
+  savedVersion: number;
+  loadPromise: Promise<void> | null;
+  savePromise: Promise<void> | null;
+}
+const markerFilePersistence = new Map<string, MarkerFilePersistenceState>();
 export type EvtxQuickFilterLike = EvtxQuickFilter;
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilterLike = {
@@ -181,42 +188,103 @@ export function isEvtxBookmark(marker: Marker | null | undefined): boolean {
   return marker?.category === "bookmark";
 }
 
-function enqueueMarkerFileOperation(
-  filePath: string,
-  operation: () => Promise<void>,
-): Promise<void> {
-  const previous = markerFileQueues.get(filePath) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(operation);
-  markerFileQueues.set(filePath, next);
-  const clearQueue = () => {
-    if (markerFileQueues.get(filePath) === next)
-      markerFileQueues.delete(filePath);
+function getMarkerFilePersistence(filePath: string): MarkerFilePersistenceState {
+  const existing = markerFilePersistence.get(filePath);
+  if (existing) return existing;
+  const created: MarkerFilePersistenceState = {
+    loadState: "unknown",
+    mutationVersion: 0,
+    savedVersion: 0,
+    loadPromise: null,
+    savePromise: null,
   };
-  void next.then(clearQueue, clearQueue);
-  return next;
+  markerFilePersistence.set(filePath, created);
+  return created;
+}
+
+function scheduleMarkerSave(filePath: string): void {
+  const persistence = getMarkerFilePersistence(filePath);
+  if (
+    persistence.loadState !== "ready" ||
+    persistence.savePromise !== null ||
+    persistence.savedVersion >= persistence.mutationVersion
+  ) {
+    return;
+  }
+
+  const savingVersion = persistence.mutationVersion;
+  const savePromise = useMarkerStore
+    .getState()
+    .saveMarkers(filePath)
+    .then(
+      (outcome) => {
+        if (outcome === "saved" || outcome === "deleted") {
+          persistence.savedVersion = Math.max(
+            persistence.savedVersion,
+            savingVersion,
+          );
+        }
+        persistence.savePromise = null;
+        if (persistence.mutationVersion > savingVersion) {
+          scheduleMarkerSave(filePath);
+        }
+      },
+      () => {
+        persistence.savePromise = null;
+        if (persistence.mutationVersion > savingVersion) {
+          scheduleMarkerSave(filePath);
+        }
+      },
+    );
+  persistence.savePromise = savePromise;
+}
+
+function startMarkerLoad(filePath: string, retryFailed: boolean): void {
+  const persistence = getMarkerFilePersistence(filePath);
+  if (persistence.loadPromise !== null) return;
+  if (persistence.loadState === "ready") {
+    scheduleMarkerSave(filePath);
+    return;
+  }
+  if (persistence.loadState === "failed" && !retryFailed) return;
+
+  persistence.loadState = "loading";
+  const loadPromise = useMarkerStore
+    .getState()
+    .loadMarkers(filePath)
+    .then(
+      (outcome) => {
+        persistence.loadPromise = null;
+        if (outcome === "loaded" || outcome === "missing") {
+          persistence.loadState = "ready";
+          scheduleMarkerSave(filePath);
+        } else {
+          persistence.loadState = "failed";
+        }
+      },
+      () => {
+        persistence.loadPromise = null;
+        persistence.loadState = "failed";
+      },
+    );
+  persistence.loadPromise = loadPromise;
 }
 
 export function loadEvtxMarkers(sourceLabels: readonly string[]): void {
   for (const sourceLabel of sourceLabels) {
-    const filePath = evtxMarkerFileKey(sourceLabel);
-    if (markerFileLoads.has(filePath)) continue;
-    const next = enqueueMarkerFileOperation(filePath, () =>
-      useMarkerStore.getState().loadMarkers(filePath),
-    );
-    markerFileLoads.set(filePath, next);
-    const clearLoad = () => {
-      if (markerFileLoads.get(filePath) === next)
-        markerFileLoads.delete(filePath);
-    };
-    void next.then(clearLoad, clearLoad);
+    startMarkerLoad(evtxMarkerFileKey(sourceLabel), true);
   }
 }
 
 function persistEvtxMarkers(sourceLabel: string): void {
   const filePath = evtxMarkerFileKey(sourceLabel);
-  void enqueueMarkerFileOperation(filePath, () =>
-    useMarkerStore.getState().saveMarkers(filePath),
-  );
+  const persistence = getMarkerFilePersistence(filePath);
+  persistence.mutationVersion += 1;
+  if (persistence.loadState === "unknown") {
+    startMarkerLoad(filePath, false);
+  } else if (persistence.loadState === "ready") {
+    scheduleMarkerSave(filePath);
+  }
 }
 interface EvtxMarkerMutation {
   fileKey: string;

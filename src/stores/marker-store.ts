@@ -25,8 +25,8 @@ interface MarkerState {
   createdTimestamps: Map<string, string>;
 
   // ── Async backend actions ─────────────────────────────────────────────────
-  loadMarkers: (filePath: string) => Promise<void>;
-  saveMarkers: (filePath: string) => Promise<void>;
+  loadMarkers: (filePath: string) => Promise<MarkerLoadOutcome>;
+  saveMarkers: (filePath: string) => Promise<MarkerSaveOutcome>;
 
   // ── Marker mutation actions ───────────────────────────────────────────────
   toggleMarker: (filePath: string, lineId: number, identity?: string) => void;
@@ -47,6 +47,14 @@ interface MarkerState {
   getMarkersForFile: (filePath: string) => Map<number, Marker>;
   getMarkedLineIds: (filePath: string, category?: string) => number[];
 }
+export type MarkerLoadOutcome =
+  | "loaded"
+  | "missing"
+  | "failed"
+  | "already-loading"
+  | "superseded";
+export type MarkerSaveOutcome = "saved" | "deleted" | "failed";
+
 function markersEqual(
   left: Marker | undefined,
   right: Marker | undefined,
@@ -263,7 +271,7 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
 
     // Guard against duplicate in-flight loads.
     if (loadingFiles.has(filePath)) {
-      return;
+      return "already-loading";
     }
     // Edits made after this snapshot but before the backend responds must win over stale disk
     // state, including edits made when the file had no map yet.
@@ -305,10 +313,11 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
         }
       }
 
+      if ((get().clearRevisions.get(filePath) ?? 0) !== clearRevision) {
+        return "superseded";
+      }
+
       set((state) => {
-        if ((state.clearRevisions.get(filePath) ?? 0) !== clearRevision) {
-          return {};
-        }
         const next = new Map(state.markersByFile);
         next.set(
           filePath,
@@ -346,8 +355,10 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
           categories: nextCategories,
         };
       });
+      return result ? "loaded" : "missing";
     } catch (err) {
       console.error("[marker-store] loadMarkers failed", { filePath, err });
+      return "failed";
     } finally {
       set((state) => {
         const next = new Set(state.loadingFiles);
@@ -367,13 +378,14 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
       // No markers remaining — delete any persisted file.
       try {
         await invoke<void>("delete_markers", { filePath });
+        return "deleted";
       } catch (err) {
         console.error("[marker-store] delete_markers failed", {
           filePath,
           err,
         });
+        return "failed";
       }
-      return;
     }
 
     const now = new Date().toISOString();
@@ -390,8 +402,10 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
 
     try {
       await invoke<void>("save_markers", { filePath, markerFile });
+      return "saved";
     } catch (err) {
       console.error("[marker-store] save_markers failed", { filePath, err });
+      return "failed";
     }
   },
 
