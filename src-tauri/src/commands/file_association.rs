@@ -729,6 +729,12 @@ mod tests {
         );
 
         let hook = load_installer_asset("windows-installer-hooks.nsh");
+        assert!(
+            hook.lines()
+                .map(str::trim)
+                .any(|line| line == "!include LogicLib.nsh"),
+            "the hook must declare the LogicLib macros it uses"
+        );
         assert_eq!(
             installer_macro_lines(
                 &hook,

@@ -1,4 +1,5 @@
 !include FileFunc.nsh
+!include LogicLib.nsh
 
 !macro CMTRACE_REMOVE_RUNTIME_FILE_ASSOCIATION APPLICATION_NAME REGISTRY_STEM
   DeleteRegValue HKCU "Software\RegisteredApplications" "${APPLICATION_NAME}"
