@@ -744,7 +744,9 @@ describe("event-log live operations", () => {
 
   it("does not invoke a clear when confirmation is cancelled", async () => {
     render(<ChannelPicker />);
-    const channelSelect = document.querySelector('select[aria-label="Channel to clear"]');
+    const channelSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Channel to clear"]',
+    );
     expect(channelSelect).not.toBeNull();
     fireEvent.change(channelSelect!, { target: { value: "Application" } });
     const clearButton = Array.from(document.querySelectorAll("button")).find((button) =>
@@ -757,8 +759,35 @@ describe("event-log live operations", () => {
       button.textContent?.trim() === "Cancel"
     );
     expect(cancelButton).not.toBeUndefined();
+    cancelButton!.focus();
     fireEvent.click(cancelButton!);
-    await waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    await waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(channelSelect).toHaveFocus();
+    });
+    expect(invoke).not.toHaveBeenCalledWith("evtx_clear_channel", expect.anything());
+  });
+
+  it("returns focus after dismissing clear confirmation with Escape", async () => {
+    render(<ChannelPicker />);
+    const channelSelect = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Channel to clear"]',
+    )!;
+    fireEvent.change(channelSelect, { target: { value: "Application" } });
+    fireEvent.click(
+      Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Clear",
+      )!,
+    );
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    dialog.focus();
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(channelSelect).toHaveFocus();
+    });
     expect(invoke).not.toHaveBeenCalledWith("evtx_clear_channel", expect.anything());
   });
 
@@ -822,6 +851,36 @@ describe("event-log live operations", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.querySelector('[role="status"]')).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("does not steal focus when a background clear settles", async () => {
+    const clearResult = deferred<{
+      channel: string;
+      result: { status: "unavailable"; detail: string };
+    }>();
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "evtx_clear_channel") return clearResult.promise;
+      return undefined;
+    });
+    render(<ChannelPicker />);
+
+    confirmChannelClear();
+    const filter = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Filter channels..."]',
+    )!;
+    await waitFor(() => expect(document.querySelector('[role="status"]')).toHaveFocus());
+    filter.focus();
+    expect(filter).toHaveFocus();
+
+    clearResult.resolve({
+      channel: "Application",
+      result: { status: "unavailable", detail: "Access denied" },
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('[role="alert"]')).toHaveTextContent("Access denied");
+    });
+    expect(filter).toHaveFocus();
   });
 
   it.each([

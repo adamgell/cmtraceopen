@@ -127,6 +127,9 @@ export function ChannelPicker() {
   const clearAlertRef = useRef<HTMLDivElement | null>(null);
   const channelFilterRef = useRef<HTMLInputElement | null>(null);
   const restoreClearFocusRef = useRef(false);
+  const clearWorkflowOwnsFocusRef = useRef(false);
+  const clearDialogWasOpenRef = useRef(false);
+  const clearDialogSubmittedRef = useRef(false);
   const [clearingChannel, setClearingChannel] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const ownsClearConfirmation = useModalOwnership(
@@ -155,7 +158,6 @@ export function ChannelPicker() {
 
   useEffect(() => {
     if (clearingChannel !== null) {
-      restoreClearFocusRef.current = true;
       clearStatusRef.current?.focus();
       return;
     }
@@ -167,6 +169,19 @@ export function ChannelPicker() {
       (clearSelectRef.current ?? channelFilterRef.current)?.focus();
     }
   }, [clearingChannel, clearError]);
+
+  useEffect(() => {
+    if (confirmClear) {
+      clearDialogWasOpenRef.current = true;
+      return;
+    }
+    if (!clearDialogWasOpenRef.current) return;
+    clearDialogWasOpenRef.current = false;
+    if (!clearDialogSubmittedRef.current) {
+      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
+    }
+    clearDialogSubmittedRef.current = false;
+  }, [confirmClear]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -336,6 +351,7 @@ export function ChannelPicker() {
                   disabled={!clearTarget || isLoading || clearingChannel !== null}
                   onClick={() => {
                     if (!clearTarget) return;
+                    clearDialogSubmittedRef.current = false;
                     setClearError(null);
                     setConfirmClear(true);
                   }}
@@ -349,6 +365,12 @@ export function ChannelPicker() {
                   ref={clearStatusRef}
                   role="status"
                   tabIndex={-1}
+                  onFocus={() => {
+                    clearWorkflowOwnsFocusRef.current = true;
+                  }}
+                  onBlur={() => {
+                    clearWorkflowOwnsFocusRef.current = false;
+                  }}
                   style={{ fontSize: `${smallFontSize}px` }}
                 >
                   Clearing {clearingChannel}…
@@ -394,12 +416,16 @@ export function ChannelPicker() {
                   onClick={() => {
                     if (!clearTarget || clearInFlightRef.current !== null) return;
                     const channel = clearTarget;
+                    clearDialogSubmittedRef.current = true;
+                    clearWorkflowOwnsFocusRef.current = true;
                     clearInFlightRef.current = channel;
                     setClearingChannel(channel);
                     setClearError(null);
                     setConfirmClear(false);
                     const releasePendingClear = () => {
                       if (clearInFlightRef.current !== channel) return false;
+                      restoreClearFocusRef.current = clearWorkflowOwnsFocusRef.current;
+                      clearWorkflowOwnsFocusRef.current = false;
                       clearInFlightRef.current = null;
                       setClearingChannel(null);
                       return clearTargetRef.current === channel;
