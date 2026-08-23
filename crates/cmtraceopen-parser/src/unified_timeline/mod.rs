@@ -1182,12 +1182,20 @@ fn is_collector_bundle_id(segment: &str) -> bool {
     let Some((hostname, nonce)) = host_and_nonce.rsplit_once('-') else {
         return false;
     };
-    date.len() == 8
-        && date.bytes().all(|byte| byte.is_ascii_digit())
-        && chrono::NaiveDate::parse_from_str(date, "%Y%m%d").is_ok()
-        && time.len() == 6
-        && time.bytes().all(|byte| byte.is_ascii_digit())
-        && chrono::NaiveTime::parse_from_str(time, "%H%M%S").is_ok()
+    let valid_date = date.len() == 8 && date.bytes().all(|byte| byte.is_ascii_digit()) && {
+        let year = date[..4].parse::<i32>().expect("validated year digits");
+        let month = date[4..6].parse::<u32>().expect("validated month digits");
+        let day = date[6..8].parse::<u32>().expect("validated day digits");
+        year >= 1 && chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
+    };
+    let valid_time = time.len() == 6 && time.bytes().all(|byte| byte.is_ascii_digit()) && {
+        let hour = time[..2].parse::<u32>().expect("validated hour digits");
+        let minute = time[2..4].parse::<u32>().expect("validated minute digits");
+        let second = time[4..6].parse::<u32>().expect("validated second digits");
+        chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some()
+    };
+    valid_date
+        && valid_time
         && !hostname.is_empty()
         && nonce.len() == NONCE_LENGTH
         && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1781,6 +1789,18 @@ mod tests {
         assert_eq!(
             bundle_from_source(
                 "/captures/CMTRACE-20260822-250061-HOST-0123456789abcdef0123456789abcdef/evidence/event.evtx"
+            ),
+            None
+        );
+        assert_eq!(
+            bundle_from_source(
+                "/captures/CMTRACE-00000101-120000-HOST-0123456789abcdef0123456789abcdef/evidence/event.evtx"
+            ),
+            None
+        );
+        assert_eq!(
+            bundle_from_source(
+                "/captures/CMTRACE-20260822-235960-HOST-0123456789abcdef0123456789abcdef/evidence/event.evtx"
             ),
             None
         );
