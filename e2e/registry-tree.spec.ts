@@ -61,15 +61,19 @@ test.describe("registry tree interaction", () => {
 
     const targetPath = "HKEY_LOCAL_MACHINE\\Branch120";
     const tree = page.getByRole("tree", { name: "Registry keys" });
-    await tree.evaluate((element) => {
-      element.scrollTop = 241 * 26;
+    const rowHeight = await tree
+      .getByRole("treeitem")
+      .first()
+      .evaluate((element) => element.getBoundingClientRect().height);
+    await tree.evaluate((element, scrollTop) => {
+      element.scrollTop = scrollTop;
       element.dispatchEvent(new Event("scroll"));
-    });
+    }, 241 * rowHeight);
 
     const target = page.getByTitle(targetPath, { exact: true }).locator("..");
     await expect(target).toBeVisible();
     await expect(target).toHaveAttribute("aria-expanded", "true");
-    const disclosure = target.locator(":scope > span").first();
+    const disclosure = target.getByRole("button", { name: "Collapse Branch120" });
     const box = await disclosure.boundingBox();
     if (!box) throw new Error("Lower disclosure did not have a browser layout box");
 

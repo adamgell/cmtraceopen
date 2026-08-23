@@ -164,7 +164,7 @@ describe("RegistryViewer", () => {
     expect(target).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("cancels disclosure focus before toggling an unselected lower row", () => {
+  it("focuses the tree without selecting an unselected disclosure row", () => {
     useLogStore.setState({ openFilePath: null });
     render(<RegistryViewer />);
 
@@ -188,7 +188,8 @@ describe("RegistryViewer", () => {
     }
     fireEvent.click(disclosure);
 
-    expect(pointerDown.defaultPrevented).toBe(true);
+    expect(pointerDown.defaultPrevented).toBe(false);
+    expect(tree).toHaveFocus();
     expect(useRegistryStore.getState().selectedKeyPath).toBeNull();
     expect(target).toHaveAttribute("aria-expanded", "false");
   });

@@ -29,6 +29,7 @@ export function KeyTree() {
   );
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const disclosurePointerRef = useRef(false);
 
   // Scroll selected row into view when search navigates.
   const selectedIndex = useMemo(
@@ -73,6 +74,10 @@ export function KeyTree() {
   );
 
   const handleFocus = useCallback(() => {
+    if (disclosurePointerRef.current) {
+      disclosurePointerRef.current = false;
+      return;
+    }
     if (selectedIndex < 0 && flatRows.length > 0) {
       setSelectedKeyPath(flatRows[0].node.fullPath);
     }
@@ -221,6 +226,13 @@ export function KeyTree() {
             >
               {/* Expand/collapse chevron */}
               <span
+                role={hasChildren ? "button" : undefined}
+                aria-label={
+                  hasChildren
+                    ? `${isExpanded ? "Collapse" : "Expand"} ${row.node.name}`
+                    : undefined
+                }
+                aria-hidden={hasChildren ? undefined : true}
                 style={{
                   width: "16px",
                   display: "inline-flex",
@@ -232,11 +244,18 @@ export function KeyTree() {
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  if (e.button === 0) e.preventDefault();
+                  if (e.button === 0) disclosurePointerRef.current = true;
+                }}
+                onPointerCancel={() => {
+                  disclosurePointerRef.current = false;
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (hasChildren) toggleExpanded(row.node.fullPath);
+                  if (!hasChildren) return;
+                  toggleExpanded(row.node.fullPath);
+                  disclosurePointerRef.current = true;
+                  parentRef.current?.focus({ preventScroll: true });
+                  disclosurePointerRef.current = false;
                 }}
               >
                 {hasChildren ? (isExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />) : ""}
