@@ -19,7 +19,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const { useEvtxStore } = await import("./evtx-store");
-const { openEventLogSources } = await import("./open-event-log-source");
+const { openEventLogSource, openEventLogSources } =
+  await import("./open-event-log-source");
 
 function manifest(path: string): EventLogSourceManifest {
   return {
@@ -152,6 +153,65 @@ describe("source-open integration", () => {
     ]);
     expect(state.sourceMode).toBe("files");
     expect(state.loadError).toBe("newer expansion failed");
+  });
+
+  it("rejects a current file parse failure after recording it", async () => {
+    invoke.mockRejectedValueOnce(new Error("file parse failed"));
+
+    await expect(
+      openEventLogSource({ kind: "file", path: "/logs/broken.evtx" }),
+    ).rejects.toThrow("file parse failed");
+
+    const state = useEvtxStore.getState();
+    expect(state.isLoading).toBe(false);
+    expect(state.loadError).toBe("file parse failed");
+  });
+
+  it("rejects a current manifest parse failure after recording it", async () => {
+    const brokenManifest = manifest("/logs/broken/Application.evtx");
+    expandEventLogSources.mockResolvedValueOnce(brokenManifest);
+    invoke.mockRejectedValueOnce(new Error("manifest parse failed"));
+
+    await expect(
+      openEventLogSources([{ kind: "folder", path: "/logs/broken" }]),
+    ).rejects.toThrow("manifest parse failed");
+
+    const state = useEvtxStore.getState();
+    expect(state.isLoading).toBe(false);
+    expect(state.loadError).toBe("manifest parse failed");
+    expect(state.sourceManifest).toEqual(brokenManifest);
+  });
+
+  it("resolves a stale parse failure without replacing the current error", async () => {
+    const olderManifest = manifest("/logs/older/Application.evtx");
+    const olderParse = deferred<EvtxParseResult>();
+    expandEventLogSources
+      .mockResolvedValueOnce(olderManifest)
+      .mockRejectedValueOnce(new Error("newer expansion failed"));
+    invoke.mockReturnValueOnce(olderParse.promise);
+
+    const olderResult = openEventLogSources([
+      { kind: "folder", path: "/logs/older" },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("evtx_parse_manifest", {
+        manifest: olderManifest,
+      }),
+    );
+    const newerResult = openEventLogSources([
+      { kind: "folder", path: "/logs/newer" },
+    ]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(await newerResult).toEqual(new Error("newer expansion failed"));
+
+    olderParse.reject(new Error("older parse failed"));
+    expect(await olderResult).toBeNull();
+    expect(useEvtxStore.getState().loadError).toBe("newer expansion failed");
   });
 
   it("does not parse an older expansion after local enumeration becomes current", async () => {

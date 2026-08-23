@@ -925,6 +925,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         coverageDetails: [],
         timeWindow: previousTimeWindow,
       });
+      throw error;
     }
   },
 
@@ -985,6 +986,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         coverageGaps: sourceCoverageMessages(manifest.coverage),
         timeWindow: previousTimeWindow,
       });
+      throw error;
     }
   },
 

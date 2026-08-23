@@ -483,7 +483,9 @@ it("keeps manifest coverage visible when manifest parsing rejects", async () => 
   };
   invoke.mockRejectedValueOnce(new Error("manifest parse failed"));
 
-  await useEvtxStore.getState().parseManifest(manifest);
+  await expect(useEvtxStore.getState().parseManifest(manifest)).rejects.toThrow(
+    "manifest parse failed",
+  );
 
   const state = useEvtxStore.getState();
   expect(state.sourceManifest).toEqual(manifest);
