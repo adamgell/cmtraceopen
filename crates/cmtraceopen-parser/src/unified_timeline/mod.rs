@@ -410,9 +410,7 @@ fn source_identity(value: &str) -> Option<String> {
     let value = identity_value(value)?;
     let bytes = value.as_bytes();
     let has_windows_drive = bytes.get(1) == Some(&b':') && bytes[0].is_ascii_alphabetic();
-    let is_windows_shaped = has_windows_drive
-        || value.starts_with("//")
-        || (!value.starts_with('/') && value.contains('\\'));
+    let is_windows_shaped = has_windows_drive || (!value.starts_with('/') && value.contains('\\'));
     Some(if is_windows_shaped {
         value.to_ascii_lowercase()
     } else {
@@ -1186,8 +1184,10 @@ fn is_collector_bundle_id(segment: &str) -> bool {
     };
     date.len() == 8
         && date.bytes().all(|byte| byte.is_ascii_digit())
+        && chrono::NaiveDate::parse_from_str(date, "%Y%m%d").is_ok()
         && time.len() == 6
         && time.bytes().all(|byte| byte.is_ascii_digit())
+        && chrono::NaiveTime::parse_from_str(time, "%H%M%S").is_ok()
         && !hostname.is_empty()
         && nonce.len() == NONCE_LENGTH
         && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1772,6 +1772,18 @@ mod tests {
             ),
             None
         );
+        assert_eq!(
+            bundle_from_source(
+                "/captures/CMTRACE-20261340-120000-HOST-0123456789abcdef0123456789abcdef/evidence/event.evtx"
+            ),
+            None
+        );
+        assert_eq!(
+            bundle_from_source(
+                "/captures/CMTRACE-20260822-250061-HOST-0123456789abcdef0123456789abcdef/evidence/event.evtx"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -2201,6 +2213,33 @@ mod tests {
         for (item, source) in [
             (&mut first, "/captures/Capture.evtx"),
             (&mut second, "/captures/capture.evtx"),
+        ] {
+            if let TimelineOrigin::Event {
+                stable_id,
+                source: origin_source,
+                ..
+            } = &mut item.origin
+            {
+                *origin_source = source.to_string();
+                *stable_id = format!("{source}/Application#1");
+            }
+        }
+        let observations = [
+            observation_from_origin(&first.origin),
+            observation_from_origin(&second.origin),
+        ];
+
+        let (edges, _) = correlate_observations(&observations);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn provider_record_identity_preserves_posix_double_slash_source_case() {
+        let mut first = event(1_000, "first", TimelineSeverity::Info);
+        let mut second = event(2_000, "second", TimelineSeverity::Info);
+        for (item, source) in [
+            (&mut first, "//captures/Capture.evtx"),
+            (&mut second, "//captures/capture.evtx"),
         ] {
             if let TimelineOrigin::Event {
                 stable_id,
