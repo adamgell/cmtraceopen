@@ -297,7 +297,7 @@ describe("marker load merge", () => {
     consoleError.mockRestore();
   });
 
-  it("blocks a generic save after read failure until a successful retry merges the dirty marker", async () => {
+  it("retries a failed read before saving and merges the dirty marker", async () => {
     const filePath = "generic-failed-load.log";
     const diskMarker = marker(1, "confirmed", "disk-marker");
     const localMarker = marker(2, "bug", "local-marker");
@@ -332,14 +332,9 @@ describe("marker load merge", () => {
       .toggleMarker(filePath, localMarker.lineId, localMarker.identity);
 
     expect(await useMarkerStore.getState().saveMarkers(filePath)).toBe(
-      "failed",
+      "saved",
     );
-    expect(loadAttempts).toBe(1);
-    expect(writes).toEqual([]);
-
-    expect(await useMarkerStore.getState().loadMarkers(filePath)).toBe(
-      "loaded",
-    );
+    expect(loadAttempts).toBe(2);
     expect(writes).toHaveLength(1);
     expect(writes[0].markers.map((item) => item.identity)).toEqual([
       "disk-marker",

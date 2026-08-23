@@ -4,6 +4,7 @@ import {
   formatCoverageGap,
   mergeCoverageGaps,
   mergeDiagnosisCoverageGaps,
+  mergeStructuredCoverageGaps,
   summarizeCoverageGaps,
 } from "./evtx-coverage";
 
@@ -297,6 +298,23 @@ describe("assertParseResultShape", () => {
 });
 
 describe("structured recovery gaps", () => {
+  it("deduplicates equivalent numeric and zero-padded textual record IDs", () => {
+    const numeric = {
+      source: "dirty.evtx",
+      kind: "record" as const,
+      reason: "unreadable record",
+      eventRecordId: 42,
+    };
+    const textual = {
+      ...numeric,
+      eventRecordIdText: "00042",
+    };
+
+    expect(mergeStructuredCoverageGaps([numeric], [textual])).toEqual([
+      numeric,
+    ]);
+  });
+
   it("keeps chunk and record provenance in the boundary shape", () => {
     const shape = assertParseResultShape({
       records: [],

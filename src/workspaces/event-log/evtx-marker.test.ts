@@ -495,4 +495,18 @@ describe("EVTX marker identity adapter", () => {
     };
     expect(evtxQuickFilterTerms(quickFilter)).toEqual(["setup", "failure"]);
   });
+
+  it.each(["Boot\rcompleted", "Boot\r\ncompleted"])(
+    "derives highlight terms from carriage-return string separators: %j",
+    (query) => {
+      expect(
+        evtxQuickFilterTerms({
+          ...DEFAULT_EVTX_QUICK_FILTER,
+          mode: "allStrings",
+          query,
+          highlight: true,
+        }),
+      ).toEqual(["Boot", "completed"]);
+    },
+  );
 });

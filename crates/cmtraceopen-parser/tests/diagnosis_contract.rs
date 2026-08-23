@@ -100,6 +100,32 @@ fn event_identity_uses_channel_and_lossless_record_text() {
 }
 
 #[test]
+fn event_identity_is_unambiguous_when_fields_contain_delimiters() {
+    let with_delimiter_in_source = EventEvidenceRef {
+        source: "alpha:beta".into(),
+        provider: "Provider".into(),
+        event_id: 100,
+        record_id: 42,
+        record_id_text: None,
+        fallback_identity: None,
+        machine: Some("gamma".into()),
+        channel: Some("Application".into()),
+        activity_id: None,
+    };
+    let with_delimiter_in_machine = EventEvidenceRef {
+        source: "alpha".into(),
+        machine: Some("beta:gamma".into()),
+        ..with_delimiter_in_source.clone()
+    };
+
+    assert_ne!(
+        with_delimiter_in_source.stable_id(),
+        with_delimiter_in_machine.stable_id(),
+        "field boundaries must remain part of the evidence identity"
+    );
+}
+
+#[test]
 fn coverage_states_are_non_assertive_findings() {
     for state in [
         CoverageState::Unknown,

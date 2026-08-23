@@ -371,7 +371,7 @@ fn open_log_folder_aggregate_impl(
 
     let mut aggregate_entries: Vec<LogEntry> = Vec::new();
     let mut aggregate_files = Vec::with_capacity(file_entries.len());
-    let mut aggregate_child_errors = listing.child_errors.clone();
+    let mut parse_child_errors = Vec::new();
     let mut open_file_states = Vec::with_capacity(file_entries.len());
     let mut total_lines = 0u32;
     let mut parse_errors = 0u32;
@@ -385,7 +385,7 @@ fn open_log_folder_aggregate_impl(
                     "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
                     entry.path
                 );
-                aggregate_child_errors.push(PathDiagnostic {
+                parse_child_errors.push(PathDiagnostic {
                     path: entry.path.clone(),
                     reason: error.to_string(),
                 });
@@ -420,6 +420,9 @@ fn open_log_folder_aggregate_impl(
         .enumerate()
         .map(|(index, file)| (file.file_path.clone(), index))
         .collect();
+
+    let aggregate_child_errors =
+        merge_folder_diagnostics(listing.child_errors, parse_child_errors, Path::new(&path));
 
     aggregate_entries.sort_by(|left, right| compare_aggregate_entries(left, right, &file_order));
 
@@ -712,7 +715,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         let collected = collect_files_recursive(&requested_path);
         entries = collected.entries;
         child_errors =
-            merge_bundle_diagnostics(child_errors, collected.child_errors, &requested_path);
+            merge_folder_diagnostics(child_errors, collected.child_errors, &requested_path);
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
@@ -764,39 +767,50 @@ fn push_folder_error(
     }
 }
 
-fn merge_bundle_diagnostics(
+fn merge_folder_diagnostics(
     first_pass: Vec<PathDiagnostic>,
     recursive_pass: Vec<PathDiagnostic>,
     root: &Path,
 ) -> Vec<PathDiagnostic> {
-    let capacity = first_pass
-        .len()
-        .saturating_add(recursive_pass.len())
-        .min(MAX_FOLDER_LISTING_ERRORS);
-    let mut merged = Vec::with_capacity(capacity);
-    let mut omitted = false;
-    // Identical path/reason pairs from both passes remain distinct: the duplicate carries
-    // provenance that each traversal observed the child and must not be silently discarded.
+    let total = first_pass.len().saturating_add(recursive_pass.len());
+    if total <= MAX_FOLDER_LISTING_ERRORS {
+        let mut merged = first_pass;
+        merged.extend(recursive_pass);
+        return merged;
+    }
+
+    let retained_diagnostics = MAX_FOLDER_LISTING_ERRORS - 1;
+    let mut retained_limits = first_pass
+        .iter()
+        .chain(&recursive_pass)
+        .filter(|diagnostic| folder_diagnostic_reports_coverage_limit(diagnostic))
+        .count()
+        .min(retained_diagnostics);
+    let mut retained_ordinary = retained_diagnostics - retained_limits;
+    let mut merged = Vec::with_capacity(MAX_FOLDER_LISTING_ERRORS);
+    // Identical path/reason pairs from both inputs remain distinct: the duplicate carries
+    // provenance that each operation observed the child and must not be silently discarded.
     for diagnostic in first_pass.into_iter().chain(recursive_pass) {
-        if merged.len() < MAX_FOLDER_LISTING_ERRORS {
+        if folder_diagnostic_reports_coverage_limit(&diagnostic) && retained_limits > 0 {
+            retained_limits -= 1;
             merged.push(diagnostic);
-        } else {
-            omitted = true;
+        } else if !folder_diagnostic_reports_coverage_limit(&diagnostic) && retained_ordinary > 0 {
+            retained_ordinary -= 1;
+            merged.push(diagnostic);
         }
     }
-    if omitted {
-        if merged.len() == MAX_FOLDER_LISTING_ERRORS {
-            merged.pop();
-        }
-        merged.push(PathDiagnostic {
-            path: normalize_path_string(root),
-            reason: format!(
-                "combined folder listing diagnostics exceeded the \
-                 {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit; later diagnostics were omitted"
-            ),
-        });
-    }
+    merged.push(PathDiagnostic {
+        path: normalize_path_string(root),
+        reason: format!(
+            "combined folder diagnostics exceeded the \
+             {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit; later diagnostics were omitted"
+        ),
+    });
     merged
+}
+
+fn folder_diagnostic_reports_coverage_limit(diagnostic: &PathDiagnostic) -> bool {
+    diagnostic.reason.contains("limit") || diagnostic.reason.contains("truncated")
 }
 
 fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
@@ -898,7 +912,10 @@ fn index_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate_impl};
+    use super::{
+        index_aggregate_entries, list_log_folder, merge_folder_diagnostics,
+        open_log_folder_aggregate_impl, PathDiagnostic, MAX_FOLDER_LISTING_ERRORS,
+    };
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
@@ -1057,6 +1074,47 @@ mod tests {
             matches!(error, crate::error::AppError::Internal(message) if message.contains("duplicate aggregate entry")),
             "duplicate source coordinates must fail clearly"
         );
+    }
+
+    #[test]
+    fn aggregate_folder_diagnostics_preserve_coverage_limits_within_the_bound() {
+        let mut listing = (0..MAX_FOLDER_LISTING_ERRORS - 1)
+            .map(|index| PathDiagnostic {
+                path: format!("listing-{index}.log"),
+                reason: "listing failure".into(),
+            })
+            .collect::<Vec<_>>();
+        listing.push(PathDiagnostic {
+            path: "aggregate-root".into(),
+            reason: "folder listing reached the 4096-entry limit".into(),
+        });
+        let parse = vec![
+            PathDiagnostic {
+                path: "parse-failure.log".into(),
+                reason: "parse failure".into(),
+            },
+            PathDiagnostic {
+                path: "aggregate-root".into(),
+                reason: "recursive listing truncated after inspecting 16384 entries".into(),
+            },
+        ];
+
+        let merged =
+            merge_folder_diagnostics(listing, parse, std::path::Path::new("aggregate-root"));
+
+        assert_eq!(merged.len(), MAX_FOLDER_LISTING_ERRORS);
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason == "folder listing reached the 4096-entry limit"
+        }));
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason == "recursive listing truncated after inspecting 16384 entries"
+        }));
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason.contains("later diagnostics were omitted")
+        }));
     }
 
     /// A folder reaching the file lane must be classified by its kind, never by

@@ -139,12 +139,19 @@ export function formatCoverageGap(gap: EvtxCoverageGap): string {
 }
 
 function coverageGapKey(gap: EvtxCoverageGap): string {
+  const textRecordIdentity = parseU64Text(gap.eventRecordIdText);
+  const recordIdentity =
+    textRecordIdentity !== null
+      ? textRecordIdentity.toString()
+      : gap.eventRecordId === undefined
+        ? undefined
+        : BigInt(gap.eventRecordId).toString();
   return JSON.stringify([
     gap.source,
     gap.kind,
     gap.reason,
     gap.chunkId,
-    gap.eventRecordIdText ?? gap.eventRecordId,
+    recordIdentity,
   ]);
 }
 

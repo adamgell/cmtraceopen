@@ -111,11 +111,12 @@ function errorTokenLabel(token: DiagnosisErrorToken): string {
   const details = [
     token.hex && token.hex !== token.raw ? `(${token.hex})` : null,
     token.description ? `— ${token.description}` : null,
+    token.found ? null : "(unresolved)",
   ]
     .filter(Boolean)
     .join(" ");
   if (details) return `${token.raw} ${details}`;
-  return `${token.raw} (unresolved)`;
+  return token.raw;
 }
 
 function EventRow({ event }: { event: EventDiagnosis }) {

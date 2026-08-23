@@ -1,6 +1,9 @@
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
-import type { EvtxQuickFilter } from "./evtx-filter";
+import {
+  EVTX_STRING_QUERY_SEPARATOR,
+  type EvtxQuickFilter,
+} from "./evtx-filter";
 import type { EvtxRecord } from "./types";
 
 export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilter = {
@@ -257,7 +260,7 @@ export function evtxQuickFilterTerms(
     quickFilter.mode === "allStrings"
   ) {
     return query
-      .split(/[,;\u000a]+/)
+      .split(EVTX_STRING_QUERY_SEPARATOR)
       .map((part) => part.trim())
       .filter(Boolean);
   }

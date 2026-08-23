@@ -417,7 +417,9 @@ describe("openEventLogSource", () => {
     }
 
     expect(message).toContain(`/tmp/${"a".repeat(20)}`);
+    expect(message).not.toContain(longPath);
     expect(message).toContain(`denied-${"b".repeat(20)}`);
+    expect(message).not.toContain(longReason);
     expect(message).toContain("/tmp/logs/second.evtx: second failure");
     expect(message).toContain("/tmp/logs/third.evtx: third failure");
     expect(message).not.toContain("/tmp/logs/fourth.evtx");

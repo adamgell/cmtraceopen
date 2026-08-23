@@ -574,7 +574,7 @@ export const useMarkerStore = create<MarkerState>((set, get) => {
     filePath: string,
     persistence: MarkerFilePersistenceState,
   ): Promise<MarkerSaveOutcome> => {
-    if (persistence.loadState === "unknown") {
+    if (persistence.loadState !== "ready") {
       await loadMarkerFileIntoStore(filePath, persistence);
     }
     if (persistence.loadState !== "ready") return "failed";

@@ -181,10 +181,21 @@ impl EventEvidenceRef {
         let record_id = self.record_identity();
         let machine = self.machine.as_deref().unwrap_or_default();
         let channel = self.channel.as_deref().unwrap_or_default();
-        format!(
-            "event:{}:{}:{}:{}:{}:{}",
-            self.source, machine, channel, self.provider, self.event_id, record_id
-        )
+        let event_id = self.event_id.to_string();
+        let mut id = String::from("event:");
+        for value in [
+            self.source.as_str(),
+            machine,
+            channel,
+            self.provider.as_str(),
+            event_id.as_str(),
+            record_id.as_str(),
+        ] {
+            id.push_str(&value.len().to_string());
+            id.push(':');
+            id.push_str(value);
+        }
+        id
     }
 
     fn source_reference(&self) -> String {

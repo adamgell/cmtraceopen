@@ -162,6 +162,42 @@ describe("EventDiagnosisPanel", () => {
     expect(errors).not.toHaveTextContent("0x80070005 (0x80070005)");
   });
 
+  it("labels resolution independently from optional token decorations", () => {
+    const tokenSummary: DiagnosisSummary = {
+      ...summary,
+      events: [
+        {
+          ...summary.events[0],
+          errorTokens: [
+            {
+              raw: "0x00000000",
+              decimal: 0,
+              hex: "0x00000000",
+              malformed: false,
+              found: true,
+              description: null,
+              category: null,
+            },
+            {
+              raw: "deadbeef",
+              decimal: null,
+              hex: "0xDEADBEEF",
+              malformed: false,
+              found: false,
+              description: null,
+              category: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    render(<EventDiagnosisPanel summary={tokenSummary} />);
+    expect(screen.getByText(/^Errors:/)).toHaveTextContent(
+      "Errors: 0x00000000, deadbeef (0xDEADBEEF) (unresolved)",
+    );
+  });
+
   it("renders structured evidence and coverage details", () => {
     render(<EventDiagnosisPanel summary={summary} />);
     expect(screen.getAllByText(/provider=Provider/).length).toBeGreaterThan(0);

@@ -33,7 +33,7 @@ fn binary_exports_stdout_and_reports_coverage_to_stderr() {
     let directory = tempfile::tempdir().expect("temp directory");
     let manifest = manifest(
         &directory,
-        "<Event><System><Computer>DESKTOP-JOHN</Computer></System></Event>",
+        "<Event><System><Computer>TESTHOST-02</Computer></System></Event>",
         "PASSWORD=hunter2",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
@@ -50,7 +50,7 @@ fn binary_exports_stdout_and_reports_coverage_to_stderr() {
     let stderr = String::from_utf8(output.stderr).expect("stderr");
     assert!(stdout.starts_with('['));
     assert!(!stdout.contains("hunter2"));
-    assert!(!stdout.contains("DESKTOP-JOHN"));
+    assert!(!stdout.contains("TESTHOST-02"));
     assert!(!stdout.contains("TESTHOST-01"));
     assert!(stdout.contains("[sensitive:ComputerName]"));
     assert!(stderr.contains("coverage: sourceRecords=1 exportedRecords=1 parseErrors=1 gaps=1"));

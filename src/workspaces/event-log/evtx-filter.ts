@@ -22,6 +22,9 @@ import { eventDateKey, type EvtxTimeZoneMode } from "./evtx-time";
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
 
+/** Delimiters accepted by the multi-string quick-filter grammar. */
+export const EVTX_STRING_QUERY_SEPARATOR = /[,;\r\n]+/;
+
 const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Critical: 0,
   Error: 1,
@@ -298,7 +301,11 @@ export function matchesQuickFilter(
       return words.length > 0 && words.some(contains);
     }
     case "multipleStrings": {
-      const strings = queryParts(query, /[,;\r\n]+/, quickFilter.caseSensitive);
+      const strings = queryParts(
+        query,
+        EVTX_STRING_QUERY_SEPARATOR,
+        quickFilter.caseSensitive,
+      );
       return strings.length > 0 && strings.some(contains);
     }
     case "allWords": {
@@ -306,7 +313,11 @@ export function matchesQuickFilter(
       return words.length > 0 && words.every(contains);
     }
     case "allStrings": {
-      const strings = queryParts(query, /[,;\r\n]+/, quickFilter.caseSensitive);
+      const strings = queryParts(
+        query,
+        EVTX_STRING_QUERY_SEPARATOR,
+        quickFilter.caseSensitive,
+      );
       return strings.length > 0 && strings.every(contains);
     }
   }
