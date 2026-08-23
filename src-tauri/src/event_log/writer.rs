@@ -903,9 +903,11 @@ fn streaming_writer_forwards_output_before_the_iterator_finishes() {
     let mut index = 0;
     let records = std::iter::from_fn(move || {
         if index == 1 {
+            let written = observed.lock().expect("observed output lock").clone();
+            let written = String::from_utf8(written).expect("UTF-8 output");
             assert!(
-                !observed.lock().expect("observed output lock").is_empty(),
-                "the supplied writer must receive the first record before the next is requested"
+                written.contains("event-0"),
+                "the supplied writer must receive the first record before the next is requested, got {written:?}"
             );
         }
         if index >= 2 {
