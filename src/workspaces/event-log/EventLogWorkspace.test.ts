@@ -14,7 +14,12 @@ describe("scopeLogEntries", () => {
     ];
 
     expect(
-      scopeLogEntries(entries, { kind: "file", path: "C:\\logs\\first.log" }, "merged")
+      scopeLogEntries(
+        entries,
+        { kind: "file", path: "C:\\logs\\first.log" },
+        "merged",
+        "windows",
+      ),
     ).toEqual(entries);
   });
 
@@ -25,9 +30,46 @@ describe("scopeLogEntries", () => {
     ];
 
     expect(
-      scopeLogEntries(entries, { kind: "file", path: "C:\\logs\\first.log" }, "single-file")
+      scopeLogEntries(
+        entries,
+        { kind: "file", path: "C:\\logs\\first.log" },
+        "single-file",
+        "windows",
+      ),
     ).toEqual([entries[0]]);
   });
+
+  it("matches case-insensitively on Windows", () => {
+    const entries = [entry("C:\\Logs\\first.log", "matching source")];
+
+    expect(
+      scopeLogEntries(
+        entries,
+        { kind: "file", path: "c:\\logs\\first.log" },
+        "single-file",
+        "windows",
+      ),
+    ).toEqual(entries);
+  });
+
+  it.each(["macos", "linux"] as const)(
+    "does not mix case-distinct sources on %s",
+    (platform) => {
+      const entries = [
+        entry("/logs/first.log", "lowercase source"),
+        entry("/Logs/first.log", "uppercase source"),
+      ];
+
+      expect(
+        scopeLogEntries(
+          entries,
+          { kind: "file", path: "/logs/first.log" },
+          "single-file",
+          platform,
+        ),
+      ).toEqual([entries[0]]);
+    },
+  );
 
   it("keeps aggregate entries when unrelated Windows volumes yield a root scope", () => {
     const entries = [
@@ -35,8 +77,13 @@ describe("scopeLogEntries", () => {
       entry("D:/logs/second.log", "second source"),
     ];
 
-    expect(scopeLogEntries(entries, { kind: "folder", path: "/" }, "aggregate-folder")).toEqual(
-      entries
-    );
+    expect(
+      scopeLogEntries(
+        entries,
+        { kind: "folder", path: "/" },
+        "aggregate-folder",
+        "windows",
+      ),
+    ).toEqual(entries);
   });
 });

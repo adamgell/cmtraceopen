@@ -3,6 +3,7 @@ import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
 import { diagnoseEventRecords } from "../../lib/commands";
 import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
+import { useUiStore } from "../../stores/ui-store";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
@@ -56,9 +57,16 @@ export function EventLogWorkspace() {
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const currentPlatform = useUiStore((s) => s.currentPlatform);
   const scopedLogEntries = useMemo(
-    () => scopeLogEntries(logEntries, activeLogSource, logSourceOpenMode),
-    [logEntries, activeLogSource, logSourceOpenMode],
+    () =>
+      scopeLogEntries(
+        logEntries,
+        activeLogSource,
+        logSourceOpenMode,
+        currentPlatform,
+      ),
+    [logEntries, activeLogSource, logSourceOpenMode, currentPlatform],
   );
   const records = useEvtxStore((s) => s.records);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);

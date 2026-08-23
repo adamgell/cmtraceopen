@@ -7,20 +7,22 @@
  */
 
 import type { EvtxRecord } from "./types";
-import type { LogEntry, LogSource } from "../../types/log";
+import type { LogEntry, LogSource, PlatformKind } from "../../types/log";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 
 function logEntryBelongsToSource(
   entry: LogEntry,
   source: LogSource | null,
+  platform: Exclude<PlatformKind, "all">,
 ): boolean {
   if (source === null) return false;
   const root = source.kind === "known" ? source.defaultPath : source.path;
-  const normalize = (value: string) =>
-    value
+  const normalize = (value: string) => {
+    const normalized = value
       .replace(/[\\/]+/g, "/")
-      .replace(/\/+$/, "")
-      .toLowerCase();
+      .replace(/\/+$/, "");
+    return platform === "windows" ? normalized.toLowerCase() : normalized;
+  };
   const normalizedRoot = normalize(root);
   if (normalizedRoot === "" || normalizedRoot === "/") return true;
   const normalizedEntry = normalize(entry.filePath);
@@ -34,10 +36,13 @@ export function scopeLogEntries(
   entries: LogEntry[],
   source: LogSource | null,
   mode: SourceOpenMode,
+  platform: Exclude<PlatformKind, "all">,
 ): LogEntry[] {
   return mode === "merged"
     ? entries
-    : entries.filter((entry) => logEntryBelongsToSource(entry, source));
+    : entries.filter((entry) =>
+        logEntryBelongsToSource(entry, source, platform),
+      );
 }
 
 export type TimelineSeverity =
