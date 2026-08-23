@@ -76,7 +76,7 @@ export function isEvtxMarkerAddressable(record: EvtxRecord): boolean {
 export function evtxMarkerKey(record: EvtxRecord): string {
   const recordIdentity =
     evtxMarkerRecordIdentity(record) ??
-    `unaddressable:${evtxOccurrenceKey(record)}`;
+    `unaddressable:${evtxOccurrenceDigest(record)}`;
   return JSON.stringify([
     record.originKind ?? "event",
     record.sourceLabel,
@@ -85,8 +85,8 @@ export function evtxMarkerKey(record: EvtxRecord): string {
   ]);
 }
 
-function hashEvtxMarkerKey(key: string): number {
-  let hash = 2166136261;
+function hashEvtxMarkerKey(key: string, seed = 2166136261): number {
+  let hash = seed;
   for (let index = 0; index < key.length; index += 1) {
     hash ^= key.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
@@ -99,54 +99,30 @@ export function evtxMarkerLineId(record: EvtxRecord): number {
   return hashEvtxMarkerKey(evtxMarkerKey(record));
 }
 
-/** Projection identity for malformed/legacy records without a provider record ID. */
-export function evtxOccurrenceKey(record: EvtxRecord): string {
-  return JSON.stringify([
-    record.timestampEpoch,
-    record.eventRecordIdText ?? "",
-    record.eventId,
-    record.provider,
-    record.message,
-    record.eventData.map((field) => [field.name, field.value]),
-    record.rawXml,
-  ]);
-}
-
-/** The delimiter/FNV identity used by marker files written before structured identities. */
-function legacyEvtxMarkerLineId(record: EvtxRecord): number {
-  const key = [
-    record.sourceLabel,
-    record.channel,
-    `record:${record.eventRecordId}`,
-    record.eventId,
-  ].join("\u001f");
-  return hashEvtxMarkerKey(key);
-}
-
-/**
- * Marker files written before structured identities used this delimiter projection for records
- * whose numeric EventRecordID was unsafe. Keep it separate from the current collision-resistant
- * JSON projection so those files can still be discovered.
- */
-function legacyEvtxOccurrenceLineId(record: EvtxRecord): number {
-  const occurrenceKey = [
-    record.timestampEpoch,
-    record.eventRecordIdText ?? "",
-    record.eventId,
-    record.provider,
-    record.message,
-    record.eventData
-      .map((field) => `${field.name}=${field.value}`)
-      .join("\u001e"),
-    record.rawXml,
-  ].join("\u001f");
-  const key = [
-    record.sourceLabel,
-    record.channel,
-    `occurrence:${occurrenceKey}`,
-    record.eventId,
-  ].join("\u001f");
-  return hashEvtxMarkerKey(key);
+/** Bounded projection identity for malformed records without a producer record ID. */
+function evtxOccurrenceDigest(record: EvtxRecord): string {
+  let first = 2166136261;
+  let second = first ^ 0x9e3779b9;
+  const feed = (value: string) => {
+    const framed = String(value.length) + ":" + value;
+    first = hashEvtxMarkerKey(framed, first);
+    second = hashEvtxMarkerKey(framed, second);
+  };
+  feed(String(record.timestampEpoch));
+  feed(record.eventRecordIdText ?? "");
+  feed(String(record.eventId));
+  feed(record.provider);
+  feed(record.message);
+  feed(String(record.eventData.length));
+  for (const field of record.eventData) {
+    feed(field.name);
+    feed(field.value);
+  }
+  feed(record.rawXml);
+  return (
+    first.toString(16).padStart(8, "0") +
+    second.toString(16).padStart(8, "0")
+  );
 }
 
 interface EvtxMarkerMatch {
@@ -183,43 +159,13 @@ function findEvtxMarker(
   record: EvtxRecord,
   markersByFile: ReadonlyMap<string, ReadonlyMap<number, Marker>>,
 ): EvtxMarkerMatch | null {
-  const addressable = isEvtxMarkerAddressable(record);
-  const textId = record.eventRecordIdText?.trim() ?? "";
-  const legacyUnsafeRecordId =
-    !addressable &&
-    textId === "" &&
-    Number.isFinite(record.eventRecordId) &&
-    record.eventRecordId > Number.MAX_SAFE_INTEGER;
-  if (!addressable && !legacyUnsafeRecordId) return null;
-  const fileMap = markersByFile.get(evtxMarkerFileKey(record.sourceLabel));
-  if (!fileMap) return null;
-
-  if (addressable) {
-    const identity = evtxMarkerKey(record);
-    const match = getMarkerIdentityIndex(markersByFile)
+  if (!isEvtxMarkerAddressable(record)) return null;
+  const identity = evtxMarkerKey(record);
+  return (
+    getMarkerIdentityIndex(markersByFile)
       .get(evtxMarkerFileKey(record.sourceLabel))
-      ?.get(identity);
-    if (match) return match;
-  }
-
-  // Numeric line IDs are only legacy lookups. Never let a hash collision select another
-  // identity-bearing EVTX marker. Probe the previous unsafe-ID occurrence format before the
-  // newer structured hash and the original delimiter/FNV numeric format.
-  const legacyLineIds = legacyUnsafeRecordId
-    ? [legacyEvtxOccurrenceLineId(record)]
-    : [
-        legacyEvtxOccurrenceLineId(record),
-        evtxMarkerLineId(record),
-        legacyEvtxMarkerLineId(record),
-      ];
-  const seenLineIds = new Set<number>();
-  for (const lineId of legacyLineIds) {
-    if (seenLineIds.has(lineId)) continue;
-    seenLineIds.add(lineId);
-    const marker = fileMap.get(lineId);
-    if (marker && marker.identity === undefined) return { lineId, marker };
-  }
-  return null;
+      ?.get(identity) ?? null
+  );
 }
 
 function evtxMarkerStorageLineId(
@@ -231,11 +177,7 @@ function evtxMarkerStorageLineId(
   let lineId = evtxMarkerLineId(record);
   while (true) {
     const existing = fileMap?.get(lineId);
-    if (
-      !existing ||
-      existing.identity === undefined ||
-      existing.identity === identity
-    ) {
+    if (!existing || existing.identity === identity) {
       return lineId;
     }
     lineId = (lineId + 1) >>> 0;
@@ -279,7 +221,7 @@ interface EvtxMarkerMutation {
   fileKey: string;
   lineId: number;
   existing: Marker | undefined;
-  mutationIdentity: string | undefined;
+  mutationIdentity: string;
 }
 
 function resolveEvtxMarkerMutation(
@@ -292,10 +234,7 @@ function resolveEvtxMarkerMutation(
   const lineId =
     existingMatch?.lineId ?? evtxMarkerStorageLineId(record, markersByFile);
   const existing = existingMatch?.marker;
-  const mutationIdentity =
-    existingMatch?.marker.identity === undefined && existingMatch !== undefined
-      ? undefined
-      : evtxMarkerKey(record);
+  const mutationIdentity = evtxMarkerKey(record);
   return { fileKey, lineId, existing, mutationIdentity };
 }
 

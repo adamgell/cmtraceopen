@@ -32,51 +32,6 @@ function record(overrides: Partial<EvtxRecord> = {}): EvtxRecord {
     ...overrides,
   };
 }
-/**
- * Marker files created before the adapter switched to structured identities used this
- * delimiter-separated key and did not persist an `identity` field. Keep this fixture
- * independent from the current key implementation so it exercises the migration seam.
- */
-function previousEvtxMarkerLineId(record: EvtxRecord): number {
-  const key = [
-    record.sourceLabel,
-    record.channel,
-    `record:${record.eventRecordId}`,
-    record.eventId,
-  ].join("\u001f");
-  let hash = 2166136261;
-  for (let index = 0; index < key.length; index += 1) {
-    hash ^= key.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function legacyUnsafeOccurrenceLineId(record: EvtxRecord): number {
-  const occurrenceKey = [
-    record.timestampEpoch,
-    record.eventRecordIdText ?? "",
-    record.eventId,
-    record.provider,
-    record.message,
-    record.eventData.map((field) => `${field.name}=${field.value}`).join("\u001e"),
-    record.rawXml,
-  ].join("\u001f");
-  const key = [
-    record.sourceLabel,
-    record.channel,
-    `occurrence:${occurrenceKey}`,
-    record.eventId,
-  ].join("\u001f");
-  let hash = 2166136261;
-  for (let index = 0; index < key.length; index += 1) {
-    hash ^= key.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-
 describe("EVTX marker identity adapter", () => {
   beforeEach(() => {
     useMarkerStore.setState({
@@ -129,6 +84,21 @@ describe("EVTX marker identity adapter", () => {
     expect(evtxMarkerLineId(missingId)).not.toBe(evtxMarkerLineId(differentOccurrence));
     expect(evtxMarkerKey(missingId)).not.toBe(evtxMarkerKey(differentSource));
     expect(evtxMarkerLineId(missingId)).not.toBe(evtxMarkerLineId(differentSource));
+  });
+
+  it("keeps unaddressable render keys bounded and omits event payloads", () => {
+    const secret = "sensitive-payload".repeat(10_000);
+    const missingId = record({
+      eventRecordId: 0,
+      eventRecordIdText: "0",
+      message: secret,
+      rawXml: `<Event>${secret}</Event>`,
+    });
+
+    const key = evtxMarkerKey(missingId);
+
+    expect(key.length).toBeLessThan(256);
+    expect(key).not.toContain("sensitive-payload");
   });
 
   it("fails closed for byte-identical records without a producer ID", () => {
@@ -237,53 +207,6 @@ describe("EVTX marker identity adapter", () => {
         new Map([[evtxMarkerFileKey(reordered.sourceLabel), new Map([[saved.lineId, saved]])]])
       )
     ).toEqual(saved);
-  });
-
-  it("reads markers persisted with the previous adapter key", () => {
-    const current = record();
-    const saved: Marker = {
-      lineId: previousEvtxMarkerLineId(current),
-      category: "investigate",
-      color: "#60a5fa",
-      added: "2026-08-18T12:00:00Z",
-    };
-    expect(saved.lineId).not.toBe(evtxMarkerLineId(current));
-
-    const markers = new Map([
-      [evtxMarkerFileKey(current.sourceLabel), new Map([[saved.lineId, saved]])],
-    ]);
-
-    expect(getEvtxMarker(current, markers)).toEqual(saved);
-  });
-
-  it("mutates a legacy unsafe-ID marker without assigning structured identity", () => {
-    const current = record({
-      eventRecordId: 9007199254740992,
-      eventRecordIdText: undefined,
-    });
-    const lineId = legacyUnsafeOccurrenceLineId(current);
-    const saved: Marker = {
-      lineId,
-      category: "bookmark",
-      color: "#8b5cf6",
-      added: "2026-08-18T12:00:00Z",
-    };
-    useMarkerStore.setState({
-      markersByFile: new Map([
-        [evtxMarkerFileKey(current.sourceLabel), new Map([[lineId, saved]])],
-      ]),
-      activeCategory: "bug",
-      saveMarkers: vi.fn().mockResolvedValue(undefined),
-    });
-
-    toggleEvtxTag(current);
-    toggleEvtxBookmark(current);
-    const mutated = useMarkerStore
-      .getState()
-      .markersByFile.get(evtxMarkerFileKey(current.sourceLabel))
-      ?.get(lineId);
-    expect(mutated).toMatchObject({ category: "bookmark" });
-    expect(mutated?.identity).toBeUndefined();
   });
 
   it("keeps exact structured identity when mutating an addressable marker", () => {
