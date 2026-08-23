@@ -114,6 +114,31 @@ describe("openEventLogSources provenance", () => {
       "vss",
     ]);
   });
+
+  it("rejects an empty expanded selection with its source diagnostics", async () => {
+    expandEventLogSources.mockResolvedValue({
+      entries: [],
+      coverage: [
+        {
+          kind: "accessDenied",
+          path: "/tmp/protected.evtx",
+          reason: "access denied",
+        },
+      ],
+    });
+
+    await expect(
+      openEventLogSources([
+        { kind: "file", path: "/tmp/protected.evtx" },
+      ]),
+    ).rejects.toThrow(
+      "No .evtx files were found. Source diagnostics: /tmp/protected.evtx: access denied",
+    );
+    expect(setLoadError).toHaveBeenCalledWith(
+      "No .evtx files were found. Source diagnostics: /tmp/protected.evtx: access denied",
+    );
+    expect(parseManifest).not.toHaveBeenCalled();
+  });
 });
 
 describe("openEventLogSource", () => {
@@ -126,6 +151,28 @@ describe("openEventLogSource", () => {
     await openEventLogSource({ kind: "file", path: "/tmp/Application.evtx" });
 
     expect(parseFiles).toHaveBeenCalledWith(["/tmp/Application.evtx"]);
+  });
+
+  it.each([
+    { kind: "wildcard" as const, path: "/tmp/*.evtx" },
+    { kind: "archive" as const, path: "/tmp/logs.zip" },
+    { kind: "vss" as const, path: "\\\\?\\GLOBALROOT\\Device\\ShadowCopy" },
+  ])("rejects an empty expanded $kind source", async (source) => {
+    expandEventLogSources.mockResolvedValue({
+      entries: [],
+      coverage: [
+        {
+          kind: "unsupported",
+          path: source.path,
+          reason: "no usable event logs",
+        },
+      ],
+    });
+
+    await expect(openEventLogSource(source)).rejects.toThrow(
+      `No .evtx files were found. Source diagnostics: ${source.path}: no usable event logs`,
+    );
+    expect(parseManifest).not.toHaveBeenCalled();
   });
 
   it.each([

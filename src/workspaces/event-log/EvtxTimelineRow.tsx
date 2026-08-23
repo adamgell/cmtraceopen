@@ -10,8 +10,8 @@ import {
   evtxQuickFilterTerms,
   isEvtxBookmark,
   isEvtxMarkerAddressable,
-  type EvtxQuickFilterLike,
 } from "./evtx-marker-adapter";
+import type { EvtxQuickFilter } from "./evtx-filter";
 import {
   columnValue,
   columnWidth,
@@ -228,7 +228,7 @@ export interface EvtxTimelineRowProps {
   timeZoneMode: EvtxTimeZoneMode;
   onSelect: (id: number | null) => void;
   marker?: Marker | null;
-  quickFilter?: EvtxQuickFilterLike;
+  quickFilter?: EvtxQuickFilter;
   quickFilterMatch?: boolean;
   onTag?: (record: EvtxRecord) => void;
   onBookmark?: (record: EvtxRecord) => void;
@@ -348,17 +348,17 @@ export const EvtxTimelineRow = memo(
           fontSize: `${fontSize}px`,
           lineHeight,
           minWidth: 0,
+          gap: "10px",
         }}
       >
         <div
           role="gridcell"
           aria-colindex={1}
+          aria-label="Event markers"
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "10px",
-            width: "100%",
-            minWidth: 0,
+            flexShrink: 0,
           }}
         >
           <div
@@ -389,79 +389,85 @@ export const EvtxTimelineRow = memo(
               onBookmark={onBookmark}
             />
           </div>
-          {columns.map((column) => {
-            const width = columnWidth(columnConfig, column);
-            const value = columnValue(record, column.id, timeZoneMode);
+        </div>
+        {columns.map((column, columnIndex) => {
+          const width = columnWidth(columnConfig, column);
+          const value = columnValue(record, column.id, timeZoneMode);
 
-            if (column.id === "level") {
-              return (
-                <div
-                  key={column.id}
-                  data-evtx-level-badge="true"
-                  style={{
-                    fontSize: `${smallFontSize}px`,
-                    fontWeight: 700,
-                    padding: "2px 6px",
-                    borderRadius: "4px",
-                    backgroundColor: levelColor,
-                    color: tokens.colorNeutralForegroundOnBrand,
-                    width: width != null ? `${width}px` : undefined,
-                    textAlign: "center",
-                    flexShrink: 0,
-                    boxSizing: "border-box",
-                  }}
-                >
-                  {LEVEL_SHORT[record.level]}
-                </div>
-              );
-            }
-
-            const isDescription = column.id === "message";
-            const isMono = column.id === "timestamp" || column.id === "keywords";
-
+          if (column.id === "level") {
             return (
               <div
                 key={column.id}
-                style={
-                  isDescription
-                    ? {
-                        // Absorbs the remaining width only while no width has been set for it.
-                        // Ignoring an override meant the Description column could be resized in the
-                        // chooser and never actually change.
-                        ...(width != null
-                          ? { width: `${width}px`, flexShrink: 0 }
-                          : { flex: 1 }),
-                        fontSize: `${fontSize}px`,
-                        fontWeight: isSelected ? 600 : 400,
-                        color: isSelected
-                          ? tokens.colorBrandForeground1
-                          : tokens.colorNeutralForeground1,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        minWidth: 0,
-                      }
-                    : {
-                        width: width != null ? `${width}px` : undefined,
-                        flexShrink: width != null ? 0 : 1,
-                        fontSize: `${isMono ? monoFontSize : smallFontSize}px`,
-                        fontFamily: isMono ? LOG_MONOSPACE_FONT_FAMILY : undefined,
-                        color: tokens.colorNeutralForeground3,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        boxSizing: "border-box",
-                      }
-                }
-                title={value}
+                role="gridcell"
+                aria-colindex={columnIndex + 2}
+                aria-label={`${column.label}: ${value || "Empty"}`}
+                data-evtx-level-badge="true"
+                style={{
+                  fontSize: `${smallFontSize}px`,
+                  fontWeight: 700,
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: levelColor,
+                  color: tokens.colorNeutralForegroundOnBrand,
+                  width: width != null ? `${width}px` : undefined,
+                  textAlign: "center",
+                  flexShrink: 0,
+                  boxSizing: "border-box",
+                }}
               >
-                {highlightEnabled
-                  ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
-                  : value}
+                {LEVEL_SHORT[record.level]}
               </div>
             );
-          })}
-        </div>
+          }
+
+          const isDescription = column.id === "message";
+          const isMono = column.id === "timestamp" || column.id === "keywords";
+
+          return (
+            <div
+              key={column.id}
+              role="gridcell"
+              aria-colindex={columnIndex + 2}
+              aria-label={`${column.label}: ${value || "Empty"}`}
+              style={
+                isDescription
+                  ? {
+                      // Absorbs the remaining width only while no width has been set for it.
+                      // Ignoring an override meant the Description column could be resized in the
+                      // chooser and never actually change.
+                      ...(width != null
+                        ? { width: `${width}px`, flexShrink: 0 }
+                        : { flex: 1 }),
+                      fontSize: `${fontSize}px`,
+                      fontWeight: isSelected ? 600 : 400,
+                      color: isSelected
+                        ? tokens.colorBrandForeground1
+                        : tokens.colorNeutralForeground1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }
+                  : {
+                      width: width != null ? `${width}px` : undefined,
+                      flexShrink: width != null ? 0 : 1,
+                      fontSize: `${isMono ? monoFontSize : smallFontSize}px`,
+                      fontFamily: isMono ? LOG_MONOSPACE_FONT_FAMILY : undefined,
+                      color: tokens.colorNeutralForeground3,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      boxSizing: "border-box",
+                    }
+              }
+              title={value}
+            >
+              {highlightEnabled
+                ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
+                : value}
+            </div>
+          );
+        })}
       </div>
     );
   })

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 import type { EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -30,14 +31,6 @@ function AboutAndChannelPicker() {
       <ChannelPicker />
     </>
   );
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function confirmChannelClear(channel = "Application") {

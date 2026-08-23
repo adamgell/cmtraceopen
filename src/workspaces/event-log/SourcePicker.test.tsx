@@ -109,31 +109,28 @@ describe("SourcePicker remote source", () => {
   it("resumes persisted remote-target synchronization after a successful enumeration", async () => {
     render(<SourcePicker />);
 
-    const input = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Remote computer name"]',
-    )!;
+    const input = screen.getByLabelText("Remote computer name");
     fireEvent.change(input, { target: { value: "lab-host" } });
-    const remoteButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("Remote computer"),
-    )!;
+    const remoteButton = screen.getByText("Remote computer").closest("button");
+    if (!remoteButton) throw new Error("Expected the remote computer button");
     fireEvent.click(remoteButton);
 
     await waitFor(
       () => {
-        expect(
-          document.querySelector('input[aria-label="Remote computer name"]'),
-        ).not.toBeNull();
+        expect(useEvtxStore.getState().remoteMachine).toBe("lab-host");
+        const completedButton = screen.getByText("Remote computer").closest("button");
+        expect(completedButton).toBeInTheDocument();
+        expect(completedButton).toBeEnabled();
       },
       { timeout: 3_000 },
     );
-    const synchronizedInput = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Remote computer name"]',
-    )!;
     act(() => {
       useEvtxStore.setState({ remoteMachine: "replacement-host" });
     });
 
-    await waitFor(() => expect(synchronizedInput.value).toBe("replacement-host"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Remote computer name")).toHaveValue("replacement-host"),
+    );
   });
 
   it("shows channel coverage gaps alongside the source error", () => {

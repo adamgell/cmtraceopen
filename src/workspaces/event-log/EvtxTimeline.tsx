@@ -12,7 +12,6 @@ import {
   getEvtxMarker,
   isEvtxMarkerAddressable,
   loadEvtxMarkers,
-  matchesEvtxQuickFilter,
   toggleEvtxBookmark,
   toggleEvtxTag,
 } from "./evtx-marker-adapter";
@@ -20,6 +19,7 @@ import { useEvtxStore, type EvtxSortField } from "./evtx-store";
 import {
   selectVisibleRecords,
   buildGroupedRows,
+  matchesQuickFilter,
   type EvtxRow,
 } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
@@ -398,7 +398,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
       onKeyDown={handleKeyDown}
       aria-label={`Event log timeline - ${sortedRecords.length} records`}
       aria-rowcount={rows.length}
-      aria-colcount={1}
+      aria-colcount={columns.length + 1}
       style={{
         overflowY: "auto",
         height: "100%",
@@ -474,6 +474,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
                   <div
                     role="gridcell"
                     aria-colindex={1}
+                    aria-colspan={columns.length + 1}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -494,7 +495,7 @@ export function EvtxTimeline({ nowEpoch }: { nowEpoch?: number } = {}) {
             const marker = getEvtxMarker(record, markersByFile);
             const quickFilterMatch =
               Boolean(quickFilter.query.trim()) &&
-              matchesEvtxQuickFilter(record, quickFilter, columnConfig.order, timeZoneMode);
+              matchesQuickFilter(record, quickFilter, columnConfig.order, timeZoneMode);
             return (
               <EvtxTimelineRow
                 key={uiRowKeys[virtualRow.index] ?? virtualRow.key}

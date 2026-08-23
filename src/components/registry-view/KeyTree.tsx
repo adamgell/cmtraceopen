@@ -247,6 +247,12 @@ export function KeyTree() {
                 onPointerCancel={() => {
                   disclosurePointerRef.current = false;
                 }}
+                onPointerUp={() => {
+                  disclosurePointerRef.current = false;
+                }}
+                onLostPointerCapture={() => {
+                  disclosurePointerRef.current = false;
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!hasChildren) return;

@@ -69,6 +69,20 @@ function formatCoverageDiagnostics(coverage: EventLogSourceCoverage[]): string {
   return `${details.join("; ")}${remaining > 0 ? `; ${remaining} more` : ""}`;
 }
 
+function requireManifestEntries(
+  manifest: EventLogSourceManifest,
+  emptyMessage: string,
+): void {
+  if (manifest.entries.length > 0) return;
+  const usefulCoverage = manifest.coverage.filter(
+    (coverage) => coverage.kind !== "empty",
+  );
+  const coverageDetails = usefulCoverage.length
+    ? ` Source diagnostics: ${formatCoverageDiagnostics(usefulCoverage)}`
+    : "";
+  throw new Error(emptyMessage + coverageDetails);
+}
+
 /** Expand selected sources once and hand the complete manifest to the store. */
 export async function openEventLogSources(
   sources: EventLogSourceSelection[],
@@ -77,6 +91,7 @@ export async function openEventLogSources(
   try {
     const manifest = await expandCurrentSource(sources, operation);
     if (!manifest) return;
+    requireManifestEntries(manifest, "No .evtx files were found.");
     await startSourceLoad(operation, () =>
       useEvtxStore.getState().parseManifest(manifest),
     );
@@ -101,6 +116,7 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
     ) {
       const manifest = await expandCurrentSource([source], operation);
       if (!manifest) return;
+      requireManifestEntries(manifest, "No .evtx files were found.");
       await startSourceLoad(operation, () =>
         useEvtxStore.getState().parseManifest(manifest),
       );
@@ -127,20 +143,12 @@ export async function openEventLogSource(source: EventLogOpenSource): Promise<vo
       operation,
     );
     if (!manifest) return;
-    if (manifest.entries.length === 0) {
-      const usefulCoverage = manifest.coverage.filter(
-        (coverage) => coverage.kind !== "empty",
-      );
-      const coverageDetails = usefulCoverage.length
-        ? ` Source diagnostics: ${formatCoverageDiagnostics(usefulCoverage)}`
-        : "";
-      throw new Error(
-        (source.kind === "known"
-          ? "No .evtx files were found for that known source."
-          : "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.") +
-          coverageDetails,
-      );
-    }
+    requireManifestEntries(
+      manifest,
+      source.kind === "known"
+        ? "No .evtx files were found for that known source."
+        : "No .evtx files were found in that folder. Choose a folder that contains Windows Event Log files.",
+    );
     await startSourceLoad(operation, () =>
       useEvtxStore.getState().parseManifest(manifest),
     );

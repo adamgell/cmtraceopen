@@ -221,6 +221,29 @@ describe("RegistryViewer", () => {
     expect(tree).toHaveAttribute("aria-activedescendant", rows[0].id);
   });
 
+  it("clears expandable disclosure intent when the pointer press ends without a click", () => {
+    useLogStore.setState({ openFilePath: null });
+    render(<RegistryViewer />);
+
+    const tree = screen.getByRole("tree", { name: "Registry keys" });
+    const rows = screen.getAllByRole("treeitem");
+    const expandable = screen
+      .getByTitle(fixture.keys[0].path)
+      .closest('[role="treeitem"]');
+    const disclosure = expandable?.querySelector("[data-registry-disclosure]");
+    if (!expandable || !disclosure) {
+      throw new Error("Expected the expandable registry row disclosure");
+    }
+    expect(expandable).toHaveAttribute("aria-expanded");
+
+    fireEvent.pointerDown(disclosure, { button: 0 });
+    fireEvent.pointerUp(disclosure, { button: 0 });
+    fireEvent.focus(tree);
+
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(tree).toHaveAttribute("aria-activedescendant", rows[0].id);
+  });
+
   it("initializes tree focus and navigates vertically", () => {
     render(<RegistryViewer />);
 

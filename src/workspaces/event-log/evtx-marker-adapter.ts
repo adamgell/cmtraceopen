@@ -1,13 +1,9 @@
 import type { Marker } from "../../types/markers";
 import { useMarkerStore } from "../../stores/marker-store";
-import type { EvtxColumnId } from "./evtx-columns";
-import { matchesQuickFilter, type EvtxQuickFilter } from "./evtx-filter";
-import type { EvtxTimeZoneMode } from "./evtx-time";
+import type { EvtxQuickFilter } from "./evtx-filter";
 import type { EvtxRecord } from "./types";
 
-export type EvtxQuickFilterLike = EvtxQuickFilter;
-
-export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilterLike = {
+export const DEFAULT_EVTX_QUICK_FILTER: EvtxQuickFilter = {
   mode: "oneString",
   query: "",
   scope: "allColumns",
@@ -199,8 +195,8 @@ function resolveEvtxMarkerMutation(
   record: EvtxRecord,
   markersByFile: ReadonlyMap<string, ReadonlyMap<number, Marker>>,
 ): EvtxMarkerMutation | null {
+  if (!isEvtxMarkerAddressable(record)) return null;
   const existingMatch = findEvtxMarker(record, markersByFile);
-  if (!isEvtxMarkerAddressable(record) && !existingMatch) return null;
   const fileKey = evtxMarkerFileKey(record.sourceLabel);
   const lineId =
     existingMatch?.lineId ?? evtxMarkerStorageLineId(record, markersByFile);
@@ -248,19 +244,9 @@ export function toggleEvtxBookmark(record: EvtxRecord): void {
   persistEvtxMarkers(record.sourceLabel);
 }
 
-/** Use the centralized matcher for both visibility and row highlighting. */
-export function matchesEvtxQuickFilter(
-  record: EvtxRecord,
-  quickFilter: EvtxQuickFilterLike,
-  visibleColumns?: readonly EvtxColumnId[],
-  timeZoneMode: EvtxTimeZoneMode = "local",
-): boolean {
-  return matchesQuickFilter(record, quickFilter, visibleColumns, timeZoneMode);
-}
-
 /** Select the terms rendered as <mark> nodes; row visibility still comes from the centralized matcher. */
 export function evtxQuickFilterTerms(
-  quickFilter: EvtxQuickFilterLike,
+  quickFilter: EvtxQuickFilter,
 ): string[] {
   const query = quickFilter.query.trim();
   if (!query || quickFilter.mode === "eventIds") {

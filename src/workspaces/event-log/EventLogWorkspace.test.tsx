@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const LEVEL_BADGE_PRESENT_OFFSET = 9;
@@ -157,7 +157,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore } from "./evtx-store";
-import { defaultColumnConfig } from "./evtx-columns";
+import { defaultColumnConfig, visibleColumns } from "./evtx-columns";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxDetailPane } from "./EvtxDetailPane";
@@ -240,28 +240,34 @@ describe("event-viewer shared font metrics", () => {
   it("uses valid grid ownership for flat and grouped rows with interactive marker controls", () => {
     seedEventLog();
     useEvtxStore.setState({ groupBy: ["level"] });
+    const columnCount = visibleColumns(defaultColumnConfig()).length + 1;
 
     const grouped = render(<EvtxTimeline />);
     const treegrid = grouped.getByRole("treegrid", {
       name: "Event log timeline - 1 records",
     });
     expect(treegrid).toHaveAttribute("aria-rowcount", "2");
-    expect(treegrid).toHaveAttribute("aria-colcount", "1");
+    expect(treegrid).toHaveAttribute("aria-colcount", String(columnCount));
 
     const [groupRow, recordRow] = grouped.getAllByRole("row");
-    const [groupCell, recordCell] = grouped.getAllByRole("gridcell");
+    const [groupCell] = within(groupRow).getAllByRole("gridcell");
+    const recordCells = within(recordRow).getAllByRole("gridcell");
     expect(groupRow).toHaveAttribute("aria-rowindex", "1");
     expect(groupRow).toHaveAttribute("aria-level", "1");
     expect(groupRow).toHaveAttribute("aria-expanded", "true");
     expect(groupRow.firstElementChild).toBe(groupCell);
     expect(groupCell).toHaveAttribute("aria-colindex", "1");
+    expect(groupCell).toHaveAttribute("aria-colspan", String(columnCount));
     expect(recordRow).toHaveAttribute("aria-rowindex", "2");
     expect(recordRow).toHaveAttribute("aria-level", "2");
     expect(recordRow).toHaveAttribute("aria-selected", "true");
-    expect(recordRow.firstElementChild).toBe(recordCell);
-    expect(recordCell).toHaveAttribute("aria-colindex", "1");
-    expect(recordCell).toContainElement(grouped.getByRole("button", { name: "Tag event" }));
-    expect(recordCell).toContainElement(
+    expect(recordCells).toHaveLength(columnCount);
+    recordCells.forEach((cell, index) => {
+      expect(cell).toHaveAttribute("aria-colindex", String(index + 1));
+    });
+    expect(recordRow.firstElementChild).toBe(recordCells[0]);
+    expect(recordCells[0]).toContainElement(grouped.getByRole("button", { name: "Tag event" }));
+    expect(recordCells[0]).toContainElement(
       grouped.getByRole("button", { name: "Bookmark event" }),
     );
 
@@ -276,12 +282,14 @@ describe("event-viewer shared font metrics", () => {
       name: "Event log timeline - 1 records",
     });
     const flatRow = flat.getByRole("row");
+    const flatCells = within(flatRow).getAllByRole("gridcell");
     expect(grid).toHaveAttribute("aria-rowcount", "1");
-    expect(grid).toHaveAttribute("aria-colcount", "1");
+    expect(grid).toHaveAttribute("aria-colcount", String(columnCount));
     expect(flatRow).toHaveAttribute("aria-rowindex", "1");
     expect(flatRow).toHaveAttribute("aria-selected", "true");
     expect(flatRow).not.toHaveAttribute("aria-level");
-    expect(flatRow.firstElementChild).toHaveAttribute("role", "gridcell");
+    expect(flatCells).toHaveLength(columnCount);
+    expect(flatRow.firstElementChild).toBe(flatCells[0]);
   });
 
   it("names channel-folder disclosure and selection controls", () => {

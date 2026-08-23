@@ -115,9 +115,20 @@ describe("EvtxTimelineRow triage state", () => {
     expect(row).toHaveAttribute("data-marker-category", "investigate");
     const tagButton = screen.getByRole("button", { name: "Remove event tag" });
     const bookmarkButton = screen.getByRole("button", { name: "Bookmark event" });
-    const cell = screen.getByRole("gridcell");
-    expect(cell).toContainElement(tagButton);
-    expect(cell).toContainElement(bookmarkButton);
+    const cells = screen.getAllByRole("gridcell");
+    const columns = visibleColumns(defaultColumnConfig());
+    expect(cells).toHaveLength(columns.length + 1);
+    cells.forEach((cell, index) => {
+      expect(cell).toHaveAttribute("aria-colindex", String(index + 1));
+    });
+    expect(cells[0]).toHaveAccessibleName("Event markers");
+    columns.forEach((column, index) => {
+      expect(cells[index + 1]).toHaveAccessibleName(
+        new RegExp(`^${column.label}: `),
+      );
+    });
+    expect(cells[0]).toContainElement(tagButton);
+    expect(cells[0]).toContainElement(bookmarkButton);
     expect(tagButton).toHaveAttribute("aria-pressed", "true");
     expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(tagButton);
