@@ -29,23 +29,95 @@ fn is_unavailable_publisher_metadata_error(code: u32) -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
+/// Maximum retained failure records, including the single overflow sentinel.
+const MAX_PROVIDER_CAPTURE_FAILURES: usize = 256;
+#[cfg(any(target_os = "windows", test))]
+const MAX_PROVIDER_FAILURE_NAME_CHARS: usize = 256;
+#[cfg(any(target_os = "windows", test))]
+const MAX_PROVIDER_FAILURE_ERROR_CHARS: usize = 512;
+#[cfg(any(target_os = "windows", test))]
+const FAILURE_TRUNCATION_PROVIDER: &str = "<provider capture>";
+#[cfg(any(target_os = "windows", test))]
+const FAILURE_TRUNCATION_ERROR: &str = "additional provider capture failures were truncated";
+
+#[cfg(any(target_os = "windows", test))]
+fn sanitize_provider_failure_field(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(max_chars)
+        .collect()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn safe_provider_failure(provider_name: &str, error: &str) -> ProviderCaptureFailure {
+    ProviderCaptureFailure {
+        provider_name: sanitize_provider_failure_field(
+            provider_name,
+            MAX_PROVIDER_FAILURE_NAME_CHARS,
+        ),
+        error: sanitize_provider_failure_field(error, MAX_PROVIDER_FAILURE_ERROR_CHARS),
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn record_provider_failure(
     failures: &mut Vec<ProviderCaptureFailure>,
     provider_name: &str,
     error: String,
     unavailable: bool,
 ) {
+    if failures.len() >= MAX_PROVIDER_CAPTURE_FAILURES {
+        return;
+    }
+    if failures.len() == MAX_PROVIDER_CAPTURE_FAILURES - 1 {
+        let failure = safe_provider_failure(FAILURE_TRUNCATION_PROVIDER, FAILURE_TRUNCATION_ERROR);
+        log::warn!(
+            "event=provider_capture_failures_truncated provider={:?} error={:?}",
+            failure.provider_name,
+            failure.error
+        );
+        failures.push(failure);
+        return;
+    }
+
+    let failure = safe_provider_failure(provider_name, &error);
     if unavailable {
         log::warn!(
-            "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
-            provider_name,
-            error
+            "event=provider_capture_unavailable provider={:?} error={:?}",
+            failure.provider_name,
+            failure.error
         );
     }
-    failures.push(ProviderCaptureFailure {
-        provider_name: provider_name.to_string(),
-        error,
-    });
+    failures.push(failure);
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum PublisherEnumerationStep {
+    Publisher(String),
+    Exhausted,
+    Failed,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn publisher_enumeration_step(
+    identifier: Option<String>,
+    failures: &mut Vec<ProviderCaptureFailure>,
+) -> PublisherEnumerationStep {
+    match identifier {
+        None => PublisherEnumerationStep::Exhausted,
+        Some(identifier) if identifier.is_empty() => {
+            record_provider_failure(
+                failures,
+                "<publisher enumeration>",
+                "publisher enumeration returned an empty identifier".to_string(),
+                false,
+            );
+            PublisherEnumerationStep::Failed
+        }
+        Some(identifier) => PublisherEnumerationStep::Publisher(identifier),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -74,7 +146,7 @@ impl CaptureError {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     fn traversal(message: impl Into<String>) -> Self {
         Self {
             kind: CaptureErrorKind::Traversal,
@@ -83,7 +155,7 @@ impl CaptureError {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     fn provider_failures(failures: Vec<ProviderCaptureFailure>) -> Self {
         Self {
             kind: CaptureErrorKind::ProviderFailures,
@@ -91,6 +163,33 @@ impl CaptureError {
             failures,
         }
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+/// Gate publication so a captured prefix can never replace the last complete database.
+fn finalize_provider_capture(
+    captured_count: usize,
+    mut failures: Vec<ProviderCaptureFailure>,
+    hit_safety_bound: bool,
+    publish: impl FnOnce() -> Result<(), String>,
+) -> Result<(), CaptureError> {
+    if hit_safety_bound {
+        record_provider_failure(
+            &mut failures,
+            "<publisher enumeration>",
+            "publisher enumeration exceeded bound".to_string(),
+            false,
+        );
+    }
+    if !failures.is_empty() {
+        return Err(CaptureError::provider_failures(failures));
+    }
+    if captured_count == 0 {
+        return Err(CaptureError::traversal(
+            "publisher enumeration returned no providers",
+        ));
+    }
+    publish().map_err(CaptureError::traversal)
 }
 
 impl std::fmt::Display for CaptureError {
@@ -1242,7 +1341,7 @@ mod windows_capture {
             let mut publisher_buffer = vec![0u16; BUFFER_RETRY];
             let mut used = 0u32;
             let mut retries = 0usize;
-            let publisher_name = loop {
+            let publisher_step = loop {
                 match unsafe {
                     EvtNextPublisherId(publisher_enum.0, Some(&mut publisher_buffer), &mut used)
                 } {
@@ -1250,56 +1349,55 @@ mod windows_capture {
                         let length = usize::try_from(used)
                             .unwrap_or(0)
                             .min(publisher_buffer.len());
-                        break String::from_utf16_lossy(&publisher_buffer[..length])
+                        let publisher_name = String::from_utf16_lossy(&publisher_buffer[..length])
                             .trim_end_matches('\0')
                             .to_string();
+                        break publisher_enumeration_step(Some(publisher_name), &mut failures);
                     }
                     Err(error) if win32_code(&error) == ERROR_NO_MORE_ITEMS.0 => {
-                        hit_safety_bound = false;
-                        if captured.is_empty() && failures.is_empty() {
-                            return Err(CaptureError::traversal(
-                                "publisher enumeration returned no providers",
-                            ));
-                        }
-                        break String::new();
+                        break publisher_enumeration_step(None, &mut failures);
                     }
                     Err(error) if win32_code(&error) == ERROR_INSUFFICIENT_BUFFER.0 => {
                         let required = usize::try_from(used).unwrap_or(0);
                         if required == 0 || required > MAX_BUFFER_BYTES / 2 {
-                            hit_safety_bound = false;
-                            failures.push(ProviderCaptureFailure {
-                                provider_name: "<publisher enumeration>".to_string(),
-                                error: format!(
-                                    "publisher name buffer size {required} exceeds bound"
-                                ),
-                            });
-                            break String::new();
+                            record_provider_failure(
+                                &mut failures,
+                                "<publisher enumeration>",
+                                format!("publisher name buffer size {required} exceeds bound"),
+                                false,
+                            );
+                            break PublisherEnumerationStep::Failed;
                         }
                         if retries >= PUBLISHER_NAME_RETRY_LIMIT {
-                            hit_safety_bound = false;
-                            failures.push(ProviderCaptureFailure {
-                                provider_name: "<publisher enumeration>".to_string(),
-                                error: "publisher name buffer retry budget exhausted".to_string(),
-                            });
-                            break String::new();
+                            record_provider_failure(
+                                &mut failures,
+                                "<publisher enumeration>",
+                                "publisher name buffer retry budget exhausted".to_string(),
+                                false,
+                            );
+                            break PublisherEnumerationStep::Failed;
                         }
                         retries += 1;
                         publisher_buffer.resize(required + 1, 0);
                     }
                     Err(error) => {
-                        hit_safety_bound = false;
-                        failures.push(ProviderCaptureFailure {
-                            provider_name: "<publisher enumeration>".to_string(),
-                            error: error.to_string(),
-                        });
-                        break String::new();
+                        record_provider_failure(
+                            &mut failures,
+                            "<publisher enumeration>",
+                            error.to_string(),
+                            false,
+                        );
+                        break PublisherEnumerationStep::Failed;
                     }
                 }
             };
-            if publisher_name.is_empty() {
-                hit_safety_bound = false;
-                break;
-            }
+            let publisher_name = match publisher_step {
+                PublisherEnumerationStep::Publisher(publisher_name) => publisher_name,
+                PublisherEnumerationStep::Exhausted | PublisherEnumerationStep::Failed => {
+                    hit_safety_bound = false;
+                    break;
+                }
+            };
             let publisher_wide = wide(&publisher_name);
             match unsafe {
                 EvtOpenPublisherMetadata(
@@ -1320,11 +1418,13 @@ mod windows_capture {
                                     .checked_add(item_count)
                                     .is_none_or(|total| total > MAX_CAPTURED_METADATA_ITEMS)
                             {
-                                failures.push(ProviderCaptureFailure {
-                                    provider_name: publisher_name.clone(),
-                                    error: "captured provider metadata exceeds aggregate bound"
+                                record_provider_failure(
+                                    &mut failures,
+                                    &publisher_name,
+                                    "captured provider metadata exceeds aggregate bound"
                                         .to_string(),
-                                });
+                                    false,
+                                );
                                 continue;
                             }
                             captured_items += item_count;
@@ -1359,26 +1459,9 @@ mod windows_capture {
                 }
             }
         }
-        if captured.is_empty() {
-            if failures.is_empty() {
-                return Err(CaptureError::traversal(
-                    "publisher enumeration exceeded its safety bound",
-                ));
-            }
-            return Err(CaptureError::provider_failures(failures));
-        }
-        if hit_safety_bound {
-            failures.push(ProviderCaptureFailure {
-                provider_name: "<publisher enumeration>".to_string(),
-                error: "publisher enumeration exceeded bound".to_string(),
-            });
-        }
-        if !failures.is_empty() {
-            return Err(CaptureError::provider_failures(failures));
-        }
-        crate::event_log::provider_db::write_provider_database(db_path, &captured)
-            .map_err(CaptureError::traversal)?;
-        Ok(())
+        finalize_provider_capture(captured.len(), failures, hit_safety_bound, || {
+            crate::event_log::provider_db::write_provider_database(db_path, &captured).map(|_| ())
+        })
     }
     #[cfg(test)]
     mod windows_tests {
@@ -1748,6 +1831,150 @@ mod tests {
                     error: "publisher metadata is unavailable".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn provider_capture_failures_are_bounded_and_control_sanitized() {
+        let mut failures = Vec::new();
+        record_provider_failure(
+            &mut failures,
+            &format!("Bad\r\n{}\0", "p".repeat(300)),
+            format!("failed\n{}\u{7}", "e".repeat(600)),
+            false,
+        );
+        for index in 1..300 {
+            record_provider_failure(
+                &mut failures,
+                &format!("Provider-{index}"),
+                format!("failure-{index}"),
+                false,
+            );
+        }
+
+        assert_eq!(failures.len(), 256);
+        assert_eq!(failures[0].provider_name.chars().count(), 256);
+        assert_eq!(failures[0].error.chars().count(), 512);
+        assert!(failures.iter().all(|failure| {
+            !failure.provider_name.chars().any(char::is_control)
+                && !failure.error.chars().any(char::is_control)
+        }));
+        assert_eq!(
+            failures
+                .iter()
+                .filter(|failure| {
+                    failure.provider_name == "<provider capture>"
+                        && failure.error == "additional provider capture failures were truncated"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn publisher_exhaustion_is_distinct_from_an_empty_success() {
+        let mut exhausted_failures = Vec::new();
+        assert_eq!(
+            publisher_enumeration_step(None, &mut exhausted_failures),
+            PublisherEnumerationStep::Exhausted
+        );
+        assert!(exhausted_failures.is_empty());
+
+        let mut empty_failures = Vec::new();
+        assert_eq!(
+            publisher_enumeration_step(Some(String::new()), &mut empty_failures),
+            PublisherEnumerationStep::Failed
+        );
+        assert_eq!(
+            empty_failures,
+            vec![ProviderCaptureFailure {
+                provider_name: "<publisher enumeration>".to_string(),
+                error: "publisher enumeration returned an empty identifier".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn incomplete_capture_states_preserve_the_existing_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        for captured_count in [0, 1] {
+            let destination = directory
+                .path()
+                .join(format!("capture-{captured_count}.db"));
+            std::fs::write(&destination, b"existing provider database").expect("seed destination");
+            let mut failures = Vec::new();
+            record_provider_failure(
+                &mut failures,
+                "Missing-Provider",
+                "metadata unavailable".to_string(),
+                true,
+            );
+            let writes = std::cell::Cell::new(0usize);
+
+            let error = finalize_provider_capture(captured_count, failures, false, || {
+                writes.set(writes.get() + 1);
+                std::fs::write(&destination, b"partial replacement")
+                    .map_err(|error| error.to_string())
+            })
+            .expect_err("incomplete capture must not publish");
+
+            assert_eq!(error.kind, CaptureErrorKind::ProviderFailures);
+            assert_eq!(writes.get(), 0);
+            assert_eq!(
+                std::fs::read(&destination).expect("read preserved destination"),
+                b"existing provider database"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_publisher_success_prevents_publishing_a_captured_prefix() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("providers.db");
+        std::fs::write(&destination, b"existing provider database").expect("seed destination");
+        let mut failures = Vec::new();
+        assert_eq!(
+            publisher_enumeration_step(Some(String::new()), &mut failures),
+            PublisherEnumerationStep::Failed
+        );
+        let writes = std::cell::Cell::new(0usize);
+
+        let error = finalize_provider_capture(1, failures, false, || {
+            writes.set(writes.get() + 1);
+            std::fs::write(&destination, b"captured prefix").map_err(|error| error.to_string())
+        })
+        .expect_err("empty publisher identifiers make capture incomplete");
+
+        assert_eq!(error.kind, CaptureErrorKind::ProviderFailures);
+        assert_eq!(writes.get(), 0);
+        assert_eq!(
+            std::fs::read(&destination).expect("read preserved destination"),
+            b"existing provider database"
+        );
+    }
+
+    #[test]
+    fn clean_capture_publishes_once_after_documented_exhaustion() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("providers.db");
+        std::fs::write(&destination, b"existing provider database").expect("seed destination");
+        let mut failures = Vec::new();
+        assert_eq!(
+            publisher_enumeration_step(None, &mut failures),
+            PublisherEnumerationStep::Exhausted
+        );
+        let writes = std::cell::Cell::new(0usize);
+
+        finalize_provider_capture(1, failures, false, || {
+            writes.set(writes.get() + 1);
+            std::fs::write(&destination, b"complete replacement").map_err(|error| error.to_string())
+        })
+        .expect("clean capture should publish");
+
+        assert_eq!(writes.get(), 1);
+        assert_eq!(
+            std::fs::read(&destination).expect("read published destination"),
+            b"complete replacement"
         );
     }
 
