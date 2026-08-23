@@ -28,15 +28,14 @@ done:
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; The updater and an installer-driven replacement keep the same product
-  ; installed. Preserve the user's handler selection across both paths.
+  ; Preserve the user's handler selection when the product remains installed.
+  ; Tauri marks updater uninstalls explicitly. For installer-driven
+  ; replacement, _?=$INSTDIR keeps the old uninstaller in place, so $EXEDIR
+  ; equals $INSTDIR. An ordinary uninstall runs from NSIS's temporary copy.
   ${If} $UpdateMode = 1
     Goto association_cleanup_done
   ${EndIf}
-  ${GetParameters} $R0
-  ClearErrors
-  ${GetOptions} $R0 "_?=" $R1
-  ${IfNot} ${Errors}
+  ${If} $EXEDIR == $INSTDIR
     Goto association_cleanup_done
   ${EndIf}
 

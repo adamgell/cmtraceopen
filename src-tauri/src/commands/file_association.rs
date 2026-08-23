@@ -710,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn nsis_uninstall_cleanup_is_scoped_and_preserves_replacement_installs() {
+    fn nsis_uninstall_cleanup_preserves_update_and_replacement_but_cleans_ordinary_uninstall() {
         let base_config = load_tauri_config("tauri.conf.json");
         assert_eq!(
             base_config
@@ -752,13 +752,13 @@ mod tests {
         assert_eq!(
             installer_macro_lines(&hook, "NSIS_HOOK_POSTUNINSTALL"),
             vec![
+                // Tauri's /UPDATE path is explicitly preserved.
                 r#"${If} $UpdateMode = 1"#,
                 "Goto association_cleanup_done",
                 r#"${EndIf}"#,
-                r#"${GetParameters} $R0"#,
-                "ClearErrors",
-                r#"${GetOptions} $R0 "_?=" $R1"#,
-                r#"${IfNot} ${Errors}"#,
+                // Tauri replacement runs the installed uninstaller in place;
+                // ordinary uninstall reaches this hook from NSIS's temp copy.
+                r#"${If} $EXEDIR == $INSTDIR"#,
                 "Goto association_cleanup_done",
                 r#"${EndIf}"#,
                 r#"StrCmp "${PRODUCTNAME}" "CMTrace Open" 0 association_cleanup_lite"#,
