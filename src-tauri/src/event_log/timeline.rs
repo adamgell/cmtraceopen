@@ -6,14 +6,13 @@
 //!
 //! The log side needs no adapter because `LogEntry` already lives in the parser crate.
 
-use cmtraceopen_parser::eventmap::EventNode;
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
     bundle_from_source, correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem,
     TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
-use super::event_node::{extract_event_identity, extract_system_fields, parse_event_xml};
+use super::event_node::extract_event_identity;
 use super::models::{EvtxLevel, EvtxOriginKind, EvtxRecord};
 ///
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
@@ -105,51 +104,30 @@ fn stable_event_base_from_id(stable_id: &str) -> &str {
         stable_id
     }
 }
-fn raw_correlation_ids(root: &EventNode) -> (Option<String>, Option<String>) {
-    if root.name != "Event" {
-        return (None, None);
-    }
-    let Some(system) = root.children.iter().find(|child| child.name == "System") else {
-        return (None, None);
-    };
-    let Some(correlation) = system
-        .children
-        .iter()
-        .find(|child| child.name == "Correlation")
-    else {
-        return (None, None);
-    };
-    let value = |name: &str| {
-        correlation
-            .attribute(name)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
-    (value("ActivityID"), value("RelatedActivityID"))
+fn normalized_identity(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
-fn identity_conflicts_for(record: &EvtxRecord, root: Option<&EventNode>) -> Vec<String> {
+fn identity_conflicts_for(record: &EvtxRecord) -> Vec<String> {
     let identity = extract_event_identity(&record.event_data);
     let mut conflicts = identity.conflicts;
-    let Some(root) = root else {
-        return conflicts;
-    };
-    let system = extract_system_fields(root);
-    for (label, system_value, data_value) in [
+    for (label, normalized_value, data_value) in [
         (
             "activityId",
-            system.activity_id.as_deref(),
+            normalized_identity(record.activity_id.as_deref()),
             identity.activity_id.as_deref(),
         ),
         (
             "relatedActivityId",
-            system.related_activity_id.as_deref(),
+            normalized_identity(record.related_activity_id.as_deref()),
             identity.related_activity_id.as_deref(),
         ),
     ] {
-        if let (Some(system_value), Some(data_value)) = (system_value, data_value) {
-            if !system_value.trim().eq_ignore_ascii_case(data_value.trim())
+        if let (Some(normalized_value), Some(data_value)) = (normalized_value, data_value) {
+            if !normalized_value.eq_ignore_ascii_case(data_value.trim())
                 && !conflicts.iter().any(|existing| existing == label)
             {
                 conflicts.push(label.to_string());
@@ -194,11 +172,6 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         };
     }
 
-    let parsed_xml = parse_event_xml(&record.raw_xml).ok();
-    let (raw_activity_id, raw_related_activity_id) = parsed_xml
-        .as_ref()
-        .map(raw_correlation_ids)
-        .unwrap_or((None, None));
     TimelineOrigin::Event {
         stable_id: stable_event_id_with_occurrence(record, occurrence),
         source: record.source_label.clone(),
@@ -207,25 +180,13 @@ fn origin_of(record: &EvtxRecord, occurrence: usize) -> TimelineOrigin {
         channel: record.channel.clone(),
         provider: record.provider.clone(),
         process_id: record.process_id,
-        activity_id: record
-            .activity_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .or(raw_activity_id),
-        related_activity_id: record
-            .related_activity_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .or(raw_related_activity_id),
+        activity_id: normalized_identity(record.activity_id.as_deref()),
+        related_activity_id: normalized_identity(record.related_activity_id.as_deref()),
         session_id: record.session_id.clone(),
         device_id: record.device_id.clone(),
         user_id: record.user_id.clone().or_else(|| record.user_sid.clone()),
         process_start_time: record.process_start_time.clone(),
-        identity_conflicts: identity_conflicts_for(record, parsed_xml.as_ref()),
+        identity_conflicts: identity_conflicts_for(record),
         event_id: record.event_id,
         record_id: record.event_record_id,
         record_id_text: record_id_text(record),
@@ -609,9 +570,9 @@ mod tests {
         source.source_label = "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-fedcba9876543210fedcba9876543210/evidence/event-logs/Application.evtx".to_string();
         source.computer = "HOST-A".to_string();
         source.process_id = Some(4321);
-        source.raw_xml =
-            r#"<Event><System><Correlation ActivityID="{1234}" RelatedActivityID="{5678}"/></System></Event>"#
-                .to_string();
+        source.activity_id = Some(" {1234} ".to_string());
+        source.related_activity_id = Some("{5678}".to_string());
+        source.raw_xml = "<malformed".to_string();
 
         match &from_event(&source).expect("placed").origin {
             TimelineOrigin::Event {
@@ -620,6 +581,7 @@ mod tests {
                 bundle,
                 process_id,
                 activity_id,
+                related_activity_id,
                 ..
             } => {
                 assert_eq!(source, "/ProgramData/CmtraceOpen/Evidence/CMTRACE-20260822-120000-HOST-fedcba9876543210fedcba9876543210/evidence/event-logs/Application.evtx");
@@ -630,6 +592,7 @@ mod tests {
                 );
                 assert_eq!(*process_id, Some(4321));
                 assert_eq!(activity_id.as_deref(), Some("{1234}"));
+                assert_eq!(related_activity_id.as_deref(), Some("{5678}"));
             }
             other => panic!("expected event origin, got {other:?}"),
         }
@@ -848,49 +811,51 @@ mod tests {
     #[test]
     fn related_activity_does_not_masquerade_as_activity() {
         let mut source = record(1, "x", EvtxLevel::Information);
-        source.raw_xml =
-            r#"<Event><System><Correlation RelatedActivityID="{5678}"/></System></Event>"#
-                .to_string();
+        source.related_activity_id = Some("{5678}".to_string());
         let item = from_event(&source).expect("placed");
         match item.origin {
-            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
-            other => panic!("expected event origin, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn activity_id_requires_the_system_correlation_element() {
-        let mut source = record(1, "x", EvtxLevel::Information);
-        source.raw_xml = r#"<Event><System><Provider ActivityID="{wrong}"/></System><Correlation ActivityID="{outside}"/></Event>"#.to_string();
-        let item = from_event(&source).expect("placed");
-        match item.origin {
-            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
-            other => panic!("expected event origin, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn activity_id_ignores_correlation_under_non_event_root() {
-        let mut source = record(1, "x", EvtxLevel::Information);
-        source.raw_xml =
-            r#"<Envelope><System><Correlation ActivityID="{wrong-root}"/></System></Envelope>"#
-                .to_string();
-        let item = from_event(&source).expect("placed");
-        match item.origin {
-            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
+            TimelineOrigin::Event {
+                activity_id,
+                related_activity_id,
+                ..
+            } => {
+                assert_eq!(activity_id, None);
+                assert_eq!(related_activity_id.as_deref(), Some("{5678}"));
+            }
             other => panic!("expected event origin, got {other:?}"),
         }
     }
     #[test]
-    fn blank_backend_activity_id_falls_back_to_raw_system_identity() {
+    fn blank_normalized_activity_id_does_not_reparse_raw_xml() {
         let mut source = record(1, "x", EvtxLevel::Information);
         source.activity_id = Some("  ".to_string());
         source.raw_xml =
             r#"<Event><System><Correlation ActivityID="{from-xml}"/></System></Event>"#.to_string();
         let item = from_event(&source).expect("placed");
         match item.origin {
-            TimelineOrigin::Event { activity_id, .. } => {
-                assert_eq!(activity_id.as_deref(), Some("{from-xml}"));
+            TimelineOrigin::Event { activity_id, .. } => assert_eq!(activity_id, None),
+            other => panic!("expected event origin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalized_system_identity_reports_event_data_conflicts() {
+        let mut source = record(1, "x", EvtxLevel::Information);
+        source.activity_id = Some("{system}".to_string());
+        source.event_data.push(super::super::models::EvtxField {
+            name: "ActivityID".to_string(),
+            value: "{payload}".to_string(),
+        });
+        source.raw_xml = "<malformed".to_string();
+
+        match from_event(&source).expect("placed").origin {
+            TimelineOrigin::Event {
+                activity_id,
+                identity_conflicts,
+                ..
+            } => {
+                assert_eq!(activity_id.as_deref(), Some("{system}"));
+                assert_eq!(identity_conflicts, vec!["activityId"]);
             }
             other => panic!("expected event origin, got {other:?}"),
         }
