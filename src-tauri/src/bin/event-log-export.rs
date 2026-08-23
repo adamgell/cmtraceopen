@@ -424,17 +424,17 @@ impl RecordSpool {
         }
 
         Ok(PreparedSpool {
-            _directory: self.directory,
             records: filtered,
             mapped_columns,
+            _directory: self.directory,
         })
     }
 }
 
 struct PreparedSpool {
-    _directory: tempfile::TempDir,
     records: tempfile::NamedTempFile,
     mapped_columns: Vec<String>,
+    _directory: tempfile::TempDir,
 }
 
 impl PreparedSpool {
@@ -503,7 +503,7 @@ impl Ord for PendingRecord {
 }
 
 struct MergedRuns {
-    readers: Vec<BufReader<File>>,
+    readers: Vec<SpoolRecordReader>,
     pending: BinaryHeap<PendingRecord>,
     next_id: u64,
     failed: bool,
@@ -514,8 +514,8 @@ impl MergedRuns {
         let mut readers = Vec::with_capacity(runs.len());
         let mut pending = BinaryHeap::new();
         for (run_index, run) in runs.iter().enumerate() {
-            let mut reader = BufReader::new(File::open(&run.path)?);
-            if let Some(record) = read_spooled_record(&mut reader)? {
+            let mut reader = SpoolRecordReader::new(File::open(&run.path)?);
+            if let Some(record) = reader.read_record()? {
                 pending.push(PendingRecord { record, run_index });
             }
             readers.push(reader);
@@ -537,7 +537,7 @@ impl Iterator for MergedRuns {
             return None;
         }
         let pending = self.pending.pop()?;
-        match read_spooled_record(&mut self.readers[pending.run_index]) {
+        match self.readers[pending.run_index].read_record() {
             Ok(Some(record)) => self.pending.push(PendingRecord {
                 record,
                 run_index: pending.run_index,
@@ -556,14 +556,14 @@ impl Iterator for MergedRuns {
 }
 
 struct SpoolRecords {
-    reader: BufReader<File>,
+    reader: SpoolRecordReader,
     failed: bool,
 }
 
 impl SpoolRecords {
     fn open(file: &tempfile::NamedTempFile) -> Result<Self, String> {
         Ok(Self {
-            reader: BufReader::new(
+            reader: SpoolRecordReader::new(
                 file.reopen()
                     .map_err(|error| format!("cannot reopen export spool: {error}"))?,
             ),
@@ -579,7 +579,7 @@ impl Iterator for SpoolRecords {
         if self.failed {
             return None;
         }
-        match read_spooled_record(&mut self.reader) {
+        match self.reader.read_record() {
             Ok(Some(record)) => Some(Ok(record)),
             Ok(None) => None,
             Err(error) => {
@@ -618,14 +618,28 @@ impl Iterator for CapturedRecordErrors {
     }
 }
 
-fn read_spooled_record(reader: &mut BufReader<File>) -> io::Result<Option<EvtxRecord>> {
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(None);
+struct SpoolRecordReader {
+    reader: BufReader<File>,
+    line: String,
+}
+
+impl SpoolRecordReader {
+    fn new(file: File) -> Self {
+        Self {
+            reader: BufReader::new(file),
+            line: String::new(),
+        }
     }
-    serde_json::from_str(&line)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+
+    fn read_record(&mut self) -> io::Result<Option<EvtxRecord>> {
+        self.line.clear();
+        if self.reader.read_line(&mut self.line)? == 0 {
+            return Ok(None);
+        }
+        serde_json::from_str(&self.line)
+            .map(Some)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
 }
 
 struct BoundedVecVisitor<T> {
@@ -2868,6 +2882,31 @@ mod tests {
 
             assert_eq!(actual, expected, "{format:?} output must not change");
         }
+    }
+
+    #[test]
+    fn prepared_spool_closes_records_before_removing_its_directory() {
+        let (prepared, ()) = prepare_record_batches(
+            &super::PreparedFilter::new(&Filter::default()).expect("filter"),
+            app_lib::event_log::export::ExportFormat::Json,
+            |emit| {
+                emit(vec![make_record()])?;
+                Ok(())
+            },
+        )
+        .expect("prepared batches");
+        let directory = prepared._directory.path().to_path_buf();
+        assert!(
+            directory.exists(),
+            "spool directory must exist while prepared"
+        );
+
+        drop(prepared);
+
+        assert!(
+            !directory.exists(),
+            "dropping a prepared spool must remove its temporary directory",
+        );
     }
 
     #[test]

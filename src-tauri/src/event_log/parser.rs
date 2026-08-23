@@ -1936,6 +1936,9 @@ struct ChunkIoFailure {
 /// The parser already reads each complete 64 KiB chunk in full. Inspecting those returned bytes
 /// here retains dirty-file coverage without opening and scanning the source a second time. A chunk
 /// is non-empty when any observed byte is nonzero, including bytes after its 512-byte header.
+/// This relies on evtx 0.12.2 calling `ReadSeek::stream_len` during `from_read_seek`, then seeking
+/// to each calculated chunk and reading up to all 65,536 bytes before rejecting a short read.
+/// Revalidate these observations before changing the pinned evtx dependency.
 #[derive(Debug, Default)]
 struct ChunkReadCoverage {
     stream_length: Option<u64>,

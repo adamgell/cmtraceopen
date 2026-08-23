@@ -1249,6 +1249,8 @@ pub enum ProviderEventLookup {
     ChannelMetadataUnavailable,
 }
 
+type CachedProviderVersions = Option<Arc<Vec<Arc<ProviderMetadata>>>>;
+
 /// Registered provider databases and the metadata read from them.
 ///
 /// Owned by `AppState` rather than held as a process global. A global made every test share one
@@ -1257,19 +1259,11 @@ pub enum ProviderEventLookup {
 /// outlived any workspace the operator closed, with no way to reset it.
 #[derive(Default)]
 pub struct ProviderStore {
-    /// Lowercased provider name to metadata, including negative results so a provider absent from
-    /// every database is not looked up again for every event that mentions it.
-    ///
-    /// Behind an `Arc` because a lookup happens once per record. A real provider carries every
-    /// event it defines with its description strings, so returning it by value meant a deep clone
-    /// per event: up to a hundred thousand of them to render one file.
-    /// Behind a `Mutex` so a lookup does not need `&mut self`. Without it the parse path had to
-    /// hold a write guard on the whole store for the length of a file, blocking every other reader
-    /// just to populate a cache.
-    cache: Mutex<HashMap<String, Option<Arc<ProviderMetadata>>>>,
-    /// Every captured version row for each provider. Event lookup uses this before applying its
-    /// exact-version-then-fallback rule; caching only one row loses definitions from other keys.
-    version_cache: Mutex<HashMap<String, Option<Arc<Vec<CapturedProviderMetadata>>>>>,
+    /// Every captured version for each lowercased provider name, including negative results.
+    /// Event lookup uses all versions before applying its exact-version-then-fallback rule;
+    /// caching only one loses definitions from other keys. Each metadata value is shared because
+    /// this lookup runs once per event and a provider can carry a large definition catalog.
+    version_cache: Mutex<HashMap<String, CachedProviderVersions>>,
     /// The registered databases, opened once at registration and reused for every lookup.
     open_databases: Mutex<Vec<ProviderDb>>,
     info: Vec<ProviderDbInfo>,
@@ -1335,19 +1329,13 @@ impl ProviderStore {
             .open_databases
             .lock()
             .map_err(|_| "provider store lock was poisoned".to_string())?;
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| "provider cache lock was poisoned".to_string())?;
         let mut version_cache = self
             .version_cache
             .lock()
             .map_err(|_| "provider version cache lock was poisoned".to_string())?;
         *open = databases;
-        cache.clear();
         version_cache.clear();
         drop(open);
-        drop(cache);
         drop(version_cache);
         self.info = info.clone();
 
@@ -1371,27 +1359,9 @@ impl ProviderStore {
     /// Errors are returned rather than treated as an absent provider. A corrupt payload is a
     /// coverage failure, not a metadata miss.
     pub fn provider(&self, provider_name: &str) -> Result<Option<Arc<ProviderMetadata>>, String> {
-        let key = provider_name.to_ascii_lowercase();
-        if let Some(cached) = self
-            .cache
-            .lock()
-            .map_err(|_| "provider cache lock was poisoned".to_string())?
-            .get(&key)
-            .cloned()
-        {
-            return Ok(cached);
-        }
-
-        let rows = self.provider_versions_cached(provider_name)?;
-        let found = rows
-            .as_ref()
-            .and_then(|rows| rows.first())
-            .map(|captured| Arc::new(captured.metadata.clone()));
-        self.cache
-            .lock()
-            .map_err(|_| "provider cache lock was poisoned".to_string())?
-            .insert(key, found.clone());
-        Ok(found)
+        Ok(self
+            .provider_versions_cached(provider_name)?
+            .and_then(|rows| rows.first().cloned()))
     }
 
     /// Selects metadata for an event by searching every captured provider/version row.
@@ -1420,10 +1390,10 @@ impl ProviderStore {
             };
         let find_matching = |requested_version: Option<u32>, minimum_score: u8| {
             rows.iter().find(|row| {
-                row.metadata.events.iter().any(|event| {
+                row.events.iter().any(|event| {
                     event.id == event_id
                         && requested_version.is_none_or(|value| event.version == value)
-                        && channel_score(&row.metadata, event) >= minimum_score
+                        && channel_score(row, event) >= minimum_score
                 })
             })
         };
@@ -1433,12 +1403,11 @@ impl ProviderStore {
             .or_else(|| find_matching(None, 2))
             .or_else(|| find_matching(None, 1));
         if let Some(row) = selected {
-            return Ok(ProviderEventLookup::Found(Arc::new(row.metadata.clone())));
+            return Ok(ProviderEventLookup::Found(Arc::clone(row)));
         }
         let channel_metadata_unavailable = rows.iter().any(|row| {
-            row.metadata.unavailable_categories.contains("channels")
+            row.unavailable_categories.contains("channels")
                 && row
-                    .metadata
                     .events
                     .iter()
                     .any(|event| event.id == event_id && event.log_name.is_none())
@@ -1453,7 +1422,7 @@ impl ProviderStore {
     fn provider_versions_cached(
         &self,
         provider_name: &str,
-    ) -> Result<Option<Arc<Vec<CapturedProviderMetadata>>>, String> {
+    ) -> Result<CachedProviderVersions, String> {
         let key = provider_name.to_ascii_lowercase();
         if let Some(cached) = self
             .version_cache
@@ -1480,7 +1449,13 @@ impl ProviderStore {
                 .cmp(&left.metadata.source_os_build)
                 .then_with(|| left.version_key.cmp(&right.version_key))
         });
-        let found = (!rows.is_empty()).then(|| Arc::new(rows));
+        let found = (!rows.is_empty()).then(|| {
+            Arc::new(
+                rows.into_iter()
+                    .map(|captured| Arc::new(captured.metadata))
+                    .collect(),
+            )
+        });
         self.version_cache
             .lock()
             .map_err(|_| "provider version cache lock was poisoned".to_string())?
@@ -1500,16 +1475,11 @@ impl ProviderStore {
             .open_databases
             .lock()
             .map_err(|_| "provider store lock was poisoned".to_string())?;
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| "provider cache lock was poisoned".to_string())?;
         let mut version_cache = self
             .version_cache
             .lock()
             .map_err(|_| "provider version cache lock was poisoned".to_string())?;
         *open = vec![database];
-        cache.clear();
         version_cache.clear();
         self.info = vec![info.clone()];
         Ok(ProviderDbLoadOutcome {
@@ -2224,6 +2194,41 @@ mod tests {
             metadata.events[0].description.as_deref(),
             Some("old-row"),
             "an exact event/version match must beat the highest provider row"
+        );
+    }
+
+    #[test]
+    fn provider_event_lookup_reuses_cached_metadata_allocation() {
+        let dir = temp_dir("event-lookup-cache");
+        let path = dir.join("capture.db");
+        build_db(&path, &[("Cached-Provider", 26200, EVENTS)]);
+        let mut store = ProviderStore::default();
+        store.load_directory(&dir).expect("loads");
+
+        let ProviderEventLookup::Found(first) = store
+            .provider_for_event("Cached-Provider", "Application", 2, Some(0))
+            .expect("first lookup succeeds")
+        else {
+            panic!("first lookup must find metadata");
+        };
+        let ProviderEventLookup::Found(second) = store
+            .provider_for_event("Cached-Provider", "Application", 2, Some(0))
+            .expect("second lookup succeeds")
+        else {
+            panic!("second lookup must find metadata");
+        };
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "event lookup must reuse cached provider metadata instead of deep-cloning it",
+        );
+        let direct = store
+            .provider("Cached-Provider")
+            .expect("provider lookup succeeds")
+            .expect("provider metadata exists");
+        assert!(
+            Arc::ptr_eq(&first, &direct),
+            "provider and event lookup must share the ordered version cache",
         );
     }
 

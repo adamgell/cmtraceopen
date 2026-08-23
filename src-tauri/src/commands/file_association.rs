@@ -82,6 +82,7 @@ fn get_file_association_preferences_path(
     Ok(path)
 }
 
+#[cfg(target_os = "windows")]
 fn read_file_association_preferences(
     app: &AppHandle,
     identity: &FileAssociationIdentity,
@@ -418,7 +419,6 @@ fn launch_windows_default_apps(
     Ok(())
 }
 
-#[cfg(any(target_os = "windows", test))]
 async fn run_file_association_operation<F, R>(operation: F) -> Result<R, crate::error::AppError>
 where
     F: FnOnce() -> Result<R, crate::error::AppError> + Send + 'static,
@@ -427,33 +427,31 @@ where
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|error| {
-            crate::error::AppError::Internal(format!(
-                "FileAssociationRegistrationTaskFailed: {error}"
-            ))
+            crate::error::AppError::Internal(format!("FileAssociationOperationTaskFailed: {error}"))
         })?
 }
 
 #[tauri::command]
-pub fn get_file_association_prompt_status(
+pub async fn get_file_association_prompt_status(
     app: AppHandle,
 ) -> Result<FileAssociationPromptStatus, crate::error::AppError> {
-    let identity = file_association_identity(app.config().product_name.as_deref())?;
-    let preferences = read_file_association_preferences(&app, &identity)?;
-
     #[cfg(target_os = "windows")]
     {
-        let is_registered = is_log_file_handler_registered(&identity)?;
-        Ok(FileAssociationPromptStatus {
-            supported: true,
-            should_prompt: !preferences.suppress_prompt && !is_registered,
-            is_registered,
+        run_file_association_operation(move || {
+            let identity = file_association_identity(app.config().product_name.as_deref())?;
+            let preferences = read_file_association_preferences(&app, &identity)?;
+            let is_registered = is_log_file_handler_registered(&identity)?;
+            Ok(FileAssociationPromptStatus {
+                supported: true,
+                should_prompt: !preferences.suppress_prompt && !is_registered,
+                is_registered,
+            })
         })
+        .await
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = identity;
-        let _ = preferences;
         let _ = app;
         Ok(FileAssociationPromptStatus {
             supported: false,
@@ -467,8 +465,8 @@ pub fn get_file_association_prompt_status(
 pub async fn register_log_file_handler(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
-        let identity = file_association_identity(app.config().product_name.as_deref())?;
         run_file_association_operation(move || {
+            let identity = file_association_identity(app.config().product_name.as_deref())?;
             register_log_file_handler_for_current_user(&identity)
         })
         .await
@@ -484,11 +482,14 @@ pub async fn register_log_file_handler(app: AppHandle) -> Result<(), crate::erro
 }
 
 #[tauri::command]
-pub fn open_windows_default_apps(app: AppHandle) -> Result<(), crate::error::AppError> {
+pub async fn open_windows_default_apps(app: AppHandle) -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "windows")]
     {
-        let identity = file_association_identity(app.config().product_name.as_deref())?;
-        launch_windows_default_apps(&identity)
+        run_file_association_operation(move || {
+            let identity = file_association_identity(app.config().product_name.as_deref())?;
+            launch_windows_default_apps(&identity)
+        })
+        .await
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -501,18 +502,21 @@ pub fn open_windows_default_apps(app: AppHandle) -> Result<(), crate::error::App
 }
 
 #[tauri::command]
-pub fn set_file_association_prompt_suppressed(
+pub async fn set_file_association_prompt_suppressed(
     app: AppHandle,
     suppressed: bool,
 ) -> Result<(), crate::error::AppError> {
-    let identity = file_association_identity(app.config().product_name.as_deref())?;
-    write_file_association_preferences(
-        &app,
-        &identity,
-        &FileAssociationPreferences {
-            suppress_prompt: suppressed,
-        },
-    )
+    run_file_association_operation(move || {
+        let identity = file_association_identity(app.config().product_name.as_deref())?;
+        write_file_association_preferences(
+            &app,
+            &identity,
+            &FileAssociationPreferences {
+                suppress_prompt: suppressed,
+            },
+        )
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -527,12 +531,12 @@ mod tests {
     };
 
     #[test]
-    fn registration_operations_run_on_the_blocking_pool() {
+    fn file_association_operations_run_on_the_blocking_pool() {
         let caller = std::thread::current().id();
         let worker = tauri::async_runtime::block_on(run_file_association_operation(|| {
             Ok(std::thread::current().id())
         }))
-        .expect("blocking registration operation completes");
+        .expect("blocking file-association operation completes");
 
         assert_ne!(worker, caller, "registry I/O must leave the caller thread");
     }
