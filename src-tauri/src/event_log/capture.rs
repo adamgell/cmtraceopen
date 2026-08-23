@@ -28,6 +28,26 @@ fn is_unavailable_publisher_metadata_error(code: u32) -> bool {
     code == 13 || is_unavailable_provider_error(code)
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn record_provider_failure(
+    failures: &mut Vec<ProviderCaptureFailure>,
+    provider_name: &str,
+    error: String,
+    unavailable: bool,
+) {
+    if unavailable {
+        log::warn!(
+            "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
+            provider_name,
+            error
+        );
+    }
+    failures.push(ProviderCaptureFailure {
+        provider_name: provider_name.to_string(),
+        error,
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureErrorKind {
@@ -1317,36 +1337,25 @@ mod windows_capture {
                             );
                         }
                         Err(error) => {
-                            if error.code.is_some_and(is_unavailable_provider_error) {
-                                log::warn!(
-                                    "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
-                                    publisher_name,
-                                    error
-                                );
-                            } else {
-                                failures.push(ProviderCaptureFailure {
-                                    provider_name: publisher_name.clone(),
-                                    error: error.to_string(),
-                                });
-                            }
+                            let unavailable = error.code.is_some_and(is_unavailable_provider_error);
+                            record_provider_failure(
+                                &mut failures,
+                                &publisher_name,
+                                error.to_string(),
+                                unavailable,
+                            );
                         }
                     }
                 }
                 Err(error) => {
                     let code = win32_code(&error);
                     let message = format!("cannot open publisher metadata: {error}");
-                    if is_unavailable_publisher_metadata_error(code) {
-                        log::warn!(
-                            "event=provider_capture_unavailable provider=\"{}\" error=\"{}\"",
-                            publisher_name,
-                            message
-                        );
-                    } else {
-                        failures.push(ProviderCaptureFailure {
-                            provider_name: publisher_name.clone(),
-                            error: message,
-                        });
-                    }
+                    record_provider_failure(
+                        &mut failures,
+                        &publisher_name,
+                        message,
+                        is_unavailable_publisher_metadata_error(code),
+                    );
                 }
             }
         }
@@ -1701,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_provider_resources_are_skipped_but_unexpected_errors_fail() {
+    fn unavailable_provider_resources_are_classified_without_being_dropped() {
         for code in [2, 1813, 15007, 15023, 15105] {
             assert!(is_unavailable_provider_error(code), "code {code}");
         }
@@ -1710,6 +1719,36 @@ mod tests {
         for code in [0, 5, 15031, 15032] {
             assert!(!is_unavailable_provider_error(code), "code {code}");
         }
+
+        let mut failures = Vec::new();
+        for (provider_name, error, unavailable) in [
+            (
+                "Capture-Provider",
+                "provider capture is unavailable",
+                is_unavailable_provider_error(2),
+            ),
+            (
+                "Open-Provider",
+                "publisher metadata is unavailable",
+                is_unavailable_publisher_metadata_error(13),
+            ),
+        ] {
+            record_provider_failure(&mut failures, provider_name, error.to_string(), unavailable);
+        }
+
+        assert_eq!(
+            failures,
+            vec![
+                ProviderCaptureFailure {
+                    provider_name: "Capture-Provider".to_string(),
+                    error: "provider capture is unavailable".to_string(),
+                },
+                ProviderCaptureFailure {
+                    provider_name: "Open-Provider".to_string(),
+                    error: "publisher metadata is unavailable".to_string(),
+                },
+            ]
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
