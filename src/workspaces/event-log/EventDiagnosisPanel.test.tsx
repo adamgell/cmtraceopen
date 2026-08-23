@@ -151,6 +151,16 @@ describe("EventDiagnosisPanel", () => {
     expect(screen.getByText(/0xDEADBEEF \(unresolved\)/)).toBeTruthy();
   });
 
+  it("does not repeat a normalized hexadecimal token that already matches its raw value", () => {
+    render(<EventDiagnosisPanel summary={summary} />);
+
+    const errors = screen.getByText(/^Errors:/);
+    expect(errors).toHaveTextContent(
+      "Errors: 0x80070005 — Access is denied, 0xDEADBEEF (unresolved)",
+    );
+    expect(errors).not.toHaveTextContent("0x80070005 (0x80070005)");
+  });
+
   it("renders structured evidence and coverage details", () => {
     render(<EventDiagnosisPanel summary={summary} />);
     expect(screen.getAllByText(/provider=Provider/).length).toBeGreaterThan(0);

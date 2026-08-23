@@ -109,7 +109,11 @@ describe("EvtxTimelineRow triage state", () => {
     const row = screen.getByRole("option");
     expect(row).toHaveAttribute("aria-selected", "true");
     expect(row).toHaveAttribute("data-marker-category", "investigate");
-    fireEvent.click(screen.getByRole("button", { name: "Remove event tag" }));
+    const tagButton = screen.getByRole("button", { name: "Remove event tag" });
+    const bookmarkButton = screen.getByRole("button", { name: "Bookmark event" });
+    expect(tagButton).toHaveAttribute("aria-pressed", "true");
+    expect(bookmarkButton).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(tagButton);
     expect(onTag).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
     fireEvent.keyDown(row, { key: "b" });
     expect(onBookmark).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
@@ -161,6 +165,24 @@ describe("EvtxTimelineRow triage state", () => {
     expect(onTag).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
     expect(onBookmark).toHaveBeenCalledWith(expect.objectContaining({ eventRecordId: 42 }));
     expect(row).toHaveFocus();
+  });
+
+  it.each([
+    ["Control", { ctrlKey: true }],
+    ["Alt", { altKey: true }],
+    ["Shift", { shiftKey: true }],
+    ["Meta", { metaKey: true }],
+  ])("does not run marker shortcuts when the %s modifier is held", (_label, modifier) => {
+    const onTag = vi.fn();
+    const onBookmark = vi.fn();
+    renderRow({ onTag, onBookmark });
+
+    const row = screen.getByRole("option");
+    fireEvent.keyDown(row, { key: "t", ...modifier });
+    fireEvent.keyDown(row, { key: "b", ...modifier });
+
+    expect(onTag).not.toHaveBeenCalled();
+    expect(onBookmark).not.toHaveBeenCalled();
   });
 
   it("keeps ungrouped marker controls out of the nested tab order", () => {

@@ -214,6 +214,61 @@ describe("FileAssociationsTab", () => {
     expect(registerLogFileHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("clears stale success and serializes the Windows Default Apps launch", async () => {
+    useUiStore.setState({ currentPlatform: "windows" });
+    vi.mocked(getFileAssociationPromptStatus)
+      .mockResolvedValueOnce({
+        supported: true,
+        shouldPrompt: true,
+        isRegistered: false,
+      })
+      .mockResolvedValueOnce({
+        supported: true,
+        shouldPrompt: false,
+        isRegistered: true,
+      });
+    let finishDefaultAppsLaunch: (() => void) | undefined;
+    vi.mocked(openWindowsDefaultApps).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDefaultAppsLaunch = resolve;
+        }),
+    );
+    render(<FileAssociationsTab />);
+
+    await waitFor(() => {
+      expect(getFileAssociationPromptStatus).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Register CMTrace Open as an available handler",
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /now available to choose/i,
+    );
+
+    const register = screen.getByRole("button", {
+      name: "Re-register CMTrace Open handler",
+    });
+    const openDefaults = screen.getByRole("button", {
+      name: "Open Windows Default Apps",
+    });
+    fireEvent.click(openDefaults);
+    fireEvent.click(openDefaults);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(register).toBeDisabled();
+    expect(openDefaults).toBeDisabled();
+    expect(openWindowsDefaultApps).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishDefaultAppsLaunch?.();
+    });
+    expect(register).toBeEnabled();
+    expect(openDefaults).toBeEnabled();
+  });
+
   it("does not allow registration to race the initial status readback", async () => {
     useUiStore.setState({ currentPlatform: "windows" });
     let finishInitialRead: ((registered: boolean) => void) | undefined;

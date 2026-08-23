@@ -5,6 +5,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
 const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
+const MAX_DISPLAYED_COVERAGE_GAPS = 256;
 /**
  * Shows what is missing from the loaded events.
  *
@@ -28,6 +29,14 @@ export function EvtxCoverageBanner() {
     () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
     [legacyGaps, tailGaps, structuredGaps]
   );
+  const displayedGaps = useMemo(() => {
+    if (gaps.length <= MAX_DISPLAYED_COVERAGE_GAPS) return gaps;
+    const omitted = gaps.length - (MAX_DISPLAYED_COVERAGE_GAPS - 1);
+    return [
+      ...gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS - 1),
+      `<coverage gaps: ${omitted} omitted by display limit>`,
+    ];
+  }, [gaps]);
   const displayedArchiveMembers = useMemo(
     () => archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS),
     [archiveMembers]
@@ -49,7 +58,7 @@ export function EvtxCoverageBanner() {
   const summary =
     gaps.length > 0
       ? summarizeCoverageGaps(gaps)
-      : `${archiveMemberMessages.length} archive member${archiveMemberMessages.length === 1 ? "" : "s"} in this view`;
+      : `${archiveMembers.length} archive member${archiveMembers.length === 1 ? "" : "s"} in this view`;
 
   // The live region remains mounted so screen readers announce newly loaded gaps and member
   // provenance. An empty region stays unstyled and carries no children.
@@ -93,7 +102,7 @@ export function EvtxCoverageBanner() {
           {!collapsed && (
             <>
               <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-                {gaps.map((gap, index) => (
+                {displayedGaps.map((gap, index) => (
                   <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
                     {gap}
                   </li>
@@ -101,7 +110,7 @@ export function EvtxCoverageBanner() {
               </ul>
               {archiveMemberMessages.length > 0 && (
                 <details>
-                  <summary>Archive member provenance ({archiveMemberMessages.length})</summary>
+                  <summary>Archive member provenance ({archiveMembers.length})</summary>
                   <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
                     {archiveMemberMessages.map((member, index) => (
                       <li

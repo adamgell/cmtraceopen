@@ -120,7 +120,7 @@ export function EvtxMarkerControls({
               : "Tag event"
             : "EventRecordID unavailable; tagging is disabled"
         }
-        aria-pressed={compact ? undefined : Boolean(marker && !bookmark)}
+        aria-pressed={Boolean(marker && !bookmark)}
         title={
           markerAddressable
             ? marker && !bookmark
@@ -306,13 +306,25 @@ export const EvtxTimelineRow = memo(
         tabIndex={tabIndex}
         onKeyDown={(e) => {
           if (e.target instanceof HTMLButtonElement) return;
+          const hasShortcutModifier =
+            e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect(isSelected ? null : record.id);
-          } else if (e.key.toLowerCase() === "t" && markerAddressable && onTag) {
+          } else if (
+            !hasShortcutModifier &&
+            e.key.toLowerCase() === "t" &&
+            markerAddressable &&
+            onTag
+          ) {
             e.preventDefault();
             onTag(record);
-          } else if (e.key.toLowerCase() === "b" && markerAddressable && onBookmark) {
+          } else if (
+            !hasShortcutModifier &&
+            e.key.toLowerCase() === "b" &&
+            markerAddressable &&
+            onBookmark
+          ) {
             e.preventDefault();
             onBookmark(record);
           }

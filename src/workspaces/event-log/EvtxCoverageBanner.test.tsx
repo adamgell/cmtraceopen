@@ -36,4 +36,43 @@ describe("EvtxCoverageBanner archive provenance", () => {
       )
     ).toHaveLength(2);
   });
+
+  it("reports the full archive count when member messages reach the display limit", () => {
+    useEvtxStore.setState({
+      archiveMembers: Array.from({ length: 4_098 }, (_, index) => ({
+        path: `bundle.zip::logs/member-${index}.evtx`,
+        kind: "evtx" as const,
+        outcome: "parsed" as const,
+      })),
+    });
+
+    render(<EvtxCoverageBanner />);
+
+    expect(screen.getByText("4098 archive members in this view")).toBeInTheDocument();
+    expect(screen.getByText("Archive member provenance (4098)")).toBeInTheDocument();
+    expect(
+      screen.getByText("<archive member metadata: 2 omitted by display limit>"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("bundle.zip::logs/member-4096.evtx: evtx parsed"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("bounds rendered coverage gaps and reports the omitted count", () => {
+    useEvtxStore.setState({
+      coverageGaps: Array.from(
+        { length: 258 },
+        (_, index) => `source-${index}: coverage gap ${index}`,
+      ),
+    });
+
+    render(<EvtxCoverageBanner />);
+
+    expect(screen.getByText("258 gaps in this view")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(256);
+    expect(
+      screen.getByText("<coverage gaps: 3 omitted by display limit>"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("source-257: coverage gap 257")).not.toBeInTheDocument();
+  });
 });

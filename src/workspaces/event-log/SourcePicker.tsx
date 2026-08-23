@@ -10,6 +10,7 @@ const EVTX_FILE_DIALOG_FILTERS = [
   { name: "Event Log Files", extensions: ["evtx"] },
   { name: "All Files", extensions: ["*"] },
 ];
+const MAX_DISPLAYED_COVERAGE_GAPS = 256;
 
 export function SourcePicker() {
   const enumerateLocalChannels = useEvtxStore((s) => s.enumerateLocalChannels);
@@ -99,6 +100,14 @@ export function SourcePicker() {
     setLocalError(null);
     try {
       await enumerateRemoteChannels(remoteTarget);
+      const completed = useEvtxStore.getState();
+      const normalizedTarget = remoteTarget.trim().replace(/^[/\\]+/, "");
+      if (
+        completed.remoteMachine === normalizedTarget &&
+        completed.loadError === null
+      ) {
+        setRemoteTargetDirty(false);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalError(message);
@@ -108,7 +117,17 @@ export function SourcePicker() {
 
   };
   const displayError = loadError ?? localError;
-  const displayCoverage = coverageGaps.join(" • ");
+  const omittedCoverageGaps =
+    coverageGaps.length > MAX_DISPLAYED_COVERAGE_GAPS
+      ? coverageGaps.length - (MAX_DISPLAYED_COVERAGE_GAPS - 1)
+      : 0;
+  const displayedCoverageGaps =
+    omittedCoverageGaps > 0
+      ? [
+          ...coverageGaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS - 1),
+          `${omittedCoverageGaps} additional coverage gaps omitted by display limit.`,
+        ]
+      : coverageGaps;
 
   return (
     <div
@@ -233,19 +252,32 @@ export function SourcePicker() {
         </div>
       )}
 
-      {displayCoverage && (
-        <div
-          style={{
-            fontSize: `${secondaryFontSize}px`,
-            color: tokens.colorPaletteYellowForeground1,
-            maxWidth: "500px",
-            textAlign: "center",
-            wordBreak: "break-word",
-          }}
-        >
-          {displayCoverage}
-        </div>
-      )}
+      <div
+        role="status"
+        aria-label="Coverage gaps"
+        aria-live="polite"
+        aria-atomic="false"
+        style={
+          displayedCoverageGaps.length === 0
+            ? undefined
+            : {
+                fontSize: `${secondaryFontSize}px`,
+                color: tokens.colorPaletteYellowForeground1,
+                maxWidth: "500px",
+                textAlign: "start",
+              }
+        }
+      >
+        {displayedCoverageGaps.length > 0 && (
+          <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+            {displayedCoverageGaps.map((gap, index) => (
+              <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
+                {gap}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

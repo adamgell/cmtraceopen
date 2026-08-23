@@ -109,7 +109,7 @@ function CorrelationRow({ edge }: { edge: DiagnosisCorrelationEdge }) {
 
 function errorTokenLabel(token: DiagnosisErrorToken): string {
   const details = [
-    token.hex ? `(${token.hex})` : null,
+    token.hex && token.hex !== token.raw ? `(${token.hex})` : null,
     token.description ? `— ${token.description}` : null,
   ]
     .filter(Boolean)

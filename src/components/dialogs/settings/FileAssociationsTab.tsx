@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import {
   getSafeErrorMessage,
@@ -14,6 +14,8 @@ export function FileAssociationsTab() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [isOpeningDefaultApps, setIsOpeningDefaultApps] = useState(false);
+  const actionInFlightRef = useRef(false);
   const [isReadingInitialStatus, setIsReadingInitialStatus] = useState(
     currentPlatform === "windows",
   );
@@ -70,8 +72,9 @@ export function FileAssociationsTab() {
   }
 
   const handleRegister = async () => {
-    if (isRegistering || isReadingInitialStatus) return;
+    if (actionInFlightRef.current || isReadingInitialStatus) return;
 
+    actionInFlightRef.current = true;
     setIsRegistering(true);
     setStatus("idle");
     setErrorMessage(null);
@@ -111,23 +114,33 @@ export function FileAssociationsTab() {
 
       setStatus("success");
     } finally {
+      actionInFlightRef.current = false;
       setIsRegistering(false);
     }
   };
 
   const handleOpenDefaultApps = async () => {
-    if (isRegistering || isReadingInitialStatus) return;
+    if (actionInFlightRef.current || isReadingInitialStatus) return;
 
+    actionInFlightRef.current = true;
+    setIsOpeningDefaultApps(true);
+    setStatus("idle");
+    setErrorMessage(null);
     try {
-      setErrorMessage(null);
       await openWindowsDefaultApps();
     } catch (err) {
       setStatus("error");
       setErrorMessage(
         `Failed to open Windows Default Apps: ${getSafeErrorMessage(err, "Unknown error")}`,
       );
+    } finally {
+      actionInFlightRef.current = false;
+      setIsOpeningDefaultApps(false);
     }
   };
+
+  const controlsDisabled =
+    isRegistering || isOpeningDefaultApps || isReadingInitialStatus;
 
   return (
     <div>
@@ -154,7 +167,7 @@ export function FileAssociationsTab() {
       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <button
           type="button"
-          disabled={isRegistering || isReadingInitialStatus}
+          disabled={controlsDisabled}
           onClick={() => void handleRegister()}
           style={{
             padding: "6px 16px",
@@ -164,7 +177,7 @@ export function FileAssociationsTab() {
             background: tokens.colorBrandBackground,
             color: tokens.colorNeutralForegroundOnBrand,
             cursor:
-              isRegistering || isReadingInitialStatus ? "default" : "pointer",
+              controlsDisabled ? "default" : "pointer",
             fontWeight: 600,
           }}
         >
@@ -177,7 +190,7 @@ export function FileAssociationsTab() {
 
         <button
           type="button"
-          disabled={isRegistering || isReadingInitialStatus}
+          disabled={controlsDisabled}
           onClick={() => void handleOpenDefaultApps()}
           style={{
             padding: "6px 16px",
@@ -187,7 +200,7 @@ export function FileAssociationsTab() {
             background: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,
             cursor:
-              isRegistering || isReadingInitialStatus ? "default" : "pointer",
+              controlsDisabled ? "default" : "pointer",
           }}
         >
           Open Windows Default Apps

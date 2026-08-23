@@ -188,7 +188,7 @@ export function EvtxDetailPane() {
               ["Related activity ID", record.relatedActivityId],
               ["Session ID", record.sessionId],
               ["Device ID", record.deviceId],
-              ["User ID", record.userId ?? record.userSid],
+              ["User ID", record.userId],
               ["Process start", record.processStartTime],
             ]
               .filter(([, value]) => value)
