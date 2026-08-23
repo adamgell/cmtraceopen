@@ -448,24 +448,11 @@ fn is_platform_temp_alias(path: &Path) -> bool {
     }
 }
 
-/// `FILE_ATTRIBUTE_REPARSE_POINT`.
-#[cfg(windows)]
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-
 fn unsafe_entry_metadata(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        metadata.file_type().is_symlink()
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        false
-    }
+    // On Windows, FileType::is_symlink uses the reparse tag's name-surrogate bit, so it rejects
+    // traversal entries such as symbolic links and mount points without refusing non-traversal
+    // reparse points (for example, cloud-file placeholders).
+    metadata.file_type().is_symlink()
 }
 
 pub(crate) fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
