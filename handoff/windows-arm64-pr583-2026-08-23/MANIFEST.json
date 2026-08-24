@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "handoffId": "cmtraceopen-pr583-windows11-arm64-2026-08-23",
+  "createdUtc": "2026-08-23T15:00:22Z",
+  "purpose": "Native Windows 11 ARM64 validation of CMTrace Open PR 583 and Event Log recovery",
+  "handoffRevision": "2026-08-23.5",
+  "classification": {
+    "applicationSourceCodeIncluded": false,
+    "validationHelperSourceIncluded": true,
+    "gitHistoryIncluded": false,
+    "applicationArtifactsIncluded": false,
+    "customerDataIncluded": false,
+    "credentialsIncluded": false,
+    "privateSigningMaterialIncluded": false,
+    "publicCommitVerificationKeyIncluded": true
+  },
+  "validationTarget": {
+    "repository": "https://github.com/adamgell/cmtraceopen.git",
+    "pullRequest": 583,
+    "pullRequestUrl": "https://github.com/adamgell/cmtraceopen/pull/583",
+    "branch": "orchestration/event-viewer-epic",
+    "sourceCommit": "39ee0b4f6f2e42e5845c6d86f5f9b03fa06e0c84",
+    "sourceTree": "251c7ccaea9e4195cde986b45971dd56d9e861d6",
+    "baseCommit": "59679c06b5dd1f5d59849a14d527f4b262b30a1c",
+    "cargoLockBlob": "9a7e7c287e695a975658a253eac9576cc491e033",
+    "packageLockBlob": "42eed8fc692efb0fdf3ebf2e2ed0d240d6c96f31",
+    "commitSignerPrincipal": "me@adamgell.com",
+    "commitSignerFingerprint": "SHA256:87j5tuVscw4mFc0vo/OWOaRusQl1joEop5olrbM11GQ",
+    "rustTarget": "aarch64-pc-windows-msvc",
+    "applicationVersionAtSource": "1.5.1"
+  },
+  "targetMachine": {
+    "operatingSystem": "Windows 11",
+    "osArchitecture": "Arm64",
+    "validationProcessArchitecture": "Arm64",
+    "powershellMinimumVersion": "7.5",
+    "nodeMajor": 22,
+    "nodeArchitecture": "arm64",
+    "rustMinimumVersion": "1.88",
+    "filesystem": "fixed local NTFS",
+    "recoveryBoundary": "disposable VM snapshot and revert",
+    "recommendedSourcePath": "C:\\src\\cmtraceopen-pr583-arm64",
+    "recommendedEvidencePath": "C:\\cmtraceopen-validation\\runs\\pr583-arm64-001"
+  },
+  "readinessSnapshot": {
+    "packagePrepared": true,
+    "targetMachineExecuted": false,
+    "nativeArm64BuildPassed": false,
+    "nativeArm64ApplicationLaunched": false,
+    "liveEventLogPassed": false,
+    "realEvtxRecoveryPassed": false,
+    "installerLifecyclePassed": false,
+    "remoteSourcePassed": false,
+    "archiveVssPassed": false,
+    "pollingFallbackObserved": false,
+    "signedArtifactPassed": false,
+    "productionMsiPassed": false
+  },
+  "evidenceBoundary": {
+    "returnAllowlist": [
+      "summary.json",
+      "machine.json",
+      "artifacts.json",
+      "manual-results.json",
+      "sanitized-logs/<exact-automatic-gate-id>.log",
+      "SHA256SUMS.txt"
+    ],
+    "rawEvidenceRemainsOnTarget": true,
+    "manualProofPathPattern": "raw-artifacts/manual-evidence/<evidenceId>.proof",
+    "privateArtifactPaths": {
+      "full-portable": "raw-artifacts/full/cmtrace-open.exe",
+      "lite-portable": "raw-artifacts/lite/cmtrace-open.exe",
+      "nsis-installer": "raw-artifacts/nsis/cmtrace-open-setup.exe"
+    },
+    "rawEventLogsReturnable": false,
+    "providerDatabaseReturnable": false,
+    "binariesReturnable": false,
+    "screenshotsReturnable": false,
+    "normalizedToolchainVersionTokensReturnable": true,
+    "toolchainBannersPathsEnvironmentReturnable": false
+  },
+  "knownAcceptanceTraps": [
+    "PR CI exercises Windows x64 but not native Windows ARM64.",
+    "The aggregate ignored live-service command also selects remote-only tests and must not be used on a local-only target.",
+    "The real-EVTX suite passes without exercising a file when CMTRACE_EVTX_FIXTURE is unset.",
+    "The level-filter ignored test can pass with zero records; manual acceptance requires a nonzero result set.",
+    "The time-filter ignored test permits equal result counts; manual acceptance requires observed strict narrowing, while a dataset limitation remains blocked or not exercised.",
+    "The packaged provider database is curated and cannot satisfy the retained machine-wide provider database tests.",
+    "The ignored native provider capture test deletes its temporary database; the target-private exact-source helper is required for retained-database validation.",
+    "No deterministic seam forces EvtSubscribe to polling; record polling as not exercised unless the target naturally returns a documented capability error.",
+    "The NSIS bootstrapper is expected to be x86 while the installed application payload must be ARM64.",
+    "The exact source reports version 1.5.1 while a newer stable release exists; validate from an isolated snapshot, use CMTRACEOPEN_DISABLE_UPDATE_CHECKS=1 for hash-bound portable artifacts, and independently read back the HKCU installer policy before installed or shell-launched activation.",
+    "Saved-filter import/export/favorites/tags/recents management, drag-to-group/pivot, and rule-specific saved-filter colors have no exact-head operator surface and cannot be marked passed.",
+    "Automatic execution writes ignored checkout build/dependency output, npm/Cargo/advisory/Playwright account caches, and the evidence root; approved prerequisites and manual app launches also mutate disposable machine/account/profile state.",
+    "Every exercised manual gate uses a unique regular raw-artifacts/manual-evidence/<evidenceId>.proof file whose lowercase SHA-256 is recorded; detailed proof never returns.",
+    "Private native commands must capture stdout and stderr beneath the evidence root, enforce aggregate byte caps and a bounded owned-process-tree timeout, and never print private output to the shared terminal.",
+    "The return ZIP is transport-authenticated only by its outer SHA-256 sent through a trusted out-of-band channel; the adjacent sidecar and internal hashes are not independent trust roots.",
+    "A full return uses 33 exact automatic logs and 68 structured manual gates; freeform observations are not returnable."
+  ]
+}
