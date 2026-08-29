@@ -87,9 +87,9 @@
   and the focused timeline test; record both red results.
 - [ ] Remove the `EventFamily::Other` synthetic coverage finding from
   `adapt_event_entry_with_data_and_raw_xml` while retaining parsed evidence and error tokens.
-- [ ] Remove only the generic no-key coverage insertion from `correlate_observations`. Preserve
-  producer gaps, missing-machine gaps, explicit identity conflicts, ambiguity, fan-out, and output
-  budget gaps.
+- [ ] Remove only the branch that inserts a gap when both exact and secondary keys are empty.
+  Preserve the existing secondary-only low-confidence gap, producer gaps, missing-machine gaps,
+  explicit identity conflicts, ambiguity, fan-out, and output budget gaps.
 - [ ] Run the focused tests, then
   `cargo test --manifest-path crates/cmtraceopen-parser/Cargo.toml diagnosis_contract` and
   `cargo test --manifest-path crates/cmtraceopen-parser/Cargo.toml unified_timeline`.

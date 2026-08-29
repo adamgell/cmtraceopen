@@ -48,6 +48,7 @@ These are product semantics and layout defects. They are not an ARM64 rendering 
   coverage gap.
 - A timeline observation with a known machine but no explicit or secondary correlation keys simply
   has no causal edge. That normal lack of a relationship is not a coverage gap.
+- A secondary-only identity can remain an explicit low-confidence correlation limitation.
 - Specific missing/malformed identities, conflicting identities, fan-out limits, truncation, and
   producer-supplied gaps remain explicit.
 
