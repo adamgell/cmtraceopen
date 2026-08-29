@@ -12,7 +12,6 @@ pub mod rendered;
 pub mod timeline;
 pub mod writer;
 
-#[cfg(target_os = "windows")]
 pub mod live;
 
 /// Strip control characters from a string, preserving newlines and tabs.

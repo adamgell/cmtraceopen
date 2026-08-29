@@ -76,6 +76,14 @@ export type EvtxCoverageGapKind =
   | "provider"
   | "limit";
 
+export type ProviderMessageStage = "openPublisherMetadata" | "formatMessage";
+
+export interface ProviderMessageCoverage {
+  provider: string;
+  stage: ProviderMessageStage;
+  errorCode: number;
+}
+
 export interface EvtxCoverageGap {
   source: string;
   kind: EvtxCoverageGapKind;
@@ -84,6 +92,8 @@ export interface EvtxCoverageGap {
   eventRecordId?: number;
   /** Exact decimal u64 identity when the JSON number is outside JavaScript's safe range. */
   eventRecordIdText?: string;
+  /** Native provider-message failure context, present only for live provider gaps. */
+  providerMessage?: ProviderMessageCoverage;
 }
 
 export type EvtxArchiveMemberKind = "evtx" | "text" | "registry" | "binary";

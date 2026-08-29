@@ -34,8 +34,10 @@ fn main() {
 #[cfg(target_os = "windows")]
 fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     use app_lib::event_log::live;
+    use app_lib::event_log::provider_db::ProviderStore;
     use cmtraceopen_parser::event_query::{EventQueryFilter, TimeWindow};
     use cmtraceopen_parser::eventmap::MapRegistry;
+    use std::sync::RwLock;
     use std::time::Instant;
 
     let enumerated = Instant::now();
@@ -66,6 +68,7 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     // No maps loaded. The map engine has its own benchmark; mixing it in here would make a change
     // to either one move this number.
     let maps = MapRegistry::new();
+    let providers = RwLock::new(ProviderStore::default());
 
     let mut total = 0usize;
     let mut failed = 0usize;
@@ -87,11 +90,11 @@ fn run(days: u64, only_channel: Option<String>, max_events: Option<u64>) {
     let started = Instant::now();
     for channel in &channels {
         let at = Instant::now();
-        match live::query_channel_filtered(channel, &filter, &maps, max_events) {
+        match live::query_channel_filtered(channel, &filter, &maps, &providers, max_events) {
             Ok(scan) => {
                 let records = scan.records;
-                gap_reports += scan.gaps.len();
-                if !scan.gaps.is_empty() {
+                gap_reports += scan.gaps.len() + scan.provider_gaps.len();
+                if !scan.gaps.is_empty() || !scan.provider_gaps.is_empty() {
                     channels_with_gaps += 1;
                 }
                 total += records.len();

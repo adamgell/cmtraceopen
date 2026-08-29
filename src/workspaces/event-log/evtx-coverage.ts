@@ -113,6 +113,19 @@ function isCoverageGap(value: unknown): value is EvtxCoverageGap {
       gap.eventRecordId >= 0 &&
       (Number.isSafeInteger(gap.eventRecordId) || recordIdText !== null) &&
       (recordIdText === null || Number(recordIdText) === gap.eventRecordId));
+  const providerMessage = gap.providerMessage;
+  const providerMessageIsValid =
+    providerMessage === undefined ||
+    (gap.kind === "provider" &&
+      typeof providerMessage === "object" &&
+      providerMessage !== null &&
+      typeof providerMessage.provider === "string" &&
+      providerMessage.provider.trim().length > 0 &&
+      (providerMessage.stage === "openPublisherMetadata" ||
+        providerMessage.stage === "formatMessage") &&
+      typeof providerMessage.errorCode === "number" &&
+      Number.isSafeInteger(providerMessage.errorCode) &&
+      providerMessage.errorCode >= 0);
   return (
     typeof gap.source === "string" &&
     typeof gap.reason === "string" &&
@@ -121,7 +134,8 @@ function isCoverageGap(value: unknown): value is EvtxCoverageGap {
     (gap.chunkId === undefined ||
       (typeof gap.chunkId === "number" && Number.isSafeInteger(gap.chunkId) && gap.chunkId >= 0)) &&
     recordIdIsValid &&
-    (gap.eventRecordIdText === undefined || recordIdText !== null)
+    (gap.eventRecordIdText === undefined || recordIdText !== null) &&
+    providerMessageIsValid
   );
 }
 
@@ -152,6 +166,9 @@ function coverageGapKey(gap: EvtxCoverageGap): string {
     gap.reason,
     gap.chunkId,
     recordIdentity,
+    gap.providerMessage?.provider,
+    gap.providerMessage?.stage,
+    gap.providerMessage?.errorCode,
   ]);
 }
 

@@ -177,6 +177,84 @@ describe("assertParseResultShape", () => {
     ).toThrow(/coverageGaps at index 1/);
   });
 
+  it("preserves typed native provider-message coverage", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        {
+          source: "remote-host/ForwardedEvents",
+          kind: "provider",
+          reason:
+            "provider message for Example.Provider could not be rendered at EvtFormatMessage " +
+            "(Windows error 15027); raw event data is shown instead",
+          providerMessage: {
+            provider: "Example.Provider",
+            stage: "formatMessage",
+            errorCode: 15027,
+          },
+        },
+      ],
+    });
+
+    expect(shape.coverageGaps).toEqual([
+      expect.objectContaining({
+        source: "remote-host/ForwardedEvents",
+        providerMessage: {
+          provider: "Example.Provider",
+          stage: "formatMessage",
+          errorCode: 15027,
+        },
+      }),
+    ]);
+  });
+
+  it.each([
+    ["missing provider", { stage: "formatMessage", errorCode: 15027 }],
+    ["blank provider", { provider: "   ", stage: "formatMessage", errorCode: 15027 }],
+    ["missing stage", { provider: "Example.Provider", errorCode: 15027 }],
+    ["unknown stage", { provider: "Example.Provider", stage: "lookup", errorCode: 15027 }],
+    ["missing code", { provider: "Example.Provider", stage: "openPublisherMetadata" }],
+    ["negative code", { provider: "Example.Provider", stage: "formatMessage", errorCode: -1 }],
+    ["fractional code", { provider: "Example.Provider", stage: "formatMessage", errorCode: 2.5 }],
+  ])("rejects providerMessage with %s", (_label, providerMessage) => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "Application",
+            kind: "provider",
+            reason: "provider description unavailable",
+            providerMessage,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("rejects native provider context on a non-provider coverage gap", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "Application",
+            kind: "record",
+            reason: "record was lost",
+            providerMessage: {
+              provider: "Example.Provider",
+              stage: "formatMessage",
+              errorCode: 15027,
+            },
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
   it("rejects coverageGaps locations outside the safe integer range", () => {
     expect(() =>
       assertParseResultShape({
@@ -349,6 +427,29 @@ describe("structured recovery gaps", () => {
         eventRecordId: 42,
       },
     ]);
+  });
+
+  it("keeps distinct native provider stages in the merge key", () => {
+    const base = {
+      source: "Application",
+      kind: "provider" as const,
+      reason: "provider message unavailable",
+      providerMessage: {
+        provider: "Example.Provider",
+        stage: "openPublisherMetadata" as const,
+        errorCode: 2,
+      },
+    };
+    const formatGap = {
+      ...base,
+      providerMessage: {
+        provider: "Example.Provider",
+        stage: "formatMessage" as const,
+        errorCode: 2,
+      },
+    };
+
+    expect(mergeStructuredCoverageGaps([base], [formatGap])).toEqual([base, formatGap]);
   });
 
 });

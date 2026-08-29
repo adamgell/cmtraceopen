@@ -104,6 +104,41 @@ fn validate_request_id(request_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct QueryAggregation {
+    records: Vec<super::models::EvtxRecord>,
+    parse_errors: u32,
+    error_messages: Vec<String>,
+    coverage_gaps: Vec<EvtxCoverageGap>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl QueryAggregation {
+    fn absorb_scan(&mut self, coverage_source: &str, scan: super::live::ChannelScan) {
+        self.parse_errors = self.parse_errors.saturating_add(scan.gaps.len() as u32);
+        self.error_messages.extend(scan.gaps.iter().cloned());
+        self.coverage_gaps.extend(scan.gaps.into_iter().map(|gap| {
+            let reason = gap
+                .strip_prefix(&format!("{coverage_source}: "))
+                .unwrap_or(&gap)
+                .to_string();
+            EvtxCoverageGap::new(
+                coverage_source.to_string(),
+                EvtxCoverageGapKind::Record,
+                reason,
+            )
+        }));
+        self.error_messages.extend(
+            scan.provider_gaps
+                .iter()
+                .map(super::live::format_provider_gap),
+        );
+        self.coverage_gaps.extend(scan.provider_gaps);
+        self.records.extend(scan.records);
+    }
+}
+
 /// Expands folder, wildcard, archive, and VSS selections before parsing.
 #[tauri::command]
 pub fn evtx_expand_sources(
@@ -177,6 +212,7 @@ fn query_source_channel(
     channel: &str,
     filter: &cmtraceopen_parser::event_query::EventQueryFilter,
     maps: &cmtraceopen_parser::eventmap::MapRegistry,
+    providers: &std::sync::RwLock<super::provider_db::ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>) -> Result<(), String>,
@@ -187,6 +223,7 @@ fn query_source_channel(
             channel,
             filter,
             maps,
+            providers,
             max_events,
             on_progress,
             on_batch,
@@ -195,6 +232,7 @@ fn query_source_channel(
             channel,
             filter,
             maps,
+            providers,
             max_events,
             on_progress,
             on_batch,
@@ -216,6 +254,7 @@ async fn query_channels_impl(
     #[cfg(target_os = "windows")]
     {
         let registry = state.event_maps.clone();
+        let providers = state.provider_store.clone();
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
 
@@ -243,6 +282,7 @@ async fn query_channels_impl(
                         channel,
                         &query_filter,
                         &maps,
+                        &providers,
                         max_events,
                         |fetched, _| {
                             let _ = app_ref.emit(
@@ -310,11 +350,8 @@ async fn query_channels_impl(
                 })
                 .collect();
 
-            let mut all_records = Vec::new();
+            let mut aggregation = QueryAggregation::default();
             let mut channel_infos = Vec::new();
-            let mut parse_errors = 0u32;
-            let mut error_messages = Vec::new();
-            let mut coverage_gaps = Vec::new();
             let mut streamed = 0usize;
 
             for (channel, outcome) in per_channel {
@@ -330,22 +367,7 @@ async fn query_channels_impl(
                             source_type: source_type.clone(),
                         });
                         streamed += scan.delivered;
-                        if !scan.gaps.is_empty() {
-                            parse_errors += scan.gaps.len() as u32;
-                            error_messages.extend(scan.gaps.iter().cloned());
-                            coverage_gaps.extend(scan.gaps.into_iter().map(|gap| {
-                                let reason = gap
-                                    .strip_prefix(&format!("{coverage_source}: "))
-                                    .unwrap_or(&gap)
-                                    .to_string();
-                                EvtxCoverageGap::new(
-                                    coverage_source.clone(),
-                                    EvtxCoverageGapKind::Record,
-                                    reason,
-                                )
-                            }));
-                        }
-                        all_records.extend(scan.records);
+                        aggregation.absorb_scan(&coverage_source, scan);
                     }
                     Err(error) => {
                         log::warn!(
@@ -353,8 +375,10 @@ async fn query_channels_impl(
                             channel,
                             error
                         );
-                        error_messages.push(format!("{coverage_source}: {error}"));
-                        coverage_gaps.push(EvtxCoverageGap::new(
+                        aggregation
+                            .error_messages
+                            .push(format!("{coverage_source}: {error}"));
+                        aggregation.coverage_gaps.push(EvtxCoverageGap::new(
                             coverage_source,
                             EvtxCoverageGapKind::File,
                             error,
@@ -364,20 +388,22 @@ async fn query_channels_impl(
                             event_count: 0,
                             source_type: source_type.clone(),
                         });
-                        parse_errors += 1;
+                        aggregation.parse_errors = aggregation.parse_errors.saturating_add(1);
                     }
                 }
             }
 
-            all_records.sort_by_key(|record| record.timestamp_epoch);
+            aggregation
+                .records
+                .sort_by_key(|record| record.timestamp_epoch);
             let total_records = streamed as u64;
             Ok(EvtxParseResult {
-                records: all_records,
+                records: aggregation.records,
                 channels: channel_infos,
                 total_records,
-                parse_errors,
-                error_messages,
-                coverage_gaps,
+                parse_errors: aggregation.parse_errors,
+                error_messages: aggregation.error_messages,
+                coverage_gaps: aggregation.coverage_gaps,
                 coverage: Vec::new(),
                 archive_members: Vec::new(),
             })
@@ -456,6 +482,7 @@ pub async fn evtx_start_tail(
             .map(super::live::normalize_remote_machine_name)
             .transpose()?;
         let maps = state.event_maps.clone();
+        let providers = state.provider_store.clone();
         let query_filter = filter.unwrap_or_default();
         tokio::task::spawn_blocking(move || {
             super::live::start_channel_tail(
@@ -464,6 +491,7 @@ pub async fn evtx_start_tail(
                 channel,
                 query_filter,
                 maps,
+                providers,
                 remote_machine,
             )
         })
@@ -1835,6 +1863,50 @@ fn diagnosis_coverage_state(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_gaps_do_not_count_as_record_loss_but_record_gaps_do() {
+        let record = diagnosis_record(super::super::models::EvtxOriginKind::Event, "raw fallback");
+        let provider_gap = super::super::live::provider_message_gap(
+            "remote-host/ForwardedEvents",
+            "Example.Provider",
+            super::super::models::ProviderMessageStage::FormatMessage,
+            15027,
+        );
+        let mut aggregation = super::QueryAggregation::default();
+        aggregation.absorb_scan(
+            "remote-host/ForwardedEvents",
+            super::super::live::ChannelScan {
+                records: vec![record],
+                delivered: 1,
+                gaps: Vec::new(),
+                provider_gaps: vec![provider_gap.clone()],
+            },
+        );
+
+        assert_eq!(aggregation.records.len(), 1);
+        assert_eq!(aggregation.parse_errors, 0);
+        assert_eq!(aggregation.coverage_gaps, vec![provider_gap]);
+
+        aggregation.absorb_scan(
+            "remote-host/ForwardedEvents",
+            super::super::live::ChannelScan {
+                records: Vec::new(),
+                delivered: 0,
+                gaps: vec![
+                    "remote-host/ForwardedEvents: one event could not be read and is missing"
+                        .to_string(),
+                ],
+                provider_gaps: Vec::new(),
+            },
+        );
+
+        assert_eq!(aggregation.parse_errors, 1);
+        assert_eq!(
+            aggregation.coverage_gaps[1].kind,
+            super::super::models::EvtxCoverageGapKind::Record
+        );
+    }
+
     fn diagnosis_record(
         origin_kind: super::super::models::EvtxOriginKind,
         message: &str,

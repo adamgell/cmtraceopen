@@ -2476,7 +2476,7 @@ where
 
 /// Outcome of attempting to render a provider description.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DescriptionOutcome {
+pub(crate) enum DescriptionOutcome {
     Rendered(String),
     MissingInsertions(Vec<u32>),
     ChannelMetadataUnavailable { channel: String },
@@ -2538,7 +2538,7 @@ fn resolve_event_message(
 /// does not define this event on the captured channel. Provider payload failures are returned as
 /// errors and unavailable captured channel metadata is returned as a structured outcome, so the
 /// caller can attach a coverage gap instead of presenting either as a normal metadata miss.
-fn describe_event(
+pub(crate) fn describe_event(
     store: &ProviderStore,
     provider: &str,
     channel: &str,
