@@ -167,7 +167,6 @@ export function EventLogWorkspace() {
         : null,
     [timeline, timelineIsCurrent, visibleRecords, records],
   );
-  const diagnosisTimeline = timelineIsCurrent ? timeline : null;
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
@@ -253,7 +252,7 @@ export function EventLogWorkspace() {
       };
     }
 
-    if (diagnosisTimeline === null) {
+    if (visibleTimeline === null) {
       setDiagnosis(null);
       setDiagnosisError(null);
       return () => {
@@ -265,9 +264,9 @@ export function EventLogWorkspace() {
     }
 
     pump.pending = {
-      records,
+      records: visibleRecords,
       coverageGaps: diagnosisCoverageGaps,
-      timeline: diagnosisTimeline,
+      timeline: visibleTimeline,
       textEntries: scopedLogEntries,
     };
     setDiagnosis(null);
@@ -314,7 +313,12 @@ export function EventLogWorkspace() {
       if (pump.revision !== revision) return;
       pump.pending = null;
     };
-  }, [records, diagnosisCoverageGaps, scopedLogEntries, diagnosisTimeline]);
+  }, [
+    visibleRecords,
+    visibleTimeline,
+    diagnosisCoverageGaps,
+    scopedLogEntries,
+  ]);
 
   useEffect(() => {
     const pump = timelinePumpRef.current;
@@ -360,7 +364,8 @@ export function EventLogWorkspace() {
         .catch((error: unknown) => {
           if (!pump.mounted || pump.revision !== startRevision) return;
           setTimelinePending(false);
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           timelineInputsRef.current = null;
           setTimeline(EMPTY_TIMELINE);
           setTimelineError(`Unified timeline could not be built: ${message}`);

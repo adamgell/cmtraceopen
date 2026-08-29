@@ -1,59 +1,36 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
-import type { DiagnosisSummary } from "./types";
+import type { DiagnosisCoverageGap, DiagnosisSummary } from "./types";
 
-const summary: DiagnosisSummary = {
-  findings: [
-    {
-      findingId: "event-1",
-      class: "confirmedFailure",
-      severity: "error",
-      confidence: "high",
-      title: "MDM enrollment failed",
-      summary: "The provider reported access denied.",
-      evidence: [
-        {
-          kind: "event",
-          value: { source: "event.evtx", provider: "Provider", eventId: 75, recordId: 12 },
-        },
-      ],
-      coverageGaps: [],
-      recommendedChecks: ["Inspect the provider record."],
-    },
-    {
-      findingId: "ime-gap-finding",
-      class: "coverageGap",
-      severity: "info",
-      confidence: "unknown",
-      title: "IME coverage gap",
-      summary: "The log was not captured.",
-      evidence: [],
-      coverageGaps: [
-        {
-          id: "ime-gap",
-          source: "IntuneManagementExtension.log",
-          state: "absent",
-          detail: "The log was not captured.",
-          evidence: [
-            {
-              kind: "textLog",
-              value: {
-                source: "IntuneManagementExtension.log",
-                filePath: "C:\\IntuneManagementExtension.log",
-                lineNumber: 42,
-                entryId: 42,
-              },
-            },
-          ],
-        },
-      ],
-      recommendedChecks: [],
-    },
-  ],
+const coverageGap: DiagnosisCoverageGap = {
+  id: "ime-gap",
+  source: "IntuneManagementExtension.log",
+  state: "absent",
+  detail: "The log was not captured.",
   evidence: [
     {
-      kind: "event",
+      kind: "textLog",
+      value: {
+        source: "IntuneManagementExtension.log",
+        filePath: "C:\\IntuneManagementExtension.log",
+        lineNumber: 42,
+        entryId: 42,
+      },
+    },
+  ],
+};
+
+const finding = {
+  findingId: "event-1",
+  class: "confirmedFailure" as const,
+  severity: "error" as const,
+  confidence: "high" as const,
+  title: "MDM enrollment failed",
+  summary: "The provider reported access denied.",
+  evidence: [
+    {
+      kind: "event" as const,
       value: {
         source: "event.evtx",
         provider: "Provider",
@@ -62,25 +39,37 @@ const summary: DiagnosisSummary = {
       },
     },
   ],
-  coverageGaps: [
+  coverageGaps: [],
+  recommendedChecks: ["Inspect the provider record."],
+};
+
+const summary: DiagnosisSummary = {
+  findings: [
+    finding,
     {
-      id: "ime-gap",
-      source: "IntuneManagementExtension.log",
-      state: "absent",
-      detail: "The log was not captured.",
-      evidence: [
-        {
-          kind: "textLog",
-          value: {
-            source: "IntuneManagementExtension.log",
-            filePath: "C:\\IntuneManagementExtension.log",
-            lineNumber: 42,
-            entryId: 42,
-          },
-        },
-      ],
+      findingId: "ime-gap-finding",
+      class: "coverageGap",
+      severity: "info",
+      confidence: "unknown",
+      title: "IME coverage gap",
+      summary: "The log was not captured.",
+      evidence: [],
+      coverageGaps: [coverageGap],
+      recommendedChecks: [],
     },
   ],
+  evidence: [
+    {
+      kind: "event",
+      value: {
+        source: "summary.evtx",
+        provider: "Summary",
+        eventId: 99,
+        recordId: 99,
+      },
+    },
+  ],
+  coverageGaps: [coverageGap],
   correlations: [
     {
       left: "event-1",
@@ -88,7 +77,9 @@ const summary: DiagnosisSummary = {
       basis: "candidateIdentifier",
       status: "candidate",
       candidateIds: ["text-1"],
-      evidence: [{ originId: "event-1", field: "activityId", value: "activity-1" }],
+      evidence: [
+        { originId: "event-1", field: "activityId", value: "activity-1" },
+      ],
     },
   ],
   events: [
@@ -97,10 +88,15 @@ const summary: DiagnosisSummary = {
       evidence: [
         {
           kind: "event",
-          value: { source: "event.evtx", provider: "Provider", eventId: 75, recordId: 12 },
+          value: {
+            source: "event.evtx",
+            provider: "Provider",
+            eventId: 75,
+            recordId: 12,
+          },
         },
       ],
-      findings: [],
+      findings: [finding],
       errorTokens: [
         {
           raw: "0x80070005",
@@ -122,6 +118,22 @@ const summary: DiagnosisSummary = {
         },
       ],
     },
+    {
+      family: "other",
+      evidence: [
+        {
+          kind: "event",
+          value: {
+            source: "ordinary.evtx",
+            provider: "Other",
+            eventId: 1,
+            recordId: 22,
+          },
+        },
+      ],
+      findings: [],
+      errorTokens: [],
+    },
   ],
   overview: {
     outcome: "confirmedFailure",
@@ -133,77 +145,78 @@ const summary: DiagnosisSummary = {
   },
 };
 
+function expandDiagnosis(): HTMLDetailsElement {
+  const details = document.querySelector("details");
+  expect(details).not.toBeNull();
+  fireEvent.click(screen.getByText("Show diagnosis details"));
+  expect(details).toHaveProperty("open", true);
+  return details as HTMLDetailsElement;
+}
+
 describe("EventDiagnosisPanel", () => {
-  it("renders finding class, severity, coverage, and lossless error token", () => {
+  it("starts collapsed with an actionable-finding and source-coverage overview", () => {
     render(<EventDiagnosisPanel summary={summary} />);
-    expect(screen.getAllByText("confirmedFailure")).toHaveLength(2);
-    expect(screen.getByText("MDM enrollment failed")).toBeTruthy();
-    expect(screen.getByText("error")).toBeTruthy();
-    expect(screen.getByText(/Access is denied/)).toBeTruthy();
-    expect(screen.getByText(/IntuneManagementExtension\.log \(absent\)/)).toBeTruthy();
-    expect(screen.getByText(/0x80070005/)).toBeTruthy();
-    expect(screen.queryByText("IME coverage gap")).toBeNull();
+
+    const details = document.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    const detailViewport = details?.querySelector("div");
+    expect(detailViewport).toHaveStyle({ overflowY: "auto" });
+    expect(detailViewport?.style.maxHeight).not.toBe("");
+    expect(screen.getByText("1 actionable finding")).toBeTruthy();
+    expect(screen.getByText("1 source coverage gap")).toBeTruthy();
+    expect(
+      screen.getByText(/1 actionable finding, 1 source coverage gap/),
+    ).toBeTruthy();
   });
 
-  it("renders overview, correlations, and unresolved error tokens", () => {
+  it("does not render source-wide evidence or repeat findings in event details", () => {
     render(<EventDiagnosisPanel summary={summary} />);
-    expect(screen.getByText(/Evidence contains confirmed operational failure/)).toBeTruthy();
-    expect(screen.getByText(/Correlation: candidate/)).toBeTruthy();
-    expect(screen.getByText(/0xDEADBEEF \(unresolved\)/)).toBeTruthy();
-  });
+    expandDiagnosis();
 
-  it("does not repeat a normalized hexadecimal token that already matches its raw value", () => {
-    render(<EventDiagnosisPanel summary={summary} />);
-
-    const errors = screen.getByText(/^Errors:/);
-    expect(errors).toHaveTextContent(
+    expect(screen.queryByText(/summary\.evtx/)).toBeNull();
+    expect(screen.getAllByText("MDM enrollment failed")).toHaveLength(1);
+    expect(screen.getByText(/^Errors:/)).toHaveTextContent(
       "Errors: 0x80070005 — Access is denied, 0xDEADBEEF (unresolved)",
     );
-    expect(errors).not.toHaveTextContent("0x80070005 (0x80070005)");
   });
 
-  it("labels resolution independently from optional token decorations", () => {
-    const tokenSummary: DiagnosisSummary = {
-      ...summary,
-      events: [
-        {
-          ...summary.events[0],
-          errorTokens: [
-            {
-              raw: "0x00000000",
-              decimal: 0,
-              hex: "0x00000000",
-              malformed: false,
-              found: true,
-              description: null,
-              category: null,
-            },
-            {
-              raw: "deadbeef",
-              decimal: null,
-              hex: "0xDEADBEEF",
-              malformed: false,
-              found: false,
-              description: null,
-              category: null,
-            },
-          ],
-        },
-      ],
-    };
-
-    render(<EventDiagnosisPanel summary={tokenSummary} />);
-    expect(screen.getByText(/^Errors:/)).toHaveTextContent(
-      "Errors: 0x00000000, deadbeef (0xDEADBEEF) (unresolved)",
-    );
-  });
-
-  it("renders structured evidence and coverage details", () => {
+  it("does not treat evidence-only events as event details", () => {
     render(<EventDiagnosisPanel summary={summary} />);
-    expect(screen.getAllByText(/provider=Provider/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Coverage: IntuneManagementExtension\.log \(absent\): The log was not captured\./)).toBeTruthy();
-    expect(screen.getByText(/Coverage evidence: textLog: source=IntuneManagementExtension\.log, filePath=.*lineNumber=42/)).toBeTruthy();
-    expect(screen.getByText(/Correlation evidence: event-1 activityId=activity-1/)).toBeTruthy();
-    expect(screen.getAllByText(/Event evidence: event:/).length).toBeGreaterThan(0);
+    expandDiagnosis();
+
+    expect(screen.queryByText("other")).toBeNull();
+    expect(screen.queryByText(/ordinary\.evtx/)).toBeNull();
+  });
+
+  it("groups identical coverage gaps and states their occurrence count", () => {
+    const groupedSummary: DiagnosisSummary = {
+      ...summary,
+      coverageGaps: [coverageGap, { ...coverageGap, id: "ime-gap-repeat" }],
+    };
+    render(<EventDiagnosisPanel summary={groupedSummary} />);
+    expandDiagnosis();
+
+    expect(
+      screen.getByText(
+        "Coverage: IntuneManagementExtension.log (absent): The log was not captured. (2 occurrences)",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("reports omitted rows when an expanded detailed section reaches its cap", () => {
+    const cappedSummary: DiagnosisSummary = {
+      ...summary,
+      coverageGaps: Array.from({ length: 101 }, (_, index) => ({
+        ...coverageGap,
+        id: `gap-${index}`,
+        source: `source-${index}`,
+      })),
+    };
+    render(<EventDiagnosisPanel summary={cappedSummary} />);
+    expandDiagnosis();
+
+    expect(screen.getAllByText(/^Coverage:/)).toHaveLength(100);
+    expect(screen.getByText("1 coverage gap omitted.")).toBeTruthy();
   });
 });

@@ -32,6 +32,7 @@ import { useLogStore } from "../../stores/log-store";
 import { useEvtxStore } from "./evtx-store";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import type { EvtxRecord } from "./types";
+import { stableRecordIdentity, type UnifiedTimeline } from "./unified-timeline";
 
 const RECORD: EvtxRecord = {
   id: 1,
@@ -74,7 +75,7 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
     cleanup();
   });
 
-  it("passes the resolved full timeline to diagnosis", async () => {
+  it("passes the resolved visible timeline to diagnosis", async () => {
     useEvtxStore.setState({
       records: [RECORD],
       channels: [
@@ -97,6 +98,90 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
 
     expect(mocks.buildTimeline).toHaveBeenCalledWith([RECORD], []);
     expect(mocks.diagnose).toHaveBeenCalledWith([RECORD], [], TIMELINE, []);
+  });
+
+  it("passes only filtered records and their timeline projection to diagnosis", async () => {
+    const hiddenRecord: EvtxRecord = {
+      ...RECORD,
+      id: 2,
+      eventRecordId: 102,
+      channel: "Security",
+      message: "Hidden event",
+    };
+    const fullTimeline: UnifiedTimeline = {
+      items: [
+        {
+          timestampMs: 1,
+          severity: "info",
+          message: "visible",
+          origin: {
+            kind: "event",
+            stableId: stableRecordIdentity(RECORD),
+            source: RECORD.sourceLabel,
+            machine: RECORD.computer,
+            bundle: null,
+            channel: RECORD.channel,
+            provider: RECORD.provider,
+            processId: null,
+            eventId: RECORD.eventId,
+            recordId: RECORD.eventRecordId,
+          },
+        },
+        {
+          timestampMs: 2,
+          severity: "info",
+          message: "hidden",
+          origin: {
+            kind: "event",
+            stableId: stableRecordIdentity(hiddenRecord),
+            source: hiddenRecord.sourceLabel,
+            machine: hiddenRecord.computer,
+            bundle: null,
+            channel: hiddenRecord.channel,
+            provider: hiddenRecord.provider,
+            processId: null,
+            eventId: hiddenRecord.eventId,
+            recordId: hiddenRecord.eventRecordId,
+          },
+        },
+      ],
+      unplaced: [],
+    };
+    mocks.buildTimeline.mockResolvedValue(fullTimeline);
+    useEvtxStore.setState({
+      records: [RECORD, hiddenRecord],
+      channels: [
+        {
+          name: "Application",
+          eventCount: 1,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+        {
+          name: "Security",
+          eventCount: 1,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set(["Application", "Security"]),
+      sourceMode: "files",
+      timeWindow: "all",
+    });
+
+    render(<EventLogWorkspace />);
+
+    await waitFor(() => expect(mocks.diagnose).toHaveBeenCalledTimes(1));
+    expect(mocks.diagnose).toHaveBeenCalledWith(
+      [RECORD],
+      [],
+      {
+        ...fullTimeline,
+        items: [fullTimeline.items[0]],
+        edges: [],
+        coverageGaps: [],
+      },
+      [],
+    );
   });
 
   it("coalesces a burst of record changes into one timeline rebuild", async () => {

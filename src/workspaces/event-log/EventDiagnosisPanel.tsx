@@ -1,6 +1,7 @@
 import { Badge, Card, Text, tokens } from "@fluentui/react-components";
 import type {
   DiagnosisCorrelationEdge,
+  DiagnosisCoverageGap,
   DiagnosisErrorToken,
   DiagnosisEvidence,
   DiagnosisFinding,
@@ -9,16 +10,64 @@ import type {
   EventDiagnosis,
 } from "./types";
 
+const DETAIL_RENDER_CAP = 100;
+
 interface EventDiagnosisPanelProps {
   summary: DiagnosisSummary | null;
 }
+
+interface GroupedCoverageGap {
+  gap: DiagnosisCoverageGap;
+  occurrences: number;
+}
+
+function actionableFindings(findings: DiagnosisFinding[]): DiagnosisFinding[] {
+  return findings.filter((finding) => finding.class !== "coverageGap");
+}
+
+function groupCoverageGaps(gaps: DiagnosisCoverageGap[]): GroupedCoverageGap[] {
+  const grouped = new Map<string, GroupedCoverageGap>();
+  for (const gap of gaps) {
+    const key = JSON.stringify([gap.source, gap.state, gap.detail]);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.occurrences += 1;
+    } else {
+      grouped.set(key, { gap, occurrences: 1 });
+    }
+  }
+  return [...grouped.values()];
+}
+
+function capSection<T>(items: T[]): { items: T[]; omitted: number } {
+  return {
+    items: items.slice(0, DETAIL_RENDER_CAP),
+    omitted: Math.max(items.length - DETAIL_RENDER_CAP, 0),
+  };
+}
+
+function countLabel(
+  count: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function omittedLabel(count: number, singular: string): string {
+  return `${countLabel(count, singular)} omitted.`;
+}
+
 function evidenceLabel(evidence: DiagnosisEvidence): string {
-  const kind = typeof evidence.kind === "string" ? evidence.kind : "source reference";
+  const kind =
+    typeof evidence.kind === "string" ? evidence.kind : "source reference";
   const value = evidence.value;
   if (typeof value === "string") return `${kind}: ${value}`;
   if (value && typeof value === "object") {
     const details = Object.entries(value)
-      .filter(([, field]) => typeof field === "string" || typeof field === "number")
+      .filter(
+        ([, field]) => typeof field === "string" || typeof field === "number",
+      )
       .map(([field, fieldValue]) => `${field}=${String(fieldValue)}`)
       .join(", ");
     return `${kind}: ${details || "source reference"}`;
@@ -40,7 +89,13 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
         borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
-      <div style={{ display: "flex", gap: tokens.spacingHorizontalXS, alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: tokens.spacingHorizontalXS,
+          alignItems: "center",
+        }}
+      >
         <Badge appearance="tint">{finding.class}</Badge>
         <Badge appearance="tint">{finding.severity}</Badge>
         <Badge appearance="tint">{finding.confidence}</Badge>
@@ -54,42 +109,74 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
         <Text size={200}>Next: {finding.recommendedChecks.join("; ")}</Text>
       )}
       {finding.coverageGaps.map((gap) => (
-        <div key={gap.id} style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>
-          <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
-            Coverage: {gap.source} ({gap.state}): {gap.detail}
-          </Text>
-          {gap.evidence.length > 0 && (
-            <Text size={200}>Coverage evidence: {evidenceText(gap.evidence)}</Text>
-          )}
-        </div>
+        <CoverageGapRow key={gap.id} gap={gap} occurrences={1} />
       ))}
     </div>
   );
 }
 
-function OverviewRow({ overview }: { overview: DiagnosisOverview }) {
+function CoverageGapRow({
+  gap,
+  occurrences,
+}: {
+  gap: DiagnosisCoverageGap;
+  occurrences: number;
+}) {
+  return (
+    <div style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>
+      <Text
+        size={200}
+        style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}
+      >
+        Coverage: {gap.source} ({gap.state}): {gap.detail} (
+        {countLabel(occurrences, "occurrence")})
+      </Text>
+      {gap.evidence.length > 0 && (
+        <Text size={200}>Coverage evidence: {evidenceText(gap.evidence)}</Text>
+      )}
+    </div>
+  );
+}
+
+function OverviewRow({
+  overview,
+  findingCount,
+  coverageGapCount,
+}: {
+  overview: DiagnosisOverview;
+  findingCount: number;
+  coverageGapCount: number;
+}) {
   return (
     <div
       style={{
         display: "grid",
         gap: tokens.spacingVerticalXXS,
         padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
       }}
     >
-      <div style={{ display: "flex", gap: tokens.spacingHorizontalXS, alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: tokens.spacingHorizontalXS,
+          alignItems: "center",
+        }}
+      >
         <Badge appearance="tint">{overview.outcome}</Badge>
         <Text weight="semibold">{overview.headline}</Text>
       </div>
       <Text size={200}>
-        {overview.findingCount} findings, {overview.coverageGapCount} coverage gaps,{" "}
-        {overview.evidenceCount} evidence items, {overview.correlationCount} correlations
+        {countLabel(findingCount, "actionable finding")},{" "}
+        {countLabel(coverageGapCount, "source coverage gap")},{" "}
+        {countLabel(overview.correlationCount, "correlation")}
       </Text>
     </div>
   );
 }
+
 function CorrelationRow({ edge }: { edge: DiagnosisCorrelationEdge }) {
-  const target = edge.right ?? (edge.candidateIds.join(", ") || "no direct match");
+  const target =
+    edge.right ?? (edge.candidateIds.join(", ") || "no direct match");
   return (
     <div style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>
       <Text size={200}>
@@ -120,30 +207,35 @@ function errorTokenLabel(token: DiagnosisErrorToken): string {
 }
 
 function EventRow({ event }: { event: EventDiagnosis }) {
-  const errors = event.errorTokens;
   return (
     <div style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>
       <Text weight="semibold">{event.family}</Text>
       {event.evidence.length > 0 && (
         <Text size={200}>Event evidence: {evidenceText(event.evidence)}</Text>
       )}
-      {event.findings.map((finding, index) => (
-        <FindingRow key={`${finding.findingId}-${index}`} finding={finding} />
-      ))}
-      {errors.length > 0 && (
-        <Text size={200}>Errors: {errors.map(errorTokenLabel).join(", ")}</Text>
-      )}
+      <Text size={200}>
+        Errors: {event.errorTokens.map(errorTokenLabel).join(", ")}
+      </Text>
     </div>
   );
 }
 
+function OmittedRows({ count, singular }: { count: number; singular: string }) {
+  return count > 0 ? (
+    <Text size={200}>{omittedLabel(count, singular)}</Text>
+  ) : null;
+}
+
 export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
   if (!summary) return null;
-  const actionableFindings = summary.findings.filter((finding) => finding.class !== "coverageGap");
-  const notableEvents = summary.events.filter(
-    (event) => event.errorTokens.length > 0 || event.findings.length > 0 || event.evidence.length > 0
+
+  const findings = capSection(actionableFindings(summary.findings));
+  const coverageGaps = capSection(groupCoverageGaps(summary.coverageGaps));
+  const correlations = capSection(summary.correlations);
+  const events = capSection(
+    summary.events.filter((event) => event.errorTokens.length > 0),
   );
-  const displayedEvents = notableEvents.slice(0, 200);
+
   return (
     <Card
       aria-label="Operational diagnosis"
@@ -154,46 +246,89 @@ export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
         gap: tokens.spacingVerticalS,
       }}
     >
-      <div style={{ display: "flex", gap: tokens.spacingHorizontalS, alignItems: "center" }}>
-        <Text size={400} weight="semibold">Operational diagnosis</Text>
-        {actionableFindings.length > 0 && (
-          <Badge appearance="tint">{actionableFindings.length} findings</Badge>
+      <div
+        style={{
+          display: "flex",
+          gap: tokens.spacingHorizontalS,
+          alignItems: "center",
+        }}
+      >
+        <Text size={400} weight="semibold">
+          Operational diagnosis
+        </Text>
+        {findings.items.length > 0 && (
+          <Badge appearance="tint">
+            {countLabel(
+              findings.items.length + findings.omitted,
+              "actionable finding",
+            )}
+          </Badge>
         )}
         {summary.coverageGaps.length > 0 && (
-          <Badge appearance="tint">{summary.coverageGaps.length} coverage gaps</Badge>
+          <Badge appearance="tint">
+            {countLabel(summary.coverageGaps.length, "source coverage gap")}
+          </Badge>
         )}
       </div>
-      <OverviewRow overview={summary.overview} />
-      {summary.evidence.length > 0 && (
-        <Text size={200}>Evidence: {evidenceText(summary.evidence)}</Text>
-      )}
-      {summary.correlations.map((edge, index) => (
-        <CorrelationRow key={`${edge.left}-${edge.right ?? "none"}-${index}`} edge={edge} />
-      ))}
-      {actionableFindings.map((finding) => (
-        <FindingRow key={finding.findingId} finding={finding} />
-      ))}
-      {summary.coverageGaps.map((gap) => (
-        <div key={gap.id} style={{ display: "grid", gap: tokens.spacingVerticalXXS }}>
-          <Text
-            size={200}
-            style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}
-          >
-            Coverage: {gap.source} ({gap.state}): {gap.detail}
-          </Text>
-          {gap.evidence.length > 0 && (
-            <Text size={200}>Coverage evidence: {evidenceText(gap.evidence)}</Text>
+      <OverviewRow
+        overview={summary.overview}
+        findingCount={findings.items.length + findings.omitted}
+        coverageGapCount={summary.coverageGaps.length}
+      />
+      <details>
+        <summary style={{ cursor: "pointer" }}>Show diagnosis details</summary>
+        <div
+          style={{
+            display: "grid",
+            gap: tokens.spacingVerticalS,
+            marginTop: tokens.spacingVerticalS,
+            maxHeight: "min(420px, 50vh)",
+            overflowY: "auto",
+          }}
+        >
+          {findings.items.length > 0 && (
+            <Text weight="semibold">Actionable findings</Text>
           )}
+          {findings.items.map((finding) => (
+            <FindingRow key={finding.findingId} finding={finding} />
+          ))}
+          <OmittedRows count={findings.omitted} singular="actionable finding" />
+
+          {coverageGaps.items.length > 0 && (
+            <Text weight="semibold">Source coverage</Text>
+          )}
+          {coverageGaps.items.map(({ gap, occurrences }) => (
+            <CoverageGapRow
+              key={`${gap.source}-${gap.state}-${gap.detail}`}
+              gap={gap}
+              occurrences={occurrences}
+            />
+          ))}
+          <OmittedRows count={coverageGaps.omitted} singular="coverage gap" />
+
+          {correlations.items.length > 0 && (
+            <Text weight="semibold">Correlations</Text>
+          )}
+          {correlations.items.map((edge, index) => (
+            <CorrelationRow
+              key={`${edge.left}-${edge.right ?? "none"}-${index}`}
+              edge={edge}
+            />
+          ))}
+          <OmittedRows count={correlations.omitted} singular="correlation" />
+
+          {events.items.length > 0 && (
+            <Text weight="semibold">Error-token event details</Text>
+          )}
+          {events.items.map((event, index) => (
+            <EventRow key={`${event.family}-${index}`} event={event} />
+          ))}
+          <OmittedRows
+            count={events.omitted}
+            singular="error-token event detail"
+          />
         </div>
-      ))}
-      {displayedEvents.map((event, index) => (
-        <EventRow key={`${event.family}-${index}`} event={event} />
-      ))}
-      {notableEvents.length > displayedEvents.length && (
-        <Text size={200}>
-          Showing the first {displayedEvents.length} of {notableEvents.length} event details.
-        </Text>
-      )}
+      </details>
     </Card>
   );
 }
