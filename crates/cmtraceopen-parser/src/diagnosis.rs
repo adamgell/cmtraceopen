@@ -1328,18 +1328,7 @@ pub fn adapt_event_entry_with_data_and_raw_xml(
     );
     if let Some(finding) = operational {
         findings.push(finding);
-    } else if matches!(family, EventFamily::Other) {
-        findings.push(rule_coverage_finding(
-            &evidence,
-            "event",
-            "unsupported-event-family",
-            CoverageState::Unsupported,
-            "Event source is outside the supported device-management diagnosis families."
-                .to_string(),
-            "Inspect a supported Autopilot, ESP, MDM, or ConfigMgr source for an operational rule."
-                .to_string(),
-        ));
-    } else if contradictory {
+    } else if !matches!(family, EventFamily::Other) && contradictory {
         findings.push(DiagnosisFinding {
             finding_id: format!("{evidence_id}:contradictory"),
             class: FindingClass::ContradictoryEvidence,
@@ -1351,7 +1340,7 @@ pub fn adapt_event_entry_with_data_and_raw_xml(
             coverage_gaps: Vec::new(),
             recommended_checks: vec!["Inspect the provider XML and adjacent records for the authoritative terminal state.".to_string()],
         });
-    } else if failure && !status_success {
+    } else if !matches!(family, EventFamily::Other) && failure && !status_success {
         let confidence = if explicit_failure_signal {
             FindingConfidence::High
         } else {
@@ -1371,7 +1360,9 @@ pub fn adapt_event_entry_with_data_and_raw_xml(
                 family_label(family)
             )],
         });
-    } else if matches!(entry.severity, EventLogSeverity::Warning) {
+    } else if !matches!(family, EventFamily::Other)
+        && matches!(entry.severity, EventLogSeverity::Warning)
+    {
         findings.push(DiagnosisFinding {
             finding_id: format!("{evidence_id}:symptom"),
             class: FindingClass::Symptom,

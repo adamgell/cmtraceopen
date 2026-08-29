@@ -587,8 +587,8 @@ fn successful_message_without_mdm_status_remains_a_coverage_gap() {
 }
 
 #[test]
-fn unsupported_event_family_is_a_coverage_gap_not_a_failure() {
-    let mut entry = event_entry("Unknown provider operation failed");
+fn unsupported_event_family_is_neutral() {
+    let mut entry = event_entry("Unknown provider operation failed with 0x80070005");
     entry.channel = EventLogChannel::Other("Application".into());
     entry.channel_display = "Application".into();
     entry.provider = "Unknown provider".into();
@@ -597,14 +597,9 @@ fn unsupported_event_family_is_a_coverage_gap_not_a_failure() {
         diagnosis.family,
         cmtraceopen_parser::diagnosis::EventFamily::Other
     );
-    assert!(diagnosis
-        .findings
-        .iter()
-        .any(|finding| finding.class == FindingClass::CoverageGap));
-    assert!(diagnosis
-        .findings
-        .iter()
-        .all(|finding| finding.class != FindingClass::ConfirmedFailure));
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
 }
 
 #[test]

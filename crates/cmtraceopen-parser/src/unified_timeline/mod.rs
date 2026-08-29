@@ -1110,15 +1110,14 @@ pub fn correlate_observations(
                 observation.origin_id.clone(),
                 "machine identity unavailable; exact correlation is restricted".to_string(),
             ));
-        } else if observation.exact_keys.is_empty() && !has_specific_gap {
+        } else if observation.exact_keys.is_empty()
+            && !observation.secondary_keys.is_empty()
+            && !has_specific_gap
+        {
             gap_set.insert((
                 observation.origin_id.clone(),
-                if observation.secondary_keys.is_empty() {
-                    "no explicit identity keys were present; timestamp-only correlation is not causal"
-                        .to_string()
-                } else {
-                    "only secondary identity was present; correlation remains low confidence".to_string()
-                },
+                "only secondary identity was present; correlation remains low confidence"
+                    .to_string(),
             ));
         }
     }
@@ -2592,6 +2591,16 @@ mod tests {
         assert_eq!(edges[0].strength, TimelineCorrelationStrength::Candidate);
         assert_eq!(edges[0].confidence, TimelineCorrelationConfidence::Low);
         assert!(gaps.iter().all(|gap| gap.reason.contains("secondary")));
+    }
+
+    #[test]
+    fn known_machine_observation_without_identity_keys_is_neutral() {
+        let observations = [observation("ordinary-event", Some("HOST"), &[], &[])];
+
+        let (edges, gaps) = correlate_observations(&observations);
+
+        assert!(edges.is_empty());
+        assert!(gaps.is_empty());
     }
 
     #[test]
