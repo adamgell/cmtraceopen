@@ -28,7 +28,7 @@ For every `PASS`/`FAIL` that observes the application or installer, set `artifac
 | `clean-snapshot-version-isolation`, `real-evtx-nonvacuous`, `provider-native-capture`, `provider-retained-db-tests`, all three known impossible advanced-surface gates, `performance-host-profile`, `performance-all-channels-seven-day`, `production-signing-and-msi-boundary` | none; `artifactSha256` must remain null |
 | Every other manual gate, including all seven recovery rows | `full-portable` |
 
-All native/manual commands that can emit target content use the bounded `Invoke-PrivateProcess` procedure in README. Capture stdout and stderr under `raw-artifacts/private-command-output`, do not echo `--nocapture`, EVTX/provider/MDMDiag/remote/performance output to the shared terminal, and kill only the owned process tree at the documented timeout. A timeout is never PASS.
+All native/manual commands that can emit target content use the bounded `Invoke-PrivateProcess` procedure in README. That helper applies the guarded zero-byte Git global config, impossible locked-file-descendant hook path, and empty command-scope template setting to every direct or transitive Git child. Capture stdout and stderr under `raw-artifacts/private-command-output`, do not echo `--nocapture`, EVTX/provider/MDMDiag/remote/performance output to the shared terminal, and kill only the owned process tree at the documented timeout. A timeout is never PASS.
 
 The exporter derives:
 

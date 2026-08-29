@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "handoffId": "cmtraceopen-pr583-windows11-arm64-2026-08-23",
-  "createdUtc": "2026-08-23T15:00:22Z",
+  "createdUtc": "2026-08-29T18:45:37Z",
   "purpose": "Native Windows 11 ARM64 validation of CMTrace Open PR 583 and Event Log recovery",
-  "handoffRevision": "2026-08-23.5",
+  "handoffRevision": "2026-08-23.6",
   "classification": {
     "applicationSourceCodeIncluded": false,
     "validationHelperSourceIncluded": true,

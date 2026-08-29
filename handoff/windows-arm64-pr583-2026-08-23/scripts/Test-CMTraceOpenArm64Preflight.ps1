@@ -389,6 +389,13 @@ Import-Module -Name '$escapedPesterManifest' -RequiredVersion '$($trustedPester.
 `$configuration.Run.PassThru = `$true
 `$configuration.Filter.FullName = @(
     '*returns the reserved wrapper failure exit for a target-start failure*',
+    '*captures native child stdout*',
+    '*captures native child stderr*',
+    '*drains simultaneous native child stdout and stderr without deadlock*',
+    '*propagates a nonzero native child exit after draining both streams*',
+    '*enforces the aggregate capture limit across forwarded child streams*',
+    '*terminates a timed-out native child and its descendant*',
+    '*runs native ARM64 Git with the controlled isolated configuration*',
     '*drains and classifies documented private-helper target-start failure*',
     '*drains and classifies private provider Cargo target-start failure*',
     '*terminates an inherited-stdio descendant after its root process exits*',
@@ -405,7 +412,7 @@ Import-Module -Name '$escapedPesterManifest' -RequiredVersion '$($trustedPester.
     skipped = [int]`$result.SkippedCount
 }
 [Console]::Out.Write((`$summary | ConvertTo-Json -Compress))
-if (`$summary.selected -ne 7 -or `$summary.passed -ne 7 -or `$summary.failed -ne 0 -or `$summary.skipped -ne 0) { exit 1 }
+if (`$summary.selected -ne 14 -or `$summary.passed -ne 14 -or `$summary.failed -ne 0 -or `$summary.skipped -ne 0) { exit 1 }
 "@
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $capture = Invoke-CMTraceOwnedProcessCapture -FilePath (Join-Path $PSHOME 'pwsh.exe') `
@@ -429,10 +436,10 @@ if (`$summary.selected -ne 7 -or `$summary.passed -ne 7 -or `$summary.failed -ne
             throw 'The focused owned-process lifecycle regression returned a non-integer count.'
         }
     }
-    if ($result.selected -ne 7 -or $result.passed -ne 7 -or $result.failed -ne 0 -or $result.skipped -ne 0) {
-        throw 'The focused owned-process lifecycle regression must report exactly seven passed tests and no failures or skips.'
+    if ($result.selected -ne 14 -or $result.passed -ne 14 -or $result.failed -ne 0 -or $result.skipped -ne 0) {
+        throw 'The focused owned-process lifecycle regression must report exactly fourteen passed tests and no failures or skips.'
     }
-    return 'owned process lifecycle regression: 7 passed, 0 failed, 0 skipped'
+    return 'owned process lifecycle regression: 14 passed, 0 failed, 0 skipped'
 }
 
 $failed = @($checks | Where-Object { $_.status -eq 'failed' })

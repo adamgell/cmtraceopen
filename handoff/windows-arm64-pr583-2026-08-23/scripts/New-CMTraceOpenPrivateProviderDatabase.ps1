@@ -36,15 +36,10 @@ $archiveCargoConfiguration = Join-Path $archiveSource '.cargo\config.toml'
 
 $git = (Get-Command git.exe -ErrorAction Stop).Source
 $cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
-$gitEnvironment = [ordered]@{
-    GIT_CONFIG_NOSYSTEM = '1'
-    GIT_CONFIG_GLOBAL = 'NUL'
-    GIT_TERMINAL_PROMPT = '0'
-    GCM_INTERACTIVE = 'Never'
-    GIT_ASKPASS = ''
-    SSH_ASKPASS = ''
-    GIT_NO_REPLACE_OBJECTS = '1'
-}
+$gitIsolation = Get-CMTraceGitIsolationContext -ForbiddenRoots @(
+    $resolvedRepository, $resolvedEvidence, (Get-CMTraceHandoffRoot)
+)
+$gitEnvironment = $gitIsolation.Environment
 
 $privateCargoTimeout = [TimeSpan]::FromMinutes(180)
 $privateCargoOutputLimitBytes = 33554432L
@@ -101,7 +96,17 @@ function Invoke-CMTracePrivateCargoProcess {
     foreach ($argument in $ArgumentList) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
-    Initialize-CMTraceChildEnvironment -StartInfo $startInfo -Environment $Environment
+    $childEnvironment = [ordered]@{}
+    foreach ($entry in $gitEnvironment.GetEnumerator()) {
+        $childEnvironment[[string]$entry.Key] = [string]$entry.Value
+    }
+    foreach ($entry in $Environment.GetEnumerator()) {
+        if (@($gitEnvironment.Keys) -icontains [string]$entry.Key) {
+            throw "Private Cargo environment cannot override sealed Git isolation entry: $($entry.Key)"
+        }
+        $childEnvironment[[string]$entry.Key] = [string]$entry.Value
+    }
+    Initialize-CMTraceChildEnvironment -StartInfo $startInfo -Environment $childEnvironment
 
     $ownedLaunch = $null
     $ownedJob = $null
@@ -126,6 +131,8 @@ function Invoke-CMTracePrivateCargoProcess {
     $contentGuards = [Collections.Generic.List[IO.FileStream]]::new()
 
     try {
+        $contentGuards.Add((Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+                -ForbiddenRoots @($resolvedRepository, $resolvedEvidence, (Get-CMTraceHandoffRoot))))
         $targetGuard = Open-CMTraceGuardedReadFile -Path $cargo -Label "Private Cargo target $Id"
         $startInfo.FileName = $targetGuard.Path
         foreach ($binding in @($ContentBindings)) {
@@ -375,11 +382,18 @@ if ($smokeResult.ExitCode -ne 0) {
     throw 'The exact native provider-capture smoke test failed.'
 }
 
-$archiveResult = Invoke-CMTraceOwnedProcessCapture -FilePath $git -WorkingDirectory $resolvedRepository `
-    -Environment $gitEnvironment -TimeoutSeconds 120 -Arguments @(
-        '-c', 'credential.helper=', '-c', 'core.hooksPath=NUL', '-C', $resolvedRepository,
-        'archive', '--format=zip', "--output=$archivePath", $script:CMTraceExpectedSourceCommit
-    )
+$gitConfigGuard = Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+    -ForbiddenRoots @($resolvedRepository, $resolvedEvidence, (Get-CMTraceHandoffRoot))
+try {
+    $archiveResult = Invoke-CMTraceOwnedProcessCapture -FilePath $git -WorkingDirectory $resolvedRepository `
+        -Environment $gitEnvironment -TimeoutSeconds 120 -Arguments @(
+            '-C', $resolvedRepository, 'archive', '--format=zip', "--output=$archivePath",
+            $script:CMTraceExpectedSourceCommit
+        )
+}
+finally {
+    $gitConfigGuard.Dispose()
+}
 if ($archiveResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
     throw 'Could not create the target-private exact-source archive.'
 }

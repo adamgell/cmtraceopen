@@ -386,6 +386,8 @@ function Test-CMTraceAllowedChildEnvironmentOverrideName {
         'BUNDLE_ROOT', 'RELEASE_ROOT', 'TARGET_TRIPLE', 'SOURCE_COMMIT', 'GITHUB_SHA',
         'CMTRACEOPEN_PROVIDER_DB', 'CMTRACEOPEN_DISABLE_UPDATE_CHECKS', 'CMTRACE_EVTX_FIXTURE',
         'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE',
+        'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+        'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1', 'GIT_CONFIG_KEY_2', 'GIT_CONFIG_VALUE_2',
         'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_NO_REPLACE_OBJECTS',
         'NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG',
         'NPM_CONFIG_UPDATE_NOTIFIER', 'NPM_CONFIG_FUND'
@@ -827,6 +829,9 @@ function Get-CMTraceOwnedProcessLaunch {
             fileName = $TargetStartInfo.FileName
             workingDirectory = $TargetStartInfo.WorkingDirectory
             arguments = @($TargetStartInfo.ArgumentList)
+            redirectStandardOutput = $TargetStartInfo.RedirectStandardOutput
+            redirectStandardError = $TargetStartInfo.RedirectStandardError
+            redirectStandardInput = $TargetStartInfo.RedirectStandardInput
         }
         $configurationBytes = [Text.Encoding]::UTF8.GetBytes(($configuration | ConvertTo-Json -Depth 4 -Compress))
         $configurationToken = [Convert]::ToBase64String($configurationBytes)
@@ -837,6 +842,9 @@ function Get-CMTraceOwnedProcessLaunch {
 `$readyEvent = `$null
 `$targetStartedEvent = `$null
 `$child = `$null
+`$stdoutTask = `$null
+`$stderrTask = `$null
+`$stdinTask = `$null
 try {
     `$readyEvent = [Threading.EventWaitHandle]::OpenExisting('$eventName')
     `$targetStartedEvent = [Threading.EventWaitHandle]::OpenExisting('$targetStartedEventName')
@@ -850,6 +858,9 @@ try {
     `$startInfo.WorkingDirectory = [string]`$configuration.workingDirectory
     `$startInfo.UseShellExecute = `$false
     `$startInfo.CreateNoWindow = `$true
+    `$startInfo.RedirectStandardOutput = [bool]`$configuration.redirectStandardOutput
+    `$startInfo.RedirectStandardError = [bool]`$configuration.redirectStandardError
+    `$startInfo.RedirectStandardInput = [bool]`$configuration.redirectStandardInput
     foreach (`$argument in @(`$configuration.arguments)) {
         [void]`$startInfo.ArgumentList.Add([string]`$argument)
     }
@@ -858,8 +869,30 @@ try {
     if (-not `$child.Start()) {
         throw 'The owned validation command could not start.'
     }
+    if (`$startInfo.RedirectStandardOutput) {
+        `$stdoutTask = `$child.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+    }
+    if (`$startInfo.RedirectStandardError) {
+        `$stderrTask = `$child.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+    }
+    if (`$startInfo.RedirectStandardInput) {
+        `$stdinTask = [Console]::OpenStandardInput().CopyToAsync(`$child.StandardInput.BaseStream)
+    }
     [void]`$targetStartedEvent.Set()
+    if (`$null -ne `$stdinTask) {
+        try {
+            [void]`$stdinTask.GetAwaiter().GetResult()
+        }
+        finally {
+            `$child.StandardInput.Close()
+        }
+    }
     `$child.WaitForExit()
+    foreach (`$outputTask in @(`$stdoutTask, `$stderrTask)) {
+        if (`$null -ne `$outputTask) {
+            [void]`$outputTask.GetAwaiter().GetResult()
+        }
+    }
     exit `$child.ExitCode
 }
 catch {
@@ -1759,6 +1792,230 @@ function Assert-CMTraceSafeTemporaryRoot {
     $probePath = Join-Path $temporaryRoot ('cmtraceopen-temp-boundary-{0}' -f [guid]::NewGuid().ToString('N'))
     [void](Assert-CMTraceFixedLocalNtfsPath -Path $probePath -Label 'Temporary root' -ForbiddenRoots $ForbiddenRoots -MustNotExist)
     return $temporaryRoot
+}
+
+function Assert-CMTraceGitIsolationContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Context,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TemporaryRoot,
+
+        [string[]]$ForbiddenRoots = @()
+    )
+
+    $expectedProperties = @('Root', 'TemporaryRoot', 'GlobalConfigPath', 'HooksPath', 'Environment')
+    $actualProperties = @($Context.PSObject.Properties.Name)
+    if ($actualProperties.Count -ne $expectedProperties.Count -or
+        @($expectedProperties | Where-Object { $_ -cnotin $actualProperties }).Count -ne 0) {
+        throw 'Git isolation context has an unexpected shape.'
+    }
+
+    $fullTemporaryRoot = [IO.Path]::GetFullPath($TemporaryRoot).TrimEnd([char]'\', [char]'/')
+    if (-not (Test-Path -LiteralPath $fullTemporaryRoot -PathType Container)) {
+        throw 'Git isolation temporary root is missing or is not a directory.'
+    }
+    [void](Assert-CMTraceNoReparseAncestor -Path $fullTemporaryRoot -Label 'Git isolation temporary root')
+    $temporaryEntry = Get-Item -LiteralPath $fullTemporaryRoot -Force
+    if (-not $temporaryEntry.PSIsContainer -or
+        ($temporaryEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Git isolation temporary root must be a regular, non-reparse directory.'
+    }
+
+    $contextTemporaryRoot = [IO.Path]::GetFullPath([string]$Context.TemporaryRoot).TrimEnd([char]'\', [char]'/')
+    if (-not $contextTemporaryRoot.Equals($fullTemporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Git isolation context belongs to a different temporary root.'
+    }
+    $root = Assert-CMTracePathWithinRoot -Path ([string]$Context.Root) -Root $fullTemporaryRoot -Label 'Git isolation root'
+    $globalConfigPath = Assert-CMTracePathWithinRoot -Path ([string]$Context.GlobalConfigPath) -Root $root -Label 'Git isolation global config'
+    $hooksPath = Assert-CMTracePathWithinRoot -Path ([string]$Context.HooksPath) -Root $root -Label 'Git isolation hooks path'
+    if (-not $globalConfigPath.Equals((Join-Path $root 'empty.gitconfig'), [StringComparison]::OrdinalIgnoreCase) -or
+        -not $hooksPath.Equals((Join-Path $globalConfigPath 'hooks'), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Git isolation context paths differ from the sealed layout.'
+    }
+    foreach ($path in @($root, $globalConfigPath, $hooksPath)) {
+        [void](Assert-CMTraceNoReparseAncestor -Path $path -Label 'Git isolation path')
+    }
+
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'Git isolation root is missing or is not a directory.'
+    }
+    $rootEntry = Get-Item -LiteralPath $root -Force
+    if (-not $rootEntry.PSIsContainer -or
+        ($rootEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Git isolation root must be a regular, non-reparse directory.'
+    }
+    if (-not (Test-Path -LiteralPath $globalConfigPath -PathType Leaf)) {
+        throw 'Git isolation global config is missing or is not a regular file.'
+    }
+    $globalConfigEntry = Get-Item -LiteralPath $globalConfigPath -Force
+    if ($globalConfigEntry.PSIsContainer -or
+        ($globalConfigEntry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $globalConfigEntry.Length -ne 0) {
+        throw 'Git isolation global config must remain an empty regular, non-reparse file.'
+    }
+    $rootEntries = @(Get-ChildItem -LiteralPath $root -Force)
+    if ($rootEntries.Count -ne 1 -or
+        -not $rootEntries[0].FullName.Equals($globalConfigPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Git isolation root must contain only its guarded empty global config.'
+    }
+    if (Test-Path -LiteralPath $hooksPath -PathType Any) {
+        throw 'Git isolation hooks path must remain impossible beneath the guarded global config file.'
+    }
+
+    foreach ($forbiddenRoot in $ForbiddenRoots) {
+        if ([string]::IsNullOrWhiteSpace($forbiddenRoot)) { continue }
+        $fullForbidden = [IO.Path]::GetFullPath($forbiddenRoot).TrimEnd([char]'\', [char]'/')
+        if ($root.Equals($fullForbidden, [StringComparison]::OrdinalIgnoreCase) -or
+            $root.StartsWith(($fullForbidden + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase) -or
+            $fullForbidden.StartsWith(($root.TrimEnd([char]'\', [char]'/') + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Git isolation root must be disjoint from protected path $fullForbidden."
+        }
+    }
+
+    if ($Context.Environment -isnot [System.Collections.IDictionary]) {
+        throw 'Git isolation environment must be a dictionary.'
+    }
+    $expectedEnvironment = [ordered]@{
+        GIT_CONFIG_NOSYSTEM = '1'
+        GIT_CONFIG_GLOBAL = $globalConfigPath
+        GIT_CONFIG_COUNT = '3'
+        GIT_CONFIG_KEY_0 = 'credential.helper'
+        GIT_CONFIG_VALUE_0 = ''
+        GIT_CONFIG_KEY_1 = 'core.hooksPath'
+        GIT_CONFIG_VALUE_1 = $hooksPath
+        GIT_CONFIG_KEY_2 = 'init.templateDir'
+        GIT_CONFIG_VALUE_2 = ''
+        GIT_TERMINAL_PROMPT = '0'
+        GCM_INTERACTIVE = 'Never'
+        GIT_ASKPASS = ''
+        SSH_ASKPASS = ''
+        GIT_NO_REPLACE_OBJECTS = '1'
+    }
+    if ($Context.Environment.Count -ne $expectedEnvironment.Count) {
+        throw 'Git isolation environment has an unexpected entry count.'
+    }
+    foreach ($entry in $expectedEnvironment.GetEnumerator()) {
+        if (-not $Context.Environment.Contains([string]$entry.Key) -or
+            -not [string]::Equals([string]$Context.Environment[[string]$entry.Key], [string]$entry.Value, [StringComparison]::Ordinal)) {
+            throw "Git isolation environment entry is missing or changed: $($entry.Key)"
+        }
+    }
+    return $true
+}
+
+function New-CMTraceGitIsolationContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TemporaryRoot,
+
+        [string[]]$ForbiddenRoots = @()
+    )
+
+    $fullTemporaryRoot = [IO.Path]::GetFullPath($TemporaryRoot).TrimEnd([char]'\', [char]'/')
+    if (-not (Test-Path -LiteralPath $fullTemporaryRoot -PathType Container)) {
+        throw 'Git isolation temporary root must already exist.'
+    }
+    [void](Assert-CMTraceNoReparseAncestor -Path $fullTemporaryRoot -Label 'Git isolation temporary root')
+    $root = Join-Path $fullTemporaryRoot ('cmtraceopen-git-isolation-{0}' -f [guid]::NewGuid().ToString('N'))
+    foreach ($forbiddenRoot in $ForbiddenRoots) {
+        if ([string]::IsNullOrWhiteSpace($forbiddenRoot)) { continue }
+        $fullForbidden = [IO.Path]::GetFullPath($forbiddenRoot).TrimEnd([char]'\', [char]'/')
+        if ($root.Equals($fullForbidden, [StringComparison]::OrdinalIgnoreCase) -or
+            $root.StartsWith(($fullForbidden + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase) -or
+            $fullForbidden.StartsWith(($root + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Git isolation root must be disjoint from protected path $fullForbidden."
+        }
+    }
+    New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+    $globalConfigPath = Join-Path $root 'empty.gitconfig'
+    $configStream = [IO.File]::Open(
+        $globalConfigPath,
+        [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write,
+        [IO.FileShare]::None
+    )
+    $configStream.Dispose()
+    $hooksPath = Join-Path $globalConfigPath 'hooks'
+
+    $environment = [ordered]@{
+        GIT_CONFIG_NOSYSTEM = '1'
+        GIT_CONFIG_GLOBAL = $globalConfigPath
+        GIT_CONFIG_COUNT = '3'
+        GIT_CONFIG_KEY_0 = 'credential.helper'
+        GIT_CONFIG_VALUE_0 = ''
+        GIT_CONFIG_KEY_1 = 'core.hooksPath'
+        GIT_CONFIG_VALUE_1 = $hooksPath
+        GIT_CONFIG_KEY_2 = 'init.templateDir'
+        GIT_CONFIG_VALUE_2 = ''
+        GIT_TERMINAL_PROMPT = '0'
+        GCM_INTERACTIVE = 'Never'
+        GIT_ASKPASS = ''
+        SSH_ASKPASS = ''
+        GIT_NO_REPLACE_OBJECTS = '1'
+    }
+    $context = [pscustomobject][ordered]@{
+        Root = $root
+        TemporaryRoot = $fullTemporaryRoot
+        GlobalConfigPath = $globalConfigPath
+        HooksPath = $hooksPath
+        Environment = $environment
+    }
+    [void](Assert-CMTraceGitIsolationContext -Context $context -TemporaryRoot $fullTemporaryRoot -ForbiddenRoots $ForbiddenRoots)
+    return $context
+}
+
+function Get-CMTraceGitIsolationContext {
+    [CmdletBinding()]
+    param(
+        [string[]]$ForbiddenRoots = @()
+    )
+
+    $temporaryRoot = Assert-CMTraceSafeTemporaryRoot -ForbiddenRoots $ForbiddenRoots
+    $cachedVariable = Get-Variable -Name CMTraceGitIsolationContext -Scope Script -ErrorAction SilentlyContinue
+    if ($null -eq $cachedVariable -or $null -eq $cachedVariable.Value) {
+        $script:CMTraceGitIsolationContext = New-CMTraceGitIsolationContext `
+            -TemporaryRoot $temporaryRoot -ForbiddenRoots $ForbiddenRoots
+    }
+    [void](Assert-CMTraceGitIsolationContext -Context $script:CMTraceGitIsolationContext `
+        -TemporaryRoot $temporaryRoot -ForbiddenRoots $ForbiddenRoots)
+    return $script:CMTraceGitIsolationContext
+}
+
+function Open-CMTraceGitIsolationGuard {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Context,
+
+        [string[]]$ForbiddenRoots = @()
+    )
+
+    [void](Assert-CMTraceGitIsolationContext -Context $Context `
+        -TemporaryRoot ([string]$Context.TemporaryRoot) -ForbiddenRoots $ForbiddenRoots)
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open(
+            [string]$Context.GlobalConfigPath,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+        if ($stream.Length -ne 0) {
+            throw 'Git isolation global config changed while its read guard was acquired.'
+        }
+        [void](Assert-CMTraceGitIsolationContext -Context $Context `
+            -TemporaryRoot ([string]$Context.TemporaryRoot) -ForbiddenRoots $ForbiddenRoots)
+        $result = $stream
+        $stream = $null
+        return $result
+    }
+    finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
 }
 
 function Get-CMTraceOrdinalSortedString {
@@ -2937,16 +3194,9 @@ function Assert-CMTraceSourceIntegrity {
 
     $resolved = (Resolve-Path -LiteralPath $RepositoryPath).Path
     $git = (Get-Command git.exe -ErrorAction Stop).Source
-    $gitEnvironment = [ordered]@{
-        GIT_CONFIG_NOSYSTEM = '1'
-        GIT_CONFIG_GLOBAL = 'NUL'
-        GIT_TERMINAL_PROMPT = '0'
-        GCM_INTERACTIVE = 'Never'
-        GIT_ASKPASS = ''
-        SSH_ASKPASS = ''
-        GIT_NO_REPLACE_OBJECTS = '1'
-    }
-    $gitArguments = @('--no-replace-objects', '-c', 'credential.helper=', '-c', 'core.hooksPath=NUL', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-C', $resolved)
+    $gitIsolation = Get-CMTraceGitIsolationContext -ForbiddenRoots @($resolved, (Get-CMTraceHandoffRoot))
+    $gitEnvironment = $gitIsolation.Environment
+    $gitArguments = @('--no-replace-objects', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-C', $resolved)
 
     function Invoke-CMTraceSourceGit {
         param(
@@ -2964,26 +3214,34 @@ function Assert-CMTraceSourceIntegrity {
             [string]$StandardInputText
         )
 
+        $gitConfigGuard = $null
         try {
-            $captureParameters = @{
-                FilePath = $git
-                Arguments = $Arguments
-                WorkingDirectory = $resolved
-                Environment = $gitEnvironment
-                TimeoutSeconds = 60
-                MaximumCaptureBytes = $MaximumCaptureBytes
+            $gitConfigGuard = Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+                -ForbiddenRoots @($resolved, (Get-CMTraceHandoffRoot))
+            try {
+                $captureParameters = @{
+                    FilePath = $git
+                    Arguments = $Arguments
+                    WorkingDirectory = $resolved
+                    Environment = $gitEnvironment
+                    TimeoutSeconds = 60
+                    MaximumCaptureBytes = $MaximumCaptureBytes
+                }
+                if ($PSBoundParameters.ContainsKey('StandardInputText')) {
+                    $captureParameters.StandardInputText = $StandardInputText
+                }
+                $capture = Invoke-CMTraceOwnedProcessCapture @captureParameters
             }
-            if ($PSBoundParameters.ContainsKey('StandardInputText')) {
-                $captureParameters.StandardInputText = $StandardInputText
+            catch {
+                if (-not [string]::IsNullOrWhiteSpace($CaptureLimitMessage) -and
+                    $_.Exception.Message -ceq "Owned process output exceeded the strict $MaximumCaptureBytes-byte aggregate capture limit.") {
+                    throw $CaptureLimitMessage
+                }
+                throw
             }
-            $capture = Invoke-CMTraceOwnedProcessCapture @captureParameters
         }
-        catch {
-            if (-not [string]::IsNullOrWhiteSpace($CaptureLimitMessage) -and
-                $_.Exception.Message -ceq "Owned process output exceeded the strict $MaximumCaptureBytes-byte aggregate capture limit.") {
-                throw $CaptureLimitMessage
-            }
-            throw
+        finally {
+            if ($null -ne $gitConfigGuard) { $gitConfigGuard.Dispose() }
         }
         $stdout = $capture.StdOut.Trim()
         $stderr = $capture.StdErr.Trim()

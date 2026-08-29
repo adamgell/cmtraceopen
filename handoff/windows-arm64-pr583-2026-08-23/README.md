@@ -115,7 +115,7 @@ function Assert-BootstrapPathBoundary {
   return $FullPath
 }
 
-$Zip = 'C:\CMTraceOpen-Handoff\cmtraceopen-pr583-windows11-arm64-validation-20260823.zip'
+$Zip = 'C:\CMTraceOpen-Handoff\cmtraceopen-pr583-windows11-arm64-validation-20260823-r6.zip'
 $Zip = Assert-BootstrapPathBoundary -Path $Zip -MustExist -RequiredType Leaf
 $SidecarPath = Assert-BootstrapPathBoundary -Path "$Zip.sha256" -MustExist -RequiredType Leaf
 $TrustedSha256 = '<trusted out-of-band lowercase SHA-256>'
@@ -205,7 +205,7 @@ $PSVersionTable.PSVersion
 
 ## 3. Initialize the exact source
 
-The initializer refuses an existing destination before mutation; rejects non-fixed, non-NTFS, synchronized, and reparse paths; isolates Git from system/global config, credential helpers, prompts, templates, and hooks; creates a complete-content, depth-one clone without checkout; fixes line-ending behavior before checkout; verifies that the advertised branch still equals the sealed commit; checks out detached without a later promisor fetch; disables the push URL; verifies the public SSH commit signature; and validates the tree, lockfile blobs, remote, and clean status.
+The initializer refuses an existing destination before mutation; rejects non-fixed, non-NTFS, synchronized, and reparse paths; isolates Git with a guarded zero-byte regular global config, an impossible absolute hook path beneath that locked file, an empty command-scope template setting, and a command-scope credential reset; creates a complete-content, depth-one clone without checkout; fixes line-ending behavior before checkout; verifies that the advertised branch still equals the sealed commit; checks out detached without a later promisor fetch; disables the push URL; verifies the public SSH commit signature; and validates the tree, lockfile blobs, remote, and clean status.
 
 ```powershell
 $Handoff = 'C:\CMTraceOpen-Handoff\pr583-arm64'
@@ -336,7 +336,7 @@ pwsh.exe -NoProfile -ExecutionPolicy RemoteSigned -File "$Handoff\scripts\Test-C
   -OutputPath $Preflight
 ```
 
-Expected: `PREFLIGHT_OK`. Resolve every failure without editing the source. Preserve each failed report and use a new nonexisting attempt-suffixed output such as `preflight-pr583-arm64-002.json` for the next run; the preflight intentionally refuses to overwrite. Preflight also runs exactly seven Windows-only owned-Job regressions and requires `7 passed, 0 failed, 0 skipped`; these prove on the target that a descendant retaining inherited output handles cannot outlive successful command completion, wrapper startup failure is never misreported as a native child exit, both the documented private helper and provider Cargo helper drain and classify that failure, bounded standard input reaches the owned native child used for exhaustive tracked-byte hashing, the Windows file guard denies target replacement until the wrapper confirms child start, and verified content bindings remain write/delete guarded until their consuming child exits.
+Expected: `PREFLIGHT_OK`. Resolve every failure without editing the source. Preserve each failed report and use a new nonexisting attempt-suffixed output such as `preflight-pr583-arm64-002.json` for the next run; the preflight intentionally refuses to overwrite. Preflight also runs exactly fourteen Windows-only owned-Job regressions and requires `14 passed, 0 failed, 0 skipped`. These prove native child stdout and stderr capture, simultaneous drain without deadlock, exact nonzero exit propagation, aggregate output limiting, timeout/descendant cleanup, and native ARM64 Git with the guarded isolated configuration. They also prove that a descendant retaining inherited output handles cannot outlive successful command completion, wrapper startup failure is never misreported as a native child exit, both the documented private helper and provider Cargo helper drain and classify that failure, bounded standard input reaches the owned native child used for exhaustive tracked-byte hashing, the Windows file guard denies target replacement until the wrapper confirms child start, and verified content bindings remain write/delete guarded until their consuming child exits.
 
 ## 6. Run the automatic plan
 
@@ -348,7 +348,7 @@ pwsh.exe -NoProfile -ExecutionPolicy RemoteSigned -File "$Handoff\scripts\Invoke
   -PlanOutputPath 'C:\cmtraceopen-validation\automatic-plan.json'
 ```
 
-Run as an ordinary user. The runner executes 33 exact gates, prints bounded gate start/end progress, gives each gate a default 180-minute timeout, constructs every child environment from an explicit ordinary/toolchain allowlist plus sealed per-gate overrides, isolates npm and Git config, and keeps raw logs and binaries private. Before every automatic process gate it reauthenticates the exact source, rejects nonordinary Git index visibility flags, unsealed `.env*`/toolchain controls, active local Git exclude/attribute rules, Cargo configuration outside the authenticated source boundary, Cargo-home config/credentials, and any Rustup active-toolchain override. Each stdout and stderr capture is limited to exactly 16 MiB; exceeding either limit kills the owned process tree and fails the gate. Sanitization is capped at 262,144 input and output characters; an oversized log is withheld wholesale from the return while its complete raw bytes remain target-private. The lane builds unsigned Full/Lite/NSIS output, requires Full/Lite PE `0xAA64`, requires the expected unsigned x86 NSIS bootstrapper `0x014C`, emits schema-v2 installed-executable provenance, and rechecks the live PR coordinate plus clean exact source.
+Run as an ordinary user. The runner executes 33 exact gates, prints bounded gate start/end progress, gives each gate a default 180-minute timeout, constructs every child environment from an explicit ordinary/toolchain allowlist plus sealed per-gate overrides, isolates npm, and gives every direct or transitive Git invocation the guarded zero-byte global config, its impossible locked-file-descendant hook path, and the empty command-scope template setting. Before every automatic process gate it reauthenticates the exact source, rejects nonordinary Git index visibility flags, unsealed `.env*`/toolchain controls, active local Git exclude/attribute rules, Cargo configuration outside the authenticated source boundary, Cargo-home config/credentials, and any Rustup active-toolchain override. Each stdout and stderr capture is limited to exactly 16 MiB; exceeding either limit kills the owned process tree and fails the gate. Sanitization is capped at 262,144 input and output characters; an oversized log is withheld wholesale from the return while its complete raw bytes remain target-private. The lane builds unsigned Full/Lite/NSIS output, requires Full/Lite PE `0xAA64`, requires the expected unsigned x86 NSIS bootstrapper `0x014C`, emits schema-v2 installed-executable provenance, and rechecks the live PR coordinate plus clean exact source.
 
 This lane writes ignored checkout output such as `node_modules`, frontend output, and `src-tauri\target`; npm, Cargo registry/Git/advisory, and Playwright account caches; and the new evidence root. Those are expected lab mutations, not returnable evidence. The approved prerequisite phase also writes machine/account package state, toolchains, modules, installed binaries, and installer caches. Preserve the disposable target until evidence is accepted, then revert it.
 
@@ -461,6 +461,8 @@ if ((Get-ExecutionPolicy) -notin @('RemoteSigned', 'Unrestricted', 'Bypass')) {
 [void](Assert-CMTraceHandoffIntegrity -HandoffRoot $Handoff)
 $InputRoot = Join-Path ([IO.Path]::GetPathRoot($Source)) 'cmtraceopen-input'
 [void](Assert-CMTraceSafeTemporaryRoot -ForbiddenRoots @($Handoff, $Source, $Evidence, $InputRoot))
+$GitIsolation = Get-CMTraceGitIsolationContext -ForbiddenRoots @($Handoff, $Source, $Evidence, $InputRoot)
+$GitEnvironment = $GitIsolation.Environment
 
 $PrivateCommandOutput = Join-Path $Evidence 'raw-artifacts\private-command-output'
 if (-not (Test-Path -LiteralPath $PrivateCommandOutput -PathType Container)) {
@@ -533,10 +535,15 @@ function Invoke-PrivateProcess {
   $StartInfo.RedirectStandardError = $true
   foreach ($Argument in $ArgumentList) { [void]$StartInfo.ArgumentList.Add($Argument) }
   $ChildEnvironment = [ordered]@{}
-  foreach ($Entry in $Environment.GetEnumerator()) {
+  foreach ($Entry in $GitEnvironment.GetEnumerator()) {
     $ChildEnvironment[[string]$Entry.Key] = [string]$Entry.Value
   }
-  $ChildEnvironment.GIT_NO_REPLACE_OBJECTS = '1'
+  foreach ($Entry in $Environment.GetEnumerator()) {
+    if (@($GitEnvironment.Keys) -icontains [string]$Entry.Key) {
+      throw "Private command environment cannot override sealed Git isolation entry: $($Entry.Key)"
+    }
+    $ChildEnvironment[[string]$Entry.Key] = [string]$Entry.Value
+  }
   Initialize-CMTraceChildEnvironment -StartInfo $StartInfo -Environment $ChildEnvironment
 
   $Process = [Diagnostics.Process]::new()
@@ -566,6 +573,8 @@ function Invoke-PrivateProcess {
   $GuardedTargetPath = $null
   $ContentGuards = [Collections.Generic.List[IO.FileStream]]::new()
   try {
+    $ContentGuards.Add((Open-CMTraceGitIsolationGuard -Context $GitIsolation `
+      -ForbiddenRoots @($Handoff, $Source, $Evidence, $InputRoot)))
     $TargetGuard = Open-CMTraceGuardedReadFile -Path $FilePath -Label "Private command target $Id" `
       -ExpectedSha256 $ExpectedSha256 -ExpectedBytes $ExpectedBytes
     $GuardedTargetPath = $TargetGuard.Path

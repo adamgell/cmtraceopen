@@ -203,6 +203,13 @@ $inputRoot = Join-Path ([IO.Path]::GetPathRoot($resolvedRepository)) 'cmtraceope
     $inputRoot,
     (Get-CMTraceHandoffRoot)
 ))
+$gitIsolation = Get-CMTraceGitIsolationContext -ForbiddenRoots @(
+    $resolvedRepository,
+    $fullEvidenceRoot,
+    $inputRoot,
+    (Get-CMTraceHandoffRoot)
+)
+$gitEnvironment = $gitIsolation.Environment
 
 New-Item -ItemType Directory -Path $fullEvidenceRoot | Out-Null
 $rawLogRoot = Join-Path $fullEvidenceRoot 'raw-logs'
@@ -526,24 +533,28 @@ function Invoke-CMTraceProcessGate {
         foreach ($argument in $Arguments) {
             [void]$startInfo.ArgumentList.Add($argument)
         }
-        $childEnvironment = [ordered]@{
-            GIT_CONFIG_NOSYSTEM = '1'
-            GIT_CONFIG_GLOBAL = 'NUL'
-            GIT_TERMINAL_PROMPT = '0'
-            GCM_INTERACTIVE = 'Never'
-            GIT_ASKPASS = ''
-            SSH_ASKPASS = ''
-            GIT_NO_REPLACE_OBJECTS = '1'
+        $childEnvironment = [ordered]@{}
+        foreach ($entry in $gitEnvironment.GetEnumerator()) {
+            $childEnvironment[[string]$entry.Key] = [string]$entry.Value
+        }
+        foreach ($entry in ([ordered]@{
             NPM_CONFIG_USERCONFIG = $emptyNpmConfig
             NPM_CONFIG_GLOBALCONFIG = $emptyNpmConfig
             NPM_CONFIG_UPDATE_NOTIFIER = 'false'
             NPM_CONFIG_FUND = 'false'
+        }).GetEnumerator()) {
+            $childEnvironment[[string]$entry.Key] = [string]$entry.Value
         }
         foreach ($entry in $Environment.GetEnumerator()) {
+            if (@($gitEnvironment.Keys) -icontains [string]$entry.Key) {
+                throw "Automatic gate environment cannot override sealed Git isolation entry: $($entry.Key)"
+            }
             $childEnvironment[[string]$entry.Key] = [string]$entry.Value
         }
         Initialize-CMTraceChildEnvironment -StartInfo $startInfo -Environment $childEnvironment
 
+        $contentGuards.Add((Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+                -ForbiddenRoots @($resolvedRepository, $fullEvidenceRoot, $inputRoot, (Get-CMTraceHandoffRoot))))
         foreach ($binding in @($ContentBindings)) {
             if ($null -eq $binding -or
                 @($binding.PSObject.Properties.Name | Where-Object { $_ -cin @('Path', 'Sha256', 'Bytes', 'Label') }).Count -ne 4 -or
@@ -1058,7 +1069,16 @@ Write-CMTraceJson -Value $summary -Path $summaryPath
 
 $osVersion = [Environment]::OSVersion.Version
 $powerShellVersion = ConvertTo-CMTraceNormalizedToolVersion -Tool PowerShell -Text $PSVersionTable.PSVersion.ToString()
-$gitVersion = ConvertTo-CMTraceNormalizedToolVersion -Tool Git -Text (Invoke-CMTraceToolVersionOutput -FilePath $git -Arguments @('--version') -Label 'Git')
+$gitConfigGuard = Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+    -ForbiddenRoots @($resolvedRepository, $fullEvidenceRoot, $inputRoot, (Get-CMTraceHandoffRoot))
+try {
+    $gitVersionOutput = Invoke-CMTraceToolVersionOutput -FilePath $git -Arguments @('--version') `
+        -Environment $gitEnvironment -Label 'Git'
+}
+finally {
+    $gitConfigGuard.Dispose()
+}
+$gitVersion = ConvertTo-CMTraceNormalizedToolVersion -Tool Git -Text $gitVersionOutput
 $nodeVersion = ConvertTo-CMTraceNormalizedToolVersion -Tool Node -Text (Invoke-CMTraceToolVersionOutput -FilePath $node -Arguments @('--version') -Label 'Node.js')
 $nodeArchitecture = Invoke-CMTraceToolVersionOutput -FilePath $node -Arguments @('-p', 'process.arch') -Label 'Node.js architecture'
 if ($nodeArchitecture -cne 'arm64') {

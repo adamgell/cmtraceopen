@@ -848,9 +848,12 @@ Describe 'source and platform safety' {
 
         $provider = Get-Content -LiteralPath (Join-Path $script:ScriptsRoot 'New-CMTraceOpenPrivateProviderDatabase.ps1') -Raw
         $provider | Should -Not -Match '(?m)^\s*\$env:(?:GIT_CONFIG_NOSYSTEM|GIT_CONFIG_GLOBAL|GIT_TERMINAL_PROMPT|GCM_INTERACTIVE|GIT_ASKPASS|SSH_ASKPASS)\s*='
-        $provider | Should -Match '\$gitEnvironment\s*=\s*\[ordered\]@\{'
-        $provider | Should -Match ([regex]::Escape("GIT_NO_REPLACE_OBJECTS = '1'"))
-        $initializer | Should -Match ([regex]::Escape("GIT_NO_REPLACE_OBJECTS = '1'"))
+        $provider | Should -Match ([regex]::Escape('$gitIsolation = Get-CMTraceGitIsolationContext'))
+        $provider | Should -Match ([regex]::Escape('$gitEnvironment = $gitIsolation.Environment'))
+        $provider | Should -Match ([regex]::Escape('Open-CMTraceGitIsolationGuard -Context $gitIsolation'))
+        $initializer | Should -Match ([regex]::Escape('$gitIsolation = Get-CMTraceGitIsolationContext'))
+        $initializer | Should -Match ([regex]::Escape('$gitEnvironment = $gitIsolation.Environment'))
+        $initializer | Should -Match ([regex]::Escape('Open-CMTraceGitIsolationGuard -Context $gitIsolation'))
 
         $common = Get-Content -LiteralPath (Join-Path $script:ScriptsRoot 'CMTraceOpenArm64Handoff.Common.ps1') -Raw
         $common | Should -Match ([regex]::Escape('normal isolated clone with a .git directory; linked worktrees are not accepted'))
@@ -861,6 +864,8 @@ Describe 'source and platform safety' {
         $common | Should -Match ([regex]::Escape('-ExpectedStdErrPattern ''\AGood "git" signature for me@adamgell\.com'))
         $common | Should -Not -Match ([regex]::Escape('@($capture.StdOut, $capture.StdErr)'))
         $common | Should -Match ([regex]::Escape("GIT_NO_REPLACE_OBJECTS = '1'"))
+        $common | Should -Match ([regex]::Escape("GIT_CONFIG_GLOBAL = `$globalConfigPath"))
+        $common | Should -Match ([regex]::Escape("GIT_CONFIG_KEY_1 = 'core.hooksPath'"))
         $common | Should -Match ([regex]::Escape("@('--no-replace-objects'"))
         $common | Should -Match ([regex]::Escape("'refs/replace/'"))
         $common | Should -Match ([regex]::Escape('if ($topLevel -notin $approvedTopLevels)'))
@@ -1430,24 +1435,21 @@ Describe 'validation contract and private helpers' {
         $repository = Join-Path $TestDrive 'stat-metadata-source'
         New-Item -ItemType Directory -Path $repository | Out-Null
         $git = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source
-        $emptyTemplate = Join-Path $TestDrive 'empty-git-template'
-        New-Item -ItemType Directory -Path $emptyTemplate | Out-Null
-        $gitEnvironmentNames = @(
-            'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL',
-            'GIT_CONFIG_COUNT', 'GIT_ATTR_NOSYSTEM', 'GIT_TEMPLATE_DIR'
-        )
+        $isolation = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        $gitEnvironmentNames = @($isolation.Environment.Keys) + @('GIT_ATTR_NOSYSTEM')
         $priorGitEnvironment = @{}
         foreach ($name in $gitEnvironmentNames) {
             $priorGitEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, [EnvironmentVariableTarget]::Process)
         }
         try {
-            $nullDevice = if ($IsWindows) { 'NUL' } else { '/dev/null' }
-            $env:GIT_CONFIG_NOSYSTEM = '1'
-            $env:GIT_CONFIG_SYSTEM = $nullDevice
-            $env:GIT_CONFIG_GLOBAL = $nullDevice
-            $env:GIT_CONFIG_COUNT = '0'
+            foreach ($entry in $isolation.Environment.GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable(
+                    [string]$entry.Key,
+                    [string]$entry.Value,
+                    [EnvironmentVariableTarget]::Process
+                )
+            }
             $env:GIT_ATTR_NOSYSTEM = '1'
-            $env:GIT_TEMPLATE_DIR = $emptyTemplate
         & $git -C $repository init --quiet
         $LASTEXITCODE | Should -Be 0
         & $git -C $repository config core.autocrlf false
@@ -1480,6 +1482,106 @@ Describe 'validation contract and private helpers' {
                 )
             }
         }
+    }
+
+    It 'creates a controlled empty global Git config and safe hooks path' {
+        $isolation = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        $isolation | Should -Not -BeNullOrEmpty
+
+        Test-Path -LiteralPath $isolation.GlobalConfigPath -PathType Leaf | Should -BeTrue
+        (Get-Item -LiteralPath $isolation.GlobalConfigPath -Force).Length | Should -Be 0
+        Test-Path -LiteralPath $isolation.HooksPath -PathType Any | Should -BeFalse
+        (Split-Path -Parent $isolation.HooksPath) | Should -BeExactly $isolation.GlobalConfigPath
+        [IO.Path]::IsPathFullyQualified($isolation.GlobalConfigPath) | Should -BeTrue
+        [IO.Path]::IsPathFullyQualified($isolation.HooksPath) | Should -BeTrue
+        $isolation.Environment.GIT_CONFIG_GLOBAL | Should -BeExactly $isolation.GlobalConfigPath
+        $isolation.Environment.GIT_CONFIG_COUNT | Should -BeExactly '3'
+        $isolation.Environment.GIT_CONFIG_KEY_0 | Should -BeExactly 'credential.helper'
+        $isolation.Environment.GIT_CONFIG_VALUE_0 | Should -BeExactly ''
+        $isolation.Environment.GIT_CONFIG_KEY_1 | Should -BeExactly 'core.hooksPath'
+        $isolation.Environment.GIT_CONFIG_VALUE_1 | Should -BeExactly $isolation.HooksPath
+        $isolation.Environment.GIT_CONFIG_KEY_2 | Should -BeExactly 'init.templateDir'
+        $isolation.Environment.GIT_CONFIG_VALUE_2 | Should -BeExactly ''
+        foreach ($name in $isolation.Environment.Keys) {
+            (Test-CMTraceAllowedChildEnvironmentOverrideName -Name ([string]$name)) | Should -BeTrue
+        }
+        (Test-CMTraceAllowedChildEnvironmentOverrideName -Name 'GIT_CONFIG_KEY_3') | Should -BeFalse
+        { Assert-CMTraceGitIsolationContext -Context $isolation -TemporaryRoot $TestDrive } | Should -Not -Throw
+        $guard = Open-CMTraceGitIsolationGuard -Context $isolation
+        try {
+            $guard.Length | Should -Be 0
+        }
+        finally {
+            $guard.Dispose()
+        }
+    }
+
+    It 'fails closed when the controlled Git config or hooks state changes' {
+        $changedConfig = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        [IO.File]::WriteAllText($changedConfig.GlobalConfigPath, '[credential]')
+        { Assert-CMTraceGitIsolationContext -Context $changedConfig -TemporaryRoot $TestDrive } |
+            Should -Throw '*global config must remain an empty regular*'
+
+        $protectedHooks = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        { New-Item -ItemType Directory -Path $protectedHooks.HooksPath -ErrorAction Stop } | Should -Throw
+        { Assert-CMTraceGitIsolationContext -Context $protectedHooks -TemporaryRoot $TestDrive } | Should -Not -Throw
+
+        $changedRoot = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        [IO.File]::WriteAllText((Join-Path $changedRoot.Root 'unsealed'), 'extra')
+        { Assert-CMTraceGitIsolationContext -Context $changedRoot -TemporaryRoot $TestDrive } |
+            Should -Throw '*must contain only its guarded empty global config*'
+
+        $changedEnvironment = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+        $changedEnvironment.Environment.GIT_CONFIG_KEY_3 = 'include.path'
+        { Assert-CMTraceGitIsolationContext -Context $changedEnvironment -TemporaryRoot $TestDrive } |
+            Should -Throw '*unexpected entry count*'
+    }
+
+    It 'runs native ARM64 Git with the controlled isolated configuration' -Skip:(-not $IsWindows) {
+        $git = @(Get-Command git.exe -CommandType Application -ErrorAction Stop)[0].Source
+        (Get-CMTracePEMachine -Path $git) | Should -Be 0xAA64
+        $isolation = New-CMTraceGitIsolationContext -TemporaryRoot $TestDrive -ForbiddenRoots @()
+
+        function Invoke-IsolatedGitProbe {
+            param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+            $guard = Open-CMTraceGitIsolationGuard -Context $isolation
+            try {
+                return Invoke-CMTraceOwnedProcessCapture -FilePath $git -Arguments $Arguments `
+                    -WorkingDirectory $TestDrive -Environment $isolation.Environment
+            }
+            finally {
+                $guard.Dispose()
+            }
+        }
+
+        $global = Invoke-IsolatedGitProbe -Arguments @('config', '--global', '--list', '--show-origin')
+        $global.ExitCode | Should -Be 0
+        $global.StdOut | Should -BeNullOrEmpty
+        $global.StdErr | Should -BeNullOrEmpty
+
+        $hooks = Invoke-IsolatedGitProbe -Arguments @('config', '--get', 'core.hooksPath')
+        $hooks.ExitCode | Should -Be 0
+        $hooks.StdOut.TrimEnd([char]13, [char]10) | Should -BeExactly $isolation.HooksPath
+        $hooks.StdErr | Should -BeNullOrEmpty
+
+        $credentials = Invoke-IsolatedGitProbe -Arguments @('config', '--get-all', 'credential.helper')
+        $credentials.ExitCode | Should -Be 0
+        $credentials.StdOut.TrimEnd([char]13, [char]10) | Should -BeExactly ''
+        $credentials.StdErr | Should -BeNullOrEmpty
+
+        $repository = Join-Path $TestDrive 'isolated-native-git-repository'
+        $initialized = Invoke-IsolatedGitProbe -Arguments @('init', '--quiet', $repository)
+        $initialized.ExitCode | Should -Be 0
+        $initialized.StdOut | Should -BeNullOrEmpty
+        $initialized.StdErr | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $repository '.git') -PathType Container | Should -BeTrue
+        @(Get-ChildItem -LiteralPath (Join-Path $repository '.git/hooks') -Force -ErrorAction SilentlyContinue).Count |
+            Should -Be 0
+        $checkout = Invoke-IsolatedGitProbe -Arguments @('-C', $repository, 'checkout', '--quiet', '-b', 'isolation-probe')
+        $checkout.ExitCode | Should -Be 0
+        $checkout.StdOut | Should -BeNullOrEmpty
+        $checkout.StdErr | Should -BeNullOrEmpty
     }
 
     It 'rechecks source controls before every automatic process gate and protects source-script preflight execution' {
@@ -1538,7 +1640,8 @@ Describe 'validation contract and private helpers' {
         $manualHelper | Should -Match ([regex]::Escape('[AllowEmptyString()][string]$ExpectedSha256'))
         $manualHelper | Should -Match ([regex]::Escape('[int64]$ExpectedBytes = -1'))
         $manualHelper | Should -Match ([regex]::Escape('$OwnedLaunch.TargetStartedEvent.Dispose()'))
-        $manualHelper | Should -Match ([regex]::Escape("`$ChildEnvironment.GIT_NO_REPLACE_OBJECTS = '1'"))
+        $manualHelper | Should -Match ([regex]::Escape('foreach ($Entry in $GitEnvironment.GetEnumerator())'))
+        $manualHelper | Should -Match ([regex]::Escape('Open-CMTraceGitIsolationGuard -Context $GitIsolation'))
     }
 
     It 'defines privacy-bounded three-run Intune medians' {
@@ -1905,11 +2008,18 @@ Describe 'validation contract and private helpers' {
         $activeToolchainIndex | Should -BeGreaterThan $rustupVersionIndex
         $preflight | Should -Match ([regex]::Escape('return ConvertTo-CMTraceNormalizedNativeOutput -Text $capture.StdOut'))
         $preflight | Should -Match ([regex]::Escape("'*returns the reserved wrapper failure exit for a target-start failure*'"))
+        $preflight | Should -Match ([regex]::Escape("'*captures native child stdout*'"))
+        $preflight | Should -Match ([regex]::Escape("'*captures native child stderr*'"))
+        $preflight | Should -Match ([regex]::Escape("'*drains simultaneous native child stdout and stderr without deadlock*'"))
+        $preflight | Should -Match ([regex]::Escape("'*propagates a nonzero native child exit after draining both streams*'"))
+        $preflight | Should -Match ([regex]::Escape("'*enforces the aggregate capture limit across forwarded child streams*'"))
+        $preflight | Should -Match ([regex]::Escape("'*terminates a timed-out native child and its descendant*'"))
+        $preflight | Should -Match ([regex]::Escape("'*runs native ARM64 Git with the controlled isolated configuration*'"))
         $preflight | Should -Match ([regex]::Escape("'*drains and classifies documented private-helper target-start failure*'"))
         $preflight | Should -Match ([regex]::Escape("'*drains and classifies private provider Cargo target-start failure*'"))
         $preflight | Should -Match ([regex]::Escape("'*delivers bounded standard input to an owned native child*'"))
         $preflight | Should -Match ([regex]::Escape("'*holds a guarded launch file against replacement until target-start release*'"))
-        $preflight | Should -Match ([regex]::Escape('if (`$summary.selected -ne 7 -or `$summary.passed -ne 7'))
+        $preflight | Should -Match ([regex]::Escape('if (`$summary.selected -ne 14 -or `$summary.passed -ne 14'))
     }
 
     It 'requires exact child containment for reserved input paths' {
@@ -2029,12 +2139,22 @@ Describe 'validation contract and private helpers' {
         $runnerReadyIndex | Should -BeGreaterThan $runnerReadIndex
         $runnerTargetWaitIndex | Should -BeGreaterThan $runnerReadyIndex
         $runnerGuardReleaseIndex | Should -BeGreaterThan $runnerTargetWaitIndex
-        $childStartIndex = $common.IndexOf('if (-not `$child.Start())', [StringComparison]::Ordinal)
-        $targetStartedSignalIndex = $common.IndexOf('[void]`$targetStartedEvent.Set()', $childStartIndex, [StringComparison]::Ordinal)
+        $childRedirectIndex = $common.IndexOf('`$startInfo.RedirectStandardOutput = [bool]`$configuration.redirectStandardOutput', [StringComparison]::Ordinal)
+        $childStartIndex = $common.IndexOf('if (-not `$child.Start())', $childRedirectIndex, [StringComparison]::Ordinal)
+        $childStdoutPumpIndex = $common.IndexOf('`$stdoutTask = `$child.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())', $childStartIndex, [StringComparison]::Ordinal)
+        $childStderrPumpIndex = $common.IndexOf('`$stderrTask = `$child.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())', $childStdoutPumpIndex, [StringComparison]::Ordinal)
+        $childStdinPumpIndex = $common.IndexOf('`$stdinTask = [Console]::OpenStandardInput().CopyToAsync(`$child.StandardInput.BaseStream)', $childStderrPumpIndex, [StringComparison]::Ordinal)
+        $targetStartedSignalIndex = $common.IndexOf('[void]`$targetStartedEvent.Set()', $childStdinPumpIndex, [StringComparison]::Ordinal)
         $childWaitIndex = $common.IndexOf('`$child.WaitForExit()', $targetStartedSignalIndex, [StringComparison]::Ordinal)
-        $childStartIndex | Should -BeGreaterThan -1
-        $targetStartedSignalIndex | Should -BeGreaterThan $childStartIndex
+        $childOutputDrainIndex = $common.IndexOf('[void]`$outputTask.GetAwaiter().GetResult()', $childWaitIndex, [StringComparison]::Ordinal)
+        $childRedirectIndex | Should -BeGreaterThan -1
+        $childStartIndex | Should -BeGreaterThan $childRedirectIndex
+        $childStdoutPumpIndex | Should -BeGreaterThan $childStartIndex
+        $childStderrPumpIndex | Should -BeGreaterThan $childStdoutPumpIndex
+        $childStdinPumpIndex | Should -BeGreaterThan $childStderrPumpIndex
+        $targetStartedSignalIndex | Should -BeGreaterThan $childStdinPumpIndex
         $childWaitIndex | Should -BeGreaterThan $targetStartedSignalIndex
+        $childOutputDrainIndex | Should -BeGreaterThan $childWaitIndex
         $provider | Should -Match ([regex]::Escape('Test-CMTraceOwnedProcessWrapperFailureExitCode -ExitCode $exitCode'))
 
         $runnerRejectIndex = $runner.IndexOf('if (Test-CMTraceOwnedProcessWrapperFailureExitCode -ExitCode $exitCode)', [StringComparison]::Ordinal)
@@ -2106,6 +2226,140 @@ Describe 'validation contract and private helpers' {
             $launch.TargetStartedEvent.Dispose()
             $launch.ReadyEvent.Dispose()
             $process.Dispose()
+        }
+    }
+
+    It 'captures native child stdout' -Skip:(-not $IsWindows) {
+        $cmd = (Get-Command cmd.exe -CommandType Application -ErrorAction Stop).Source
+        $capture = Invoke-CMTraceOwnedProcessCapture -FilePath $cmd -WorkingDirectory $TestDrive `
+            -Arguments @('/d', '/c', 'echo CMTRACE_CAPTURE_PROBE')
+        $capture.ExitCode | Should -Be 0
+        $capture.StdOut.TrimEnd([char]13, [char]10) | Should -BeExactly 'CMTRACE_CAPTURE_PROBE'
+        $capture.StdErr | Should -BeNullOrEmpty
+    }
+
+    It 'captures native child stderr' -Skip:(-not $IsWindows) {
+        $cmd = (Get-Command cmd.exe -CommandType Application -ErrorAction Stop).Source
+        $capture = Invoke-CMTraceOwnedProcessCapture -FilePath $cmd -WorkingDirectory $TestDrive `
+            -Arguments @('/d', '/c', 'echo CMTRACE_STDERR_PROBE 1>&2')
+        $capture.ExitCode | Should -Be 0
+        $capture.StdOut | Should -BeNullOrEmpty
+        $capture.StdErr.TrimEnd([char]13, [char]10) | Should -BeExactly 'CMTRACE_STDERR_PROBE'
+    }
+
+    It 'drains simultaneous native child stdout and stderr without deadlock' -Skip:(-not $IsWindows) {
+        $command = @'
+Add-Type -TypeDefinition @"
+using System;
+using System.Threading.Tasks;
+
+public static class CMTraceConcurrentStreamProbe
+{
+    public static void Run()
+    {
+        Task stdout = Task.Run(() => {
+            for (int index = 0; index < 4096; index++) Console.Out.WriteLine("OUT-{0:D4}", index);
+            Console.Out.Flush();
+        });
+        Task stderr = Task.Run(() => {
+            for (int index = 0; index < 4096; index++) Console.Error.WriteLine("ERR-{0:D4}", index);
+            Console.Error.Flush();
+        });
+        Task.WaitAll(stdout, stderr);
+    }
+}
+"@
+[CMTraceConcurrentStreamProbe]::Run()
+'@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $capture = Invoke-CMTraceOwnedProcessCapture -FilePath $script:PwshPath -WorkingDirectory $TestDrive `
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand) `
+            -MaximumCaptureBytes 262144 -TimeoutSeconds 30
+        $capture.ExitCode | Should -Be 0
+        $stdoutLines = @($capture.StdOut -split '\r?\n' | Where-Object { $_.Length -gt 0 })
+        $stderrLines = @($capture.StdErr -split '\r?\n' | Where-Object { $_.Length -gt 0 })
+        $stdoutLines.Count | Should -Be 4096
+        $stderrLines.Count | Should -Be 4096
+        $stdoutLines[0] | Should -BeExactly 'OUT-0000'
+        $stdoutLines[-1] | Should -BeExactly 'OUT-4095'
+        $stderrLines[0] | Should -BeExactly 'ERR-0000'
+        $stderrLines[-1] | Should -BeExactly 'ERR-4095'
+    }
+
+    It 'propagates a nonzero native child exit after draining both streams' -Skip:(-not $IsWindows) {
+        $command = '[Console]::Out.Write("NONZERO-OUT"); [Console]::Error.Write("NONZERO-ERR"); exit 17'
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $capture = Invoke-CMTraceOwnedProcessCapture -FilePath $script:PwshPath -WorkingDirectory $TestDrive `
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand)
+        $capture.ExitCode | Should -Be 17
+        $capture.StdOut | Should -BeExactly 'NONZERO-OUT'
+        $capture.StdErr | Should -BeExactly 'NONZERO-ERR'
+    }
+
+    It 'enforces the aggregate capture limit across forwarded child streams' -Skip:(-not $IsWindows) {
+        $command = '[Console]::Out.Write((''O'' * 768)); [Console]::Error.Write((''E'' * 768))'
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        {
+            Invoke-CMTraceOwnedProcessCapture -FilePath $script:PwshPath -WorkingDirectory $TestDrive `
+                -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand) `
+                -MaximumCaptureBytes 1024 -TimeoutSeconds 30
+        } | Should -Throw '*exceeded the strict 1024-byte aggregate capture limit*'
+    }
+
+    It 'terminates a timed-out native child and its descendant' -Skip:(-not $IsWindows) {
+        $childRecordPath = Join-Path $TestDrive 'timed-out-descendant.json'
+        $escapedChildRecordPath = $childRecordPath.Replace("'", "''")
+        $command = @"
+`$start = [Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = (Get-Command pwsh.exe -CommandType Application -ErrorAction Stop).Source
+`$start.UseShellExecute = `$false
+`$start.CreateNoWindow = `$true
+foreach (`$argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '[Threading.Thread]::Sleep(30000)')) {
+    [void]`$start.ArgumentList.Add(`$argument)
+}
+`$child = [Diagnostics.Process]::Start(`$start)
+`$child.Refresh()
+`$record = [ordered]@{
+    id = `$child.Id
+    path = `$child.Path
+    startTimeUtcTicks = `$child.StartTime.ToUniversalTime().Ticks
+}
+[IO.File]::WriteAllText('$escapedChildRecordPath', (`$record | ConvertTo-Json -Compress))
+[Threading.Thread]::Sleep(30000)
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $spawnedChildRecord = $null
+        $currentChild = $null
+        try {
+            {
+                Invoke-CMTraceOwnedProcessCapture -FilePath $script:PwshPath -WorkingDirectory $TestDrive `
+                    -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand) `
+                    -TimeoutSeconds 1
+            } | Should -Throw '*timed out after 1 seconds*'
+            Test-Path -LiteralPath $childRecordPath -PathType Leaf | Should -BeTrue
+            $spawnedChildRecord = [IO.File]::ReadAllText($childRecordPath) | ConvertFrom-Json
+            $childId = [int]$spawnedChildRecord.id
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
+            do {
+                $currentChild = Get-Process -Id $childId -ErrorAction SilentlyContinue
+                if ($null -eq $currentChild) { break }
+                if ([DateTimeOffset]::UtcNow -ge $deadline) { break }
+                $currentChild.Dispose()
+                $currentChild = $null
+                Start-Sleep -Milliseconds 50
+            } while ($true)
+            $currentChild | Should -BeNullOrEmpty
+        }
+        finally {
+            if ($null -ne $currentChild -and $null -ne $spawnedChildRecord) {
+                $currentChild.Refresh()
+                $samePath = $currentChild.Path.Equals([string]$spawnedChildRecord.path, [StringComparison]::OrdinalIgnoreCase)
+                $sameStart = $currentChild.StartTime.ToUniversalTime().Ticks -eq [int64]$spawnedChildRecord.startTimeUtcTicks
+                if ($samePath -and $sameStart) {
+                    Stop-Process -Id $currentChild.Id -Force -ErrorAction SilentlyContinue
+                }
+                $currentChild.Dispose()
+            }
         }
     }
 
@@ -2265,6 +2519,8 @@ exit 253
         $targetStartInfo.FileName = $pwsh
         $targetStartInfo.UseShellExecute = $false
         $targetStartInfo.CreateNoWindow = $true
+        $targetStartInfo.RedirectStandardOutput = $true
+        $targetStartInfo.RedirectStandardError = $true
         foreach ($argument in @(
             '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
             '$start = [Diagnostics.ProcessStartInfo]::new(); $start.FileName = (Get-Command pwsh.exe).Source; $start.UseShellExecute = $false; [void]$start.ArgumentList.Add(''-NoLogo''); [void]$start.ArgumentList.Add(''-NoProfile''); [void]$start.ArgumentList.Add(''-Command''); [void]$start.ArgumentList.Add(''[Threading.Thread]::Sleep(30000)''); $child = [Diagnostics.Process]::Start($start); [Console]::Out.WriteLine($child.Id)'
@@ -2284,12 +2540,14 @@ exit 253
             [void]$launch.ReadyEvent.Set()
             Wait-CMTraceOwnedTargetStarted -OwnedLaunch $launch -WrapperProcess $process
             $childProcessId = [int]$process.StandardOutput.ReadLine()
-            $process.WaitForExit(5000) | Should -BeTrue
+            Start-Sleep -Milliseconds 250
+            $process.HasExited | Should -BeFalse
             { Get-Process -Id $childProcessId -ErrorAction Stop } | Should -Not -Throw
             $job.ActiveProcessCount | Should -BeGreaterThan 0
             @($job.ActiveProcessIds) | Should -Contain $childProcessId
 
             $job.Terminate(1)
+            $process.WaitForExit(5000) | Should -BeTrue
 
             $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
             do {

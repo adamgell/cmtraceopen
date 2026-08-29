@@ -28,15 +28,10 @@ if (-not $git) {
     throw 'git.exe is required. Run the prerequisite procedure in README.md first.'
 }
 
-$gitEnvironment = [ordered]@{
-    GIT_CONFIG_NOSYSTEM = '1'
-    GIT_CONFIG_GLOBAL = 'NUL'
-    GIT_TERMINAL_PROMPT = '0'
-    GCM_INTERACTIVE = 'Never'
-    GIT_ASKPASS = ''
-    SSH_ASKPASS = ''
-    GIT_NO_REPLACE_OBJECTS = '1'
-}
+$gitIsolation = Get-CMTraceGitIsolationContext -ForbiddenRoots @(
+    $fullDestination, $inputRoot, (Get-CMTraceHandoffRoot)
+)
+$gitEnvironment = $gitIsolation.Environment
 
 function Invoke-CMTraceInitializerGit {
     param(
@@ -53,19 +48,26 @@ function Invoke-CMTraceInitializerGit {
         [int]$TimeoutSeconds = 60
     )
 
+    $gitConfigGuard = $null
     try {
-        return Invoke-CMTraceOwnedProcessCapture -FilePath $git.Source -Arguments $Arguments `
-            -WorkingDirectory $WorkingDirectory -Environment $gitEnvironment -TimeoutSeconds $TimeoutSeconds
+        $gitConfigGuard = Open-CMTraceGitIsolationGuard -Context $gitIsolation `
+            -ForbiddenRoots @($fullDestination, $inputRoot, (Get-CMTraceHandoffRoot))
+        try {
+            return Invoke-CMTraceOwnedProcessCapture -FilePath $git.Source -Arguments $Arguments `
+                -WorkingDirectory $WorkingDirectory -Environment $gitEnvironment -TimeoutSeconds $TimeoutSeconds
+        }
+        catch {
+            throw "$Operation did not complete safely: $($_.Exception.Message)"
+        }
     }
-    catch {
-        throw "$Operation did not complete safely: $($_.Exception.Message)"
+    finally {
+        if ($null -ne $gitConfigGuard) { $gitConfigGuard.Dispose() }
     }
 }
 
 $destinationParent = Split-Path -Parent $fullDestination
 New-Item -ItemType Directory -Path $fullDestination -ErrorAction Stop | Out-Null
 $clone = Invoke-CMTraceInitializerGit -Operation 'Git clone' -WorkingDirectory $destinationParent -TimeoutSeconds 300 -Arguments @(
-    '-c', 'credential.helper=', '-c', 'core.hooksPath=NUL', '-c', 'init.templateDir=',
     '-c', 'core.autocrlf=false', '-c', 'core.longpaths=true',
     'clone', '--quiet', '--depth', '1', '--single-branch', '--branch', $script:CMTraceExpectedSourceBranch,
     '--no-checkout', $script:CMTraceExpectedRemote, $fullDestination
@@ -104,7 +106,7 @@ if ($advertisedCommit -cne $script:CMTraceExpectedSourceCommit) {
 
 try {
     $checkout = Invoke-CMTraceInitializerGit -Operation 'Exact-SHA checkout' -WorkingDirectory $fullDestination -TimeoutSeconds 300 -Arguments @(
-        '-c', 'core.autocrlf=false', '-c', 'core.hooksPath=NUL', '-C', $fullDestination,
+        '-c', 'core.autocrlf=false', '-C', $fullDestination,
         'checkout', '--quiet', '--detach', $script:CMTraceExpectedSourceCommit
     )
 }
