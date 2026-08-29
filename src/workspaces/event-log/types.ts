@@ -217,7 +217,8 @@ export type DiagnosisCoverageState =
   | "skipped"
   | "unsupported"
   | "malformed"
-  | "parseFailed";
+  | "parseFailed"
+  | "providerDescriptionUnavailable";
 
 export type DiagnosisFindingClass =
   | "confirmedFailure"

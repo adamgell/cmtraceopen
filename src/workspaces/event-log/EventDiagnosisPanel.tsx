@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Badge, Card, Text, tokens } from "@fluentui/react-components";
 import type {
   DiagnosisCorrelationEdge,
@@ -227,6 +228,7 @@ function OmittedRows({ count, singular }: { count: number; singular: string }) {
 }
 
 export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
+  const detailsLabelId = useId();
   if (!summary) return null;
 
   const findings = capSection(actionableFindings(summary.findings));
@@ -276,8 +278,13 @@ export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
         coverageGapCount={summary.coverageGaps.length}
       />
       <details>
-        <summary style={{ cursor: "pointer" }}>Show diagnosis details</summary>
+        <summary id={detailsLabelId} style={{ cursor: "pointer" }}>
+          Show diagnosis details
+        </summary>
         <div
+          aria-labelledby={detailsLabelId}
+          role="region"
+          tabIndex={0}
           style={{
             display: "grid",
             gap: tokens.spacingVerticalS,

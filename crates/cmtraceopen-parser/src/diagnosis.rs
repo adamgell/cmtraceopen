@@ -238,6 +238,7 @@ pub enum CoverageState {
     Unsupported,
     Malformed,
     ParseFailed,
+    ProviderDescriptionUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -135,6 +135,7 @@ fn coverage_states_are_non_assertive_findings() {
         CoverageState::Skipped,
         CoverageState::Unsupported,
         CoverageState::Malformed,
+        CoverageState::ProviderDescriptionUnavailable,
     ] {
         let finding = finding_for_coverage(
             "autopilot",

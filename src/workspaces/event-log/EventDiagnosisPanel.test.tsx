@@ -170,6 +170,21 @@ describe("EventDiagnosisPanel", () => {
     ).toBeTruthy();
   });
 
+  it("exposes expanded details as a named keyboard-focusable region", () => {
+    render(<EventDiagnosisPanel summary={summary} />);
+
+    const details = document.querySelector("details");
+    expect(details).not.toHaveAttribute("open");
+    expandDiagnosis();
+
+    const detailViewport = screen.getByRole("region", {
+      name: "Show diagnosis details",
+    });
+    expect(detailViewport).toHaveAttribute("tabindex", "0");
+    detailViewport.focus();
+    expect(detailViewport).toHaveFocus();
+  });
+
   it("does not render source-wide evidence or repeat findings in event details", () => {
     render(<EventDiagnosisPanel summary={summary} />);
     expandDiagnosis();

@@ -1855,9 +1855,9 @@ fn diagnosis_coverage_state(
         EvtxCoverageGapKind::File
         | EvtxCoverageGapKind::Chunk
         | EvtxCoverageGapKind::Record
-        | EvtxCoverageGapKind::Xml
-        | EvtxCoverageGapKind::Provider => {
-            cmtraceopen_parser::diagnosis::CoverageState::ParseFailed
+        | EvtxCoverageGapKind::Xml => cmtraceopen_parser::diagnosis::CoverageState::ParseFailed,
+        EvtxCoverageGapKind::Provider => {
+            cmtraceopen_parser::diagnosis::CoverageState::ProviderDescriptionUnavailable
         }
     }
 }
@@ -1921,6 +1921,44 @@ mod tests {
         assert_eq!(
             aggregation.coverage_gaps[1].kind,
             super::super::models::EvtxCoverageGapKind::Record
+        );
+    }
+
+    #[test]
+    fn diagnosis_retains_provider_description_gaps_without_reporting_parse_failure() {
+        let record = diagnosis_record(super::super::models::EvtxOriginKind::Event, "raw fallback");
+        let provider_gap = super::super::live::provider_message_gap(
+            "remote-host/ForwardedEvents",
+            "Example.Provider",
+            super::super::models::ProviderMessageStage::FormatMessage,
+            15027,
+        );
+
+        let summary = tauri::async_runtime::block_on(super::evtx_diagnose_records(
+            vec![record],
+            Some(vec![provider_gap]),
+            None,
+            None,
+        ))
+        .expect("diagnosis should retain the event and provider-description gap");
+
+        assert_eq!(summary.events.len(), 1);
+        let retained_gap = summary
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.source == "remote-host/ForwardedEvents")
+            .expect("provider-description gap must remain visible in diagnosis output");
+        assert_ne!(
+            retained_gap.state,
+            cmtraceopen_parser::diagnosis::CoverageState::ParseFailed
+        );
+        assert_eq!(
+            retained_gap.state,
+            cmtraceopen_parser::diagnosis::CoverageState::ProviderDescriptionUnavailable
+        );
+        assert_eq!(
+            serde_json::to_value(retained_gap.state).expect("coverage state should serialize"),
+            serde_json::json!("providerDescriptionUnavailable")
         );
     }
 

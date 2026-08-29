@@ -1437,6 +1437,19 @@ const malformedDiagnosisCases: Array<
 ];
 
 describe("event-log diagnosis IPC boundary", () => {
+  it("accepts provider-description-unavailable coverage state", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.coverageGaps = [
+      {
+        ...summary.coverageGaps[0],
+        state: "providerDescriptionUnavailable",
+      },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(diagnoseEventRecords([])).resolves.toBe(summary);
+  });
+
   it.each(malformedDiagnosisCases)(
     "rejects malformed diagnosis summary %s",
     async (_caseName, mutateSummary) => {

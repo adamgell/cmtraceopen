@@ -71,6 +71,8 @@ These are product semantics and layout defects. They are not an ARM64 rendering 
   tail paths.
 - Provider coverage gaps use `EvtxCoverageGapKind::Provider`; they do not increment `parse_errors`
   and are not reclassified as rejected records.
+- Operational diagnosis serializes those retained gaps as
+  `providerDescriptionUnavailable`; it does not label them `parseFailed`.
 - A provider-database lookup error remains a provider coverage gap while native rendering is still
   attempted. Normal database misses and incomplete templates create no warning when native
   rendering succeeds.

@@ -1313,6 +1313,7 @@ const DIAGNOSIS_COVERAGE_STATES = new Set([
   "unsupported",
   "malformed",
   "parseFailed",
+  "providerDescriptionUnavailable",
 ]);
 const DIAGNOSIS_FINDING_CLASSES = new Set([
   "confirmedFailure",
