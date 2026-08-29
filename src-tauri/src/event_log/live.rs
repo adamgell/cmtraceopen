@@ -1,7 +1,7 @@
-#[cfg(any(target_os = "windows", test))]
-use std::collections::HashSet;
 #[cfg(target_os = "windows")]
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::{HashSet, VecDeque};
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
@@ -16,7 +16,7 @@ use std::thread;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
 #[cfg(target_os = "windows")]
 use super::models::{ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus};
@@ -146,10 +146,19 @@ enum ProviderGapKey {
     Other(String, EvtxCoverageGapKind, String),
 }
 
+/// Distinct provider failures remembered for one active tail.
+///
+/// A tail can remain active indefinitely. Keeping four times the 256-entry delivery diagnostic
+/// budget suppresses recurring provider noise across batches without letting that lifetime turn
+/// the deduplication index into an unbounded cache.
+#[cfg(any(target_os = "windows", test))]
+const MAX_PROVIDER_GAP_DEDUP_ENTRIES: usize = 1024;
+
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Default)]
 struct ProviderGapDedup {
     seen: HashSet<ProviderGapKey>,
+    insertion_order: VecDeque<ProviderGapKey>,
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -161,7 +170,18 @@ impl ProviderGapDedup {
             }
             None => ProviderGapKey::Other(gap.source.clone(), gap.kind, gap.reason.clone()),
         };
-        self.seen.insert(key)
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        self.insertion_order.push_back(key);
+        if self.seen.len() > MAX_PROVIDER_GAP_DEDUP_ENTRIES {
+            let oldest = self
+                .insertion_order
+                .pop_front()
+                .expect("a newly inserted provider gap has an insertion-order entry");
+            self.seen.remove(&oldest);
+        }
+        true
     }
 }
 
@@ -1142,30 +1162,42 @@ fn emit_tail_event(app: &AppHandle, stored_gaps: &Mutex<Vec<String>>, mut batch:
     }
 }
 
-#[cfg(target_os = "windows")]
-fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<TailDelivery, String> {
-    let xml = render_event_xml(event).map_err(|error| {
-        format_source_error(
-            "EvtRender",
-            &error,
-            context.source_label.starts_with("Remote:"),
-        )
-    })?;
+#[cfg(any(target_os = "windows", test))]
+struct TailRenderState<'a, Metadata> {
+    channel: &'a str,
+    source_label: &'a str,
+    maps: &'a std::sync::RwLock<MapRegistry>,
+    providers: &'a std::sync::RwLock<ProviderStore>,
+    publisher_metadata: &'a std::sync::Mutex<Metadata>,
+    provider_gap_dedup: &'a std::sync::Mutex<ProviderGapDedup>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn render_tail_xml<Metadata>(
+    xml: &str,
+    state: TailRenderState<'_, Metadata>,
+    native: impl FnOnce(&mut Metadata, &str) -> Result<Option<String>, NativeProviderFailure>,
+) -> Result<TailDelivery, String> {
+    let TailRenderState {
+        channel,
+        source_label,
+        maps,
+        providers,
+        publisher_metadata,
+        provider_gap_dedup,
+    } = state;
     let parsed =
-        parse_event_xml(&xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
+        parse_event_xml(xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
     let system = extract_system_fields(&parsed);
     let event_fields = extract_event_data(&parsed);
     let message_outcome = match system.provider.as_deref() {
         Some(provider) => {
-            let coverage_source = context
-                .source_label
+            let coverage_source = source_label
                 .strip_prefix("Remote: ")
-                .map(|machine| format!("{machine}/{}", context.channel))
-                .unwrap_or_else(|| context.channel.clone());
-            let provider_channel =
-                provider_database_channel(system.channel.as_deref(), &context.channel);
-            let described = context
-                .providers
+                .map(|machine| format!("{machine}/{channel}"))
+                .unwrap_or_else(|| channel.to_string());
+            let provider_channel = provider_database_channel(system.channel.as_deref(), channel);
+            let described = providers
                 .read()
                 .map_err(|_| "provider store lock was poisoned".to_string())
                 .and_then(|store| {
@@ -1178,39 +1210,32 @@ fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<TailDel
                         &event_fields.insertions,
                     )
                 });
-            let mut metadata_lock_error = None;
             let outcome = select_provider_message(described, &coverage_source, provider, || {
-                let Ok(mut metadata) = context.publisher_metadata.lock() else {
-                    metadata_lock_error = Some("publisher metadata lock was poisoned".to_string());
-                    return Ok(None);
-                };
-                format_event_message(event, provider, context.session, &mut metadata)
+                let mut metadata = publisher_metadata
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                native(&mut metadata, provider)
             });
-            if let Some(error) = metadata_lock_error {
-                return Err(error);
-            }
             outcome
         }
         None => MessageRenderOutcome::default(),
     };
     let mut record = {
-        let maps = context
-            .maps
+        let maps = maps
             .read()
             .map_err(|_| "event map registry lock was poisoned".to_string())?;
         super::rendered::record_from_parts(
             &parsed,
             system,
             event_fields,
-            &xml,
-            &context.channel,
+            xml,
+            channel,
             &maps,
             message_outcome.message.as_deref(),
         )
     };
-    record.source_label = context.source_label.clone();
-    let mut dedup = context
-        .provider_gap_dedup
+    record.source_label = source_label.to_string();
+    let mut dedup = provider_gap_dedup
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     Ok(project_tail_delivery(
@@ -1218,6 +1243,29 @@ fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<TailDel
         message_outcome.provider_gaps,
         &mut dedup,
     ))
+}
+
+#[cfg(target_os = "windows")]
+fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<TailDelivery, String> {
+    let xml = render_event_xml(event).map_err(|error| {
+        format_source_error(
+            "EvtRender",
+            &error,
+            context.source_label.starts_with("Remote:"),
+        )
+    })?;
+    render_tail_xml(
+        &xml,
+        TailRenderState {
+            channel: &context.channel,
+            source_label: &context.source_label,
+            maps: &context.maps,
+            providers: &context.providers,
+            publisher_metadata: &context.publisher_metadata,
+            provider_gap_dedup: &context.provider_gap_dedup,
+        },
+        |metadata, provider| format_event_message(event, provider, context.session, metadata),
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -2176,6 +2224,65 @@ mod portable_tests {
     }
 
     #[test]
+    fn poisoned_optional_metadata_still_projects_parsed_record_and_native_diagnostic() {
+        let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+  <System>
+    <Provider Name='Example.Provider'/>
+    <EventID>7</EventID>
+    <Level>4</Level>
+    <TimeCreated SystemTime='2026-08-11T12:00:00.000000000Z'/>
+    <EventRecordID>4242</EventRecordID>
+    <Channel>Application</Channel>
+    <Computer>HOST-A</Computer>
+  </System>
+  <EventData><Data Name='Payload'>raw fallback</Data></EventData>
+</Event>"#;
+        let maps = std::sync::RwLock::new(MapRegistry::new());
+        let providers = std::sync::RwLock::new(ProviderStore::default());
+        let metadata = std::sync::Mutex::new(());
+        let dedup = std::sync::Mutex::new(ProviderGapDedup::default());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = metadata.lock().expect("metadata lock starts healthy");
+            panic!("poison optional publisher metadata");
+        }));
+        assert!(poisoned.is_err());
+        assert!(metadata.is_poisoned());
+
+        let delivery = render_tail_xml(
+            xml,
+            TailRenderState {
+                channel: "Application",
+                source_label: "Live",
+                maps: &maps,
+                providers: &providers,
+                publisher_metadata: &metadata,
+                provider_gap_dedup: &dedup,
+            },
+            |_, _| {
+                Err(NativeProviderFailure {
+                    stage: ProviderMessageStage::FormatMessage,
+                    error_code: 15027,
+                })
+            },
+        )
+        .expect("optional renderer state must not discard a parsed record");
+        let (record, diagnostics) = delivery.into_pending_parts();
+
+        assert_eq!(record.event_record_id, 4242);
+        assert_eq!(record.provider, "Example.Provider");
+        assert_eq!(record.message, "Payload: raw fallback");
+        assert_eq!(record.source_label, "Live");
+        assert_eq!(
+            diagnostics,
+            vec![
+                "Application: provider message for Example.Provider could not be rendered at \
+                 EvtFormatMessage (Windows error 15027); raw event data is shown instead"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn polling_scan_projects_record_and_provider_gap_into_tail_batch() {
         let gap = provider_message_gap(
             "Application",
@@ -2234,8 +2341,45 @@ mod portable_tests {
         );
 
         assert!(dedup.keep(&first));
+        assert_eq!(dedup.seen.len(), 1);
+        assert_eq!(dedup.insertion_order.len(), 1);
         assert!(!dedup.keep(&repeated));
+        assert_eq!(dedup.seen.len(), 1);
+        assert_eq!(dedup.insertion_order.len(), 1);
         assert!(dedup.keep(&distinct_stage));
+        assert_eq!(dedup.seen.len(), 2);
+        assert_eq!(dedup.insertion_order.len(), 2);
+    }
+
+    #[test]
+    fn provider_gap_dedup_evicts_oldest_entry_at_hard_bound() {
+        let mut dedup = ProviderGapDedup::default();
+        for index in 0..=1024 {
+            let gap = provider_message_gap(
+                "Application",
+                &format!("Example.Provider.{index}"),
+                ProviderMessageStage::FormatMessage,
+                15027,
+            );
+            assert!(dedup.keep(&gap));
+        }
+
+        assert_eq!(dedup.seen.len(), 1024);
+        assert_eq!(dedup.insertion_order.len(), 1024);
+        assert!(dedup.keep(&provider_message_gap(
+            "Application",
+            "Example.Provider.0",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        )));
+        assert!(!dedup.keep(&provider_message_gap(
+            "Application",
+            "Example.Provider.1024",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        )));
+        assert_eq!(dedup.seen.len(), 1024);
+        assert_eq!(dedup.insertion_order.len(), 1024);
     }
 
     #[test]
