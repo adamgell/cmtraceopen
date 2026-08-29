@@ -155,14 +155,29 @@ enum ProviderGapKey {
 const MAX_PROVIDER_GAP_DEDUP_ENTRIES: usize = 1024;
 
 #[cfg(any(target_os = "windows", test))]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ProviderGapDedup {
     seen: HashSet<ProviderGapKey>,
-    insertion_order: VecDeque<ProviderGapKey>,
+    /// Present only for persistent tails; finite scans retain every key until the scan ends.
+    tail_insertion_order: Option<VecDeque<ProviderGapKey>>,
 }
 
 #[cfg(any(target_os = "windows", test))]
 impl ProviderGapDedup {
+    fn exact_scan() -> Self {
+        Self {
+            seen: HashSet::new(),
+            tail_insertion_order: None,
+        }
+    }
+
+    fn persistent_tail() -> Self {
+        Self {
+            seen: HashSet::new(),
+            tail_insertion_order: Some(VecDeque::new()),
+        }
+    }
+
     fn keep(&mut self, gap: &EvtxCoverageGap) -> bool {
         let key = match &gap.provider_message {
             Some(context) => {
@@ -173,13 +188,14 @@ impl ProviderGapDedup {
         if !self.seen.insert(key.clone()) {
             return false;
         }
-        self.insertion_order.push_back(key);
-        if self.seen.len() > MAX_PROVIDER_GAP_DEDUP_ENTRIES {
-            let oldest = self
-                .insertion_order
-                .pop_front()
-                .expect("a newly inserted provider gap has an insertion-order entry");
-            self.seen.remove(&oldest);
+        if let Some(insertion_order) = &mut self.tail_insertion_order {
+            insertion_order.push_back(key);
+            if self.seen.len() > MAX_PROVIDER_GAP_DEDUP_ENTRIES {
+                let oldest = insertion_order
+                    .pop_front()
+                    .expect("a newly inserted provider gap has an insertion-order entry");
+                self.seen.remove(&oldest);
+            }
         }
         true
     }
@@ -661,7 +677,7 @@ fn query_channel_inner(
     let mut message_failures = 0usize;
     let mut gaps = Vec::new();
     let mut provider_gaps = Vec::new();
-    let mut provider_gap_dedup = ProviderGapDedup::default();
+    let mut provider_gap_dedup = ProviderGapDedup::exact_scan();
     let mut batch = EVENT_FETCH_BATCH;
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
@@ -1415,7 +1431,7 @@ fn start_polling_tail(
     let worker = thread::spawn(move || {
         let mut seen = HashSet::<(String, u64)>::new();
         let mut seen_order = VecDeque::<(String, u64)>::new();
-        let mut provider_gap_dedup = ProviderGapDedup::default();
+        let mut provider_gap_dedup = ProviderGapDedup::persistent_tail();
         let mut first_poll = true;
         while !worker_stop.load(Ordering::Acquire) {
             let outcome = query_channel_inner(
@@ -1589,7 +1605,7 @@ pub fn start_channel_tail(
         providers,
         batcher: Arc::clone(&batcher),
         publisher_metadata: Mutex::new(HashMap::new()),
-        provider_gap_dedup: Mutex::new(ProviderGapDedup::default()),
+        provider_gap_dedup: Mutex::new(ProviderGapDedup::persistent_tail()),
     });
     let context_ptr = (&*context) as *const TailContext as *const c_void;
     let callback: EVT_SUBSCRIBE_CALLBACK = Some(evt_subscribe_callback);
@@ -2195,7 +2211,7 @@ mod portable_tests {
                 error_code: 15027,
             })
         });
-        let mut dedup = ProviderGapDedup::default();
+        let mut dedup = ProviderGapDedup::persistent_tail();
         let projected = project_tail_delivery(
             test_record("raw fallback"),
             outcome.provider_gaps,
@@ -2240,7 +2256,7 @@ mod portable_tests {
         let maps = std::sync::RwLock::new(MapRegistry::new());
         let providers = std::sync::RwLock::new(ProviderStore::default());
         let metadata = std::sync::Mutex::new(());
-        let dedup = std::sync::Mutex::new(ProviderGapDedup::default());
+        let dedup = std::sync::Mutex::new(ProviderGapDedup::persistent_tail());
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = metadata.lock().expect("metadata lock starts healthy");
             panic!("poison optional publisher metadata");
@@ -2296,7 +2312,7 @@ mod portable_tests {
             gaps: Vec::new(),
             provider_gaps: vec![gap],
         };
-        let mut dedup = ProviderGapDedup::default();
+        let mut dedup = ProviderGapDedup::persistent_tail();
 
         let projected = project_polling_tail_scan(scan, &mut dedup);
         assert!(!projected.is_empty());
@@ -2320,7 +2336,7 @@ mod portable_tests {
 
     #[test]
     fn provider_gap_dedup_normalizes_provider_and_keeps_stages_distinct() {
-        let mut dedup = ProviderGapDedup::default();
+        let mut dedup = ProviderGapDedup::persistent_tail();
         let first = provider_message_gap(
             "Application",
             "Example.Provider",
@@ -2342,18 +2358,51 @@ mod portable_tests {
 
         assert!(dedup.keep(&first));
         assert_eq!(dedup.seen.len(), 1);
-        assert_eq!(dedup.insertion_order.len(), 1);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1)
+        );
         assert!(!dedup.keep(&repeated));
         assert_eq!(dedup.seen.len(), 1);
-        assert_eq!(dedup.insertion_order.len(), 1);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1)
+        );
         assert!(dedup.keep(&distinct_stage));
         assert_eq!(dedup.seen.len(), 2);
-        assert_eq!(dedup.insertion_order.len(), 2);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn finite_scan_dedup_rejects_first_key_after_tail_cap_plus_one_distinct_keys() {
+        let mut dedup = ProviderGapDedup::exact_scan();
+        let first = provider_message_gap(
+            "Application",
+            "Example.Provider.0",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        );
+        assert!(dedup.keep(&first));
+        for index in 1..=MAX_PROVIDER_GAP_DEDUP_ENTRIES {
+            let gap = provider_message_gap(
+                "Application",
+                &format!("Example.Provider.{index}"),
+                ProviderMessageStage::FormatMessage,
+                15027,
+            );
+            assert!(dedup.keep(&gap));
+        }
+
+        assert!(!dedup.keep(&first));
+        assert_eq!(dedup.seen.len(), MAX_PROVIDER_GAP_DEDUP_ENTRIES + 1);
     }
 
     #[test]
     fn provider_gap_dedup_evicts_oldest_entry_at_hard_bound() {
-        let mut dedup = ProviderGapDedup::default();
+        let mut dedup = ProviderGapDedup::persistent_tail();
         for index in 0..=1024 {
             let gap = provider_message_gap(
                 "Application",
@@ -2365,7 +2414,10 @@ mod portable_tests {
         }
 
         assert_eq!(dedup.seen.len(), 1024);
-        assert_eq!(dedup.insertion_order.len(), 1024);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1024)
+        );
         assert!(dedup.keep(&provider_message_gap(
             "Application",
             "Example.Provider.0",
@@ -2379,7 +2431,10 @@ mod portable_tests {
             15027,
         )));
         assert_eq!(dedup.seen.len(), 1024);
-        assert_eq!(dedup.insertion_order.len(), 1024);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1024)
+        );
     }
 
     #[test]
