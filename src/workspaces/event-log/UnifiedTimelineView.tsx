@@ -138,13 +138,8 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
         )}
       </div>
       {(correlationEdges.length > 0 || coverageGaps.length > 0) && (
-        <div
-          role="region"
-          aria-label="Correlation details"
+        <details
           style={{
-            display: "grid",
-            gap: "4px",
-            padding: "6px 12px",
             borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
             backgroundColor: tokens.colorNeutralBackground2,
             fontSize: `${smallFontSize}px`,
@@ -152,69 +147,84 @@ export function UnifiedTimelineView({ timeline, pending = false }: UnifiedTimeli
             flexShrink: 0,
           }}
         >
-          {correlationPreview.map((edge) => (
-            <div
-              key={edge.id}
-              data-testid="correlation-edge"
-              style={{
-                display: "grid",
-                gap: "2px",
-                padding: "4px 6px",
-                borderLeft: `3px solid ${
-                  edge.strength === "ambiguous"
-                    ? tokens.colorPaletteMarigoldForeground1
-                    : tokens.colorNeutralStroke2
-                }`,
-              }}
-            >
-              <span>
-                {correlationEdgeLabel(edge)}
-              </span>
-              <span>
-                from: {edge.fromId} → {edge.toId ?? "unresolved"}
-              </span>
-              {edge.candidateIds.length > 0 && (
-                <span>candidate IDs: {edge.candidateIds.join(", ")}</span>
-              )}
-              {edge.evidence.slice(0, UNPLACED_PREVIEW_LIMIT).map((evidence) => (
-                <span key={`${edge.id}-${evidence.originId}-${evidence.field}`}>
-                  {evidence.field}: {evidence.value} ({evidence.originId})
-                </span>
-              ))}
-              {edge.evidence.length > UNPLACED_PREVIEW_LIMIT && (
+          <summary style={{ cursor: "pointer", padding: "6px 12px" }}>
+            Show correlation details
+          </summary>
+          <div
+            role="region"
+            aria-label="Correlation details"
+            tabIndex={0}
+            style={{
+              display: "grid",
+              gap: "4px",
+              padding: "0 12px 6px",
+              maxHeight: "min(320px, 40vh)",
+              overflowY: "auto",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {correlationPreview.map((edge) => (
+              <div
+                key={edge.id}
+                data-testid="correlation-edge"
+                style={{
+                  display: "grid",
+                  gap: "2px",
+                  padding: "4px 6px",
+                  borderLeft: `3px solid ${
+                    edge.strength === "ambiguous"
+                      ? tokens.colorPaletteMarigoldForeground1
+                      : tokens.colorNeutralStroke2
+                  }`,
+                }}
+              >
+                <span>{correlationEdgeLabel(edge)}</span>
                 <span>
-                  Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
-                  {edge.evidence.length.toLocaleString()} evidence items;{" "}
-                  {(edge.evidence.length - UNPLACED_PREVIEW_LIMIT).toLocaleString()} omitted.
+                  from: {edge.fromId} → {edge.toId ?? "unresolved"}
                 </span>
-              )}
-              {edge.coverage.gap && (
-                <span>
-                  coverage reason: {edge.coverage.gap.reason} ({edge.coverage.gap.source})
-                </span>
-              )}
-            </div>
-          ))}
-          {coverageGapPreview.map((gap, index) => (
-            <div key={`coverage-gap-${index}`} data-testid="correlation-gap">
-              coverage: {gap.reason} ({gap.source})
-            </div>
-          ))}
-          {coverageGapOmittedCount > 0 && (
-            <div>
-              Showing the first {coverageGapPreview.length.toLocaleString()} of{" "}
-              {coverageGaps.length.toLocaleString()} coverage gaps;{" "}
-              {coverageGapOmittedCount.toLocaleString()} omitted.
-            </div>
-          )}
-          {correlationOmittedCount > 0 && (
-            <div>
-              Showing the first {correlationPreview.length.toLocaleString()} of{" "}
-              {correlationEdges.length.toLocaleString()} correlations;{" "}
-              {correlationOmittedCount.toLocaleString()} omitted.
-            </div>
-          )}
-        </div>
+                {edge.candidateIds.length > 0 && (
+                  <span>candidate IDs: {edge.candidateIds.join(", ")}</span>
+                )}
+                {edge.evidence.slice(0, UNPLACED_PREVIEW_LIMIT).map((evidence) => (
+                  <span key={`${edge.id}-${evidence.originId}-${evidence.field}`}>
+                    {evidence.field}: {evidence.value} ({evidence.originId})
+                  </span>
+                ))}
+                {edge.evidence.length > UNPLACED_PREVIEW_LIMIT && (
+                  <span>
+                    Showing the first {UNPLACED_PREVIEW_LIMIT.toLocaleString()} of{" "}
+                    {edge.evidence.length.toLocaleString()} evidence items;{" "}
+                    {(edge.evidence.length - UNPLACED_PREVIEW_LIMIT).toLocaleString()} omitted.
+                  </span>
+                )}
+                {edge.coverage.gap && (
+                  <span>
+                    coverage reason: {edge.coverage.gap.reason} ({edge.coverage.gap.source})
+                  </span>
+                )}
+              </div>
+            ))}
+            {coverageGapPreview.map((gap, index) => (
+              <div key={`coverage-gap-${index}`} data-testid="correlation-gap">
+                coverage: {gap.reason} ({gap.source})
+              </div>
+            ))}
+            {coverageGapOmittedCount > 0 && (
+              <div>
+                Showing the first {coverageGapPreview.length.toLocaleString()} of{" "}
+                {coverageGaps.length.toLocaleString()} coverage gaps;{" "}
+                {coverageGapOmittedCount.toLocaleString()} omitted.
+              </div>
+            )}
+            {correlationOmittedCount > 0 && (
+              <div>
+                Showing the first {correlationPreview.length.toLocaleString()} of{" "}
+                {correlationEdges.length.toLocaleString()} correlations;{" "}
+                {correlationOmittedCount.toLocaleString()} omitted.
+              </div>
+            )}
+          </div>
+        </details>
       )}
 
       {timeline.items.length === 0 ? (

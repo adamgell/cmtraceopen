@@ -168,6 +168,7 @@ describe("EventDiagnosisPanel", () => {
     expect(
       screen.getByText(/1 actionable finding, 1 source coverage gap/),
     ).toBeTruthy();
+    expect(screen.queryByText("1 correlation")).toBeNull();
   });
 
   it("exposes expanded details as a named keyboard-focusable region", () => {

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
@@ -139,6 +139,13 @@ describe("UnifiedTimelineView", () => {
     expect(screen.getByText("candidate 1")).toBeInTheDocument();
     expect(screen.getByText("ambiguous 1")).toBeInTheDocument();
     expect(screen.getByText("coverage gaps 1")).toBeInTheDocument();
+    const details = document.querySelector("details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Show correlation details"));
+    expect(details).toHaveProperty("open", true);
+    const detailViewport = screen.getByRole("region", { name: "Correlation details" });
+    expect(detailViewport).toHaveStyle({ overflowY: "auto" });
+    expect(detailViewport.style.maxHeight).not.toBe("");
     expect(screen.getByText(/exact · high · activityId: \{activity\}/)).toBeInTheDocument();
     expect(screen.getByText("candidate IDs: ambiguous-target, other-target")).toBeInTheDocument();
     expect(screen.getByText(/coverage reason: duplicate/)).toBeInTheDocument();
@@ -162,6 +169,7 @@ describe("UnifiedTimelineView", () => {
         />,
       );
 
+      fireEvent.click(screen.getByText("Show correlation details"));
       expect(screen.getAllByTestId("correlation-gap")).toHaveLength(100);
       expect(
         screen.getByText("Showing the first 100 of 105 coverage gaps; 5 omitted."),

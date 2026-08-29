@@ -168,8 +168,7 @@ function OverviewRow({
       </div>
       <Text size={200}>
         {countLabel(findingCount, "actionable finding")},{" "}
-        {countLabel(coverageGapCount, "source coverage gap")},{" "}
-        {countLabel(overview.correlationCount, "correlation")}
+        {countLabel(coverageGapCount, "source coverage gap")}
       </Text>
     </div>
   );

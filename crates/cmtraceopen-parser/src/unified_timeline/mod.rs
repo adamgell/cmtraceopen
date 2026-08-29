@@ -500,7 +500,6 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
             related_activity_id,
             session_id,
             device_id,
-            user_id,
             process_start_time,
             identity_conflicts,
             event_id,
@@ -509,7 +508,6 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
             ..
         } => {
             let mut exact_keys = Vec::new();
-            let mut secondary_keys = Vec::new();
             let mut coverage_gaps = identity_conflicts
                 .iter()
                 .map(|field| TimelineCoverageGap {
@@ -553,12 +551,6 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                 device_id.as_deref(),
                 "deviceId",
             );
-            push_exact(
-                &mut exact_keys,
-                TimelineCorrelationKeyKind::UserId,
-                user_id.as_deref(),
-                "userId",
-            );
             let record = usable_record_text(record_id_text.as_deref())
                 .or_else(|| (*record_id != 0).then(|| record_id.to_string()));
             if let (Some(source), Some(provider), Some(channel), Some(record)) = (
@@ -579,42 +571,34 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                     ),
                 });
             }
-            if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
-                if !is_conflicted("processStartTime") {
-                    if let Some(start) = validated_process_start(process_start_time.as_deref()) {
-                        exact_keys.push(TimelineCorrelationKey {
-                            kind: TimelineCorrelationKeyKind::ProcessStart,
-                            value: format!("{process_id}|{start}"),
-                        });
-                    } else {
-                        coverage_gaps.push(TimelineCoverageGap {
-                            source: stable_id.clone(),
-                            reason: if process_start_time.is_some() {
-                                "process start identity was present but its timestamp was invalid"
-                            } else {
-                                "process start identity was unavailable for a nonzero process id"
-                            }
-                            .to_string(),
-                        });
+            if let Some(process_start_time) = process_start_time.as_deref() {
+                if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
+                    if !is_conflicted("processStartTime") {
+                        if let Some(start) = validated_process_start(Some(process_start_time)) {
+                            exact_keys.push(TimelineCorrelationKey {
+                                kind: TimelineCorrelationKeyKind::ProcessStart,
+                                value: format!("{process_id}|{start}"),
+                            });
+                        } else {
+                            coverage_gaps.push(TimelineCoverageGap {
+                                source: stable_id.clone(),
+                                reason: "process start identity was present but its timestamp was invalid"
+                                    .to_string(),
+                            });
+                        }
                     }
+                } else {
+                    coverage_gaps.push(TimelineCoverageGap {
+                        source: stable_id.clone(),
+                        reason: "process start identity requires a nonzero process id".to_string(),
+                    });
                 }
-            } else if process_start_time.is_some() {
-                coverage_gaps.push(TimelineCoverageGap {
-                    source: stable_id.clone(),
-                    reason: "process start identity requires a nonzero process id".to_string(),
-                });
-            }
-            if let Some(process_id) = (*process_id).filter(|value| *value != 0) {
-                secondary_keys.push(TimelineCorrelationKey {
-                    kind: TimelineCorrelationKeyKind::Secondary,
-                    value: format!("process:{process_id}"),
-                });
             }
             (
                 stable_id.clone(),
                 normalize_machine_identity(machine.as_deref()),
                 exact_keys,
-                secondary_keys,
+                Vec::new(),
                 coverage_gaps,
             )
         }
@@ -2448,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_process_start_is_reported_when_pid_is_present() {
+    fn process_id_without_process_start_is_neutral() {
         let mut first = event(1_000, "first", TimelineSeverity::Info);
         let mut second = event(2_000, "second", TimelineSeverity::Info);
         for (index, item) in [&mut first, &mut second].into_iter().enumerate() {
@@ -2473,20 +2457,8 @@ mod tests {
             observation_from_origin(&second.origin),
         ];
         let (edges, gaps) = correlate_observations(&observations);
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].strength, TimelineCorrelationStrength::Candidate);
-        assert_eq!(
-            edges[0].coverage.state,
-            TimelineCorrelationCoverageState::Gap
-        );
-        assert!(edges[0]
-            .coverage
-            .gap
-            .as_ref()
-            .is_some_and(|gap| gap.reason.contains("unavailable for a nonzero process id")));
-        assert!(gaps
-            .iter()
-            .any(|gap| gap.reason.contains("unavailable for a nonzero process id")));
+        assert!(edges.is_empty());
+        assert!(gaps.is_empty());
     }
 
     #[test]

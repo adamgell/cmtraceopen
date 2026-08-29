@@ -2518,6 +2518,49 @@ mod tests {
     }
 
     #[test]
+    fn thousands_of_ordinary_application_and_system_events_stay_neutral_and_bounded() {
+        let records = (0..5_000_u64)
+            .map(|index| {
+                let mut record = diagnosis_record(
+                    super::super::models::EvtxOriginKind::Event,
+                    "Ordinary informational event",
+                );
+                record.id = index + 1;
+                record.event_record_id = index + 1;
+                record.event_record_id_text = Some((index + 1).to_string());
+                record.provider = "Ordinary.Provider".into();
+                record.channel = if index % 2 == 0 {
+                    "Application".into()
+                } else {
+                    "System".into()
+                };
+                record.process_id = Some(1_024 + (index % 8) as u32);
+                record.user_id = Some("S-1-5-18".into());
+                record
+            })
+            .collect::<Vec<_>>();
+        let timeline = super::super::timeline::build(&[], &records);
+
+        assert!(timeline.edges.is_empty());
+        assert!(timeline.coverage_gaps.is_empty());
+
+        let summary = tauri::async_runtime::block_on(super::evtx_diagnose_records(
+            records,
+            None,
+            Some(timeline),
+            None,
+        ))
+        .expect("ordinary events should diagnose successfully");
+
+        assert!(summary.findings.is_empty());
+        assert!(summary.coverage_gaps.is_empty());
+        assert!(summary.correlations.is_empty());
+        assert_eq!(summary.overview.finding_count, 0);
+        assert_eq!(summary.overview.coverage_gap_count, 0);
+        assert_eq!(summary.overview.correlation_count, 0);
+    }
+
+    #[test]
     fn diagnosis_uses_canonical_timeline_for_stale_edge_subsets() {
         let mut first = diagnosis_record(
             super::super::models::EvtxOriginKind::Event,
