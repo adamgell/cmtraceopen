@@ -111,19 +111,30 @@
 - Modify: `src-tauri/src/event_log/live.rs`
 - Modify: `src-tauri/src/event_log/commands.rs`
 - Modify: `src-tauri/src/event_log/parser.rs`
+- Modify: `src-tauri/src/event_log/models.rs`
+- Modify: `src-tauri/examples/evtx_scan.rs`
+- Modify: `src/workspaces/event-log/types.ts`
+- Modify: `src/workspaces/event-log/evtx-coverage.ts`
 - Test: unit tests in `src-tauri/src/event_log/live.rs`
 - Test: unit tests in `src-tauri/src/event_log/commands.rs`
 - Test: existing provider-description tests in `src-tauri/src/event_log/parser.rs`
+- Test: `src/workspaces/event-log/evtx-coverage.test.ts`
 
 ### Steps
 
 - [ ] Add portable failing helper tests for a provider gap that assert channel/provider source,
   `EvtxCoverageGapKind::Provider`, exact stage, error code, and stable operator text.
+- [ ] Add failing frontend wire-validation tests for a nested `providerMessage` object containing a
+  nonempty provider, `openPublisherMetadata` or `formatMessage` stage, and a nonnegative integer
+  `errorCode`. Reject malformed or partially present native context.
 - [ ] Add a failing command aggregation test showing a scan with delivered records plus a provider
   gap keeps `parse_errors == 0`, while a true record-loss gap still increments it.
 - [ ] Add a failing pure selection test proving a complete provider-database description wins and a
   normal database miss falls through to the native formatter. Add a tail regression proving an
   optional provider-description failure still delivers the record plus a diagnostic.
+- [ ] Add a failing selection test proving a provider-database lookup error is reported as provider
+  coverage while native rendering is still attempted; an incomplete database description followed
+  by native success must not emit a warning.
 - [ ] On Windows, add focused tests for `ERROR_FILE_NOT_FOUND`,
   `ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND`, and `ERROR_EVT_MESSAGE_NOT_FOUND`, asserting the stage is
   `EvtOpenPublisherMetadata` or `EvtFormatMessage` as appropriate.
@@ -132,6 +143,10 @@
   loaded `ProviderStore` through batch queries, polling tails, and subscription tails. Use the
   database renderer first and fall back to native formatting only on a normal miss or incomplete
   database description; do not duplicate template rendering.
+- [ ] Extend `EvtxCoverageGap` with optional typed `providerMessage` context and the corresponding
+  Rust/TypeScript stage enums. Validate and preserve those fields through the existing parse-result
+  decoder and coverage merge key. Existing non-provider and offline-provider gaps leave the field
+  absent.
 - [ ] Add a typed provider-gap collection to `ChannelScan`. Return a small message-render outcome
   carrying either text or a provider gap; cache metadata failures with their original stage/code.
   Deduplicate per provider and stage inside a scan and per active tail.
@@ -139,10 +154,14 @@
   incrementing `parse_errors`. Keep existing record-loss strings on the record-error path. Convert
   provider gaps to strings only at the live-tail boundary that still transports string diagnostics,
   and ensure subscription callbacks enqueue the record even when description rendering fails.
+- [ ] Queue a subscription record and its provider diagnostic atomically under the pending-batch
+  lock. Keep a persistent provider-plus-stage dedup set for subscription and polling tails; do not
+  use the delivery-retry buffer as the dedup authority.
 - [ ] Run focused tests, then
   `cargo test --manifest-path src-tauri/Cargo.toml event_log::live` and
   `cargo test --manifest-path src-tauri/Cargo.toml event_log::commands` and the focused existing
   provider-description tests in `event_log::parser`.
+- [ ] Run `npm test -- src/workspaces/event-log/evtx-coverage.test.ts` and `npx tsc --noEmit`.
 - [ ] Run `cargo fmt --check --manifest-path src-tauri/Cargo.toml`,
   `cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets`, and
   `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`.
@@ -156,6 +175,7 @@
 - Packaged provider descriptions are used for live records before Windows resource lookup, and
   description failure cannot discard a tail record.
 - Provider, channel, stage, and Windows code are visible and typed.
+- The typed provider/stage/code context survives Rust serialization and frontend validation.
 - XML/render/record loss still reports a parse error.
 
 ---

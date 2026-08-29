@@ -64,11 +64,16 @@ These are product semantics and layout defects. They are not an ARM64 rendering 
 - Failure to open publisher metadata and failure to format a provider message are distinct stages.
 - The provider name, stage, Windows error code, and source channel are retained in a structured
   provider coverage gap.
+- That native context remains typed after IPC as `providerMessage` with provider, stage, and numeric
+  error code fields. It is not encoded only in the human-readable reason.
 - Provider lookup failures are deduplicated per provider and stage within a channel scan.
 - The event record is still delivered with its XML/EventData fallback message in both batch and
   tail paths.
 - Provider coverage gaps use `EvtxCoverageGapKind::Provider`; they do not increment `parse_errors`
   and are not reclassified as rejected records.
+- A provider-database lookup error remains a provider coverage gap while native rendering is still
+  attempted. Normal database misses and incomplete templates create no warning when native
+  rendering succeeds.
 - True XML/render/record loss continues to increment parse errors and keeps its existing record-loss
   coverage classification.
 - Live-tail string diagnostics may be derived from the structured provider gap, but the batch query
