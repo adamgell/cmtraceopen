@@ -7,8 +7,10 @@ present an unusable first screen. The diagnosis card currently renders source-wi
 correlations, coverage gaps, findings, and event details without a collapsed or bounded container.
 Ordinary Application and System events also create one diagnosis coverage gap per event merely
 because their provider family is not one of the device-management families, and the timeline adds
-another gap when an event has no explicit correlation key. Finally, a provider message-resource
-failure is reported as a rejected record even though the record itself is retained.
+another gap when an event has no explicit correlation key. Finally, the live reader bypasses the
+packaged provider databases and reports a provider message-resource failure as a rejected record
+even though the batch-query record itself is retained. The subscription tail is worse: the same
+optional description failure can drop the event.
 
 These are product semantics and layout defects. They are not an ARM64 rendering defect.
 
@@ -54,11 +56,17 @@ These are product semantics and layout defects. They are not an ARM64 rendering 
 
 ### Provider message-resource coverage
 
+- Live batch queries, polling tails, and subscription tails consult the loaded `ProviderStore`
+  before calling the Windows message API. They reuse the existing provider description renderer;
+  they do not create a second template implementation.
+- A complete database-rendered description wins. A normal database miss falls through to the
+  native formatter without creating a synthetic warning.
 - Failure to open publisher metadata and failure to format a provider message are distinct stages.
 - The provider name, stage, Windows error code, and source channel are retained in a structured
   provider coverage gap.
 - Provider lookup failures are deduplicated per provider and stage within a channel scan.
-- The event record is still delivered with its XML/EventData fallback message.
+- The event record is still delivered with its XML/EventData fallback message in both batch and
+  tail paths.
 - Provider coverage gaps use `EvtxCoverageGapKind::Provider`; they do not increment `parse_errors`
   and are not reclassified as rejected records.
 - True XML/render/record loss continues to increment parse errors and keeps its existing record-loss

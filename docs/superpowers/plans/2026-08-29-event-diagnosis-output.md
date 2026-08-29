@@ -104,14 +104,16 @@
 
 ---
 
-## Task 3: Separate provider-description gaps from record loss
+## Task 3: Use provider data and separate description gaps from record loss
 
 **Files:**
 
 - Modify: `src-tauri/src/event_log/live.rs`
 - Modify: `src-tauri/src/event_log/commands.rs`
+- Modify: `src-tauri/src/event_log/parser.rs`
 - Test: unit tests in `src-tauri/src/event_log/live.rs`
 - Test: unit tests in `src-tauri/src/event_log/commands.rs`
+- Test: existing provider-description tests in `src-tauri/src/event_log/parser.rs`
 
 ### Steps
 
@@ -119,19 +121,28 @@
   `EvtxCoverageGapKind::Provider`, exact stage, error code, and stable operator text.
 - [ ] Add a failing command aggregation test showing a scan with delivered records plus a provider
   gap keeps `parse_errors == 0`, while a true record-loss gap still increments it.
+- [ ] Add a failing pure selection test proving a complete provider-database description wins and a
+  normal database miss falls through to the native formatter. Add a tail regression proving an
+  optional provider-description failure still delivers the record plus a diagnostic.
 - [ ] On Windows, add focused tests for `ERROR_FILE_NOT_FOUND`,
   `ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND`, and `ERROR_EVT_MESSAGE_NOT_FOUND`, asserting the stage is
   `EvtOpenPublisherMetadata` or `EvtFormatMessage` as appropriate.
 - [ ] Run the focused portable tests and record the red result.
+- [ ] Expose the existing provider description lookup to the live module at crate scope. Pass the
+  loaded `ProviderStore` through batch queries, polling tails, and subscription tails. Use the
+  database renderer first and fall back to native formatting only on a normal miss or incomplete
+  database description; do not duplicate template rendering.
 - [ ] Add a typed provider-gap collection to `ChannelScan`. Return a small message-render outcome
   carrying either text or a provider gap; cache metadata failures with their original stage/code.
-  Deduplicate per provider and stage inside a scan.
+  Deduplicate per provider and stage inside a scan and per active tail.
 - [ ] Map provider gaps directly into `EvtxParseResult.coverage_gaps` and `error_messages` without
   incrementing `parse_errors`. Keep existing record-loss strings on the record-error path. Convert
-  provider gaps to strings only at the live-tail boundary that still transports string diagnostics.
+  provider gaps to strings only at the live-tail boundary that still transports string diagnostics,
+  and ensure subscription callbacks enqueue the record even when description rendering fails.
 - [ ] Run focused tests, then
   `cargo test --manifest-path src-tauri/Cargo.toml event_log::live` and
-  `cargo test --manifest-path src-tauri/Cargo.toml event_log::commands`.
+  `cargo test --manifest-path src-tauri/Cargo.toml event_log::commands` and the focused existing
+  provider-description tests in `event_log::parser`.
 - [ ] Run `cargo fmt --check --manifest-path src-tauri/Cargo.toml`,
   `cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets`, and
   `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`.
@@ -142,6 +153,8 @@
 
 - Successfully delivered records are not counted as parse failures because their description DLL
   is missing.
+- Packaged provider descriptions are used for live records before Windows resource lookup, and
+  description failure cannot discard a tail record.
 - Provider, channel, stage, and Windows code are visible and typed.
 - XML/render/record loss still reports a parse error.
 
