@@ -217,6 +217,18 @@ describe("assertParseResultShape", () => {
     ["missing code", { provider: "Example.Provider", stage: "openPublisherMetadata" }],
     ["negative code", { provider: "Example.Provider", stage: "formatMessage", errorCode: -1 }],
     ["fractional code", { provider: "Example.Provider", stage: "formatMessage", errorCode: 2.5 }],
+    [
+      "unsafe code",
+      {
+        provider: "Example.Provider",
+        stage: "formatMessage",
+        errorCode: Number.MAX_SAFE_INTEGER + 1,
+      },
+    ],
+    [
+      "non-number code",
+      { provider: "Example.Provider", stage: "formatMessage", errorCode: "15027" },
+    ],
   ])("rejects providerMessage with %s", (_label, providerMessage) => {
     expect(() =>
       assertParseResultShape({

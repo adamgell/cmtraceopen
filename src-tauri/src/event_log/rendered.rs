@@ -44,9 +44,11 @@ pub fn parse_xml_to_record(
 ) -> Option<EvtxRecord> {
     let parsed = parse_event_xml(xml).ok()?;
     let system = extract_system_fields(&parsed);
+    let event_fields = extract_event_data(&parsed);
     Some(record_from_parts(
         &parsed,
         system,
+        event_fields,
         xml,
         channel,
         maps,
@@ -60,11 +62,13 @@ pub fn parse_xml_to_record(
 /// provider name first, to name the publisher whose message template it asks the service to render,
 /// and parsing again to get the rest would double the cost of the hottest loop in the view.
 ///
-/// `parsed` is used for the System block, the event fields, the decoded payload and any registered
-/// map, so none of them costs an extra pass over the document.
+/// `parsed` is used for the decoded payload and any registered map. `system` and `event_fields` are
+/// supplied by the caller so the hot live paths can reuse the same extraction for provider lookup
+/// and record construction.
 pub fn record_from_parts(
     parsed: &EventNode,
     system: SystemFields,
+    event_fields: EventFields,
     xml: &str,
     channel: &str,
     maps: &MapRegistry,
@@ -91,7 +95,7 @@ pub fn record_from_parts(
     let EventFields {
         fields: mut event_data,
         insertions: _,
-    } = extract_event_data(parsed);
+    } = event_fields;
     let identity = extract_event_identity(&event_data);
     // Derived conflict markers are useful in the detail surface, but they are not event data and
     // must not become the fallback row message when no real field has a value.

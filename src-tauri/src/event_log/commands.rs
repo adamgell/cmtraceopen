@@ -207,6 +207,7 @@ pub async fn evtx_enumerate_remote_channels(
 }
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 fn query_source_channel(
     remote_machine: Option<&str>,
     channel: &str,
@@ -1886,6 +1887,14 @@ mod tests {
         assert_eq!(aggregation.records.len(), 1);
         assert_eq!(aggregation.parse_errors, 0);
         assert_eq!(aggregation.coverage_gaps, vec![provider_gap]);
+        let provider_diagnostic =
+            "remote-host/ForwardedEvents: provider message for Example.Provider could not be \
+             rendered at EvtFormatMessage (Windows error 15027); raw event data is shown instead"
+                .to_string();
+        assert_eq!(
+            aggregation.error_messages,
+            vec![provider_diagnostic.clone()]
+        );
 
         aggregation.absorb_scan(
             "remote-host/ForwardedEvents",
@@ -1901,6 +1910,14 @@ mod tests {
         );
 
         assert_eq!(aggregation.parse_errors, 1);
+        assert_eq!(
+            aggregation.error_messages,
+            vec![
+                provider_diagnostic,
+                "remote-host/ForwardedEvents: one event could not be read and is missing"
+                    .to_string()
+            ]
+        );
         assert_eq!(
             aggregation.coverage_gaps[1].kind,
             super::super::models::EvtxCoverageGapKind::Record
