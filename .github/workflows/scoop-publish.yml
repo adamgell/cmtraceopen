@@ -11,6 +11,10 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: scoop-publish
+  cancel-in-progress: false
+
 jobs:
   scoop:
     name: Update Scoop bucket
