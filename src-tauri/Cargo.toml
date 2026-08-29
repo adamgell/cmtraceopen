@@ -63,6 +63,9 @@ notify = "8"
 tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net"] }
 rayon = "1.10"
 font-kit = "0.14"
+# evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 could not parse.
+# The MSRV is now 1.88, so this exact pin is no longer MSRV-mandated; it is
+# retained deliberately and can be revisited separately.
 evtx = { version = "=0.12.2", optional = true }
 quick-xml = { version = "0.41", optional = true }
 glob = "0.3"
@@ -73,7 +76,14 @@ uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"], optional = true }
 cab = { version = "=0.6.0", optional = true }
+# Floor, not an exact pin: 0.3.47 carries the fixes for RUSTSEC-2026-0009 and
+# GHSA-r6v5-fh4h-64xc (stack exhaustion). Declared directly -- despite the code
+# using only std::time -- so the whole graph (cab, cookie, plist, simplelog,
+# tauri-plugin-log, tauri-plugin-updater) is held at or above the patched release.
 time = { version = "0.3.47", default-features = false, features = ["parsing"] }
+# Only the event-log modules use these, so they are optional and pulled in by that feature.
+# rusqlite carries "bundled", which compiles SQLite from source; an unrelated build should not pay
+# for it.
 serde_norway = { version = "0.9.42", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
 flate2 = { version = "1.1.9", optional = true }
@@ -86,8 +96,35 @@ plist = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.56"
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_NetworkManagement_NetManagement", "Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_System_EventLog", "Win32_System_IO", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_Wmi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Security_Authentication_Web_Core", "Security_Credentials", "Foundation", "Foundation_Collections", "Win32_System_WinRT", "Wdk_Foundation", "Wdk_Storage_FileSystem"] }
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Authorization",
+    "Win32_System_EventLog",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_Wmi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Security_Authentication_Web_Core",
+    "Security_Credentials",
+    "Foundation",
+    "Foundation_Collections",
+    "Win32_System_WinRT",
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+] }
 windows-future = "=0.3.2"
+# ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85, which the old
+# 1.77.2 floor barred. The floor is now 1.88; this pin is kept for now.
 ureq = "=3.3.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
@@ -99,6 +136,8 @@ tempfile = "3"
 plist = "1"
 tauri = { version = "2", features = ["test"] }
 
+# Timing harness for the live event-log scan. Declared so `--all-targets` does not try to build it
+# without the modules it measures.
 [[example]]
 name = "evtx_scan"
 required-features = ["event-log"]

@@ -72,7 +72,7 @@ describe("FindBar (CHROME-007)", () => {
     expect(screen.getByText("Invalid regex")).toBeVisible();
   });
 
-  it("Enter/F3 find next, Shift+Enter previous, Escape closes", () => {
+  it("Enter/F3 find next, Shift+Enter/Shift+F3 previous, Escape closes", () => {
     const onClose = vi.fn();
     useLogStore.setState({
       entries: [entry(1, "error one"), entry(2, "error two")],
@@ -86,6 +86,14 @@ describe("FindBar (CHROME-007)", () => {
     const input = screen.getByPlaceholderText("Find...");
 
     fireEvent.keyDown(input, { key: "Enter" });
+    expect(useLogStore.getState().findCurrentIndex).toBe(1);
+    expect(useLogStore.getState().selectedId).toBe(2);
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(useLogStore.getState().findCurrentIndex).toBe(0);
+    expect(useLogStore.getState().selectedId).toBe(1);
+
+    fireEvent.keyDown(input, { key: "F3" });
     expect(useLogStore.getState().findCurrentIndex).toBe(1);
     expect(useLogStore.getState().selectedId).toBe(2);
 

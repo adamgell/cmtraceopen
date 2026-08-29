@@ -45,10 +45,10 @@ describe("MSI DISABLEUPDATECHECKS policy (#576)", () => {
       .join("\n");
 
     assert.doesNotMatch(executable, /Microsoft\.Win32\.RegistryKey/);
-    assert.match(script, /System32\\reg\.exe/);
-    assert.match(script, /\/reg:64/);
-    assert.match(script, /DisableUpdateChecks/);
-    assert.match(script, /HKLM\\Software\\CMTrace Open/);
-    assert.match(script, /exit 1/);
+    assert.match(executable, /System32\\reg\.exe/);
+    assert.match(executable, /\/reg:64/);
+    assert.match(executable, /DisableUpdateChecks/);
+    assert.match(executable, /HKLM\\Software\\CMTrace Open/);
+    assert.match(executable, /exit 1/);
   });
 });

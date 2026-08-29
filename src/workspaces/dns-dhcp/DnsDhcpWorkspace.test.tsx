@@ -4,27 +4,38 @@ import type { LogEntry } from "../../types/log";
 import { DnsDhcpWorkspace } from "./DnsDhcpWorkspace";
 import { useDnsDhcpStore } from "./dns-dhcp-store";
 
-const checkDnsLoggingStatus = vi.fn();
-const inspectPathKind = vi.fn();
-const listLogFolder = vi.fn();
-const openLogFile = vi.fn();
-const collectDnsDhcpFromDomain = vi.fn();
-const enableDnsDebugLogging = vi.fn();
-const openDialog = vi.fn();
-const confirmDialog = vi.fn();
+const {
+  checkDnsLoggingStatus,
+  inspectPathKind,
+  listLogFolder,
+  openLogFile,
+  collectDnsDhcpFromDomain,
+  enableDnsDebugLogging,
+  openDialog,
+  confirmDialog,
+} = vi.hoisted(() => ({
+  checkDnsLoggingStatus: vi.fn(),
+  inspectPathKind: vi.fn(),
+  listLogFolder: vi.fn(),
+  openLogFile: vi.fn(),
+  collectDnsDhcpFromDomain: vi.fn(),
+  enableDnsDebugLogging: vi.fn(),
+  openDialog: vi.fn(),
+  confirmDialog: vi.fn(),
+}));
 
 vi.mock("../../lib/commands", () => ({
-  checkDnsLoggingStatus: (...args: unknown[]) => checkDnsLoggingStatus(...args),
-  inspectPathKind: (...args: unknown[]) => inspectPathKind(...args),
-  listLogFolder: (...args: unknown[]) => listLogFolder(...args),
-  openLogFile: (...args: unknown[]) => openLogFile(...args),
-  collectDnsDhcpFromDomain: (...args: unknown[]) => collectDnsDhcpFromDomain(...args),
-  enableDnsDebugLogging: (...args: unknown[]) => enableDnsDebugLogging(...args),
+  checkDnsLoggingStatus,
+  inspectPathKind,
+  listLogFolder,
+  openLogFile,
+  collectDnsDhcpFromDomain,
+  enableDnsDebugLogging,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: (...args: unknown[]) => openDialog(...args),
-  confirm: (...args: unknown[]) => confirmDialog(...args),
+  open: openDialog,
+  confirm: confirmDialog,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
