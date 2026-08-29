@@ -603,6 +603,41 @@ fn unsupported_event_family_is_neutral() {
 }
 
 #[test]
+fn unsupported_event_family_with_failure_and_success_language_is_neutral() {
+    let mut entry =
+        event_entry("Unknown provider operation failed and then completed with 0x80070005");
+    entry.channel = EventLogChannel::Other("Application".into());
+    entry.channel_display = "Application".into();
+    entry.provider = "Unknown provider".into();
+    let diagnosis = adapt_event_entry(entry);
+
+    assert_eq!(
+        diagnosis.family,
+        cmtraceopen_parser::diagnosis::EventFamily::Other
+    );
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
+}
+
+#[test]
+fn unsupported_event_family_with_failed_status_and_success_language_is_neutral() {
+    let mut entry = event_entry("Unknown provider operation completed with 0x80070005");
+    entry.channel = EventLogChannel::Other("System".into());
+    entry.channel_display = "System".into();
+    entry.provider = "Unknown provider".into();
+    let diagnosis = adapt_event_entry_with_data(entry, &["Status=Failed".into()]);
+
+    assert_eq!(
+        diagnosis.family,
+        cmtraceopen_parser::diagnosis::EventFamily::Other
+    );
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
+}
+
+#[test]
 fn diagnosis_projection_masks_code_shaped_secrets_from_event_data_and_xml() {
     let mut entry = event_entry("Enrollment completed");
     entry.severity = EventLogSeverity::Information;

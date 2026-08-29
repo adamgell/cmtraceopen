@@ -852,6 +852,10 @@ fn operational_event_finding(
     explicit_failure_signal: bool,
     explicit_success_signal: bool,
 ) -> Option<DiagnosisFinding> {
+    if matches!(family, EventFamily::Other) {
+        return None;
+    }
+
     let status = event_status(pairs);
     let status_value = status.as_ref().map(|(_, value)| value.as_str());
     let status_failure = status_value.is_some_and(failure_status);
