@@ -1327,6 +1327,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       }
     );
     if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+    const recordsToMerge: EvtxRecord[] = [];
+    const eventCounts = new Map<string, number>();
+    const processedChannels = new Set<string>();
+    const channelUsability = new Map<string, boolean>();
+    const reportedGaps: string[] = [];
+    const reportedDetails: EvtxCoverageGap[] = [];
     for (const { channel, result, error } of results) {
       if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
       const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
@@ -1336,11 +1342,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
           drainStreamedRecords(channel, requestId);
           acknowledgeStreamedRecords(channel, requestId);
-          set((s) => ({
-            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-              `${context}: not read (${error ?? "unknown error"})`,
-            ]),
-          }));
+          reportedGaps.push(`${context}: not read (${error ?? "unknown error"})`);
           continue;
         }
         await waitForStreamReconciliation(channel, requestId);
@@ -1351,42 +1353,20 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         if (maxEvents === undefined && records.length >= perChannelLimit) {
           implicitLimitReached = true;
         }
-        const state = get();
-        const merged = mergeRecordsPreservingSelection(
-          state.records,
-          state.selectedRecordId,
-          records
-        );
-        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-        const updatedChannels = state.channels.map((c) => ({
-          ...c,
-          eventCount: countMap.get(c.name) ?? c.eventCount,
-        }));
-        const reportedGaps = reconciliation.gaps;
-        const newLoaded = new Set(state.loadedChannels);
+        recordsToMerge.push(...records);
+        for (const resultChannel of result.channels) {
+          eventCounts.set(resultChannel.name, resultChannel.eventCount);
+        }
+        processedChannels.add(channel);
+        reportedGaps.push(...reconciliation.gaps);
+        reportedDetails.push(...checked.coverageGaps);
         const channelHasUsableData = hasUsableChannelData(
           records.length,
           result.channels.find((c) => c.name === channel)?.eventCount ?? 0,
-          reportedGaps.length,
+          reconciliation.gaps.length,
           reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
         );
-        if (channelHasUsableData) newLoaded.add(channel);
-        else newLoaded.delete(channel);
-        const priorGaps = state.coverageGaps.filter(
-          (gap) => !coverageBelongsToChannel(gap, channel, remoteMachine)
-        );
-        set({
-          ...merged,
-          channels: updatedChannels,
-          loadedChannels: newLoaded,
-          coverageGaps: mergeCoverageGaps(priorGaps, reportedGaps),
-          coverageDetails: mergeStructuredCoverageGaps(
-            state.coverageDetails.filter((detail) =>
-              !coverageBelongsToChannel(detail.source, channel, remoteMachine)
-            ),
-            checked.coverageGaps
-          ),
-        });
+        channelUsability.set(channel, channelHasUsableData);
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
@@ -1396,21 +1376,60 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           processingError instanceof Error ? processingError.message : String(processingError);
         console.warn(`[evtx] Failed to process ${context}: ${message}`);
         if (!loadError) loadError = `${context}: ${message}`;
-        set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${context}: not read (${message})`]),
-        }));
+        reportedGaps.push(`${context}: not read (${message})`);
       }
     }
 
     if (implicitLimitReached) {
-      set((state) => ({
-        coverageGaps: mergeCoverageGaps(state.coverageGaps, [
-          `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${channels.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`,
-        ]),
-      }));
+      reportedGaps.push(
+        `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${channels.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`
+      );
     }
 
-    set({ isLoading: false, loadError });
+    // Commit all channel outcomes together. Hundreds of synchronous store publications made React
+    // repeatedly restart its external-store subscribers and eventually trip its maximum-update
+    // guard when "All channels" was used.
+    const processedChannelNames = [...processedChannels];
+    set((state) => {
+      const merged = mergeRecordsPreservingSelection(
+        state.records,
+        state.selectedRecordId,
+        recordsToMerge
+      );
+      const loadedChannels = new Set(state.loadedChannels);
+      for (const [channel, usable] of channelUsability) {
+        if (usable) loadedChannels.add(channel);
+        else loadedChannels.delete(channel);
+      }
+      return {
+        ...merged,
+        channels: state.channels.map((channel) => ({
+          ...channel,
+          eventCount: eventCounts.get(channel.name) ?? channel.eventCount,
+        })),
+        loadedChannels,
+        coverageGaps: mergeCoverageGaps(
+          state.coverageGaps.filter(
+            (gap) =>
+              !processedChannelNames.some((channel) =>
+                coverageBelongsToChannel(gap, channel, remoteMachine)
+              )
+          ),
+          reportedGaps
+        ),
+        coverageDetails: mergeStructuredCoverageGaps(
+          state.coverageDetails.filter(
+            (detail) =>
+              !processedChannelNames.some((channel) =>
+                coverageBelongsToChannel(detail.source, channel, remoteMachine)
+              )
+          ),
+          reportedDetails
+        ),
+        isLoading: false,
+        loadError,
+      };
+    });
     if (refreshRequested && get().sourceMode === "live") {
       refreshRequested = false;
       const refreshChannels = [...new Set([...channels, ...get().loadedChannels])];

@@ -2054,6 +2054,10 @@ describe("remote event sources", () => {
     const channels = Array.from({ length: 1_000 }, (_, index) => `Channel-${index}`);
     let active = 0;
     let peak = 0;
+    let publications = 0;
+    const unsubscribe = useEvtxStore.subscribe(() => {
+      publications += 1;
+    });
     invoke.mockImplementation(
       async (_name: string, args: { channels: string[]; maxEvents: number; requestId: string }) => {
         active += 1;
@@ -2073,7 +2077,11 @@ describe("remote event sources", () => {
       }
     );
 
-    await useEvtxStore.getState().queryChannels(channels);
+    try {
+      await useEvtxStore.getState().queryChannels(channels);
+    } finally {
+      unsubscribe();
+    }
 
     expect(invoke).toHaveBeenCalledTimes(1_000);
     expect(peak).toBe(4);
@@ -2082,6 +2090,7 @@ describe("remote event sources", () => {
         Object.is((call[1] as { maxEvents?: number }).maxEvents, 25)
       )
     ).toBe(true);
+    expect(publications).toBeLessThan(10);
     expect(useEvtxStore.getState().isLoading).toBe(false);
   });
 });
