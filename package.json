@@ -27,8 +27,8 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@fluentui/react-charts": "^9.3.25",
-    "@fluentui/react-components": "^9.74.7",
+    "@fluentui/react-charts": "^9.3.23",
+    "@fluentui/react-components": "^9.74.5",
     "@fluentui/react-icons": "^2.0.339",
     "@tanstack/react-virtual": "^3.14.10",
     "@tauri-apps/api": "^2.11.1",
