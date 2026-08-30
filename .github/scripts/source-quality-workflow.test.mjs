@@ -8,7 +8,7 @@ function assertRequiredTriggers(workflow) {
   assert.match(
     workflow,
     /^on:\n  push:\n    branches: \[main, codex\/parser-family-skeleton\]\n  pull_request:\n(?:    #.*\n)*    branches: \[main, codex\/parser-family-skeleton\]$/m,
-    "main push and pull-request triggers missing"
+    "required push and pull-request branch triggers missing"
   );
 }
 
@@ -54,7 +54,7 @@ function assertSourceQualityRequirements(workflow) {
   );
   assert.match(
     job,
-    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          git diff --check "\$base\.\.\.HEAD"$/m,
+    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          elif \[\[ "\$base" == "\$\(git rev-parse HEAD\)" \]\]; then\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          else\n            git diff --check "\$base\.\.\.HEAD"\n          fi$/m,
     "range whitespace gate missing"
   );
 }

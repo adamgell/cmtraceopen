@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Record the approved issue #356 contract, reconcile the live epic tracker, establish one behavior-free Rust formatting baseline, and enforce formatting, whitespace, and parser wasm portability on every pull request and `main` push.
+**Goal:** Record the approved issue #356 contract, reconcile the live epic tracker, establish one behavior-free Rust formatting baseline, and enforce formatting, whitespace, and parser wasm portability on pull requests targeting `main` or `codex/parser-family-skeleton` and on pushes to either branch.
 
 **Architecture:** This is the first independently reviewable sub-project from the approved closeout design. It changes no parser or application behavior: documentation and GitHub establish program truth, one mechanical commit removes inherited rustfmt drift, and one dedicated GitHub Actions job enforces the three source-quality gates before later Intune slices build on the repository.
 
@@ -63,7 +63,12 @@ remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
 planning_head="$(git ls-remote origin refs/heads/codex/issue356-epic-closeout-20260829 | awk '{print $1}')"
 test "$execution_base" = "$remote_main"
 git merge-base --is-ancestor 59679c06b5dd1f5d59849a14d527f4b262b30a1c "$planning_head"
-git diff --name-only 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head" | sort
+diff -u \
+  <(printf '%s\n' \
+    docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md \
+    docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md \
+    docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md | sort) \
+  <(git diff --name-only 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head" | sort)
 ```
 
 Expected: local and remote `main` are identical, the planning head descends from the audited baseline, and the diff contains exactly the spec, ADR, and this plan.
@@ -303,7 +308,35 @@ Expected: both commands exit `0`. Test counts are recorded in the issue/PR evide
 Run:
 
 ```bash
-git add crates/cmtraceopen-parser src-tauri/src/commands/intune.rs src-tauri/src/event_log/mod.rs
+formatter_files=(
+  crates/cmtraceopen-parser/src/collector/profile.rs
+  crates/cmtraceopen-parser/src/esp/redaction.rs
+  crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs
+  crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/reducer.rs
+  crates/cmtraceopen-parser/src/intune/apps/windows/win32/findings.rs
+  crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs
+  crates/cmtraceopen-parser/src/intune/device/windows/compliance/reducer.rs
+  crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/redaction.rs
+  crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs
+  crates/cmtraceopen-parser/src/intune/event_tracker.rs
+  crates/cmtraceopen-parser/src/intune/ime_parser.rs
+  crates/cmtraceopen-parser/src/intune/normalized.rs
+  crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/logs/document.rs
+  crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/package_state/mod.rs
+  crates/cmtraceopen-parser/tests/esp_export_boundary.rs
+  crates/cmtraceopen-parser/tests/intune_skeleton_contract.rs
+  crates/cmtraceopen-parser/tests/intune_windows_autopilot.rs
+  crates/cmtraceopen-parser/tests/intune_windows_compliance.rs
+  crates/cmtraceopen-parser/tests/intune_windows_configuration.rs
+  crates/cmtraceopen-parser/tests/intune_windows_microsoft_store_semantics.rs
+  crates/cmtraceopen-parser/tests/support/mod.rs
+  src-tauri/src/commands/intune.rs
+  src-tauri/src/event_log/mod.rs
+)
+git add -- "${formatter_files[@]}"
+diff -u \
+  <(printf '%s\n' "${formatter_files[@]}" | sort) \
+  <(git diff --cached --name-only | sort)
 git commit -m "style(rust): establish formatter baseline"
 ```
 
@@ -334,7 +367,7 @@ function assertRequiredTriggers(workflow) {
   assert.match(
     workflow,
     /^on:\n  push:\n    branches: \[main, codex\/parser-family-skeleton\]\n  pull_request:\n(?:    #.*\n)*    branches: \[main, codex\/parser-family-skeleton\]$/m,
-    "main push and pull-request triggers missing"
+    "required push and pull-request branch triggers missing"
   );
 }
 
@@ -380,7 +413,7 @@ function assertSourceQualityRequirements(workflow) {
   );
   assert.match(
     job,
-    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          git diff --check "\$base\.\.\.HEAD"$/m,
+    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          elif \[\[ "\$base" == "\$\(git rev-parse HEAD\)" \]\]; then\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          else\n            git diff --check "\$base\.\.\.HEAD"\n          fi$/m,
     "range whitespace gate missing"
   );
 }
@@ -469,7 +502,13 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
           fi
 
           git cat-file -e "${base}^{commit}"
-          git diff --check "$base...HEAD"
+          if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
+            git diff --check "$base...HEAD"
+          elif [[ "$base" == "$(git rev-parse HEAD)" ]]; then
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          else
+            git diff --check "$base...HEAD"
+          fi
 ```
 
 In the existing frontend job's `Release script tests` step, make the command:
@@ -525,9 +564,13 @@ Run:
 ```bash
 cargo +1.92.0 fmt --all -- --check
 cargo test --locked -p cmtraceopen-parser
+cargo test --locked -p cmtrace-open --all-features
 cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 cargo check --locked --workspace --all-features
+npm test
+npx tsc --noEmit
 node --test .github/scripts/source-quality-workflow.test.mjs
 actionlint .github/workflows/cmtrace-ci.yml
 git diff --check origin/main...HEAD
@@ -667,7 +710,7 @@ printf '%s\n' \
   "Head: ${head_sha}" \
   "Draft PR: ${pr_url}" \
   '' \
-  'Local gates: rustfmt PASS; parser tests PASS; parser strict Clippy PASS; parser wasm PASS; workspace all-features check PASS; workflow contract PASS; actionlint PASS; diff check PASS.' \
+  'Local gates: rustfmt PASS; parser tests PASS; app all-features tests PASS; parser strict Clippy PASS; workspace all-targets all-features Clippy PASS; parser wasm PASS; workspace all-features check PASS; frontend tests PASS; TypeScript noEmit PASS; workflow contract PASS; actionlint PASS; diff check PASS.' \
   'Review gates: record the exact-head CodeRabbit and independent-review decisions from the PR before changing readiness.' \
   'State boundary: committed and pushed; not merged; no native Intune acceptance performed or claimed; no child acceptance row completed by this foundation slice.' \
   | gh issue comment 356 --repo adamgell/cmtraceopen --body-file -

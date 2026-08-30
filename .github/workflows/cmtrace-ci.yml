@@ -53,7 +53,13 @@ jobs:
           fi
 
           git cat-file -e "${base}^{commit}"
-          git diff --check "$base...HEAD"
+          if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
+            git diff --check "$base...HEAD"
+          elif [[ "$base" == "$(git rev-parse HEAD)" ]]; then
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          else
+            git diff --check "$base...HEAD"
+          fi
 
   check:
     name: Check & Test (Rust)
