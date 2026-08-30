@@ -588,7 +588,7 @@ head_sha="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse origin/main)"
 pr_url="$(gh pr view --repo adamgell/cmtraceopen --json url --jq .url)"
 printf '%s\n' \
-  'Phase 0A — program truth and source-quality gates' \
+  'Phase 0A: program truth and source-quality gates' \
   '' \
   "Base: ${base_sha}" \
   "Head: ${head_sha}" \

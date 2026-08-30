@@ -26,8 +26,8 @@ function assertSourceQualityRequirements(workflow) {
   assert.match(job, /^    steps:\n/m, "source-quality steps missing");
   assert.match(
     job,
-    /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0$/m,
-    "full-history checkout missing"
+    /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
+    "full-history credential-free checkout missing"
   );
   assert.match(
     job,
@@ -66,6 +66,7 @@ test("source-quality requirements cannot be satisfied outside the job", () => {
       - run: true
   check:
     # fetch-depth: 0
+    # persist-credentials: false
     # toolchain: "1.92.0"
     # components: rustfmt
     # targets: wasm32-unknown-unknown
