@@ -17,7 +17,7 @@
 - Execute in a fresh issue-scoped worktree created from the exact current `origin/main`; never edit, clean, reset, rebase, or merge the dirty primary checkout.
 - Do not add compatibility layers, fallbacks, migrations, dual readers, or deprecated facades.
 - Keep `cmtraceopen-parser` pure Rust and compatible with `wasm32-unknown-unknown`; no OS I/O, registry, WMI, Tauri, network, database, or live collection enters the parser crate.
-- Missing, denied, capped, skipped, unsupported, malformed, and partial evidence remain coverage states and never imply success.
+- Missing, denied, capped, skipped, unsupported, unknown-version, malformed, and partial evidence remain coverage states and never imply success.
 - Do not create fixtures or introduce customer, tenant, account, device, secret, private URL, or raw diagnostic data in this sub-project.
 - The formatter baseline is mechanical only. A semantic edit discovered in a formatting hunk is removed and handled by its owning vertical slice.
 - Rust formatting is pinned to toolchain `1.92.0` for this gate; the crate's declared MSRV remains `1.88` and its existing MSRV CI job remains unchanged.
@@ -57,22 +57,27 @@ Each later plan must leave a working product at its own review boundary. Recover
 Run:
 
 ```bash
+(
+set -euo pipefail
 git fetch --prune origin
 execution_base="$(git rev-parse origin/main)"
 remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
 planning_head="$(git ls-remote origin refs/heads/codex/issue356-epic-closeout-20260829 | awk '{print $1}')"
 test "$execution_base" = "$remote_main"
 git merge-base --is-ancestor 59679c06b5dd1f5d59849a14d527f4b262b30a1c "$planning_head"
+planning_commits="$(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head")"
+planning_paths="$(
+  while IFS= read -r commit; do
+    git diff-tree --no-commit-id --name-only -r -m "$commit" || exit 1
+  done <<< "$planning_commits"
+)"
 diff -u \
   <(printf '%s\n' \
     docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md \
     docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md \
     docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md | sort) \
-  <(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head" \
-    | while IFS= read -r commit; do
-        git diff-tree --no-commit-id --name-only -r -m "$commit"
-      done \
-    | sort -u)
+  <(printf '%s\n' "$planning_paths" | sort -u)
+)
 ```
 
 Expected: local and remote `main` are identical, the planning head descends from the audited baseline, and every commit in the planning range touches only the spec, ADR, and this plan.
@@ -117,10 +122,13 @@ Expected: each authority marker appears once and the imported documentation rang
 Run:
 
 ```bash
+(
+set -euo pipefail
 for issue in 354 357 358 359 360 361 362 363 364 365 366 367 368 369 370 371 372; do
   gh issue view "$issue" --repo adamgell/cmtraceopen --json number,state,title --jq '[.number,.state,.title] | @tsv'
 done
 gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body | rg '^\s*- \[[ x]\] #[0-9]+'
+)
 ```
 
 Expected: live state is 12 closed and five open; #354, #361, #365, #369, and #371 are open; the epic body still leaves closed #357 and #363 unchecked.
@@ -130,6 +138,8 @@ Expected: live state is 12 closed and five open; #354, #361, #365, #369, and #37
 Run:
 
 ```bash
+(
+set -euo pipefail
 issue_body="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body)"
 test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #357([^0-9]|$)')" = 1
 test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #363([^0-9]|$)')" = 1
@@ -138,6 +148,7 @@ updated_body="$(printf '%s\n' "$issue_body" \
 test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #357([^0-9]|$)')" = 1
 test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #363([^0-9]|$)')" = 1
 printf '%s\n' "$updated_body" | gh issue edit 356 --repo adamgell/cmtraceopen --body-file -
+)
 ```
 
 Expected: GitHub reports issue #356 updated and no other issue-body text changes.
@@ -147,6 +158,8 @@ Expected: GitHub reports issue #356 updated and no other issue-body text changes
 Run:
 
 ```bash
+(
+set -euo pipefail
 tracker_lines="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body | rg '^\s*- \[[ x]\] #[0-9]+')"
 test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[[ x]\] #[0-9]+')" = 17
 test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[x\] #[0-9]+')" = 12
@@ -154,6 +167,7 @@ test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[ \] #[0-9]+')" = 5
 diff -u \
   <(printf '%s\n' 354 361 365 369 371) \
   <(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[ \][[:space:]]+#([0-9]+).*/\1/p' | sort -n)
+)
 ```
 
 Expected: exactly 12 entries are `[x]`; only #354, #361, #365, #369, and #371 remain `[ ]`.
@@ -163,6 +177,8 @@ Expected: exactly 12 entries are `[x]`; only #354, #361, #365, #369, and #371 re
 Run:
 
 ```bash
+(
+set -euo pipefail
 main_sha="$(git rev-parse origin/main)"
 printf '%s\n' \
   'Repository-owner approval recorded on 2026-08-30.' \
@@ -171,6 +187,7 @@ printf '%s\n' \
   '' \
   'The tracker now matches live issue state at 12 closed / 5 open. A checked box records child-issue closure history only; it is not final native, provenance, redaction, exact-head, or aggregate acceptance evidence. The approved closeout design remains the authority for every child row.' \
   | gh issue comment 356 --repo adamgell/cmtraceopen --body-file -
+)
 ```
 
 Expected: one new issue #356 comment records approval, the exact current-main SHA, and the evidence limitation.
@@ -180,6 +197,8 @@ Expected: one new issue #356 comment records approval, the exact current-main SH
 Run:
 
 ```bash
+(
+set -euo pipefail
 for issue in 357 358 359 360 362 363 364 366 367 368 370 372; do
   printf '%s\n' \
     'Issue #356 closeout audit note (2026-08-30): this issue remains closed as implementation history, but closure is not final epic acceptance evidence.' \
@@ -187,9 +206,40 @@ for issue in 357 358 359 360 362 363 364 366 367 368 370 372; do
     "The approved closeout contract for #${issue} is the matching row in docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md. Its issue-scoped plan must reproduce each remaining provenance, application/native, redaction, and exact-head criterion against current main before the epic can use this row as accepted evidence." \
     | gh issue comment "$issue" --repo adamgell/cmtraceopen --body-file -
 done
+)
 ```
 
 Expected: each closed child receives one policy annotation with its own issue number. No issue is reopened by this task; a lane plan may reopen its original issue only after reproducing a missing acceptance criterion.
+
+- [ ] **Step 6: Prove failed reads and comments stop before later mutations**
+
+Run this local negative proof. Its substituted commands do not contact GitHub:
+
+```bash
+failed_read_marker="$(
+  bash -c 'set -euo pipefail; issue_body="$(false)"; printf edit-reached' \
+    2>/dev/null || true
+)"
+test -z "$failed_read_marker"
+
+failed_comment_marker="$(
+  bash -c '
+    set -euo pipefail
+    for issue in 357 358; do
+      if test "$issue" = 357; then
+        printf body | false
+      else
+        printf body | true
+      fi
+    done
+    printf later-comment-reached
+  ' 2>/dev/null || true
+)"
+test -z "$failed_comment_marker"
+```
+
+Expected: both assertions exit `0`. A failed precondition read prevents the
+edit marker, and a failed earlier child comment prevents all later loop work.
 
 ### Task 3: Establish the Mechanical Rustfmt Baseline
 

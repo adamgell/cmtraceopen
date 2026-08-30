@@ -249,15 +249,19 @@ not merely per-record state:
 - expected source identity and source schema;
 - adapter and collection-profile versions;
 - `complete`, `missing`, `skipped`, `denied`, `capped`, `cancelled`,
-  `timedOut`, `malformed`, `unsupported`, or `partial` status;
+  `timedOut`, `malformed`, `unsupported`, `unknownVersion`, or `partial`
+  status;
 - attempted and observed record counts and bytes;
 - active member, byte, time, and record limits plus truncation details;
 - deterministically ordered normalized records.
 
 An empty record vector means "complete and empty" only when its source envelope
 proves the expected source was successfully and completely queried. A denied,
-missing, skipped, malformed, unsupported, timed-out, cancelled, capped, or
-partial source cannot be normalized into a successful empty capture.
+missing, skipped, malformed, unsupported, unknown-version, timed-out,
+cancelled, capped, or partial source cannot be normalized into a successful
+empty capture. Source-envelope contract tests enumerate the complete status
+vocabulary and prove that `unknownVersion` remains distinct from `malformed`
+and `unsupported`.
 
 Each normalized record carries artifact and record identity, source kind,
 provider/channel and event ID where applicable, source schema version, original
@@ -1057,8 +1061,8 @@ Issue #356 can close only when all of the following are true on current
 - required Windows x64 and macOS arm64 live acceptance is recorded against the
   exact executable/package hash; the Windows ARM64 build/package commands pass,
   their artifact hashes are retained, and no runtime claim is made;
-- missing/denied/capped/skipped/unsupported/malformed/partial evidence remains
-  explicit and cannot imply success;
+- missing/denied/capped/skipped/unsupported/unknown-version/malformed/partial
+  evidence remains explicit and cannot imply success;
 - every public Intune analysis requires `RedactionContext` and is projected by
   construction; no raw/local-preserving value can reach IPC, emit, save,
   clipboard, logs, errors, or retained evidence;
