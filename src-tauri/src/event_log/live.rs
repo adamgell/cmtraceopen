@@ -20,7 +20,7 @@ use std::time::Duration;
 use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
 #[cfg(target_os = "windows")]
 use super::models::{ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus};
-use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxRecord};
+use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxField, EvtxRecord};
 #[cfg(any(target_os = "windows", test))]
 use super::models::{
     EvtxCoverageGapKind, EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, ProviderMessageStage,
@@ -309,6 +309,40 @@ fn select_provider_message(
         message,
         provider_gaps,
     }
+}
+
+/// Uses the event's own longest data value when Windows cannot open metadata for an
+/// unregistered publisher. Some Windows components write complete human-readable descriptions
+/// into Application event data under ad-hoc source names. In that case the description is present
+/// in the event itself, so reporting it as unavailable is both noisy and inaccurate.
+#[cfg(any(target_os = "windows", test))]
+fn recover_unregistered_provider_message(outcome: &mut MessageRenderOutcome, fields: &[EvtxField]) {
+    if outcome.message.is_some() {
+        return;
+    }
+    let has_unregistered_publisher_failure = outcome.provider_gaps.iter().any(|gap| {
+        gap.provider_message.as_deref().is_some_and(|failure| {
+            failure.stage == ProviderMessageStage::OpenPublisherMetadata && failure.error_code == 2
+        })
+    });
+    if !has_unregistered_publisher_failure {
+        return;
+    }
+    let Some(message) = fields
+        .iter()
+        .map(|field| field.value.trim())
+        .filter(|value| !value.is_empty())
+        .max_by_key(|value| value.chars().count())
+    else {
+        return;
+    };
+
+    outcome.message = Some(message.to_string());
+    outcome.provider_gaps.retain(|gap| {
+        !gap.provider_message.as_deref().is_some_and(|failure| {
+            failure.stage == ProviderMessageStage::OpenPublisherMetadata && failure.error_code == 2
+        })
+    });
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -800,7 +834,7 @@ fn query_channel_inner(
             // Only attempted when the event named a provider. Asking the service for the metadata
             // of a publisher the event never named would fail once per event and cache the failure
             // under a name no provider has.
-            let message_outcome = match system.provider.as_deref() {
+            let mut message_outcome = match system.provider.as_deref() {
                 Some(provider) => {
                     let provider_channel =
                         provider_database_channel(system.channel.as_deref(), channel);
@@ -828,6 +862,7 @@ fn query_channel_inner(
                 }
                 None => MessageRenderOutcome::default(),
             };
+            recover_unregistered_provider_message(&mut message_outcome, &event_fields.fields);
             for gap in message_outcome.provider_gaps.iter() {
                 message_failures += 1;
                 if provider_gap_dedup.keep(gap) {
@@ -1206,7 +1241,7 @@ fn render_tail_xml<Metadata>(
         parse_event_xml(xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
     let system = extract_system_fields(&parsed);
     let event_fields = extract_event_data(&parsed);
-    let message_outcome = match system.provider.as_deref() {
+    let mut message_outcome = match system.provider.as_deref() {
         Some(provider) => {
             let coverage_source = source_label
                 .strip_prefix("Remote: ")
@@ -1236,6 +1271,7 @@ fn render_tail_xml<Metadata>(
         }
         None => MessageRenderOutcome::default(),
     };
+    recover_unregistered_provider_message(&mut message_outcome, &event_fields.fields);
     let mut record = {
         let maps = maps
             .read()
@@ -2237,6 +2273,58 @@ mod portable_tests {
                     .to_string()
             ]
         );
+    }
+
+    #[test]
+    fn unregistered_windows_source_uses_its_embedded_human_description() {
+        let mut outcome = select_provider_message(
+            Ok(None),
+            "Application",
+            "Microsoft-Windows-AppXDeploymentServer/Operational",
+            || {
+                Err(NativeProviderFailure {
+                    stage: ProviderMessageStage::OpenPublisherMetadata,
+                    error_code: 2,
+                })
+            },
+        );
+        let fields = vec![
+            EvtxField {
+                name: "Data1".into(),
+                value: "MSIXDeployment".into(),
+            },
+            EvtxField {
+                name: "Data2".into(),
+                value: "DeleteMachineFolder".into(),
+            },
+            EvtxField {
+                name: "Data3".into(),
+                value: "Package cleanup completed and the machine folder was removed.".into(),
+            },
+        ];
+
+        recover_unregistered_provider_message(&mut outcome, &fields);
+
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Package cleanup completed and the machine folder was removed.")
+        );
+        assert!(outcome.provider_gaps.is_empty());
+    }
+
+    #[test]
+    fn missing_provider_metadata_without_event_data_remains_a_gap() {
+        let mut outcome = select_provider_message(Ok(None), "Application", "Empty.Source", || {
+            Err(NativeProviderFailure {
+                stage: ProviderMessageStage::OpenPublisherMetadata,
+                error_code: 2,
+            })
+        });
+
+        recover_unregistered_provider_message(&mut outcome, &[]);
+
+        assert!(outcome.message.is_none());
+        assert_eq!(outcome.provider_gaps.len(), 1);
     }
 
     #[test]

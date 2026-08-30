@@ -2049,6 +2049,41 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().remoteMachine).toBe("empty-host");
     expect(useEvtxStore.getState().sourceMode).toBeNull();
   });
+
+  it("loads a thousand selected channels with bounded query concurrency and records", async () => {
+    const channels = Array.from({ length: 1_000 }, (_, index) => `Channel-${index}`);
+    let active = 0;
+    let peak = 0;
+    invoke.mockImplementation(
+      async (_name: string, args: { channels: string[]; maxEvents: number; requestId: string }) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await Promise.resolve();
+        const channel = args.channels[0];
+        emitTerminal(channel, 0, 0, args.requestId);
+        active -= 1;
+        return {
+          records: [],
+          channels: [{ name: channel, eventCount: 0, sourceType: "live" as const }],
+          totalRecords: 0,
+          parseErrors: 0,
+          errorMessages: [],
+          coverageGaps: [],
+        };
+      }
+    );
+
+    await useEvtxStore.getState().queryChannels(channels);
+
+    expect(invoke).toHaveBeenCalledTimes(1_000);
+    expect(peak).toBe(4);
+    expect(
+      invoke.mock.calls.every((call) =>
+        Object.is((call[1] as { maxEvents?: number }).maxEvents, 25)
+      )
+    ).toBe(true);
+    expect(useEvtxStore.getState().isLoading).toBe(false);
+  });
 });
 
 describe("load error state", () => {

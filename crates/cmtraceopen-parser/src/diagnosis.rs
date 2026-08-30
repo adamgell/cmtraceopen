@@ -2083,10 +2083,7 @@ pub fn summarize_cross_source(
             "Evidence contains symptoms or contributing signals but no confirmed failure.",
         )
     } else if !coverage_gaps.is_empty() {
-        (
-            "insufficientEvidence",
-            "Evidence is insufficient to conclude an operational outcome.",
-        )
+        ("insufficientEvidence", "No issues detected.")
     } else {
         ("noFindings", "No actionable diagnosis was produced.")
     };
@@ -2171,6 +2168,16 @@ mod tests {
             super::finding_for_coverage("mdm", CoverageState::Skipped, "not collected".into());
         assert_eq!(finding.class, FindingClass::CoverageGap);
         assert_eq!(finding.confidence, super::FindingConfidence::Unknown);
+    }
+
+    #[test]
+    fn coverage_only_overview_uses_the_human_neutral_headline() {
+        let finding =
+            super::finding_for_coverage("event", CoverageState::Skipped, "not available".into());
+        let summary = super::summarize_cross_source(Vec::new(), vec![finding], Vec::new());
+
+        assert_eq!(summary.overview.outcome, "insufficientEvidence");
+        assert_eq!(summary.overview.headline, "No issues detected.");
     }
 
     #[test]

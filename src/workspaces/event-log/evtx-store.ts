@@ -55,6 +55,32 @@ type ServerFilter = EventQueryFilterSubset & {
   eventIds?: EvtxEventIdSelector[];
   eventIdMode?: "include";
 };
+
+const MAX_CONCURRENT_CHANNEL_QUERIES = 4;
+const MAX_LIVE_VIEW_RECORDS = 25_000;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+  return results;
+}
+
+function implicitPerChannelLimit(channelCount: number): number {
+  return Math.max(1, Math.floor(MAX_LIVE_VIEW_RECORDS / Math.max(1, channelCount)));
+}
 function decimalIdParts(record: EvtxRecord): {
   valid: boolean;
   digits: string;
@@ -1264,20 +1290,24 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // It also isolates failure. A single request fails as a whole, so one unreadable channel threw
     // away the results of every channel queried alongside it and left the view empty.
     let loadError: string | null = null;
+    const perChannelLimit = maxEvents ?? implicitPerChannelLimit(channels.length);
+    let implicitLimitReached = false;
 
     // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
     // count a previous run's batches towards this one.
     invalidateAllStreamedRecords(requestId);
     for (const channel of channels) resetStreamedRecords([channel], requestId);
 
-    const results = await Promise.all(
-      channels.map(async (ch) => {
+    const results = await mapWithConcurrency(
+      channels,
+      MAX_CONCURRENT_CHANNEL_QUERIES,
+      async (ch) => {
         try {
           const result = await invokeEventQuery<EvtxParseResult>(
             requestId,
             remoteMachine,
             [ch],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : maxEvents ?? null,
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : perChannelLimit,
             buildServerFilter(
               filterSnapshot.timeWindow,
               filterSnapshot.filterEventIds,
@@ -1294,7 +1324,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           if (!loadError) loadError = `${context}: ${message}`;
           return { channel: ch, result: null, error: message };
         }
-      })
+      }
     );
     if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
     for (const { channel, result, error } of results) {
@@ -1318,6 +1348,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
+        if (maxEvents === undefined && records.length >= perChannelLimit) {
+          implicitLimitReached = true;
+        }
         const state = get();
         const merged = mergeRecordsPreservingSelection(
           state.records,
@@ -1367,6 +1400,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${context}: not read (${message})`]),
         }));
       }
+    }
+
+    if (implicitLimitReached) {
+      set((state) => ({
+        coverageGaps: mergeCoverageGaps(state.coverageGaps, [
+          `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${channels.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`,
+        ]),
+      }));
     }
 
     set({ isLoading: false, loadError });
@@ -1434,10 +1475,12 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       get().filterEventIds,
       get().filterLevels
     );
+    const perChannelLimit = implicitPerChannelLimit(loaded.length);
+    let implicitLimitReached = false;
     for (const channel of loaded) resetStreamedRecords([channel], requestId);
     // Refresh invokes the streaming command directly, so drain its batch before merging the
     // command reply (which intentionally carries only records not emitted in batches).
-    const promises = loaded.map(async (ch) => {
+    await mapWithConcurrency(loaded, MAX_CONCURRENT_CHANNEL_QUERIES, async (ch) => {
       const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
       try {
         resetStreamedRecords([ch], requestId);
@@ -1445,7 +1488,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           requestId,
           remoteMachine,
           [ch],
-          hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : null,
+          hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : perChannelLimit,
           buildServerFilter(
             filterSnapshot.timeWindow,
             filterSnapshot.filterEventIds,
@@ -1459,6 +1502,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const reconciliation = reconcileStreamedResult(ch, requestId, result, context);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
+        if (records.length >= perChannelLimit) implicitLimitReached = true;
         const s = get();
         const merged = mergeRecordsPreservingSelection(
           s.records,
@@ -1513,8 +1557,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         }));
       }
     });
-    await Promise.all(promises);
     if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+    if (implicitLimitReached) {
+      set((current) => ({
+        coverageGaps: mergeCoverageGaps(current.coverageGaps, [
+          `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${loaded.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`,
+        ]),
+      }));
+    }
     const finalState = get();
     const remoteRefreshFailed =
       remoteMachine !== null &&
