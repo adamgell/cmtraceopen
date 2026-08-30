@@ -13,7 +13,7 @@ import {
   graphCancelAuthentication,
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
-  diagnoseEventRecords,
+  appendEventLogAnalysisChunk,
   clearEventLogChannel,
   openLogFile,
   parseEventLogManifest,
@@ -26,8 +26,15 @@ import {
   getFileAssociationPromptStatus,
   openWindowsDefaultApps,
   registerLogFileHandler,
+  diagnoseEventLogAnalysisSession,
+  EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+  queryEventLogAnalysisTimeline,
 } from "./commands";
-import type { EvtxRecord } from "../workspaces/event-log/types";
+import type {
+  EvtxCoverageGap,
+  EvtxRecord,
+} from "../workspaces/event-log/types";
+import type { LogEntry } from "../types/log";
 
 import { readAccessDenied } from "./source-error";
 
@@ -191,7 +198,10 @@ describe("parse and folder IPC response validation", () => {
   });
 
   it.each([
-    ["when it is not an array", { path: "C:\\Logs\\protected.evtx", reason: "access denied" }],
+    [
+      "when it is not an array",
+      { path: "C:\\Logs\\protected.evtx", reason: "access denied" },
+    ],
     ["when it has a non-record member", ["access denied"]],
     [
       "when a member has a non-string path",
@@ -228,7 +238,9 @@ describe("Windows file handler IPC boundary", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined);
 
-    await expect(getFileAssociationPromptStatus()).resolves.toEqual(registration);
+    await expect(getFileAssociationPromptStatus()).resolves.toEqual(
+      registration,
+    );
     await expect(registerLogFileHandler()).resolves.toBeUndefined();
     await expect(openWindowsDefaultApps()).resolves.toBeUndefined();
 
@@ -299,9 +311,9 @@ describe("Intune IPC response validation", () => {
     const result = validIntuneAnalysis();
     vi.mocked(invoke).mockResolvedValueOnce(result);
 
-    await expect(
-      analyzeIntuneLogs("C:\\Logs", "request-1"),
-    ).resolves.toEqual(result);
+    await expect(analyzeIntuneLogs("C:\\Logs", "request-1")).resolves.toEqual(
+      result,
+    );
   });
 
   it("rejects malformed diagnostics metadata", async () => {
@@ -312,12 +324,11 @@ describe("Intune IPC response validation", () => {
     };
     vi.mocked(invoke).mockResolvedValueOnce(result);
 
-    await expect(
-      analyzeIntuneLogs("C:\\Logs", "request-1"),
-    ).rejects.toThrow("invalid response");
+    await expect(analyzeIntuneLogs("C:\\Logs", "request-1")).rejects.toThrow(
+      "invalid response",
+    );
   });
 });
-
 
 function validTimelineBundle() {
   return {
@@ -1185,31 +1196,30 @@ describe("event-log manifest commands", () => {
     ["absent", {}],
     ["null", { eventRecordIdText: null }],
     ["string", { eventRecordIdText: "42" }],
-  ] as const)("accepts %s eventRecordIdText values", async (_label, identity) => {
-    const result = {
-      records: [{ ...validEventRecord, ...identity }],
-      channels: [
-        { name: "Application", eventCount: 1, sourceType: "live" },
-      ],
-      totalRecords: 1,
-      parseErrors: 0,
-      errorMessages: [],
-    };
-    vi.mocked(invoke).mockResolvedValueOnce(result);
+  ] as const)(
+    "accepts %s eventRecordIdText values",
+    async (_label, identity) => {
+      const result = {
+        records: [{ ...validEventRecord, ...identity }],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+        totalRecords: 1,
+        parseErrors: 0,
+        errorMessages: [],
+      };
+      vi.mocked(invoke).mockResolvedValueOnce(result);
 
-    await expect(parseEventLogManifest({ entries: [], coverage: [] })).resolves.toEqual(
-      result,
-    );
-  });
+      await expect(
+        parseEventLogManifest({ entries: [], coverage: [] }),
+      ).resolves.toEqual(result);
+    },
+  );
 
   it.each([[42], [true], [[]], [{ value: "42" }]])(
     "rejects malformed eventRecordIdText type %s",
     async (eventRecordIdText) => {
       vi.mocked(invoke).mockResolvedValueOnce({
         records: [{ ...validEventRecord, eventRecordIdText }],
-        channels: [
-          { name: "Application", eventCount: 1, sourceType: "live" },
-        ],
+        channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
         totalRecords: 1,
         parseErrors: 0,
         errorMessages: [],
@@ -1325,9 +1335,11 @@ function makeValidDiagnosisSummary(): DiagnosisSummaryFixture {
       outcome: "confirmedFailure",
       headline: "Evidence contains confirmed operational failure(s).",
       findingCount: 1,
+      actionableFindingCount: 1,
       coverageGapCount: 1,
       evidenceCount: 2,
       correlationCount: 1,
+      errorTokenEventCount: 1,
     },
   };
 }
@@ -1436,7 +1448,155 @@ const malformedDiagnosisCases: Array<
   ],
 ];
 
-describe("event-log diagnosis IPC boundary", () => {
+describe("event-log analysis diagnosis IPC boundary", () => {
+  it("passes ordinary coverage gaps through without changing them", async () => {
+    const coverageGaps: EvtxCoverageGap[] = [
+      {
+        source: "Application",
+        kind: "provider",
+        reason: "The provider description was unavailable.",
+      },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(makeValidDiagnosisSummary());
+
+    await diagnoseEventLogAnalysisSession("analysis-session", coverageGaps);
+
+    const payload = vi.mocked(invoke).mock.calls[0][1] as {
+      coverageGaps: EvtxCoverageGap[];
+    };
+    expect(payload.coverageGaps).toBe(coverageGaps);
+    expect(payload.coverageGaps).toEqual([
+      {
+        source: "Application",
+        kind: "provider",
+        reason: "The provider description was unavailable.",
+      },
+    ]);
+  });
+
+  it("bounds oversized coverage fields and reports exact projection accounting", async () => {
+    const oversized = "🙂".repeat(100_000);
+    const coverageGaps: EvtxCoverageGap[] = Array.from(
+      { length: 256 },
+      (_, index) => ({
+        source: index === 0 ? oversized : `source-${index}`,
+        kind: "limit" as const,
+        reason: index === 0 ? oversized : `reason-${index}`,
+      }),
+    );
+    vi.mocked(invoke).mockResolvedValueOnce(makeValidDiagnosisSummary());
+
+    await diagnoseEventLogAnalysisSession("analysis-session", coverageGaps);
+
+    const payload = vi.mocked(invoke).mock.calls[0][1] as {
+      coverageGaps: EvtxCoverageGap[];
+    };
+    const transported = payload.coverageGaps;
+    expect(transported).toHaveLength(256);
+    expect(
+      new TextEncoder().encode(JSON.stringify(transported)).byteLength,
+    ).toBeLessThanOrEqual(32 * 1024);
+    expect(
+      new TextEncoder().encode(transported[0].source).byteLength,
+    ).toBeLessThanOrEqual(EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT);
+    expect(
+      new TextEncoder().encode(transported[0].reason).byteLength,
+    ).toBeLessThanOrEqual(EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT);
+    expect(transported[0].source).toMatch(/…\[truncated:[0-9a-f]{16}\]$/);
+    expect(transported[0].reason).toMatch(/…\[truncated:[0-9a-f]{16}\]$/);
+    expect(transported[255]).toEqual({
+      source: "diagnosis-input-projection",
+      kind: "limit",
+      reason:
+        "Diagnosis coverage transport compacted 2 oversized text fields " +
+        "to 4096 UTF-8 bytes and omitted 1 original coverage gap to reserve this projection notice.",
+    });
+    expect(transported.some((gap) => gap.source === "source-255")).toBe(false);
+    expect(coverageGaps[0].source).toBe(oversized);
+    expect(coverageGaps[0].reason).toBe(oversized);
+    expect(coverageGaps).toHaveLength(256);
+  });
+
+  it("bounds every nested provider field and counts each compacted field", async () => {
+    const oversizedProvider = "Provider🙂".repeat(20_000);
+    const coverageGaps: EvtxCoverageGap[] = Array.from(
+      { length: 256 },
+      (_, index) => ({
+        source: `Application-${index}`,
+        kind: "provider" as const,
+        reason: "The provider description was unavailable.",
+        providerMessage: {
+          provider: `${oversizedProvider}-${index}`,
+          stage: "formatMessage" as const,
+          errorCode: 31_729,
+        },
+      }),
+    );
+    vi.mocked(invoke).mockResolvedValueOnce(makeValidDiagnosisSummary());
+
+    await diagnoseEventLogAnalysisSession("analysis-session", coverageGaps);
+
+    const payload = vi.mocked(invoke).mock.calls[0][1] as {
+      coverageGaps: EvtxCoverageGap[];
+    };
+    const transported = payload.coverageGaps;
+    expect(transported).toHaveLength(256);
+    expect(
+      new TextEncoder().encode(JSON.stringify(transported)).byteLength,
+    ).toBeLessThanOrEqual(2 * 1024 * 1024);
+    for (const gap of transported.slice(0, -1)) {
+      expect(
+        new TextEncoder().encode(gap.providerMessage?.provider ?? "")
+          .byteLength,
+      ).toBeLessThanOrEqual(EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT);
+      expect(gap.providerMessage).toMatchObject({
+        stage: "formatMessage",
+        errorCode: 31_729,
+      });
+    }
+    expect(transported[255]).toEqual({
+      source: "diagnosis-input-projection",
+      kind: "limit",
+      reason:
+        "Diagnosis coverage transport compacted 256 oversized text fields " +
+        "to 4096 UTF-8 bytes and omitted 1 original coverage gap to reserve this projection notice.",
+    });
+    expect(coverageGaps[0].providerMessage?.provider).toBe(
+      `${oversizedProvider}-0`,
+    );
+  });
+
+  it("canonicalizes zero-padded EventRecordID text without changing its value", async () => {
+    const padded = `${"0".repeat(1_000_000)}42`;
+    const coverageGaps: EvtxCoverageGap[] = [
+      {
+        source: "Application",
+        kind: "record",
+        reason: "Example record gap",
+        eventRecordId: 42,
+        eventRecordIdText: padded,
+      },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(makeValidDiagnosisSummary());
+
+    await diagnoseEventLogAnalysisSession("analysis-session", coverageGaps);
+
+    const payload = vi.mocked(invoke).mock.calls[0][1] as {
+      coverageGaps: EvtxCoverageGap[];
+    };
+    expect(payload.coverageGaps).toEqual([
+      {
+        source: "Application",
+        kind: "record",
+        reason: "Example record gap",
+        eventRecordId: 42,
+        eventRecordIdText: "42",
+      },
+    ]);
+    expect(payload.coverageGaps).not.toBe(coverageGaps);
+    expect(coverageGaps[0].eventRecordIdText).toBe(padded);
+  });
+
   it("accepts provider-description-unavailable coverage state", async () => {
     const summary = makeValidDiagnosisSummary();
     summary.coverageGaps = [
@@ -1447,7 +1607,9 @@ describe("event-log diagnosis IPC boundary", () => {
     ];
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).resolves.toBe(summary);
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).resolves.toBe(summary);
   });
 
   it.each(malformedDiagnosisCases)(
@@ -1457,14 +1619,14 @@ describe("event-log diagnosis IPC boundary", () => {
         mutateSummary(makeValidDiagnosisSummary()),
       );
 
-      await expect(diagnoseEventRecords([])).rejects.toThrow(
-        "Command 'evtx_diagnose_records' returned an invalid response.",
+      await expect(
+        diagnoseEventLogAnalysisSession("analysis-session"),
+      ).rejects.toThrow(
+        "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
       );
-      expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
-        records: [],
+      expect(invoke).toHaveBeenCalledWith("evtx_diagnose_analysis_session", {
+        sessionId: "analysis-session",
         coverageGaps: [],
-        timeline: null,
-        textEntries: [],
       });
     },
   );
@@ -1487,8 +1649,10 @@ describe("event-log diagnosis IPC boundary", () => {
     summary.overview.evidenceCount = summary.evidence.length;
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
   it("rejects unsafe numeric event identity paired with a safe-range text id", async () => {
@@ -1510,8 +1674,10 @@ describe("event-log diagnosis IPC boundary", () => {
     summary.overview.evidenceCount = summary.evidence.length;
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
 
@@ -1534,7 +1700,9 @@ describe("event-log diagnosis IPC boundary", () => {
     summary.overview.evidenceCount = summary.evidence.length;
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).resolves.toBe(summary);
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).resolves.toBe(summary);
   });
   it("rejects an unsafe numeric event identity with mismatched lossless text", async () => {
     const summary = makeValidDiagnosisSummary();
@@ -1555,19 +1723,37 @@ describe("event-log diagnosis IPC boundary", () => {
     summary.overview.evidenceCount = summary.evidence.length;
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
 
-
-  it("rejects diagnosis overview counts that disagree with the summary arrays", async () => {
+  it("accepts authoritative diagnosis totals larger than bounded preview arrays", async () => {
     const summary = makeValidDiagnosisSummary();
     summary.overview.findingCount = 99;
+    summary.overview.actionableFindingCount = 87;
+    summary.overview.coverageGapCount = 81;
+    summary.overview.evidenceCount = 412;
+    summary.overview.correlationCount = 55;
+    summary.overview.errorTokenEventCount = 23;
     vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).resolves.toBe(summary);
+  });
+
+  it("rejects diagnosis overview totals smaller than their preview arrays", async () => {
+    const summary = makeValidDiagnosisSummary();
+    summary.overview.findingCount = 0;
+    vi.mocked(invoke).mockResolvedValueOnce(summary);
+
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
   it("rejects a malformed backend response instead of exposing it as a diagnosis", async () => {
@@ -1578,8 +1764,10 @@ describe("event-log diagnosis IPC boundary", () => {
       correlations: [],
     });
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
 
@@ -1599,8 +1787,10 @@ describe("event-log diagnosis IPC boundary", () => {
       ],
     });
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
   it("rejects nested evidence references that omit required event identity", async () => {
@@ -1633,8 +1823,10 @@ describe("event-log diagnosis IPC boundary", () => {
       events: [],
     });
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
 
@@ -1661,13 +1853,17 @@ describe("event-log diagnosis IPC boundary", () => {
         outcome: "confirmedFailure",
         headline: "Failure evidence is available.",
         findingCount: 1,
+        actionableFindingCount: 1,
         coverageGapCount: 0,
         evidenceCount: 0,
         correlationCount: 0,
+        errorTokenEventCount: 0,
       },
     });
 
-    await expect(diagnoseEventRecords([])).resolves.toMatchObject({
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).resolves.toMatchObject({
       findings: [{ findingId: "finding-empty-summary", summary: "" }],
     });
   });
@@ -1693,174 +1889,214 @@ describe("event-log diagnosis IPC boundary", () => {
       events: [],
     });
 
-    await expect(diagnoseEventRecords([])).rejects.toThrow(
-      "Command 'evtx_diagnose_records' returned an invalid response.",
+    await expect(
+      diagnoseEventLogAnalysisSession("analysis-session"),
+    ).rejects.toThrow(
+      "Command 'evtx_diagnose_analysis_session' returned an invalid response.",
     );
   });
+});
 
-  it("transports unsafe EventRecordID values through their lossless decimal text", async () => {
-    const exactId = "9007199254740993";
-    const record: EvtxRecord = {
-      id: 1,
-      eventRecordId: Number(exactId),
-      eventRecordIdText: exactId,
-      timestamp: "2026-08-18T12:00:00Z",
-      timestampEpoch: 1_755_523_200_000,
-      provider: "Provider",
-      channel: "Application",
-      eventId: 75,
-      level: "Information",
-      computer: "WIN-TEST",
-      message: "Enrollment failed",
-      eventData: [],
-      rawXml: "",
-      sourceLabel: "Application.evtx",
-      originKind: "event",
-    };
-    vi.mocked(invoke).mockResolvedValueOnce({
-      findings: [],
-      evidence: [],
-      coverageGaps: [],
-      correlations: [],
-      events: [],
-      overview: {
-        outcome: "noFindings",
-        headline: "No operational findings were identified.",
-        findingCount: 0,
-        coverageGapCount: 0,
-        evidenceCount: 0,
-        correlationCount: 0,
-      },
-    });
+describe("event-log analysis append transport", () => {
+  const sessionStatus = {
+    sessionId: "analysis-session",
+    revision: 1,
+    totalItems: 1,
+    eventItems: 1,
+    logItems: 0,
+    totalUnplaced: 0,
+    totalEdges: 0,
+    totalCoverageGaps: 0,
+    finalized: false,
+  };
 
-    await expect(diagnoseEventRecords([record])).resolves.toEqual({
-      findings: [],
-      evidence: [],
-      coverageGaps: [],
-      correlations: [],
-      events: [],
-      overview: {
-        outcome: "noFindings",
-        headline: "No operational findings were identified.",
-        findingCount: 0,
-        coverageGapCount: 0,
-        evidenceCount: 0,
-        correlationCount: 0,
-      },
-    });
-    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
-      records: [
-        {
-          ...record,
-          eventRecordId: Number.MAX_SAFE_INTEGER + 1,
-        },
-      ],
-      coverageGaps: [],
-      timeline: null,
-      textEntries: [],
-    });
-  });
-  it("uses bounded numeric transport when decimal text exceeds u64", async () => {
-    const record: EvtxRecord = {
-      id: 1,
-      eventRecordId: Number("18446744073709551616"),
-      eventRecordIdText: "18446744073709551616",
-      timestamp: "2026-08-18T12:00:00Z",
-      timestampEpoch: 1_755_523_200_000,
-      provider: "Provider",
-      channel: "Application",
-      eventId: 75,
-      level: "Information",
-      computer: "WIN-TEST",
-      message: "Enrollment failed",
-      eventData: [],
-      rawXml: "",
-      sourceLabel: "Application.evtx",
-      originKind: "event",
-    };
-    vi.mocked(invoke).mockResolvedValueOnce({
-      findings: [],
-      evidence: [],
-      coverageGaps: [],
-      correlations: [],
-      events: [],
-      overview: {
-        outcome: "noFindings",
-        headline: "No operational findings were identified.",
-        findingCount: 0,
-        coverageGapCount: 0,
-        evidenceCount: 0,
-        correlationCount: 0,
-      },
-    });
-
-    await expect(diagnoseEventRecords([record])).resolves.toMatchObject({
-      findings: [],
-    });
-    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
-      records: [
-        {
-          ...record,
-          eventRecordId: Number.MAX_SAFE_INTEGER + 1,
-        },
-      ],
-      coverageGaps: [],
-      timeline: null,
-      textEntries: [],
-    });
+  const recordWithIdentity = (
+    eventRecordId: number,
+    eventRecordIdText: string,
+  ): EvtxRecord => ({
+    id: 1,
+    eventRecordId,
+    eventRecordIdText,
+    timestamp: "2026-08-18T12:00:00Z",
+    timestampEpoch: 1_755_523_200_000,
+    provider: "Provider",
+    channel: "Application",
+    eventId: 75,
+    level: "Information",
+    computer: "WIN-TEST",
+    message: "Enrollment failed",
+    eventData: [],
+    rawXml: "",
+    sourceLabel: "Application.evtx",
+    originKind: "event",
   });
 
-  it("rejects an unsafe EventRecordID paired with a safe-range transport text id", async () => {
-    const record: EvtxRecord = {
-      id: 1,
-      eventRecordId: Number("9007199254740992"),
-      eventRecordIdText: "42",
-      timestamp: "2026-08-18T12:00:00Z",
-      timestampEpoch: 1_755_523_200_000,
-      provider: "Provider",
-      channel: "Application",
-      eventId: 75,
-      level: "Information",
-      computer: "WIN-TEST",
-      message: "Enrollment failed",
-      eventData: [],
-      rawXml: "",
-      sourceLabel: "Application.evtx",
-      originKind: "event",
-    };
+  it.each([
+    [
+      "an unsafe exact identity",
+      Number("9007199254740993"),
+      "9007199254740993",
+      null,
+    ],
+    [
+      "a projected decimal above u64",
+      Number("18446744073709551616"),
+      "18446744073709551616",
+      9_000_000,
+    ],
+  ])(
+    "uses a bounded numeric transport for %s",
+    async (_caseName, numericId, exactId, originalSerializedBytes) => {
+      const record = recordWithIdentity(numericId, exactId);
+      vi.mocked(invoke).mockResolvedValueOnce(sessionStatus);
 
-    await expect(diagnoseEventRecords([record])).rejects.toThrow(
+      await expect(
+        appendEventLogAnalysisChunk("analysis-session", [
+          { record, originalSerializedBytes },
+        ]),
+      ).resolves.toEqual(sessionStatus);
+      expect(invoke).toHaveBeenCalledWith("evtx_append_analysis_chunk", {
+        sessionId: "analysis-session",
+        records: [
+          {
+            record: {
+              ...record,
+              eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+            },
+            originalSerializedBytes,
+          },
+        ],
+        entries: [],
+      });
+    },
+  );
+
+  it("rejects unsafe numeric identity paired with safe-range text before IPC", async () => {
+    const record = recordWithIdentity(Number("9007199254740992"), "42");
+
+    await expect(
+      appendEventLogAnalysisChunk("analysis-session", [
+        { record, originalSerializedBytes: null },
+      ]),
+    ).rejects.toThrow(
       "EventRecordID text must preserve an unsafe numeric identity.",
     );
     expect(invoke).not.toHaveBeenCalled();
   });
-  it("keeps malformed record identities in the diagnosis batch for backend coverage", async () => {
-    const record: EvtxRecord = {
-      id: 1,
-      eventRecordId: 42,
-      eventRecordIdText: "not-decimal",
-      timestamp: "2026-08-18T12:00:00Z",
-      timestampEpoch: 1_755_523_200_000,
-      provider: "Provider",
-      channel: "Application",
-      eventId: 75,
-      level: "Information",
-      computer: "WIN-TEST",
-      message: "Enrollment failed",
-      eventData: [],
-      rawXml: "",
-      sourceLabel: "Application.evtx",
-      originKind: "event",
-    };
-    const summary = makeValidDiagnosisSummary();
-    vi.mocked(invoke).mockResolvedValueOnce(summary);
 
-    await expect(diagnoseEventRecords([record])).resolves.toBe(summary);
-    expect(invoke).toHaveBeenCalledWith("evtx_diagnose_records", {
-      records: [{ ...record, eventRecordId: 42 }],
-      coverageGaps: [],
-      timeline: null,
-      textEntries: [],
+  it("preserves malformed record identity text for backend coverage", async () => {
+    const record = recordWithIdentity(42, "not-decimal");
+    vi.mocked(invoke).mockResolvedValueOnce(sessionStatus);
+
+    await expect(
+      appendEventLogAnalysisChunk("analysis-session", [
+        { record, originalSerializedBytes: null },
+      ]),
+    ).resolves.toEqual(sessionStatus);
+    expect(invoke).toHaveBeenCalledWith("evtx_append_analysis_chunk", {
+      sessionId: "analysis-session",
+      records: [{ record, originalSerializedBytes: null }],
+      entries: [],
     });
   });
+
+  it("transports text-log projection markers without changing the entry", async () => {
+    const entry: LogEntry = {
+      id: 7,
+      lineNumber: 19,
+      message: "Bounded projected message",
+      component: "Example component",
+      timestamp: 1_755_523_200_000,
+      timestampDisplay: "08-18-2026 12:00:00.000",
+      severity: "Info",
+      thread: 42,
+      threadDisplay: "42 (0x002A)",
+      sourceFile: "example.log",
+      format: "Ccm",
+      filePath: "C:\\Logs\\example.log",
+      timezoneOffset: 0,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(sessionStatus);
+
+    await expect(
+      appendEventLogAnalysisChunk(
+        "analysis-session",
+        [],
+        [{ entry, originalSerializedBytes: 9_000_000 }],
+      ),
+    ).resolves.toEqual(sessionStatus);
+    expect(invoke).toHaveBeenCalledWith("evtx_append_analysis_chunk", {
+      sessionId: "analysis-session",
+      records: [],
+      entries: [{ entry, originalSerializedBytes: 9_000_000 }],
+    });
+  });
+});
+
+describe("event-log analysis timeline IPC boundary", () => {
+  const page = {
+    sessionId: "analysis-session",
+    revision: 4,
+    offset: 1,
+    nextOffset: 2,
+    serializedBytes: 4_096,
+    totalItems: 3,
+    eventItems: 3,
+    logItems: 0,
+    totalUnplaced: 0,
+    totalEdges: 0,
+    totalCoverageGaps: 0,
+    items: [
+      {
+        timestampMs: 2,
+        severity: "info",
+        message: "Variable byte page row",
+        origin: {
+          kind: "event",
+          stableId: "source|Application|record-2",
+          source: "Application",
+          machine: null,
+          bundle: null,
+          channel: "Application",
+          provider: "Provider",
+          processId: null,
+          eventId: 1,
+          recordId: 2,
+        },
+      },
+    ],
+    unplacedPreview: [],
+    edgesPreview: [],
+    coverageGapsPreview: [],
+  };
+
+  it("accepts a variable-size page with an exact next offset", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(page);
+
+    await expect(
+      queryEventLogAnalysisTimeline("analysis-session", 1, 1_000),
+    ).resolves.toMatchObject({ offset: 1, nextOffset: 2, totalItems: 3 });
+  });
+
+  it("rejects a page that does not advance to the next unread row", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ ...page, nextOffset: 3 });
+
+    await expect(
+      queryEventLogAnalysisTimeline("analysis-session", 1, 1_000),
+    ).rejects.toThrow("Invalid event-log analysis response: page.nextOffset");
+  });
+
+  it.each([undefined, 0, 8 * 1024 * 1024 + 1])(
+    "rejects invalid authoritative serialized page bytes %s",
+    async (serializedBytes) => {
+      const response = { ...page, serializedBytes };
+      vi.mocked(invoke).mockResolvedValueOnce(response);
+
+      await expect(
+        queryEventLogAnalysisTimeline("analysis-session", 1, 1_000),
+      ).rejects.toThrow(
+        "Invalid event-log analysis response: page.serializedBytes",
+      );
+    },
+  );
 });

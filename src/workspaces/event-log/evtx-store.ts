@@ -25,12 +25,10 @@ import type {
   EvtxTailStatus,
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
-import type { LogEntry } from "../../types/log";
 import {
   clearEventLogChannel,
   type EvtxClearStatusResult,
 } from "../../lib/commands";
-import { assertUnifiedTimelineShape, type UnifiedTimeline } from "./unified-timeline";
 
 // Re-exported so callers have one import site; the implementation lives in a Tauri-free module.
 export { selectVisibleRecords } from "./evtx-filter";
@@ -598,30 +596,6 @@ function captureSelectedRecord(records: EvtxRecord[], selectedRecordId: number |
     selectedRecordId === null ? -1 : records.findIndex((record) => record.id === selectedRecordId);
   preservedSelectedRecordKey =
     selectedIndex < 0 ? null : selectionKeyForIndex(records, selectedIndex);
-}
-/** Builds the backend-owned merged timeline for the records currently shown in this workspace. */
-export function buildUnifiedTimeline(
-  records: EvtxRecord[],
-  entries: LogEntry[] = []
-): Promise<UnifiedTimeline> {
-  if (
-    records.some(
-      (record) =>
-        record.eventRecordId !== 0 &&
-        !record.eventRecordIdText &&
-        !Number.isSafeInteger(record.eventRecordId)
-    )
-  ) {
-    return Promise.reject(new Error("EventRecordID exceeds JavaScript safe integer precision"));
-  }
-  const transportRecords = records.map((record) => ({
-    ...record,
-    eventRecordId: record.eventRecordIdText ?? String(record.eventRecordId),
-  }));
-  return invoke<unknown>("evtx_build_unified_timeline", {
-    entries,
-    records: transportRecords,
-  }).then(assertUnifiedTimelineShape);
 }
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";

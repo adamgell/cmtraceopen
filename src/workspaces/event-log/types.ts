@@ -343,9 +343,11 @@ export interface DiagnosisOverview {
     | "noFindings";
   headline: string;
   findingCount: number;
+  actionableFindingCount: number;
   coverageGapCount: number;
   evidenceCount: number;
   correlationCount: number;
+  errorTokenEventCount: number;
 }
 
 export interface DiagnosisSummary {

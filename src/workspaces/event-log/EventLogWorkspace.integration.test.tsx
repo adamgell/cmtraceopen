@@ -1,23 +1,26 @@
-import type * as EvtxStoreModule from "./evtx-store";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import { deferred } from "../../test-utils/deferred";
+
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => undefined),
 }));
 
 const mocks = vi.hoisted(() => ({
-  buildTimeline: vi.fn(),
-  diagnose: vi.fn(),
+  buildAnalysis: vi.fn(),
+  closeAnalysis: vi.fn(),
+  queryTimeline: vi.fn(),
 }));
 
 vi.mock("../../lib/commands", () => ({
-  diagnoseEventRecords: mocks.diagnose,
+  closeEventLogAnalysisSession: mocks.closeAnalysis,
+  queryEventLogAnalysisTimeline: mocks.queryTimeline,
 }));
-vi.mock("./evtx-store", async () => {
-  const actual = await vi.importActual<typeof EvtxStoreModule>("./evtx-store");
-  return { ...actual, buildUnifiedTimeline: mocks.buildTimeline };
-});
+vi.mock("./event-analysis-session", () => ({
+  buildEventLogAnalysisSession: mocks.buildAnalysis,
+  EventLogAnalysisCancelled: class EventLogAnalysisCancelled extends Error {},
+}));
 
 vi.mock("./SourcePicker", () => ({ SourcePicker: () => null }));
 vi.mock("./ChannelPicker", () => ({ ChannelPicker: () => null }));
@@ -32,7 +35,6 @@ import { useLogStore } from "../../stores/log-store";
 import { useEvtxStore } from "./evtx-store";
 import { EventLogWorkspace } from "./EventLogWorkspace";
 import type { EvtxRecord } from "./types";
-import { stableRecordIdentity, type UnifiedTimeline } from "./unified-timeline";
 
 const RECORD: EvtxRecord = {
   id: 1,
@@ -50,14 +52,65 @@ const RECORD: EvtxRecord = {
   sourceLabel: "sample.evtx",
 };
 
-const TIMELINE = {
-  items: [],
-  unplaced: [],
-  edges: [],
-  coverageGaps: [],
-};
+function analysisResult(sessionId = "session-1", eventItems = 1) {
+  const status = {
+    sessionId,
+    revision: 1,
+    totalItems: eventItems,
+    eventItems,
+    logItems: 0,
+    totalUnplaced: 0,
+    totalEdges: 0,
+    totalCoverageGaps: 0,
+    finalized: true,
+  };
+  return {
+    status,
+    initialPage: {
+      sessionId,
+      revision: status.revision,
+      offset: 0,
+      nextOffset: null,
+      serializedBytes: 1_024,
+      totalItems: status.totalItems,
+      eventItems: status.eventItems,
+      logItems: status.logItems,
+      totalUnplaced: status.totalUnplaced,
+      totalEdges: status.totalEdges,
+      totalCoverageGaps: status.totalCoverageGaps,
+      items: [],
+      unplacedPreview: [],
+      edgesPreview: [],
+      coverageGapsPreview: [],
+    },
+    diagnosis: {},
+  };
+}
 
-describe("EventLogWorkspace diagnosis and timeline wiring", () => {
+function seed(records: EvtxRecord[], isLoading = false): void {
+  useEvtxStore.setState({
+    records,
+    channels: [
+      {
+        name: "Application",
+        eventCount: records.length,
+        sourceType: { file: { path: "sample.evtx" } },
+      },
+      {
+        name: "Security",
+        eventCount: records.length,
+        sourceType: { file: { path: "sample.evtx" } },
+      },
+    ],
+    selectedChannels: new Set(["Application"]),
+    loadedChannels: new Set(["Application", "Security"]),
+    sourceMode: "files",
+    timeWindow: "all",
+    isLoading,
+  });
+}
+
+describe("EventLogWorkspace backend-owned analysis wiring", () => {
   beforeEach(() => {
     useEvtxStore.getState().reset();
     useLogStore.setState({
@@ -65,42 +118,30 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
       activeSource: null,
       sourceOpenMode: "merged",
     });
-    mocks.buildTimeline.mockReset();
-    mocks.diagnose.mockReset();
-    mocks.buildTimeline.mockResolvedValue(TIMELINE);
-    mocks.diagnose.mockResolvedValue({});
+    mocks.buildAnalysis.mockReset().mockResolvedValue(analysisResult());
+    mocks.closeAnalysis.mockReset().mockResolvedValue(undefined);
+    mocks.queryTimeline.mockReset();
   });
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
-  it("passes the resolved visible timeline to diagnosis", async () => {
-    useEvtxStore.setState({
-      records: [RECORD],
-      channels: [
-        {
-          name: "Application",
-          eventCount: 1,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["Application"]),
-      loadedChannels: new Set(["Application"]),
-      sourceMode: "files",
-      timeWindow: "all",
-    });
-
+  it("passes the currently visible snapshot to one analysis session", async () => {
+    seed([RECORD]);
     render(<EventLogWorkspace />);
 
-    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mocks.diagnose).toHaveBeenCalledTimes(1));
-
-    expect(mocks.buildTimeline).toHaveBeenCalledWith([RECORD], []);
-    expect(mocks.diagnose).toHaveBeenCalledWith([RECORD], [], TIMELINE, []);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    expect(mocks.buildAnalysis).toHaveBeenCalledWith({
+      records: [RECORD],
+      entries: [],
+      coverageGaps: [],
+      cancelled: expect.any(Function),
+    });
   });
 
-  it("passes only filtered records and their timeline projection to diagnosis", async () => {
+  it("sends only filtered records to timeline and diagnosis analysis", async () => {
     const hiddenRecord: EvtxRecord = {
       ...RECORD,
       id: 2,
@@ -108,200 +149,126 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
       channel: "Security",
       message: "Hidden event",
     };
-    const fullTimeline: UnifiedTimeline = {
-      items: [
-        {
-          timestampMs: 1,
-          severity: "info",
-          message: "visible",
-          origin: {
-            kind: "event",
-            stableId: stableRecordIdentity(RECORD),
-            source: RECORD.sourceLabel,
-            machine: RECORD.computer,
-            bundle: null,
-            channel: RECORD.channel,
-            provider: RECORD.provider,
-            processId: null,
-            eventId: RECORD.eventId,
-            recordId: RECORD.eventRecordId,
-          },
-        },
-        {
-          timestampMs: 2,
-          severity: "info",
-          message: "hidden",
-          origin: {
-            kind: "event",
-            stableId: stableRecordIdentity(hiddenRecord),
-            source: hiddenRecord.sourceLabel,
-            machine: hiddenRecord.computer,
-            bundle: null,
-            channel: hiddenRecord.channel,
-            provider: hiddenRecord.provider,
-            processId: null,
-            eventId: hiddenRecord.eventId,
-            recordId: hiddenRecord.eventRecordId,
-          },
-        },
-      ],
-      unplaced: [],
-    };
-    mocks.buildTimeline.mockResolvedValue(fullTimeline);
-    useEvtxStore.setState({
-      records: [RECORD, hiddenRecord],
-      channels: [
-        {
-          name: "Application",
-          eventCount: 1,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-        {
-          name: "Security",
-          eventCount: 1,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["Application"]),
-      loadedChannels: new Set(["Application", "Security"]),
-      sourceMode: "files",
-      timeWindow: "all",
-    });
-
+    seed([RECORD, hiddenRecord]);
     render(<EventLogWorkspace />);
 
-    await waitFor(() => expect(mocks.diagnose).toHaveBeenCalledTimes(1));
-    expect(mocks.diagnose).toHaveBeenCalledWith(
-      [RECORD],
-      [],
-      {
-        ...fullTimeline,
-        items: [fullTimeline.items[0]],
-        edges: [],
-        coverageGaps: [],
-      },
-      [],
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ records: [RECORD] }),
     );
   });
 
-  it("coalesces a burst of record changes into one timeline rebuild", async () => {
-    const newer = {
-      ...RECORD,
-      id: 2,
-      eventRecordId: 102,
-      message: "Newer event",
-    };
-    const newest = {
-      ...RECORD,
-      id: 3,
-      eventRecordId: 103,
-      message: "Newest event",
-    };
-    useEvtxStore.setState({
-      records: [RECORD],
-      channels: [
-        {
-          name: "Application",
-          eventCount: 3,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["Application"]),
-      loadedChannels: new Set(["Application"]),
-      sourceMode: "files",
-      timeWindow: "all",
-    });
-
+  it("coalesces a burst of record changes into one session build", async () => {
+    const newer = { ...RECORD, id: 2, eventRecordId: 102 };
+    const newest = { ...RECORD, id: 3, eventRecordId: 103 };
+    seed([RECORD]);
     render(<EventLogWorkspace />);
     act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
     act(() => useEvtxStore.setState({ records: [RECORD, newer, newest] }));
 
-    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
-    expect(mocks.buildTimeline).toHaveBeenCalledWith(
-      [RECORD, newer, newest],
-      [],
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ records: [RECORD, newer, newest] }),
     );
   });
 
-  it("defers full timeline and diagnosis work until a streamed load settles", async () => {
-    const newer = {
-      ...RECORD,
-      id: 2,
-      eventRecordId: 102,
-      message: "Newer event",
-    };
-    useEvtxStore.setState({
-      records: [RECORD],
-      channels: [
-        {
-          name: "Application",
-          eventCount: 2,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["Application"]),
-      loadedChannels: new Set<string>(),
-      sourceMode: "live",
-      timeWindow: "all",
-      isLoading: true,
-    });
-
+  it("defers analysis until a streamed load settles", async () => {
+    const newer = { ...RECORD, id: 2, eventRecordId: 102 };
+    seed([RECORD], true);
     render(<EventLogWorkspace />);
     act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 150));
     });
-
-    expect(mocks.buildTimeline).not.toHaveBeenCalled();
-    expect(mocks.diagnose).not.toHaveBeenCalled();
+    expect(mocks.buildAnalysis).not.toHaveBeenCalled();
 
     act(() => useEvtxStore.setState({ isLoading: false }));
-    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mocks.diagnose).toHaveBeenCalledTimes(1));
-    expect(mocks.buildTimeline).toHaveBeenCalledWith([RECORD, newer], []);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
+    expect(mocks.buildAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ records: [RECORD, newer] }),
+    );
   });
 
-  it("serializes timeline builds and runs only the newest queued snapshot", async () => {
-    const firstBuild = deferred<typeof TIMELINE>();
-    const newer = {
+  it("keeps a rolling-window snapshot stable until records change", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T12:00:00Z"));
+    const boundaryRecord = {
+      ...RECORD,
+      timestampEpoch: Date.now() - 24 * 60 * 60 * 1_000 + 60_000,
+    };
+    seed([boundaryRecord]);
+    useEvtxStore.setState({ timeWindow: "24h" });
+    render(<EventLogWorkspace />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
+
+    const newRecord = {
       ...RECORD,
       id: 2,
       eventRecordId: 102,
-      message: "Newer event",
+      timestampEpoch: Date.now(),
     };
-    mocks.buildTimeline
+    act(() =>
+      useEvtxStore.setState({ records: [boundaryRecord, newRecord] }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2);
+    expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+      expect.objectContaining({ records: [newRecord] }),
+    );
+  });
+
+  it("serializes more than eight rapid supersessions and builds only the newest snapshot", async () => {
+    const firstBuild = deferred<ReturnType<typeof analysisResult>>();
+    mocks.buildAnalysis
       .mockReset()
       .mockReturnValueOnce(firstBuild.promise)
-      .mockResolvedValue(TIMELINE);
-    useEvtxStore.setState({
-      records: [RECORD],
-      channels: [
-        {
-          name: "Application",
-          eventCount: 2,
-          sourceType: { file: { path: "sample.evtx" } },
-        },
-      ],
-      selectedChannels: new Set(["Application"]),
-      loadedChannels: new Set(["Application"]),
-      sourceMode: "files",
-      timeWindow: "all",
-    });
-
+      .mockResolvedValueOnce(analysisResult("session-latest", 11));
+    seed([RECORD]);
     render(<EventLogWorkspace />);
-    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1));
 
-    act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
+    const firstOptions = mocks.buildAnalysis.mock.calls[0][0];
+    let latestRecords = [RECORD];
+    for (let index = 2; index <= 11; index += 1) {
+      latestRecords = [
+        ...latestRecords,
+        { ...RECORD, id: index, eventRecordId: 100 + index },
+      ];
+      const records = latestRecords;
+      act(() => useEvtxStore.setState({ records }));
+    }
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 150));
     });
-    expect(mocks.buildTimeline).toHaveBeenCalledTimes(1);
+
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(1);
+    expect(firstOptions.cancelled()).toBe(true);
 
     await act(async () => {
-      firstBuild.resolve(TIMELINE);
+      firstBuild.resolve(analysisResult("session-1"));
       await firstBuild.promise;
     });
-    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(2));
-    expect(mocks.buildTimeline).toHaveBeenLastCalledWith([RECORD, newer], []);
+    await waitFor(() => expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2));
+    expect(mocks.buildAnalysis).toHaveBeenLastCalledWith(
+      expect.objectContaining({ records: latestRecords }),
+    );
+    await waitFor(() =>
+      expect(mocks.closeAnalysis).toHaveBeenCalledWith("session-1"),
+    );
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
+    expect(mocks.buildAnalysis).toHaveBeenCalledTimes(2);
   });
 });

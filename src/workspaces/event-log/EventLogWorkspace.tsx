@@ -1,9 +1,15 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { ProgressBar, Spinner, tokens } from "@fluentui/react-components";
-import { diagnoseEventRecords } from "../../lib/commands";
-import { useEvtxStore, buildUnifiedTimeline } from "./evtx-store";
+import {
+  closeEventLogAnalysisSession,
+  queryEventLogAnalysisTimeline,
+  type EventLogAnalysisSessionStatus,
+  type EventLogAnalysisTimelinePage,
+} from "../../lib/commands";
+import { useEvtxStore } from "./evtx-store";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
+import type { LogEntry } from "../../types/log";
 import { SourcePicker } from "./SourcePicker";
 import { ChannelPicker } from "./ChannelPicker";
 import { EvtxFilterBar } from "./EvtxFilterBar";
@@ -13,60 +19,58 @@ import { EvtxTimeline } from "./EvtxTimeline";
 import { UnifiedTimelineView } from "./UnifiedTimelineView";
 import { EvtxDetailPane } from "./EvtxDetailPane";
 import { selectVisibleRecords } from "./evtx-filter";
-import {
-  filterTimelineToRecords,
-  scopeLogEntries,
-  type UnifiedTimeline,
-} from "./unified-timeline";
+import { scopeLogEntries } from "./unified-timeline";
 import { mergeDiagnosisCoverageGaps } from "./evtx-coverage";
-import type { DiagnosisSummary } from "./types";
+import type {
+  DiagnosisSummary,
+  EvtxCoverageGap,
+  EvtxRecord,
+} from "./types";
+import {
+  buildEventLogAnalysisSession,
+  EventLogAnalysisCancelled,
+} from "./event-analysis-session";
 
 const DEFAULT_DETAIL_HEIGHT = 300;
 const MIN_DETAIL_HEIGHT = 100;
 const MAX_DETAIL_RATIO = 0.7;
 const DIAGNOSIS_DEBOUNCE_MS = 75;
-const EMPTY_TIMELINE: UnifiedTimeline = { items: [], unplaced: [] };
 
-type DiagnosisSnapshot = {
-  records: Parameters<typeof diagnoseEventRecords>[0];
-  coverageGaps: Exclude<Parameters<typeof diagnoseEventRecords>[1], undefined>;
-  timeline: UnifiedTimeline;
-  textEntries: Exclude<Parameters<typeof diagnoseEventRecords>[3], undefined>;
-};
-
-type DiagnosisPump = {
-  pending: DiagnosisSnapshot | null;
-  running: boolean;
-  timer: number | null;
+interface EventLogAnalysisSnapshot {
   revision: number;
+  readyAt: number;
+  records: EvtxRecord[];
+  entries: LogEntry[];
+  coverageGaps: EvtxCoverageGap[];
+}
+
+interface EventLogAnalysisPump {
   mounted: boolean;
-};
-
-type TimelineSnapshot = {
-  records: Parameters<typeof buildUnifiedTimeline>[0];
-  entries: Parameters<typeof buildUnifiedTimeline>[1];
-};
-
-type TimelinePump = {
-  pending: TimelineSnapshot | null;
-  running: boolean;
-  timer: number | null;
   revision: number;
-  mounted: boolean;
-};
+  running: boolean;
+  pending: EventLogAnalysisSnapshot | null;
+  timer: number | null;
+  publishedSessionId: string | null;
+}
+
+function useStableRecordMembership(records: EvtxRecord[]): EvtxRecord[] {
+  const stableRecordsRef = useRef(records);
+  const stableRecords = stableRecordsRef.current;
+  if (stableRecords === records) return stableRecords;
+  if (
+    stableRecords.length !== records.length ||
+    records.some((record, index) => record !== stableRecords[index])
+  ) {
+    stableRecordsRef.current = records;
+  }
+  return stableRecordsRef.current;
+}
 
 export function EventLogWorkspace() {
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const isLoading = useEvtxStore((s) => s.isLoading);
   const loadError = useEvtxStore((s) => s.loadError);
-  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
-  useEffect(() => {
-    if (timeWindow === "all") return;
-    setNowEpoch(Date.now());
-    const timer = window.setInterval(() => setNowEpoch(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, [timeWindow]);
   const logEntries = useLogStore((s) => s.entries);
   const activeLogSource = useLogStore((s) => s.activeSource);
   const logSourceOpenMode = useLogStore((s) => s.sourceOpenMode);
@@ -89,6 +93,21 @@ export function EventLogWorkspace() {
   const quickFilter = useEvtxStore((s) => s.quickFilter);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
+  const nowEpoch = useMemo(
+    () => Date.now(),
+    [
+      records,
+      selectedChannels,
+      filterLevels,
+      filterEventIds,
+      filterSearch,
+      quickFilter,
+      columnOrder,
+      timeZoneMode,
+      timeWindow,
+      isLoading,
+    ],
+  );
   const visibleRecords = useMemo(
     () =>
       isLoading
@@ -119,6 +138,7 @@ export function EventLogWorkspace() {
       nowEpoch,
     ],
   );
+  const analysisRecords = useStableRecordMembership(visibleRecords);
   const channels = useEvtxStore((s) => s.channels);
   const coverageGaps = useEvtxStore((s) => s.coverageGaps);
   const coverageDetails = useEvtxStore((s) => s.coverageDetails);
@@ -138,38 +158,20 @@ export function EventLogWorkspace() {
 
   const [diagnosis, setDiagnosis] = useState<DiagnosisSummary | null>(null);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
-  const diagnosisPumpRef = useRef<DiagnosisPump>({
-    pending: null,
-    running: false,
-    timer: null,
-    revision: 0,
-    mounted: false,
-  });
-
-  const [timeline, setTimeline] = useState<UnifiedTimeline>({
-    items: [],
-    unplaced: [],
-  });
+  const [analysisStatus, setAnalysisStatus] =
+    useState<EventLogAnalysisSessionStatus | null>(null);
+  const [initialTimelinePage, setInitialTimelinePage] =
+    useState<EventLogAnalysisTimelinePage | null>(null);
   const [timelinePending, setTimelinePending] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
-  const timelineInputsRef = useRef<TimelineSnapshot | null>(null);
-  const timelinePumpRef = useRef<TimelinePump>({
-    pending: null,
-    running: false,
-    timer: null,
-    revision: 0,
+  const analysisPumpRef = useRef<EventLogAnalysisPump>({
     mounted: false,
+    revision: 0,
+    running: false,
+    pending: null,
+    timer: null,
+    publishedSessionId: null,
   });
-  const timelineIsCurrent =
-    timelineInputsRef.current?.records === records &&
-    timelineInputsRef.current?.entries === scopedLogEntries;
-  const visibleTimeline = useMemo(
-    () =>
-      timelineIsCurrent
-        ? filterTimelineToRecords(timeline, visibleRecords, records)
-        : null,
-    [timeline, timelineIsCurrent, visibleRecords, records],
-  );
 
   const [detailHeight, setDetailHeight] = useState(DEFAULT_DETAIL_HEIGHT);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(
@@ -210,211 +212,153 @@ export function EventLogWorkspace() {
     };
   }, []);
   useEffect(() => {
-    const pump = diagnosisPumpRef.current;
+    const pump = analysisPumpRef.current;
     pump.mounted = true;
     return () => {
       pump.mounted = false;
       pump.revision += 1;
+      pump.pending = null;
       if (pump.timer !== null) window.clearTimeout(pump.timer);
       pump.timer = null;
-      pump.pending = null;
-    };
-  }, []);
-  useEffect(() => {
-    const pump = timelinePumpRef.current;
-    pump.mounted = true;
-    return () => {
-      pump.mounted = false;
-      pump.revision += 1;
-      if (pump.timer !== null) window.clearTimeout(pump.timer);
-      pump.timer = null;
-      pump.pending = null;
+      if (pump.publishedSessionId !== null) {
+        void closeEventLogAnalysisSession(pump.publishedSessionId).catch(
+          () => undefined,
+        );
+        pump.publishedSessionId = null;
+      }
     };
   }, []);
 
   useEffect(() => {
-    const pump = diagnosisPumpRef.current;
+    const pump = analysisPumpRef.current;
     const revision = pump.revision + 1;
     pump.revision = revision;
+    pump.pending = null;
     if (pump.timer !== null) window.clearTimeout(pump.timer);
     pump.timer = null;
-    pump.pending = null;
+    if (pump.publishedSessionId !== null) {
+      void closeEventLogAnalysisSession(pump.publishedSessionId).catch(
+        () => undefined,
+      );
+      pump.publishedSessionId = null;
+    }
+
+    setDiagnosis(null);
+    setDiagnosisError(null);
+    setAnalysisStatus(null);
+    setInitialTimelinePage(null);
+    setTimelineError(null);
 
     if (isLoading) {
-      setDiagnosis(null);
-      setDiagnosisError(null);
-      return () => {
-        if (pump.timer !== null) window.clearTimeout(pump.timer);
-        pump.timer = null;
-        if (pump.revision !== revision) return;
-        pump.pending = null;
-      };
+      setTimelinePending(true);
+      return;
     }
 
     if (
-      records.length === 0 &&
-      diagnosisCoverageGaps.length === 0 &&
-      scopedLogEntries.length === 0
+      analysisRecords.length === 0 &&
+      scopedLogEntries.length === 0 &&
+      diagnosisCoverageGaps.length === 0
     ) {
-      setDiagnosis(null);
-      setDiagnosisError(null);
-      return () => {
-        if (pump.timer !== null) window.clearTimeout(pump.timer);
-        pump.timer = null;
-        if (pump.revision !== revision) return;
-        pump.pending = null;
-      };
+      setTimelinePending(false);
+      return;
     }
 
-    if (visibleTimeline === null) {
-      setDiagnosis(null);
-      setDiagnosisError(null);
-      return () => {
-        if (pump.timer !== null) window.clearTimeout(pump.timer);
-        pump.timer = null;
-        if (pump.revision !== revision) return;
-        pump.pending = null;
-      };
-    }
-
+    setTimelinePending(true);
     pump.pending = {
-      records: visibleRecords,
+      revision,
+      readyAt: Date.now() + DIAGNOSIS_DEBOUNCE_MS,
+      records: analysisRecords,
+      entries: scopedLogEntries,
       coverageGaps: diagnosisCoverageGaps,
-      timeline: visibleTimeline,
-      textEntries: scopedLogEntries,
     };
-    setDiagnosis(null);
-    setDiagnosisError(null);
 
-    const run = () => {
+    function schedule(): void {
+      if (
+        !pump.mounted ||
+        pump.running ||
+        pump.pending === null ||
+        pump.timer !== null
+      ) {
+        return;
+      }
+      const delay = Math.max(pump.pending.readyAt - Date.now(), 0);
+      pump.timer = window.setTimeout(run, delay);
+    }
+
+    function run(): void {
       pump.timer = null;
       if (!pump.mounted || pump.running || pump.pending === null) return;
       const snapshot = pump.pending;
       pump.pending = null;
       pump.running = true;
-      const startRevision = pump.revision;
-      void diagnoseEventRecords(
-        snapshot.records,
-        snapshot.coverageGaps,
-        snapshot.timeline,
-        snapshot.textEntries,
-      )
-        .then((summary) => {
-          if (pump.mounted && pump.revision === startRevision)
-            setDiagnosis(summary);
+      void buildEventLogAnalysisSession({
+        records: snapshot.records,
+        entries: snapshot.entries,
+        coverageGaps: snapshot.coverageGaps,
+        cancelled: () =>
+          !pump.mounted || pump.revision !== snapshot.revision,
+      })
+        .then((result) => {
+          if (!pump.mounted || pump.revision !== snapshot.revision) {
+            void closeEventLogAnalysisSession(result.status.sessionId).catch(
+              () => undefined,
+            );
+            return;
+          }
+          pump.publishedSessionId = result.status.sessionId;
+          setAnalysisStatus(result.status);
+          setInitialTimelinePage(result.initialPage);
+          setDiagnosis(result.diagnosis);
+          setTimelinePending(false);
         })
         .catch((error: unknown) => {
-          if (!pump.mounted || pump.revision !== startRevision) return;
+          if (
+            !pump.mounted ||
+            pump.revision !== snapshot.revision ||
+            error instanceof EventLogAnalysisCancelled
+          ) {
+            return;
+          }
           const message =
             error instanceof Error ? error.message : String(error);
+          setTimelinePending(false);
           setDiagnosis(null);
           setDiagnosisError(
             `Operational diagnosis could not be built: ${message}`,
           );
+          setTimelineError(`Unified timeline could not be built: ${message}`);
         })
         .finally(() => {
           pump.running = false;
-          if (!pump.mounted || pump.pending === null || pump.timer !== null)
-            return;
-          pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
+          schedule();
         });
-    };
+    }
 
-    pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
-    return () => {
-      if (pump.timer !== null) window.clearTimeout(pump.timer);
-      pump.timer = null;
-      if (pump.revision !== revision) return;
-      pump.pending = null;
-    };
+    schedule();
   }, [
-    visibleRecords,
-    visibleTimeline,
+    analysisRecords,
     diagnosisCoverageGaps,
     scopedLogEntries,
     isLoading,
   ]);
 
-  useEffect(() => {
-    const pump = timelinePumpRef.current;
-    const revision = pump.revision + 1;
-    pump.revision = revision;
-    if (pump.timer !== null) window.clearTimeout(pump.timer);
-    pump.timer = null;
-    pump.pending = null;
-
-    if (isLoading) {
-      timelineInputsRef.current = null;
-      setTimelinePending(true);
-      setTimeline(EMPTY_TIMELINE);
-      setTimelineError(null);
-      return () => {
-        if (pump.timer !== null) window.clearTimeout(pump.timer);
-        pump.timer = null;
-        if (pump.revision !== revision) return;
-        pump.pending = null;
-      };
-    }
-
-    if (records.length === 0 && scopedLogEntries.length === 0) {
-      timelineInputsRef.current = { records, entries: scopedLogEntries };
-      setTimelinePending(false);
-      setTimeline(EMPTY_TIMELINE);
-      setTimelineError(null);
-      return () => {
-        if (pump.timer !== null) window.clearTimeout(pump.timer);
-        pump.timer = null;
-        if (pump.revision !== revision) return;
-        pump.pending = null;
-      };
-    }
-
-    pump.pending = { records, entries: scopedLogEntries };
-    setTimelinePending(true);
-    timelineInputsRef.current = null;
-    setTimelineError(null);
-
-    const run = () => {
-      pump.timer = null;
-      if (!pump.mounted || pump.running || pump.pending === null) return;
-      const snapshot = pump.pending;
-      pump.pending = null;
-      pump.running = true;
-      const startRevision = pump.revision;
-      void buildUnifiedTimeline(snapshot.records, snapshot.entries)
-        .then((nextTimeline) => {
-          if (!pump.mounted || pump.revision !== startRevision) return;
-          setTimelinePending(false);
-          timelineInputsRef.current = snapshot;
-          setTimeline(nextTimeline);
-          setTimelineError(null);
-        })
-        .catch((error: unknown) => {
-          if (!pump.mounted || pump.revision !== startRevision) return;
-          setTimelinePending(false);
-          const message =
-            error instanceof Error ? error.message : String(error);
-          timelineInputsRef.current = null;
-          setTimeline(EMPTY_TIMELINE);
-          setTimelineError(`Unified timeline could not be built: ${message}`);
-        })
-        .finally(() => {
-          pump.running = false;
-          if (!pump.mounted || pump.pending === null || pump.timer !== null)
-            return;
-          pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
-        });
-    };
-
-    pump.timer = window.setTimeout(run, DIAGNOSIS_DEBOUNCE_MS);
-
-    return () => {
-      if (pump.timer !== null) window.clearTimeout(pump.timer);
-      pump.timer = null;
-      if (pump.revision !== revision) return;
-      pump.pending = null;
-    };
-  }, [scopedLogEntries, records, isLoading]);
+  const loadTimelinePage = useCallback(
+    async (offset: number, limit: number) => {
+      if (analysisStatus === null) {
+        throw new Error("The event-log analysis session is not ready.");
+      }
+      const page = await queryEventLogAnalysisTimeline(
+        analysisStatus.sessionId,
+        offset,
+        limit,
+      );
+      if (page.revision !== analysisStatus.revision) {
+        throw new Error("The event-log analysis session changed while paging.");
+      }
+      return page;
+    },
+    [analysisStatus],
+  );
 
   const hasData =
     scopedLogEntries.length > 0 ||
@@ -519,7 +463,14 @@ export function EventLogWorkspace() {
             }}
           >
             <UnifiedTimelineView
-              timeline={visibleTimeline ?? EMPTY_TIMELINE}
+              key={
+                analysisStatus === null
+                  ? "pending"
+                  : `${analysisStatus.sessionId}:${analysisStatus.revision}`
+              }
+              status={analysisStatus}
+              initialPage={initialTimelinePage}
+              loadPage={loadTimelinePage}
               pending={timelinePending}
             />
           </div>

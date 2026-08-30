@@ -99,6 +99,16 @@ interface EvtxFilterBarProps {
   nowEpoch: number;
 }
 
+export function eventLogTimeWindowSnapshotLabel(
+  timeWindow: EvtxTimeWindow,
+  nowEpoch: number,
+): string {
+  const label = EVTX_TIME_WINDOW_LABELS[timeWindow];
+  return timeWindow === "all"
+    ? label
+    : `${label} · as of ${new Date(nowEpoch).toLocaleString()}`;
+}
+
 export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const filterLevels = useEvtxStore((s) => s.filterLevels);
   const toggleFilterLevel = useEvtxStore((s) => s.toggleFilterLevel);
@@ -142,6 +152,10 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const timeWindowSnapshotLabel = useMemo(
+    () => eventLogTimeWindowSnapshotLabel(timeWindow, nowEpoch),
+    [nowEpoch, timeWindow],
+  );
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
   const nextSortDirectionLabel =
@@ -285,11 +299,15 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           <Dropdown
             button={{ style: { fontSize: controlFontSize } }}
             size="small"
-            value={EVTX_TIME_WINDOW_LABELS[timeWindow]}
+            value={timeWindowSnapshotLabel}
             selectedOptions={[timeWindow]}
             disabled={isLoading}
-            style={{ minWidth: "132px" }}
-            title="How far back to query. Applied by the Event Log service, so events outside the window are never fetched."
+            style={{ minWidth: timeWindow === "all" ? "132px" : "260px" }}
+            title={
+              timeWindow === "all"
+                ? "Query the complete available event history."
+                : `${timeWindowSnapshotLabel}. This is a coherent frozen snapshot for the grid, timeline, and diagnosis. Refresh the selected channels to advance it.`
+            }
             onOptionSelect={(_, data) => {
               const next = data.optionValue as EvtxTimeWindow;
               if (!next || next === timeWindow) return;

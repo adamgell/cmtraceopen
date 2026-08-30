@@ -1,3 +1,4 @@
+pub mod analysis_session;
 pub mod archive;
 pub mod capture;
 pub mod commands;

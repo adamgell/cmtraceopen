@@ -78,9 +78,6 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 function configureInvoke() {
   invoke.mockImplementation(async (command: string) => {
-    if (command === "evtx_build_unified_timeline") {
-      return { items: [], unplaced: [], edges: [], coverageGaps: [] };
-    }
     if (command === "load_markers") return null;
     return undefined;
   });
@@ -868,7 +865,7 @@ describe("EventLogWorkspace fixtures", () => {
     );
   });
 
-  it("ages relative time windows for loaded file sources", async () => {
+  it("advances relative time windows when the loaded records refresh", async () => {
     vi.useFakeTimers();
     const nowEpoch = Date.parse("2026-08-18T13:00:00.000Z");
     vi.setSystemTime(nowEpoch);
@@ -892,7 +889,11 @@ describe("EventLogWorkspace fixtures", () => {
         vi.advanceTimersByTime(30_000);
         await Promise.resolve();
       });
+      expect(recordGridRows(document.body).length).toBeGreaterThan(0);
 
+      act(() =>
+        useEvtxStore.setState((state) => ({ records: [...state.records] })),
+      );
       expect(recordGridRows(document.body)).toHaveLength(0);
     } finally {
       vi.useRealTimers();

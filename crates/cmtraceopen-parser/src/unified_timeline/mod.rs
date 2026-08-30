@@ -13,6 +13,8 @@
 //! an entry with no timestamp has no position on a timeline, and putting it at the epoch or at the
 //! previous entry's time would invent a sequence the evidence does not support.
 
+use std::cmp::Ordering;
+
 use serde::{Deserialize, Serialize};
 
 use crate::esp::{process_start_instant, EspTimestamp, EspTimestampKind};
@@ -298,6 +300,8 @@ pub fn coverage_state(reason: &str) -> TimelineCoverageState {
         TimelineCoverageState::Malformed
     } else if (lower.starts_with("correlation relation budget") && lower.ends_with(" was reached"))
         || lower.starts_with("coverage gap limit reached;")
+        || lower.starts_with("correlation input limit reached;")
+        || lower.starts_with("timeline message preview budget reached;")
         || lower.starts_with("correlation candidate output budget reached;")
         || lower.starts_with("correlation edge output budget reached;")
         || is_correlation_group_limit
@@ -500,6 +504,7 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
             related_activity_id,
             session_id,
             device_id,
+            user_id,
             process_start_time,
             identity_conflicts,
             event_id,
@@ -550,6 +555,12 @@ fn observation_from_origin(origin: &TimelineOrigin) -> TimelineCorrelationObserv
                 TimelineCorrelationKeyKind::DeviceId,
                 device_id.as_deref(),
                 "deviceId",
+            );
+            push_exact(
+                &mut exact_keys,
+                TimelineCorrelationKeyKind::UserId,
+                user_id.as_deref(),
+                "userId",
             );
             let record = usable_record_text(record_id_text.as_deref())
                 .or_else(|| (*record_id != 0).then(|| record_id.to_string()));
@@ -1134,14 +1145,24 @@ pub fn correlate_timeline(
     items: &[TimelineItem],
     unplaced: &[UnplacedItem],
 ) -> (Vec<TimelineCorrelationEdge>, Vec<TimelineCoverageGap>) {
-    let observations = items
-        .iter()
-        .map(|item| observation_from_origin(&item.origin))
-        .chain(
-            unplaced
-                .iter()
-                .map(|item| observation_from_origin(&item.origin)),
-        )
+    correlate_origins(
+        items
+            .iter()
+            .map(|item| &item.origin)
+            .chain(unplaced.iter().map(|item| &item.origin)),
+    )
+}
+
+/// Correlates a caller-selected set of timeline origins.
+///
+/// Native callers use this to project a very large timeline down to the origins that carry
+/// meaningful cross-record identity before correlation materializes its owned observations.
+pub fn correlate_origins<'a>(
+    origins: impl IntoIterator<Item = &'a TimelineOrigin>,
+) -> (Vec<TimelineCorrelationEdge>, Vec<TimelineCoverageGap>) {
+    let observations = origins
+        .into_iter()
+        .map(observation_from_origin)
         .collect::<Vec<_>>();
     correlate_observations(&observations)
 }
@@ -1241,27 +1262,39 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry]) {
     }
     *timeline = merge(placed, unplaced);
 }
-/// Builds a collision-resistant textual key for deterministic provenance ordering.
 fn key_part(value: &str) -> String {
     format!("{}:{value}", value.len())
 }
 
-fn optional_text_key(value: Option<&str>) -> String {
-    value.map(key_part).unwrap_or_else(|| "none".to_string())
+fn write_key_part(output: &mut impl std::fmt::Write, value: &str) -> std::fmt::Result {
+    write!(output, "{}:", value.len())?;
+    output.write_str(value)
 }
 
-fn optional_number_key<T: std::fmt::Display>(value: Option<T>) -> String {
-    value
-        .map(|number| format!("some:{number}"))
-        .unwrap_or_else(|| "none".to_string())
+fn write_optional_text_key(
+    output: &mut impl std::fmt::Write,
+    value: Option<&str>,
+) -> std::fmt::Result {
+    match value {
+        Some(value) => write_key_part(output, value),
+        None => output.write_str("none"),
+    }
 }
 
-/// Returns the canonical provenance key used for all timeline ordering.
-///
-/// Every serialized origin field participates, not just the primary identity. This keeps
-/// equal-identity records deterministic when a timeline is built in one batch or reconciled from
-/// several batches.
-pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
+fn write_optional_number_key<T: std::fmt::Display>(
+    output: &mut impl std::fmt::Write,
+    value: Option<T>,
+) -> std::fmt::Result {
+    match value {
+        Some(number) => write!(output, "some:{number}"),
+        None => output.write_str("none"),
+    }
+}
+
+fn write_origin_sort_key(
+    output: &mut impl std::fmt::Write,
+    origin: &TimelineOrigin,
+) -> std::fmt::Result {
     match origin {
         TimelineOrigin::Log {
             source,
@@ -1271,14 +1304,18 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             machine,
             bundle,
             record_id,
-        } => format!(
-            "log|{}|{}|{line:010}|{record_id:020}|{}|{}|{}",
-            key_part(source),
-            key_part(file),
-            optional_text_key(component.as_deref()),
-            optional_text_key(machine.as_deref()),
-            optional_text_key(bundle.as_deref()),
-        ),
+        } => {
+            output.write_str("log|")?;
+            write_key_part(output, source)?;
+            output.write_char('|')?;
+            write_key_part(output, file)?;
+            write!(output, "|{line:010}|{record_id:020}|")?;
+            write_optional_text_key(output, component.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, machine.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, bundle.as_deref())
+        }
         TimelineOrigin::Event {
             stable_id,
             source,
@@ -1297,50 +1334,223 @@ pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
             event_id,
             record_id,
             record_id_text,
-        } => format!(
-            "event|{stable}|{source}|{machine}|{bundle}|{channel}|{provider}|{process}|{activity}|{related}|{session}|{device}|{user}|{process_start}|{conflicts}|{event_id:010}|{record_id:020}|{record_text}",
-            stable = key_part(stable_id),
-            source = key_part(source),
-            machine = optional_text_key(machine.as_deref()),
-            bundle = optional_text_key(bundle.as_deref()),
-            channel = key_part(channel),
-            provider = key_part(provider),
-            process = optional_number_key(*process_id),
-            activity = optional_text_key(activity_id.as_deref()),
-            related = optional_text_key(related_activity_id.as_deref()),
-            session = optional_text_key(session_id.as_deref()),
-            device = optional_text_key(device_id.as_deref()),
-            user = optional_text_key(user_id.as_deref()),
-            process_start = optional_text_key(process_start_time.as_deref()),
-            conflicts = identity_conflicts
-                .iter()
-                .map(|conflict| key_part(conflict))
-                .collect::<Vec<_>>()
-                .join(","),
-            event_id = event_id,
-            record_id = record_id,
-            record_text = optional_text_key(record_id_text.as_deref()),
-        ),
+        } => {
+            output.write_str("event|")?;
+            write_key_part(output, stable_id)?;
+            output.write_char('|')?;
+            write_key_part(output, source)?;
+            output.write_char('|')?;
+            write_optional_text_key(output, machine.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, bundle.as_deref())?;
+            output.write_char('|')?;
+            write_key_part(output, channel)?;
+            output.write_char('|')?;
+            write_key_part(output, provider)?;
+            output.write_char('|')?;
+            write_optional_number_key(output, *process_id)?;
+            output.write_char('|')?;
+            write_optional_text_key(output, activity_id.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, related_activity_id.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, session_id.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, device_id.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, user_id.as_deref())?;
+            output.write_char('|')?;
+            write_optional_text_key(output, process_start_time.as_deref())?;
+            output.write_char('|')?;
+            for (index, conflict) in identity_conflicts.iter().enumerate() {
+                if index > 0 {
+                    output.write_char(',')?;
+                }
+                write_key_part(output, conflict)?;
+            }
+            write!(output, "|{event_id:010}|{record_id:020}|")?;
+            write_optional_text_key(output, record_id_text.as_deref())
+        }
     }
 }
 
-/// Returns the canonical key for a placed timeline item.
-///
-/// The event adapter uses this same key before occurrence suffixes are assigned, so full builds
-/// and append reconciliation cannot disagree when otherwise identical timestamps are split across
-/// batches.
-pub fn timeline_sort_key(
-    timestamp_ms: i64,
-    severity: TimelineSeverity,
-    message: &str,
-    origin: &TimelineOrigin,
-) -> (i64, String, String, TimelineSeverity) {
-    (
-        timestamp_ms,
-        origin_sort_key(origin),
-        message.to_string(),
-        severity,
+/// Returns the canonical textual provenance key used by serialized identities and tests.
+pub fn origin_sort_key(origin: &TimelineOrigin) -> String {
+    let mut output = String::new();
+    write_origin_sort_key(&mut output, origin).expect("string writer is infallible");
+    output
+}
+
+fn decimal_bytes_with_terminator(mut value: u128, terminator: u8, output: &mut [u8; 40]) -> &[u8] {
+    let mut index = output.len() - 1;
+    output[index] = terminator;
+    loop {
+        index -= 1;
+        output[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            return &output[index..];
+        }
+    }
+}
+
+fn compare_decimal_text(left: u128, right: u128, terminator: u8) -> Ordering {
+    let mut left_buffer = [0u8; 40];
+    let mut right_buffer = [0u8; 40];
+    decimal_bytes_with_terminator(left, terminator, &mut left_buffer).cmp(
+        decimal_bytes_with_terminator(right, terminator, &mut right_buffer),
     )
+}
+
+fn compare_key_part(left: &str, right: &str) -> Ordering {
+    compare_decimal_text(left.len() as u128, right.len() as u128, b':')
+        .then_with(|| left.cmp(right))
+}
+
+fn compare_optional_text(left: Option<&str>, right: Option<&str>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => compare_key_part(left, right),
+        // Textual Some keys begin with a decimal length; `none` begins with `n`.
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn compare_optional_number(left: Option<u32>, right: Option<u32>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => compare_decimal_text(left.into(), right.into(), b'|'),
+        // The canonical strings are `none` and `some:<number>`.
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn compare_conflicts(left: &[String], right: &[String]) -> Ordering {
+    for (left, right) in left.iter().zip(right) {
+        let ordering = compare_key_part(left, right);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    right.len().cmp(&left.len())
+}
+
+/// Compares provenance in exactly the same order as [`origin_sort_key`] without allocating.
+///
+/// Large same-timestamp selections exercise this comparator O(n log n), so it deliberately uses
+/// only borrowed fields and fixed stack buffers.
+pub fn origin_sort_cmp(left: &TimelineOrigin, right: &TimelineOrigin) -> Ordering {
+    match (left, right) {
+        (
+            TimelineOrigin::Log {
+                source: left_source,
+                file: left_file,
+                line: left_line,
+                component: left_component,
+                machine: left_machine,
+                bundle: left_bundle,
+                record_id: left_record_id,
+            },
+            TimelineOrigin::Log {
+                source: right_source,
+                file: right_file,
+                line: right_line,
+                component: right_component,
+                machine: right_machine,
+                bundle: right_bundle,
+                record_id: right_record_id,
+            },
+        ) => compare_key_part(left_source, right_source)
+            .then_with(|| compare_key_part(left_file, right_file))
+            .then_with(|| left_line.cmp(right_line))
+            .then_with(|| left_record_id.cmp(right_record_id))
+            .then_with(|| {
+                compare_optional_text(left_component.as_deref(), right_component.as_deref())
+            })
+            .then_with(|| compare_optional_text(left_machine.as_deref(), right_machine.as_deref()))
+            .then_with(|| compare_optional_text(left_bundle.as_deref(), right_bundle.as_deref())),
+        (
+            TimelineOrigin::Event {
+                stable_id: left_stable_id,
+                source: left_source,
+                machine: left_machine,
+                bundle: left_bundle,
+                channel: left_channel,
+                provider: left_provider,
+                process_id: left_process_id,
+                activity_id: left_activity_id,
+                related_activity_id: left_related_activity_id,
+                session_id: left_session_id,
+                device_id: left_device_id,
+                user_id: left_user_id,
+                process_start_time: left_process_start_time,
+                identity_conflicts: left_identity_conflicts,
+                event_id: left_event_id,
+                record_id: left_record_id,
+                record_id_text: left_record_id_text,
+            },
+            TimelineOrigin::Event {
+                stable_id: right_stable_id,
+                source: right_source,
+                machine: right_machine,
+                bundle: right_bundle,
+                channel: right_channel,
+                provider: right_provider,
+                process_id: right_process_id,
+                activity_id: right_activity_id,
+                related_activity_id: right_related_activity_id,
+                session_id: right_session_id,
+                device_id: right_device_id,
+                user_id: right_user_id,
+                process_start_time: right_process_start_time,
+                identity_conflicts: right_identity_conflicts,
+                event_id: right_event_id,
+                record_id: right_record_id,
+                record_id_text: right_record_id_text,
+            },
+        ) => compare_key_part(left_stable_id, right_stable_id)
+            .then_with(|| compare_key_part(left_source, right_source))
+            .then_with(|| compare_optional_text(left_machine.as_deref(), right_machine.as_deref()))
+            .then_with(|| compare_optional_text(left_bundle.as_deref(), right_bundle.as_deref()))
+            .then_with(|| compare_key_part(left_channel, right_channel))
+            .then_with(|| compare_key_part(left_provider, right_provider))
+            .then_with(|| compare_optional_number(*left_process_id, *right_process_id))
+            .then_with(|| {
+                compare_optional_text(left_activity_id.as_deref(), right_activity_id.as_deref())
+            })
+            .then_with(|| {
+                compare_optional_text(
+                    left_related_activity_id.as_deref(),
+                    right_related_activity_id.as_deref(),
+                )
+            })
+            .then_with(|| {
+                compare_optional_text(left_session_id.as_deref(), right_session_id.as_deref())
+            })
+            .then_with(|| {
+                compare_optional_text(left_device_id.as_deref(), right_device_id.as_deref())
+            })
+            .then_with(|| compare_optional_text(left_user_id.as_deref(), right_user_id.as_deref()))
+            .then_with(|| {
+                compare_optional_text(
+                    left_process_start_time.as_deref(),
+                    right_process_start_time.as_deref(),
+                )
+            })
+            .then_with(|| compare_conflicts(left_identity_conflicts, right_identity_conflicts))
+            .then_with(|| left_event_id.cmp(right_event_id))
+            .then_with(|| left_record_id.cmp(right_record_id))
+            .then_with(|| {
+                compare_optional_text(
+                    left_record_id_text.as_deref(),
+                    right_record_id_text.as_deref(),
+                )
+            }),
+        (TimelineOrigin::Event { .. }, TimelineOrigin::Log { .. }) => Ordering::Less,
+        (TimelineOrigin::Log { .. }, TimelineOrigin::Event { .. }) => Ordering::Greater,
+    }
 }
 
 /// Merges already-converted items into one chronological timeline.
@@ -1352,16 +1562,21 @@ pub fn merge(
     unplaced: impl IntoIterator<Item = UnplacedItem>,
 ) -> UnifiedTimeline {
     let mut items: Vec<TimelineItem> = placed.into_iter().collect();
-    items.sort_by_cached_key(|item| {
-        timeline_sort_key(
-            item.timestamp_ms,
-            item.severity,
-            &item.message,
-            &item.origin,
-        )
+    // Sort the borrowed, potentially very large message first, then stably sort by the compact
+    // primary key. This is exactly equivalent to `(timestamp, origin, message, severity)` ordering
+    // without caching a second owned copy of every message.
+    items.sort_by(|left, right| {
+        left.message
+            .cmp(&right.message)
+            .then_with(|| left.severity.cmp(&right.severity))
+    });
+    items.sort_by(|left, right| {
+        left.timestamp_ms
+            .cmp(&right.timestamp_ms)
+            .then_with(|| origin_sort_cmp(&left.origin, &right.origin))
     });
     let mut unplaced: Vec<UnplacedItem> = unplaced.into_iter().collect();
-    unplaced.sort_by_cached_key(|item| origin_sort_key(&item.origin));
+    unplaced.sort_by(|left, right| origin_sort_cmp(&left.origin, &right.origin));
     UnifiedTimeline {
         items,
         unplaced,

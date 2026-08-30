@@ -40,10 +40,29 @@ function groupCoverageGaps(gaps: DiagnosisCoverageGap[]): GroupedCoverageGap[] {
   return [...grouped.values()];
 }
 
-function capSection<T>(items: T[]): { items: T[]; omitted: number } {
+function capSection<T>(
+  items: T[],
+  authoritativeCount = items.length,
+): { items: T[]; omitted: number } {
+  const visibleItems = items.slice(0, DETAIL_RENDER_CAP);
   return {
-    items: items.slice(0, DETAIL_RENDER_CAP),
-    omitted: Math.max(items.length - DETAIL_RENDER_CAP, 0),
+    items: visibleItems,
+    omitted: Math.max(authoritativeCount - visibleItems.length, 0),
+  };
+}
+
+function capCoverageSection(
+  gaps: DiagnosisCoverageGap[],
+  authoritativeCount: number,
+): { items: GroupedCoverageGap[]; omitted: number } {
+  const items = groupCoverageGaps(gaps).slice(0, DETAIL_RENDER_CAP);
+  const representedCount = items.reduce(
+    (count, item) => count + item.occurrences,
+    0,
+  );
+  return {
+    items,
+    omitted: Math.max(authoritativeCount - representedCount, 0),
   };
 }
 
@@ -139,15 +158,15 @@ function CoverageGapRow({
   );
 }
 
-function OverviewRow({
-  overview,
-  findingCount,
-  coverageGapCount,
-}: {
-  overview: DiagnosisOverview;
-  findingCount: number;
-  coverageGapCount: number;
-}) {
+const OUTCOME_LABELS: Record<DiagnosisOverview["outcome"], string> = {
+  confirmedFailure: "Issues detected",
+  contradictoryEvidence: "Conflicting evidence",
+  symptomsOnly: "Potential issues detected",
+  insufficientEvidence: "No issues detected",
+  noFindings: "No issues detected",
+};
+
+function OverviewRow({ overview }: { overview: DiagnosisOverview }) {
   return (
     <div
       style={{
@@ -163,12 +182,12 @@ function OverviewRow({
           alignItems: "center",
         }}
       >
-        <Badge appearance="tint">{overview.outcome}</Badge>
+        <Badge appearance="tint">{OUTCOME_LABELS[overview.outcome]}</Badge>
         <Text weight="semibold">{overview.headline}</Text>
       </div>
       <Text size={200}>
-        {countLabel(findingCount, "actionable finding")},{" "}
-        {countLabel(coverageGapCount, "source coverage gap")}
+        {countLabel(overview.actionableFindingCount, "actionable finding")},{" "}
+        {countLabel(overview.coverageGapCount, "source coverage gap")}
       </Text>
     </div>
   );
@@ -230,11 +249,21 @@ export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
   const detailsLabelId = useId();
   if (!summary) return null;
 
-  const findings = capSection(actionableFindings(summary.findings));
-  const coverageGaps = capSection(groupCoverageGaps(summary.coverageGaps));
-  const correlations = capSection(summary.correlations);
+  const findings = capSection(
+    actionableFindings(summary.findings),
+    summary.overview.actionableFindingCount,
+  );
+  const coverageGaps = capCoverageSection(
+    summary.coverageGaps,
+    summary.overview.coverageGapCount,
+  );
+  const correlations = capSection(
+    summary.correlations,
+    summary.overview.correlationCount,
+  );
   const events = capSection(
     summary.events.filter((event) => event.errorTokens.length > 0),
+    summary.overview.errorTokenEventCount,
   );
 
   return (
@@ -257,25 +286,24 @@ export function EventDiagnosisPanel({ summary }: EventDiagnosisPanelProps) {
         <Text size={400} weight="semibold">
           Operational diagnosis
         </Text>
-        {findings.items.length > 0 && (
+        {summary.overview.actionableFindingCount > 0 && (
           <Badge appearance="tint">
             {countLabel(
-              findings.items.length + findings.omitted,
+              summary.overview.actionableFindingCount,
               "actionable finding",
             )}
           </Badge>
         )}
-        {summary.coverageGaps.length > 0 && (
+        {summary.overview.coverageGapCount > 0 && (
           <Badge appearance="tint">
-            {countLabel(summary.coverageGaps.length, "source coverage gap")}
+            {countLabel(
+              summary.overview.coverageGapCount,
+              "source coverage gap",
+            )}
           </Badge>
         )}
       </div>
-      <OverviewRow
-        overview={summary.overview}
-        findingCount={findings.items.length + findings.omitted}
-        coverageGapCount={summary.coverageGaps.length}
-      />
+      <OverviewRow overview={summary.overview} />
       <details>
         <summary id={detailsLabelId} style={{ cursor: "pointer" }}>
           Show diagnosis details

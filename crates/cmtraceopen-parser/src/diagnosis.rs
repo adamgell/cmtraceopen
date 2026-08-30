@@ -490,7 +490,12 @@ fn family_from_text(value: &str) -> Option<EventFamily> {
     }
 }
 
-fn event_family(entry: &EventLogEntry) -> EventFamily {
+/// Classifies an event into the operational families understood by diagnosis.
+///
+/// [`EventFamily::Other`] is deliberately neutral: those records cannot produce an operational
+/// finding under the current rules and may be excluded from a bounded diagnosis projection
+/// without creating a coverage gap.
+pub fn event_family(entry: &EventLogEntry) -> EventFamily {
     match &entry.channel {
         crate::intune::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
         crate::intune::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
@@ -503,6 +508,184 @@ fn event_family(entry: &EventLogEntry) -> EventFamily {
             family_from_text(&source)
                 .or_else(|| family_from_text(&entry.message))
                 .unwrap_or(EventFamily::Other)
+        }
+    }
+}
+
+/// Classifies native event source fields without first cloning them into an owned entry.
+pub fn event_family_from_source(channel: &str, provider: &str, message: &str) -> EventFamily {
+    let normalized_channel = crate::intune::models::EventLogChannel::from_channel_string(channel);
+    match normalized_channel {
+        crate::intune::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
+        crate::intune::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
+        crate::intune::models::EventLogChannel::DeviceManagementAdmin
+        | crate::intune::models::EventLogChannel::DeviceManagementOperational => {
+            EventFamily::MdmEnrollment
+        }
+        _ => family_from_text(channel)
+            .or_else(|| family_from_text(provider))
+            .or_else(|| family_from_text(message))
+            .unwrap_or(EventFamily::Other),
+    }
+}
+
+/// Describes how an event was handled by [`EventDiagnosisAccumulator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventDiagnosisDisposition {
+    /// The event is outside the operational families understood by diagnosis.
+    NeutralOther,
+    /// The event was retained for detailed diagnosis output.
+    Retained,
+    /// The event was relevant, but the caller-selected detailed-analysis budget was exhausted.
+    OmittedRelevant,
+}
+
+/// Exact accounting for an incremental event-diagnosis projection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventDiagnosisProjectionStats {
+    pub inspected_event_count: usize,
+    pub neutral_other_event_count: usize,
+    pub relevant_event_count: usize,
+    pub retained_event_count: usize,
+    pub omitted_relevant_event_count: usize,
+    pub retained_event_bytes: usize,
+    pub omitted_relevant_event_bytes: usize,
+}
+
+/// Bounded event diagnoses plus explicit coverage for any relevant records that were omitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventDiagnosisProjection {
+    pub events: Vec<EventDiagnosis>,
+    pub coverage_findings: Vec<DiagnosisFinding>,
+    pub stats: EventDiagnosisProjectionStats,
+}
+
+impl EventDiagnosisProjection {
+    /// Merges this projection with findings and correlations produced by other sources.
+    pub fn into_summary(
+        self,
+        mut other_findings: Vec<DiagnosisFinding>,
+        correlations: Vec<CorrelationEdge>,
+    ) -> DiagnosisSummary {
+        other_findings.extend(self.coverage_findings);
+        summarize_cross_source(self.events, other_findings, correlations)
+    }
+}
+
+/// Incrementally projects arbitrarily many event records into bounded detailed diagnosis output.
+///
+/// The caller owns the detailed-analysis budget. All records are classified, ordinary
+/// [`EventFamily::Other`] records are discarded as provably neutral, and every relevant record
+/// beyond the budget is represented by one exact grouped [`CoverageState::Capped`] gap returned
+/// by [`Self::finish`]. This lets native callers process transport-sized chunks without retaining
+/// or returning the complete event grid through diagnosis IPC.
+#[derive(Debug, Clone)]
+pub struct EventDiagnosisAccumulator {
+    relevant_event_limit: usize,
+    retained_event_byte_limit: usize,
+    events: Vec<EventDiagnosis>,
+    stats: EventDiagnosisProjectionStats,
+}
+
+impl EventDiagnosisAccumulator {
+    pub fn new(relevant_event_limit: usize, retained_event_byte_limit: usize) -> Self {
+        Self {
+            relevant_event_limit,
+            retained_event_byte_limit,
+            events: Vec::new(),
+            stats: EventDiagnosisProjectionStats::default(),
+        }
+    }
+
+    /// Classifies and, when relevant and within budget, adapts one normalized event.
+    pub fn push(
+        &mut self,
+        entry: EventLogEntry,
+        event_data: &[String],
+        raw_xml: &str,
+    ) -> EventDiagnosisDisposition {
+        self.push_with_record_id_text(entry, event_data, raw_xml, None)
+    }
+
+    /// Classifies and adapts one event while preserving its exact decimal record identity.
+    ///
+    /// Native IPC callers use this when the JavaScript-safe numeric identity was accompanied by
+    /// the authoritative decimal text from the provider.
+    pub fn push_with_record_id_text(
+        &mut self,
+        entry: EventLogEntry,
+        event_data: &[String],
+        raw_xml: &str,
+        record_id_text: Option<&str>,
+    ) -> EventDiagnosisDisposition {
+        self.stats.inspected_event_count += 1;
+        let family = event_family(&entry);
+        if matches!(family, EventFamily::Other) {
+            self.stats.neutral_other_event_count += 1;
+            return EventDiagnosisDisposition::NeutralOther;
+        }
+
+        self.stats.relevant_event_count += 1;
+        let mut diagnosis = adapt_event_entry_for_family(entry, event_data, raw_xml, family);
+        if let (Some(record_id_text), Some(EvidenceRef::Event(evidence))) =
+            (record_id_text, diagnosis.evidence.first_mut())
+        {
+            evidence.record_id_text = Some(record_id_text.to_string());
+        }
+        let serialized_bytes = serde_json::to_vec(&diagnosis)
+            .expect("event diagnosis serialization is infallible")
+            .len();
+        if self.events.len() >= self.relevant_event_limit
+            || self
+                .stats
+                .retained_event_bytes
+                .saturating_add(serialized_bytes)
+                > self.retained_event_byte_limit
+        {
+            self.stats.omitted_relevant_event_count += 1;
+            self.stats.omitted_relevant_event_bytes = self
+                .stats
+                .omitted_relevant_event_bytes
+                .saturating_add(serialized_bytes);
+            return EventDiagnosisDisposition::OmittedRelevant;
+        }
+        self.events.push(diagnosis);
+        self.stats.retained_event_count += 1;
+        self.stats.retained_event_bytes = self
+            .stats
+            .retained_event_bytes
+            .saturating_add(serialized_bytes);
+        EventDiagnosisDisposition::Retained
+    }
+
+    pub fn stats(&self) -> EventDiagnosisProjectionStats {
+        self.stats
+    }
+
+    /// Completes the projection and groups all relevant overflow into one explicit coverage gap.
+    pub fn finish(self) -> EventDiagnosisProjection {
+        let mut coverage_findings = Vec::new();
+        if self.stats.omitted_relevant_event_count > 0 {
+            coverage_findings.push(finding_for_coverage(
+                "event-diagnosis-projection",
+                CoverageState::Capped,
+                format!(
+                    "{} of {} diagnostic-family event records ({} serialized bytes) were omitted after retaining {} records ({} serialized bytes) within the {}-record and {}-byte diagnosis budgets.",
+                    self.stats.omitted_relevant_event_count,
+                    self.stats.relevant_event_count,
+                    self.stats.omitted_relevant_event_bytes,
+                    self.stats.retained_event_count,
+                    self.stats.retained_event_bytes,
+                    self.relevant_event_limit,
+                    self.retained_event_byte_limit,
+                ),
+            ));
+        }
+        EventDiagnosisProjection {
+            events: self.events,
+            coverage_findings,
+            stats: self.stats,
         }
     }
 }
@@ -1285,6 +1468,15 @@ pub fn adapt_event_entry_with_data_and_raw_xml(
     raw_xml: &str,
 ) -> EventDiagnosis {
     let family = event_family(&entry);
+    adapt_event_entry_for_family(entry, event_data, raw_xml, family)
+}
+
+fn adapt_event_entry_for_family(
+    entry: EventLogEntry,
+    event_data: &[String],
+    raw_xml: &str,
+    family: EventFamily,
+) -> EventDiagnosis {
     let evidence = EvidenceRef::Event(EventEvidenceRef {
         source: entry.source_file.clone(),
         provider: entry.provider.clone(),
@@ -1744,20 +1936,26 @@ pub struct DiagnosisOverview {
     pub outcome: String,
     pub headline: String,
     pub finding_count: usize,
+    /// Exact count of non-coverage findings before any native display projection is truncated.
+    pub actionable_finding_count: usize,
     pub coverage_gap_count: usize,
     pub evidence_count: usize,
     pub correlation_count: usize,
+    /// Exact count of diagnosed events carrying at least one enriched error token.
+    pub error_token_event_count: usize,
 }
 
 impl Default for DiagnosisOverview {
     fn default() -> Self {
         Self {
             outcome: "noFindings".to_string(),
-            headline: "No actionable diagnosis was produced.".to_string(),
+            headline: "No issues detected.".to_string(),
             finding_count: 0,
+            actionable_finding_count: 0,
             coverage_gap_count: 0,
             evidence_count: 0,
             correlation_count: 0,
+            error_token_event_count: 0,
         }
     }
 }
@@ -2085,15 +2283,23 @@ pub fn summarize_cross_source(
     } else if !coverage_gaps.is_empty() {
         ("insufficientEvidence", "No issues detected.")
     } else {
-        ("noFindings", "No actionable diagnosis was produced.")
+        ("noFindings", "No issues detected.")
     };
     let overview = DiagnosisOverview {
         outcome: outcome.0.to_string(),
         headline: outcome.1.to_string(),
         finding_count: findings.len(),
+        actionable_finding_count: findings
+            .iter()
+            .filter(|finding| !matches!(finding.class, FindingClass::CoverageGap))
+            .count(),
         coverage_gap_count: coverage_gaps.len(),
         evidence_count: evidence.len(),
         correlation_count: correlations.len(),
+        error_token_event_count: events
+            .iter()
+            .filter(|event| !event.error_tokens.is_empty())
+            .count(),
     };
     DiagnosisSummary {
         findings,
@@ -2109,7 +2315,8 @@ pub fn summarize_cross_source(
 mod tests {
     use super::{
         adapt_event_entry_with_data_and_raw_xml, enrich_error_tokens, CoverageState,
-        EventLogChannel, EventLogEntry, EventLogSeverity, FindingClass,
+        EventDiagnosisAccumulator, EventDiagnosisDisposition, EventLogChannel, EventLogEntry,
+        EventLogSeverity, FindingClass,
     };
     use std::collections::BTreeMap;
 
@@ -2117,7 +2324,7 @@ mod tests {
     fn default_overview_uses_a_valid_no_findings_outcome() {
         let overview = super::DiagnosisOverview::default();
         assert_eq!(overview.outcome, "noFindings");
-        assert_eq!(overview.headline, "No actionable diagnosis was produced.");
+        assert_eq!(overview.headline, "No issues detected.");
     }
 
     #[test]
@@ -2327,5 +2534,163 @@ mod tests {
         let right_id = right.evidence[0].stable_id();
         assert_ne!(left_id, right_id);
         assert_ne!(left.findings[0].finding_id, right.findings[0].finding_id);
+    }
+
+    fn ordinary_event(id: u64, system: bool) -> EventLogEntry {
+        let (channel, channel_display) = if system {
+            (EventLogChannel::SystemLog, "System")
+        } else {
+            (EventLogChannel::Other("Application".into()), "Application")
+        };
+        EventLogEntry {
+            id,
+            channel,
+            channel_display: channel_display.into(),
+            provider: "Microsoft-Windows-Kernel-General".into(),
+            event_id: 12,
+            severity: if id.is_multiple_of(2) {
+                EventLogSeverity::Error
+            } else {
+                EventLogSeverity::Information
+            },
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            computer: Some("machine.example.invalid".into()),
+            message: "A generic operating system event was recorded.".into(),
+            correlation_activity_id: None,
+            source_file: channel_display.into(),
+        }
+    }
+
+    fn mdm_success_event(id: u64) -> EventLogEntry {
+        EventLogEntry {
+            id,
+            channel: EventLogChannel::DeviceManagementAdmin,
+            channel_display: "DeviceManagement-Enterprise-Diagnostics-Provider/Admin".into(),
+            provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider".into(),
+            event_id: 75,
+            severity: EventLogSeverity::Information,
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            computer: Some("machine.example.invalid".into()),
+            message: "Enrollment completed.".into(),
+            correlation_activity_id: None,
+            source_file: "DeviceManagement.evtx".into(),
+        }
+    }
+
+    #[test]
+    fn incremental_projection_discards_400k_ordinary_events_as_neutral() {
+        const EVENT_COUNT: usize = 400_000;
+        let mut accumulator = EventDiagnosisAccumulator::new(8, usize::MAX);
+
+        for index in 0..EVENT_COUNT {
+            assert_eq!(
+                accumulator.push(ordinary_event(index as u64 + 1, index % 2 == 0), &[], ""),
+                EventDiagnosisDisposition::NeutralOther
+            );
+        }
+
+        let projection = accumulator.finish();
+        assert_eq!(projection.stats.inspected_event_count, EVENT_COUNT);
+        assert_eq!(projection.stats.neutral_other_event_count, EVENT_COUNT);
+        assert_eq!(projection.stats.relevant_event_count, 0);
+        assert_eq!(projection.stats.retained_event_count, 0);
+        assert_eq!(projection.stats.omitted_relevant_event_count, 0);
+        assert!(projection.events.is_empty());
+        assert!(projection.coverage_findings.is_empty());
+
+        let summary = projection.into_summary(Vec::new(), Vec::new());
+        assert!(summary.findings.is_empty());
+        assert!(summary.coverage_gaps.is_empty());
+        assert!(summary.evidence.is_empty());
+        assert!(summary.events.is_empty());
+        assert_eq!(summary.overview.outcome, "noFindings");
+    }
+
+    #[test]
+    fn incremental_projection_groups_relevant_overflow_into_one_exact_gap() {
+        let mut accumulator = EventDiagnosisAccumulator::new(2, usize::MAX);
+        for index in 0..2_000 {
+            assert_eq!(
+                accumulator.push(ordinary_event(index + 1, index % 2 == 0), &[], ""),
+                EventDiagnosisDisposition::NeutralOther
+            );
+        }
+        for id in 2_001..=2_004 {
+            let disposition =
+                accumulator.push(mdm_success_event(id), &["Status=Success".into()], "");
+            assert_eq!(
+                disposition,
+                if id <= 2_002 {
+                    EventDiagnosisDisposition::Retained
+                } else {
+                    EventDiagnosisDisposition::OmittedRelevant
+                }
+            );
+        }
+
+        let projection = accumulator.finish();
+        assert_eq!(projection.stats.inspected_event_count, 2_004);
+        assert_eq!(projection.stats.neutral_other_event_count, 2_000);
+        assert_eq!(projection.stats.relevant_event_count, 4);
+        assert_eq!(projection.stats.retained_event_count, 2);
+        assert_eq!(projection.stats.omitted_relevant_event_count, 2);
+        assert_eq!(projection.events.len(), 2);
+        assert_eq!(projection.coverage_findings.len(), 1);
+        assert_eq!(projection.coverage_findings[0].coverage_gaps.len(), 1);
+        let gap = &projection.coverage_findings[0].coverage_gaps[0];
+        assert_eq!(gap.state, CoverageState::Capped);
+        assert_eq!(gap.source, "event-diagnosis-projection");
+        assert!(gap
+            .detail
+            .starts_with("2 of 4 diagnostic-family event records ("));
+        assert!(gap
+            .detail
+            .contains("were omitted after retaining 2 records ("));
+        assert!(gap.detail.ends_with(&format!(
+            "within the 2-record and {}-byte diagnosis budgets.",
+            usize::MAX
+        )));
+
+        let summary = projection.into_summary(Vec::new(), Vec::new());
+        assert_eq!(summary.overview.outcome, "insufficientEvidence");
+        assert_eq!(summary.coverage_gaps.len(), 1);
+        assert_eq!(summary.events.len(), 2);
+    }
+
+    #[test]
+    fn incremental_projection_groups_large_relevant_byte_overflow_exactly() {
+        const BYTE_LIMIT: usize = 512 * 1024;
+        const EVENT_COUNT: usize = 100;
+        let mut accumulator = EventDiagnosisAccumulator::new(EVENT_COUNT, BYTE_LIMIT);
+        for id in 1..=EVENT_COUNT {
+            let mut event = mdm_success_event(id as u64);
+            event.message = format!(
+                "Enrollment failed with error 0x80070005. {}",
+                "detail".repeat(10_000)
+            );
+            accumulator.push(event, &["Status=Failure".into()], "");
+        }
+
+        let projection = accumulator.finish();
+
+        assert_eq!(projection.stats.relevant_event_count, EVENT_COUNT);
+        assert_eq!(
+            projection.stats.retained_event_count + projection.stats.omitted_relevant_event_count,
+            EVENT_COUNT
+        );
+        assert!(projection.stats.retained_event_bytes <= BYTE_LIMIT);
+        assert!(projection.stats.omitted_relevant_event_count > 0);
+        assert!(projection.stats.omitted_relevant_event_bytes > BYTE_LIMIT);
+        assert_eq!(
+            projection.events.len(),
+            projection.stats.retained_event_count
+        );
+        assert_eq!(projection.coverage_findings.len(), 1);
+        assert!(projection.coverage_findings[0].coverage_gaps[0]
+            .detail
+            .contains(&format!(
+                "{} serialized bytes",
+                projection.stats.omitted_relevant_event_bytes
+            )));
     }
 }

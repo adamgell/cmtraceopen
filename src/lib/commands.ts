@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { boundUtf8WithDigest } from "./bounded-utf8";
 import type {
   AggregateParseResult,
   FolderListingResult,
@@ -30,7 +31,13 @@ import type {
   EvtxRecord,
 } from "../workspaces/event-log/types";
 import { assertParseResultShape } from "../workspaces/event-log/evtx-coverage";
-import type { UnifiedTimeline } from "../workspaces/event-log/unified-timeline";
+import {
+  assertUnifiedTimelineShape,
+  type TimelineCorrelationEdge,
+  type TimelineCoverageGap,
+  type TimelineItem,
+  type UnplacedItem,
+} from "../workspaces/event-log/unified-timeline";
 import type {
   EvidenceArtifactPreview,
   EvidenceBundleDetails,
@@ -382,67 +389,54 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     return false;
   }
   return (
-    value.originKind === undefined ||
-    value.originKind === "event" ||
-    value.originKind === "log"
-  ) && (
-    value.task === undefined ||
-    value.task === null ||
-    isFiniteCommandNumber(value.task)
-  ) && (
-    value.opcode === undefined ||
-    value.opcode === null ||
-    isFiniteCommandNumber(value.opcode)
-  ) && (
-    value.processId === undefined ||
-    value.processId === null ||
-    isFiniteCommandNumber(value.processId)
-  ) && (
-    value.activityId === undefined ||
-    value.activityId === null ||
-    typeof value.activityId === "string"
-  ) && (
-    value.relatedActivityId === undefined ||
-    value.relatedActivityId === null ||
-    typeof value.relatedActivityId === "string"
-  ) && (
-    value.sessionId === undefined ||
-    value.sessionId === null ||
-    typeof value.sessionId === "string"
-  ) && (
-    value.deviceId === undefined ||
-    value.deviceId === null ||
-    typeof value.deviceId === "string"
-  ) && (
-    value.userId === undefined ||
-    value.userId === null ||
-    typeof value.userId === "string"
-  ) && (
-    value.processStartTime === undefined ||
-    value.processStartTime === null ||
-    typeof value.processStartTime === "string"
-  ) && (
-    value.threadId === undefined ||
-    value.threadId === null ||
-    isFiniteCommandNumber(value.threadId)
-  ) && (
-    value.userSid === undefined ||
-    value.userSid === null ||
-    typeof value.userSid === "string"
-  ) && (
-    value.keywords === undefined ||
-    value.keywords === null ||
-    typeof value.keywords === "string"
-  ) && (
-    value.mapped === undefined ||
-    (Array.isArray(value.mapped) &&
-      value.mapped.every(
-        (mapped) =>
-          isCommandRecord(mapped) &&
-          typeof mapped.property === "string" &&
-          typeof mapped.text === "string" &&
-          typeof mapped.complete === "boolean",
-      ))
+    (value.originKind === undefined ||
+      value.originKind === "event" ||
+      value.originKind === "log") &&
+    (value.task === undefined ||
+      value.task === null ||
+      isFiniteCommandNumber(value.task)) &&
+    (value.opcode === undefined ||
+      value.opcode === null ||
+      isFiniteCommandNumber(value.opcode)) &&
+    (value.processId === undefined ||
+      value.processId === null ||
+      isFiniteCommandNumber(value.processId)) &&
+    (value.activityId === undefined ||
+      value.activityId === null ||
+      typeof value.activityId === "string") &&
+    (value.relatedActivityId === undefined ||
+      value.relatedActivityId === null ||
+      typeof value.relatedActivityId === "string") &&
+    (value.sessionId === undefined ||
+      value.sessionId === null ||
+      typeof value.sessionId === "string") &&
+    (value.deviceId === undefined ||
+      value.deviceId === null ||
+      typeof value.deviceId === "string") &&
+    (value.userId === undefined ||
+      value.userId === null ||
+      typeof value.userId === "string") &&
+    (value.processStartTime === undefined ||
+      value.processStartTime === null ||
+      typeof value.processStartTime === "string") &&
+    (value.threadId === undefined ||
+      value.threadId === null ||
+      isFiniteCommandNumber(value.threadId)) &&
+    (value.userSid === undefined ||
+      value.userSid === null ||
+      typeof value.userSid === "string") &&
+    (value.keywords === undefined ||
+      value.keywords === null ||
+      typeof value.keywords === "string") &&
+    (value.mapped === undefined ||
+      (Array.isArray(value.mapped) &&
+        value.mapped.every(
+          (mapped) =>
+            isCommandRecord(mapped) &&
+            typeof mapped.property === "string" &&
+            typeof mapped.text === "string" &&
+            typeof mapped.complete === "boolean",
+        )))
   );
 }
 
@@ -621,7 +615,9 @@ const TIMELINE_PARSER_KIND_MEMBERS = {
   companyPortal: true,
 } satisfies Record<ParserKind, true>;
 
-const TIMELINE_PARSER_KINDS = new Set(Object.keys(TIMELINE_PARSER_KIND_MEMBERS));
+const TIMELINE_PARSER_KINDS = new Set(
+  Object.keys(TIMELINE_PARSER_KIND_MEMBERS),
+);
 
 const TIMELINE_SIGNAL_KIND_MEMBERS = {
   errorSeverity: true,
@@ -629,7 +625,9 @@ const TIMELINE_SIGNAL_KIND_MEMBERS = {
   imeFailed: true,
 } satisfies Record<SignalKind, true>;
 
-const TIMELINE_SIGNAL_KINDS = new Set(Object.keys(TIMELINE_SIGNAL_KIND_MEMBERS));
+const TIMELINE_SIGNAL_KINDS = new Set(
+  Object.keys(TIMELINE_SIGNAL_KIND_MEMBERS),
+);
 
 function isTimelineSourceKind(value: unknown): boolean {
   if (value === "intuneEvents") return true;
@@ -940,7 +938,6 @@ function isNullableEvidenceEventLogExportPreview(value: unknown): boolean {
   return value === null || isEvidenceEventLogExportPreview(value);
 }
 
-
 function decodeParseResults(
   value: unknown,
   commandName: string,
@@ -1245,11 +1242,12 @@ function decodeEventLogParseResult(
     parseErrors,
     errorMessages: shape.errorMessages,
   };
-  if (reply.coverageGaps !== undefined) result.coverageGaps = shape.coverageGaps;
+  if (reply.coverageGaps !== undefined)
+    result.coverageGaps = shape.coverageGaps;
   if (reply.coverage !== undefined) result.coverage = shape.coverage;
-  if (reply.archiveMembers !== undefined) result.archiveMembers = shape.archiveMembers;
+  if (reply.archiveMembers !== undefined)
+    result.archiveMembers = shape.archiveMembers;
   return result;
-
 }
 function decodeEventLogClearResponse(
   value: unknown,
@@ -1264,7 +1262,9 @@ function decodeEventLogClearResponse(
     return response;
   }
   if (
-    (status === "denied" || status === "unavailable" || status === "unsupported") &&
+    (status === "denied" ||
+      status === "unavailable" ||
+      status === "unsupported") &&
     typeof response.result.detail === "string"
   ) {
     return response;
@@ -1279,7 +1279,6 @@ export async function expandEventLogSources(
     sources,
   });
 }
-
 
 export async function parseEventLogManifest(
   manifest: EventLogSourceManifest,
@@ -1591,9 +1590,11 @@ function isDiagnosisOverview(value: unknown): value is DiagnosisOverview {
     DIAGNOSIS_OVERVIEW_OUTCOMES.has(value.outcome) &&
     isDiagnosisIdentityString(value.headline) &&
     count(value.findingCount) &&
+    count(value.actionableFindingCount) &&
     count(value.coverageGapCount) &&
     count(value.evidenceCount) &&
-    count(value.correlationCount)
+    count(value.correlationCount) &&
+    count(value.errorTokenEventCount)
   );
 }
 
@@ -1615,11 +1616,20 @@ function isDiagnosisSummary(value: unknown): value is DiagnosisSummary {
   ) {
     return false;
   }
+  const actionableFindingPreviewCount = findings.filter(
+    (finding) => finding.class !== "coverageGap",
+  ).length;
+  const errorTokenEventPreviewCount = events.filter(
+    (event) => event.errorTokens.length > 0,
+  ).length;
   return (
-    overview.findingCount === findings.length &&
-    overview.coverageGapCount === coverageGaps.length &&
-    overview.evidenceCount === evidence.length &&
-    overview.correlationCount === correlations.length
+    overview.findingCount >= findings.length &&
+    overview.actionableFindingCount >= actionableFindingPreviewCount &&
+    overview.actionableFindingCount <= overview.findingCount &&
+    overview.coverageGapCount >= coverageGaps.length &&
+    overview.evidenceCount >= evidence.length &&
+    overview.correlationCount >= correlations.length &&
+    overview.errorTokenEventCount >= errorTokenEventPreviewCount
   );
 }
 
@@ -1633,17 +1643,28 @@ function decodeDiagnosisSummary(
   return value;
 }
 
-type DiagnosisTransportRecord = Omit<EvtxRecord, "eventRecordId"> & {
-  eventRecordId: number;
-};
+export interface EventLogAnalysisRecordInput {
+  record: EvtxRecord;
+  originalSerializedBytes: number | null;
+}
+
+export interface EventLogAnalysisLogEntryInput {
+  entry: LogEntry;
+  originalSerializedBytes: number | null;
+}
+
+interface EventLogAnalysisTransportRecord {
+  record: EvtxRecord;
+  originalSerializedBytes: number | null;
+}
 
 // Keep an unsafe numeric ID in the u64 transport range while the optional text field carries its
 // exact identity (or its malformed decimal text) for Rust diagnosis validation.
 const DIAGNOSIS_UNSAFE_EVENT_RECORD_ID_FALLBACK = Number.MAX_SAFE_INTEGER + 1;
 
-function diagnosisRecordForTransport(
+export function eventLogAnalysisRecordForTransport(
   record: EvtxRecord,
-): DiagnosisTransportRecord {
+): EvtxRecord {
   const numericId = record.eventRecordId;
   if (
     typeof numericId !== "number" ||
@@ -1668,31 +1689,319 @@ function diagnosisRecordForTransport(
   const eventRecordId = Number.isSafeInteger(numericId)
     ? numericId
     : DIAGNOSIS_UNSAFE_EVENT_RECORD_ID_FALLBACK;
-  return { ...record, eventRecordId };
+  return eventRecordId === numericId ? record : { ...record, eventRecordId };
 }
 
 function transportDiagnosisRecords(
-  records: EvtxRecord[],
-): DiagnosisTransportRecord[] {
-  return records.map(diagnosisRecordForTransport);
+  records: EventLogAnalysisRecordInput[],
+): EventLogAnalysisTransportRecord[] {
+  return records.map(({ record, originalSerializedBytes }) => ({
+    record: eventLogAnalysisRecordForTransport(record),
+    originalSerializedBytes,
+  }));
 }
 
-export async function diagnoseEventRecords(
-  records: EvtxRecord[],
+export interface EventLogAnalysisSessionStatus {
+  sessionId: string;
+  revision: number;
+  totalItems: number;
+  eventItems: number;
+  logItems: number;
+  totalUnplaced: number;
+  totalEdges: number;
+  totalCoverageGaps: number;
+  finalized: boolean;
+}
+
+export interface EventLogAnalysisTimelinePage extends Omit<
+  EventLogAnalysisSessionStatus,
+  "finalized"
+> {
+  offset: number;
+  nextOffset: number | null;
+  serializedBytes: number;
+  items: TimelineItem[];
+  unplacedPreview: UnplacedItem[];
+  edgesPreview: TimelineCorrelationEdge[];
+  coverageGapsPreview: TimelineCoverageGap[];
+}
+
+const EVENT_LOG_ANALYSIS_PAGE_BYTE_LIMIT = 8 * 1024 * 1024;
+
+function analysisCount(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid event-log analysis response: ${path}`);
+  }
+  return value;
+}
+
+function analysisPageSerializedBytes(value: unknown): number {
+  const count = analysisCount(value, "page.serializedBytes");
+  if (count === 0 || count > EVENT_LOG_ANALYSIS_PAGE_BYTE_LIMIT) {
+    throw new Error(
+      "Invalid event-log analysis response: page.serializedBytes",
+    );
+  }
+  return count;
+}
+
+function analysisRecord(value: unknown, path: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid event-log analysis response: ${path}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function decodeEventLogAnalysisSessionStatus(
+  value: unknown,
+): EventLogAnalysisSessionStatus {
+  const status = analysisRecord(value, "status");
+  if (typeof status.sessionId !== "string" || status.sessionId.length === 0) {
+    throw new Error("Invalid event-log analysis response: status.sessionId");
+  }
+  if (typeof status.finalized !== "boolean") {
+    throw new Error("Invalid event-log analysis response: status.finalized");
+  }
+  return {
+    sessionId: status.sessionId,
+    revision: analysisCount(status.revision, "status.revision"),
+    totalItems: analysisCount(status.totalItems, "status.totalItems"),
+    eventItems: analysisCount(status.eventItems, "status.eventItems"),
+    logItems: analysisCount(status.logItems, "status.logItems"),
+    totalUnplaced: analysisCount(status.totalUnplaced, "status.totalUnplaced"),
+    totalEdges: analysisCount(status.totalEdges, "status.totalEdges"),
+    totalCoverageGaps: analysisCount(
+      status.totalCoverageGaps,
+      "status.totalCoverageGaps",
+    ),
+    finalized: status.finalized,
+  };
+}
+
+function decodeEventLogAnalysisTimelinePage(
+  value: unknown,
+): EventLogAnalysisTimelinePage {
+  const page = analysisRecord(value, "page");
+  if (typeof page.sessionId !== "string" || page.sessionId.length === 0) {
+    throw new Error("Invalid event-log analysis response: page.sessionId");
+  }
+  if (
+    !Array.isArray(page.items) ||
+    !Array.isArray(page.unplacedPreview) ||
+    !Array.isArray(page.edgesPreview) ||
+    !Array.isArray(page.coverageGapsPreview)
+  ) {
+    throw new Error("Invalid event-log analysis response: page.previews");
+  }
+  const timeline = assertUnifiedTimelineShape({
+    items: page.items,
+    unplaced: page.unplacedPreview,
+    edges: page.edgesPreview,
+    coverageGaps: page.coverageGapsPreview,
+  });
+  const offset = analysisCount(page.offset, "page.offset");
+  const totalItems = analysisCount(page.totalItems, "page.totalItems");
+  const nextOffset =
+    page.nextOffset === null
+      ? null
+      : analysisCount(page.nextOffset, "page.nextOffset");
+  const consumedOffset = offset + timeline.items.length;
+  if (
+    consumedOffset > totalItems ||
+    (offset < totalItems && timeline.items.length === 0) ||
+    (consumedOffset < totalItems && nextOffset !== consumedOffset) ||
+    (consumedOffset >= totalItems && nextOffset !== null)
+  ) {
+    throw new Error("Invalid event-log analysis response: page.nextOffset");
+  }
+  return {
+    sessionId: page.sessionId,
+    revision: analysisCount(page.revision, "page.revision"),
+    offset,
+    nextOffset,
+    serializedBytes: analysisPageSerializedBytes(page.serializedBytes),
+    totalItems,
+    eventItems: analysisCount(page.eventItems, "page.eventItems"),
+    logItems: analysisCount(page.logItems, "page.logItems"),
+    totalUnplaced: analysisCount(page.totalUnplaced, "page.totalUnplaced"),
+    totalEdges: analysisCount(page.totalEdges, "page.totalEdges"),
+    totalCoverageGaps: analysisCount(
+      page.totalCoverageGaps,
+      "page.totalCoverageGaps",
+    ),
+    items: timeline.items,
+    unplacedPreview: timeline.unplaced,
+    edgesPreview: timeline.edges,
+    coverageGapsPreview: timeline.coverageGaps,
+  };
+}
+
+export async function createEventLogAnalysisSession(): Promise<EventLogAnalysisSessionStatus> {
+  return decodeEventLogAnalysisSessionStatus(
+    await invokeCommand("evtx_create_analysis_session"),
+  );
+}
+
+export async function appendEventLogAnalysisChunk(
+  sessionId: string,
+  records: EventLogAnalysisRecordInput[] = [],
+  entries: EventLogAnalysisLogEntryInput[] = [],
+): Promise<EventLogAnalysisSessionStatus> {
+  return decodeEventLogAnalysisSessionStatus(
+    await invokeCommand("evtx_append_analysis_chunk", {
+      sessionId,
+      records: transportDiagnosisRecords(records),
+      entries,
+    }),
+  );
+}
+
+export async function finalizeEventLogAnalysisSession(
+  sessionId: string,
+): Promise<EventLogAnalysisSessionStatus> {
+  return decodeEventLogAnalysisSessionStatus(
+    await invokeCommand("evtx_finalize_analysis_session", { sessionId }),
+  );
+}
+
+export async function queryEventLogAnalysisTimeline(
+  sessionId: string,
+  offset: number,
+  limit: number,
+): Promise<EventLogAnalysisTimelinePage> {
+  return decodeEventLogAnalysisTimelinePage(
+    await invokeCommand("evtx_query_analysis_timeline", {
+      sessionId,
+      offset,
+      limit,
+    }),
+  );
+}
+
+export const EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT = 4 * 1024;
+const EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT = 256;
+const DIAGNOSIS_COVERAGE_PROJECTION_SOURCE = "diagnosis-input-projection";
+const MAX_U64_TEXT = "18446744073709551615";
+
+function canonicalCoverageRecordIdText(value: string): string {
+  if (!/^\d+$/.test(value)) {
+    throw new Error("EventRecordID text must be an unsigned decimal integer.");
+  }
+  let firstSignificant = 0;
+  while (
+    firstSignificant < value.length - 1 &&
+    value.charCodeAt(firstSignificant) === 0x30
+  ) {
+    firstSignificant += 1;
+  }
+  const canonical = value.slice(firstSignificant);
+  if (
+    canonical.length > MAX_U64_TEXT.length ||
+    (canonical.length === MAX_U64_TEXT.length && canonical > MAX_U64_TEXT)
+  ) {
+    throw new Error("EventRecordID text exceeds the unsigned 64-bit range.");
+  }
+  return canonical;
+}
+
+function diagnosisCoverageGapsForTransport(
+  coverageGaps: EvtxCoverageGap[],
+): EvtxCoverageGap[] {
+  let compactedFieldCount = 0;
+  let transportChanged = false;
+  const projected = coverageGaps.map((gap) => {
+    const source = boundUtf8WithDigest(
+      gap.source,
+      EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+    );
+    const reason = boundUtf8WithDigest(
+      gap.reason,
+      EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+    );
+    const provider =
+      gap.providerMessage === undefined
+        ? undefined
+        : boundUtf8WithDigest(
+            gap.providerMessage.provider,
+            EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
+          );
+    const eventRecordIdText =
+      gap.eventRecordIdText === undefined
+        ? undefined
+        : canonicalCoverageRecordIdText(gap.eventRecordIdText);
+    compactedFieldCount += Number(source !== gap.source);
+    compactedFieldCount += Number(reason !== gap.reason);
+    compactedFieldCount += Number(
+      provider !== undefined && provider !== gap.providerMessage?.provider,
+    );
+    const unchanged =
+      source === gap.source &&
+      reason === gap.reason &&
+      provider === gap.providerMessage?.provider &&
+      eventRecordIdText === gap.eventRecordIdText;
+    transportChanged ||= !unchanged;
+    if (unchanged) return gap;
+    return {
+      ...gap,
+      source,
+      reason,
+      ...(eventRecordIdText === undefined ? {} : { eventRecordIdText }),
+      ...(gap.providerMessage === undefined
+        ? {}
+        : {
+            providerMessage: {
+              ...gap.providerMessage,
+              provider: provider!,
+            },
+          }),
+    };
+  });
+
+  if (
+    compactedFieldCount === 0 &&
+    projected.length <= EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT
+  ) {
+    return transportChanged ? projected : coverageGaps;
+  }
+
+  const retainedOriginalCount = Math.min(
+    projected.length,
+    EVENT_LOG_DIAGNOSIS_COVERAGE_GAP_LIMIT - 1,
+  );
+  const omittedOriginalGapCount = projected.length - retainedOriginalCount;
+  const fieldLabel = compactedFieldCount === 1 ? "field" : "fields";
+  const gapLabel = omittedOriginalGapCount === 1 ? "gap" : "gaps";
+  return [
+    ...projected.slice(0, retainedOriginalCount),
+    {
+      source: DIAGNOSIS_COVERAGE_PROJECTION_SOURCE,
+      kind: "limit",
+      reason:
+        `Diagnosis coverage transport compacted ${compactedFieldCount} oversized text ${fieldLabel} ` +
+        `to ${EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT} UTF-8 bytes and omitted ` +
+        `${omittedOriginalGapCount} original coverage ${gapLabel} to reserve this projection notice.`,
+    },
+  ];
+}
+
+export async function diagnoseEventLogAnalysisSession(
+  sessionId: string,
   coverageGaps: EvtxCoverageGap[] = [],
-  timeline?: UnifiedTimeline,
-  textEntries: LogEntry[] = [],
 ): Promise<DiagnosisSummary> {
-  const commandName = "evtx_diagnose_records";
+  const commandName = "evtx_diagnose_analysis_session";
   return decodeDiagnosisSummary(
     await invokeCommand(commandName, {
-      records: transportDiagnosisRecords(records),
-      coverageGaps,
-      timeline: timeline ?? null,
-      textEntries,
+      sessionId,
+      coverageGaps: diagnosisCoverageGapsForTransport(coverageGaps),
     }),
     commandName,
   );
+}
+
+export async function closeEventLogAnalysisSession(
+  sessionId: string,
+): Promise<void> {
+  await invokeCommand("evtx_close_analysis_session", { sessionId });
 }
 
 export async function inspectEvidenceBundle(
@@ -2205,7 +2514,6 @@ export interface GraphInteractiveOperationTicket {
   attemptId: string;
 }
 
-
 function isStringArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) && value.every((item) => typeof item === "string")
@@ -2213,7 +2521,8 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isGraphAuthStatus(value: unknown): value is GraphAuthStatus {
-  if (!isCommandRecord(value) || !isCommandRecord(value.capabilities)) return false;
+  if (!isCommandRecord(value) || !isCommandRecord(value.capabilities))
+    return false;
   const capabilities = value.capabilities;
   return (
     typeof value.isAuthenticated === "boolean" &&
@@ -2260,7 +2569,6 @@ const GRAPH_PERMISSION_UPGRADE_OUTCOMES =
     "failed",
     "stale",
   ]);
-
 
 function decodeGraphHostCapability(
   value: unknown,
@@ -2535,7 +2843,12 @@ const COMMAND_DECODERS = {
   evtx_expand_sources: decodeEventLogSourceManifest,
   evtx_parse_manifest: decodeEventLogParseResult,
   evtx_clear_channel: decodeEventLogClearResponse,
-  evtx_diagnose_records: decodeDiagnosisSummary,
+  evtx_create_analysis_session: decodeEventLogAnalysisSessionStatus,
+  evtx_append_analysis_chunk: decodeEventLogAnalysisSessionStatus,
+  evtx_finalize_analysis_session: decodeEventLogAnalysisSessionStatus,
+  evtx_query_analysis_timeline: decodeEventLogAnalysisTimelinePage,
+  evtx_diagnose_analysis_session: decodeDiagnosisSummary,
+  evtx_close_analysis_session: decodeUnitResponse,
   build_timeline_cmd: decodeTimelineBundle,
   inspect_evidence_bundle: (value, commandName) =>
     decodeRecordResponse<EvidenceBundleDetails>(value, commandName, {

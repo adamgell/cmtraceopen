@@ -139,9 +139,11 @@ const summary: DiagnosisSummary = {
     outcome: "confirmedFailure",
     headline: "Evidence contains confirmed operational failure(s).",
     findingCount: 2,
+    actionableFindingCount: 1,
     coverageGapCount: 1,
     evidenceCount: 1,
     correlationCount: 1,
+    errorTokenEventCount: 1,
   },
 };
 
@@ -169,7 +171,29 @@ describe("EventDiagnosisPanel", () => {
       screen.getByText(/1 actionable finding, 1 source coverage gap/),
     ).toBeTruthy();
     expect(screen.queryByText("1 correlation")).toBeNull();
+    expect(screen.getByText("Issues detected")).toBeTruthy();
   });
+
+  it.each(["noFindings", "insufficientEvidence"] as const)(
+    "labels the neutral %s outcome in human language",
+    (outcome) => {
+      render(
+        <EventDiagnosisPanel
+          summary={{
+            ...summary,
+            overview: {
+              ...summary.overview,
+              outcome,
+              headline: "No issues detected.",
+            },
+          }}
+        />,
+      );
+
+      expect(screen.getByText("No issues detected")).toBeTruthy();
+      expect(screen.queryByText(outcome)).toBeNull();
+    },
+  );
 
   it("exposes expanded details as a named keyboard-focusable region", () => {
     render(<EventDiagnosisPanel summary={summary} />);
@@ -228,11 +252,42 @@ describe("EventDiagnosisPanel", () => {
         id: `gap-${index}`,
         source: `source-${index}`,
       })),
+      overview: { ...summary.overview, coverageGapCount: 101 },
     };
     render(<EventDiagnosisPanel summary={cappedSummary} />);
     expandDiagnosis();
 
     expect(screen.getAllByText(/^Coverage:/)).toHaveLength(100);
     expect(screen.getByText("1 coverage gap omitted.")).toBeTruthy();
+  });
+
+  it("uses authoritative totals when the backend returns bounded previews", () => {
+    const boundedSummary: DiagnosisSummary = {
+      ...summary,
+      overview: {
+        ...summary.overview,
+        findingCount: 812,
+        actionableFindingCount: 712,
+        coverageGapCount: 4_228,
+        evidenceCount: 8_217,
+        correlationCount: 849,
+        errorTokenEventCount: 207,
+      },
+    };
+    render(<EventDiagnosisPanel summary={boundedSummary} />);
+
+    expect(screen.getByText("712 actionable findings")).toBeTruthy();
+    expect(screen.getByText("4228 source coverage gaps")).toBeTruthy();
+    expect(
+      screen.getByText(/712 actionable findings, 4228 source coverage gaps/),
+    ).toBeTruthy();
+
+    expandDiagnosis();
+    expect(screen.getByText("711 actionable findings omitted.")).toBeTruthy();
+    expect(screen.getByText("4227 coverage gaps omitted.")).toBeTruthy();
+    expect(screen.getByText("848 correlations omitted.")).toBeTruthy();
+    expect(
+      screen.getByText("206 error-token event details omitted."),
+    ).toBeTruthy();
   });
 });
