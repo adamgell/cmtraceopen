@@ -24,8 +24,8 @@ use crate::intune::ime_parser::{parse_ime_content_bounded, ImeLine};
 use super::models::{
     Win32Analysis, Win32AppMetadata, Win32Confidence, Win32Coverage, Win32ExecutionContext,
     Win32Intent, Win32Observation, Win32Outcome, Win32Phase, Win32ReturnCodeKind,
-    Win32ReturnCodeMapping, Win32Signal, Win32SourceKind, Win32SupersededFailure,
-    Win32Transaction, Win32TransactionKey, WIN32_SCHEMA_VERSION,
+    Win32ReturnCodeMapping, Win32Signal, Win32SourceKind, Win32SupersededFailure, Win32Transaction,
+    Win32TransactionKey, WIN32_SCHEMA_VERSION,
 };
 use super::rules::{classify_record, RecordClassification};
 use super::sources::{
@@ -88,12 +88,10 @@ fn classify_return_code(
     };
     // Intune configures the table per deployment type, so an entry scoped to
     // this transaction's deployment type wins over an app-wide entry.
-    let matches_app = |mapping: &&Win32ReturnCodeMapping| {
-        mapping.app_id == key.app_id && mapping.code == decimal
-    };
+    let matches_app =
+        |mapping: &&Win32ReturnCodeMapping| mapping.app_id == key.app_id && mapping.code == decimal;
     let scoped = table.iter().filter(matches_app).find(|mapping| {
-        mapping.deployment_type_id.is_some()
-            && mapping.deployment_type_id == key.deployment_type_id
+        mapping.deployment_type_id.is_some() && mapping.deployment_type_id == key.deployment_type_id
     });
     if let Some(mapping) = scoped.or_else(|| {
         table
@@ -709,9 +707,7 @@ pub fn analyze_win32_bundle_with(
             artifact_id: format!("expected:{expected}"),
             family: coverage_family(Win32SourceKind::AppWorkload).to_owned(),
             status: IntuneArtifactStatus::Missing,
-            detail: Some(format!(
-                "no usable {expected} was supplied to the analyzer"
-            )),
+            detail: Some(format!("no usable {expected} was supplied to the analyzer")),
             observed_at_utc: String::new(),
             evidence: Vec::new(),
         });
@@ -1090,13 +1086,21 @@ fn collect_superseded(candidates: &[&TerminalCandidate]) -> Vec<Win32SupersededF
     }
     for entry in &mut superseded_failures {
         entry.evidence.sort_by(|left, right| {
-            (left.source_artifact_id.as_str(), left.evidence_id.as_str())
-                .cmp(&(right.source_artifact_id.as_str(), right.evidence_id.as_str()))
+            (left.source_artifact_id.as_str(), left.evidence_id.as_str()).cmp(&(
+                right.source_artifact_id.as_str(),
+                right.evidence_id.as_str(),
+            ))
         });
     }
     superseded_failures.sort_by(|left, right| {
-        (left.outcome, left.return_code.as_ref().map(|code| &code.raw))
-            .cmp(&(right.outcome, right.return_code.as_ref().map(|code| &code.raw)))
+        (
+            left.outcome,
+            left.return_code.as_ref().map(|code| &code.raw),
+        )
+            .cmp(&(
+                right.outcome,
+                right.return_code.as_ref().map(|code| &code.raw),
+            ))
     });
     superseded_failures
 }
@@ -1204,7 +1208,10 @@ fn resolve_outcome(fold: &Fold) -> Resolution {
     surviving.sort_by(|left, right| left.sequence.canonical().cmp(&right.sequence.canonical()));
 
     let outcome = surviving[0].outcome;
-    if surviving.iter().any(|candidate| candidate.outcome != outcome) {
+    if surviving
+        .iter()
+        .any(|candidate| candidate.outcome != outcome)
+    {
         // Rule 4: conservative. Rule 3: only cleared failures are reported
         // superseded, and nothing is attributed.
         return Resolution {
@@ -1225,7 +1232,9 @@ fn resolve_outcome(fold: &Fold) -> Resolution {
                 remaining
                     .iter()
                     .enumerate()
-                    .filter(|(index, candidate)| superseded[*index] && candidate.outcome.is_failure())
+                    .filter(|(index, candidate)| {
+                        superseded[*index] && candidate.outcome.is_failure()
+                    })
                     .map(|(_, candidate)| *candidate),
             )
             .collect::<Vec<_>>(),
@@ -1306,14 +1315,18 @@ fn reduce_transaction(
             .map(|&index| &records[index])
             .filter(|record| {
                 record.classification.signal == Win32Signal::InstallerCompleted
-                    && record.classification.error_code.as_ref().is_some_and(|code| {
-                        matches!(
-                            classify_return_code(&key, code, &options.return_codes),
-                            Win32ReturnCodeKind::Success
-                                | Win32ReturnCodeKind::SoftReboot
-                                | Win32ReturnCodeKind::HardReboot
-                        )
-                    })
+                    && record
+                        .classification
+                        .error_code
+                        .as_ref()
+                        .is_some_and(|code| {
+                            matches!(
+                                classify_return_code(&key, code, &options.return_codes),
+                                Win32ReturnCodeKind::Success
+                                    | Win32ReturnCodeKind::SoftReboot
+                                    | Win32ReturnCodeKind::HardReboot
+                            )
+                        })
             })
             .map(record_sequence_point)
             .collect(),
@@ -1338,8 +1351,7 @@ fn reduce_transaction(
         .iter()
         .filter(|entry| entry.app_id == key.app_id)
         .find(|entry| {
-            entry.deployment_type_id.is_some()
-                && entry.deployment_type_id == key.deployment_type_id
+            entry.deployment_type_id.is_some() && entry.deployment_type_id == key.deployment_type_id
         })
         .or_else(|| {
             options
@@ -2159,7 +2171,10 @@ mod tests {
             .artifacts
             .iter()
             .any(|entry| entry.artifact_id == "expected:AppWorkload.log"));
-        assert_eq!(only_transaction(&analysis).confidence, Win32Confidence::Medium);
+        assert_eq!(
+            only_transaction(&analysis).confidence,
+            Win32Confidence::Medium
+        );
     }
 
     #[test]
@@ -2266,8 +2281,12 @@ mod tests {
         // stands -- but the missing tail is a coverage gap, so High is
         // unreachable.
         let mut capped = workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+            )),
         ]);
         capped.access_state = IntuneAccessState::Capped;
         let analysis = analyze_win32_bundle(&[
@@ -2361,9 +2380,7 @@ mod tests {
         let inferred = analysis
             .transactions
             .iter()
-            .find(|transaction| {
-                transaction.key.execution_context == Win32ExecutionContext::System
-            })
+            .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::System)
             .expect("the system-context transaction exists");
         assert_eq!(
             inferred.key.deployment_type_id.as_deref(),
@@ -2381,8 +2398,11 @@ mod tests {
             .iter()
             .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::User)
             .expect("the user-context transaction exists");
-        assert_eq!(observed.confidence, Win32Confidence::Low,
-            "non-terminal outcome stays low regardless");
+        assert_eq!(
+            observed.confidence,
+            Win32Confidence::Low,
+            "non-terminal outcome stays low regardless"
+        );
     }
 
     #[test]
@@ -2408,9 +2428,7 @@ mod tests {
         let failure_carriers: Vec<&Win32TransactionKey> = analysis
             .transactions
             .iter()
-            .filter(|transaction| {
-                transaction.outcome == Win32Outcome::InstallerReportedFailure
-            })
+            .filter(|transaction| transaction.outcome == Win32Outcome::InstallerReportedFailure)
             .map(|transaction| &transaction.key)
             .collect();
         assert_eq!(
@@ -2455,9 +2473,7 @@ mod tests {
         let failure_carriers: Vec<&Win32TransactionKey> = analysis
             .transactions
             .iter()
-            .filter(|transaction| {
-                transaction.outcome == Win32Outcome::InstallerReportedFailure
-            })
+            .filter(|transaction| transaction.outcome == Win32Outcome::InstallerReportedFailure)
             .map(|transaction| &transaction.key)
             .collect();
         assert_eq!(
@@ -2473,9 +2489,7 @@ mod tests {
         let system = analysis
             .transactions
             .iter()
-            .find(|transaction| {
-                transaction.key.execution_context == Win32ExecutionContext::System
-            })
+            .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::System)
             .expect("the system-context policy transaction exists");
         assert_ne!(
             system.outcome,
@@ -2530,9 +2544,7 @@ mod tests {
         let system = analysis
             .transactions
             .iter()
-            .find(|transaction| {
-                transaction.key.execution_context == Win32ExecutionContext::System
-            })
+            .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::System)
             .expect("the system-context transaction exists");
         assert_eq!(
             system.outcome,
@@ -2549,9 +2561,7 @@ mod tests {
         let unknown = analysis
             .transactions
             .iter()
-            .find(|transaction| {
-                transaction.key.execution_context == Win32ExecutionContext::Unknown
-            })
+            .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::Unknown)
             .expect("the context-less transaction exists");
         assert_eq!(unknown.outcome, Win32Outcome::InstallerReportedFailure);
         assert_eq!(
@@ -2574,23 +2584,37 @@ mod tests {
         // explicit retry linkage, so the later success is the outcome -- and the
         // proven failure must survive as a superseded entry, never vanish.
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 1603"
+            )),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+            )),
         ])]);
 
         let transaction = only_transaction(&analysis);
         assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
         assert_eq!(
-            transaction.return_code.as_ref().map(|code| code.raw.as_str()),
+            transaction
+                .return_code
+                .as_ref()
+                .map(|code| code.raw.as_str()),
             Some("0")
         );
         assert_eq!(transaction.superseded_failures.len(), 1);
         let superseded = &transaction.superseded_failures[0];
         assert_eq!(superseded.outcome, Win32Outcome::InstallerReportedFailure);
         assert_eq!(
-            superseded.return_code.as_ref().map(|code| code.raw.as_str()),
+            superseded
+                .return_code
+                .as_ref()
+                .map(|code| code.raw.as_str()),
             Some("1603")
         );
         assert!(!superseded.evidence.is_empty());
@@ -2696,10 +2720,7 @@ mod tests {
             .concat(),
         );
 
-        for inputs in [
-            vec![monday.clone(), friday.clone()],
-            vec![friday, monday],
-        ] {
+        for inputs in [vec![monday.clone(), friday.clone()], vec![friday, monday]] {
             let analysis = analyze_win32_bundle(&inputs);
             let transaction = only_transaction(&analysis);
             assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
@@ -2735,7 +2756,9 @@ mod tests {
             record_at(
                 "10:15:30.000+000",
                 "7-31-2026",
-                &format!("[Win32App] Hash mismatch while downloading content for app with id: {APP}"),
+                &format!(
+                    "[Win32App] Hash mismatch while downloading content for app with id: {APP}"
+                ),
                 5,
             ),
         );
@@ -2842,15 +2865,24 @@ mod tests {
         // the exported attribution, or the unmapped-code finding silently
         // stops firing for a deployment that failed with an unmapped code.
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1618")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 1603"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 1618"
+            )),
         ])]);
 
         let transaction = only_transaction(&analysis);
         assert_eq!(transaction.outcome, Win32Outcome::InstallerReportedFailure);
         assert_eq!(
-            transaction.return_code.as_ref().map(|code| code.raw.as_str()),
+            transaction
+                .return_code
+                .as_ref()
+                .map(|code| code.raw.as_str()),
             Some("1603"),
             "the exported token must belong to the outcome-bearing cycle"
         );
@@ -2869,9 +2901,15 @@ mod tests {
     #[test]
     fn a_retry_kind_completion_after_a_reboot_success_keeps_the_winning_attribution() {
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 3010")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1618")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 3010"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 1618"
+            )),
         ])]);
 
         let transaction = only_transaction(&analysis);
@@ -2880,7 +2918,10 @@ mod tests {
         // triple comes from it: a Retry token paired with someone else's
         // reboot flag was the incoherent export this replaces.
         assert_eq!(
-            transaction.return_code.as_ref().map(|code| code.raw.as_str()),
+            transaction
+                .return_code
+                .as_ref()
+                .map(|code| code.raw.as_str()),
             Some("3010")
         );
         assert_eq!(
@@ -2902,9 +2943,15 @@ mod tests {
         // proof — but the transaction must carry the unplaced record and ask
         // for the linkage evidence that would resolve it.
         let enforcement = workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Install command line: setup.exe /quiet for app with id: {APP}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Install command line: setup.exe /quiet for app with id: {APP}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+            )),
         ]);
         let detection = Win32SourceInput::captured(
             "aap",
@@ -2930,8 +2977,7 @@ mod tests {
         let findings = super::super::findings::derive_findings(&analysis);
         assert!(
             findings.iter().any(|finding| {
-                finding.finding_id
-                    == format!("win32-unlinked-detection-failure:{APP}:{DT}:unknown")
+                finding.finding_id == format!("win32-unlinked-detection-failure:{APP}:{DT}:unknown")
                     && finding
                         .evidence
                         .iter()
@@ -2951,9 +2997,15 @@ mod tests {
         // detection before enforcement: nothing is unlinked and a clean
         // success asks for nothing further.
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Detection state for app with id: {APP} = Not Detected")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Detection state for app with id: {APP} = Not Detected"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+            )),
         ])]);
         let transaction = only_transaction(&analysis);
         assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
@@ -2968,9 +3020,15 @@ mod tests {
         // the superseded completion's token would pair an InstalledNotDetected
         // outcome with a stale success code.
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 3010")),
-            record(&format!("[Win32App] Detection state for app with id: {APP} = Not Detected")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 3010"
+            )),
+            record(&format!(
+                "[Win32App] Detection state for app with id: {APP} = Not Detected"
+            )),
         ])]);
 
         let transaction = only_transaction(&analysis);
@@ -3053,7 +3111,9 @@ mod tests {
             record_at(
                 "10:15:30.000+000",
                 "7-31-2026",
-                &format!("[Win32App] Hash mismatch while downloading content for app with id: {APP}"),
+                &format!(
+                    "[Win32App] Hash mismatch while downloading content for app with id: {APP}"
+                ),
                 5,
             ),
         );
@@ -3147,9 +3207,15 @@ mod tests {
         // clear ReportingFailed. The proven failure survives as a superseded
         // entry rather than being erased (ADR-003 retry semantics).
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Download failed for app with id: {APP}, error code: 0x87D30067")),
-            record(&format!("[Win32App] Download completed for app with id: {APP}")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Download failed for app with id: {APP}, error code: 0x87D30067"
+            )),
+            record(&format!(
+                "[Win32App] Download completed for app with id: {APP}"
+            )),
         ])]);
 
         let transaction = only_transaction(&analysis);
@@ -3172,9 +3238,13 @@ mod tests {
         // completed download proves nothing about them and must not clear
         // their candidates.
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
             record(&format!("[Win32App] Hash mismatch for app with id: {APP}")),
-            record(&format!("[Win32App] Download completed for app with id: {APP}")),
+            record(&format!(
+                "[Win32App] Download completed for app with id: {APP}"
+            )),
         ])]);
         assert_eq!(
             only_transaction(&analysis).outcome,
@@ -3185,8 +3255,12 @@ mod tests {
     #[test]
     fn a_scheduled_retry_cannot_mask_a_later_content_failure() {
         let analysis = analyze_win32_bundle(&[workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Will retry app with id: {APP} at the next check-in")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Will retry app with id: {APP} at the next check-in"
+            )),
             record(&format!("[Win32App] Hash mismatch for app with id: {APP}")),
         ])]);
         assert_eq!(
@@ -3237,8 +3311,12 @@ mod tests {
     #[test]
     fn duplicating_an_artifact_changes_no_conclusion() {
         let aw = workload(&[
-            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
-            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+            )),
         ]);
         let mut copy = aw.clone();
         copy.artifact_id = "aw-copy".to_owned();
@@ -3249,8 +3327,7 @@ mod tests {
 
         let transaction = only_transaction(&duplicated);
         assert_eq!(
-            transaction.outcome,
-            baseline.transactions[0].outcome,
+            transaction.outcome, baseline.transactions[0].outcome,
             "a re-collected copy of the same evidence adds nothing"
         );
         assert_eq!(transaction.confidence, baseline.transactions[0].confidence);
@@ -3269,11 +3346,8 @@ mod tests {
         for _ in 0..=MAX_RECORDS_PER_ARTIFACT {
             content.push_str("noise\n");
         }
-        let analysis = analyze_win32_bundle(&[Win32SourceInput::captured(
-            "aw",
-            "AppWorkload.log",
-            content,
-        )]);
+        let analysis =
+            analyze_win32_bundle(&[Win32SourceInput::captured("aw", "AppWorkload.log", content)]);
 
         let entry = analysis
             .coverage
