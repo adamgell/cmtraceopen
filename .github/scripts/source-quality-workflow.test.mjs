@@ -54,6 +54,16 @@ function assertSourceQualityRequirements(workflow) {
   );
   assert.match(
     job,
+    /^          if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then\n            base="\$PR_BASE_SHA"\n          else\n            base="\$BEFORE_SHA"\n          fi$/m,
+    "event-specific changed-range base selection missing"
+  );
+  assert.match(
+    job,
+    /^          if ! git cat-file -e "\$\{base\}\^\{commit\}" 2>\/dev\/null; then\n            base="\$\(git rev-list --max-parents=0 HEAD\)"\n          fi$/m,
+    "unavailable changed-range base fallback missing"
+  );
+  assert.match(
+    job,
     /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          elif \[\[ "\$base" == "\$\(git rev-parse HEAD\)" \]\]; then\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          else\n            git diff --check "\$base\.\.\.HEAD"\n          fi$/m,
     "range whitespace gate missing"
   );

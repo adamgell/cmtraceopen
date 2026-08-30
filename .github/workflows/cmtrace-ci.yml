@@ -52,7 +52,10 @@ jobs:
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          git cat-file -e "${base}^{commit}"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
           if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
             git diff --check "$base...HEAD"
           elif [[ "$base" == "$(git rev-parse HEAD)" ]]; then

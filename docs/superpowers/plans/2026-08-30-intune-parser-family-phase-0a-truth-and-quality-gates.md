@@ -130,9 +130,14 @@ Expected: live state is 12 closed and five open; #354, #361, #365, #369, and #37
 Run:
 
 ```bash
-gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body \
-  | sed 's/- \[ \] #357 /- [x] #357 /; s/- \[ \] #363 /- [x] #363 /' \
-  | gh issue edit 356 --repo adamgell/cmtraceopen --body-file -
+issue_body="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body)"
+test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #357([^0-9]|$)')" = 1
+test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #363([^0-9]|$)')" = 1
+updated_body="$(printf '%s\n' "$issue_body" \
+  | sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #363\1/')"
+test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #357([^0-9]|$)')" = 1
+test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #363([^0-9]|$)')" = 1
+printf '%s\n' "$updated_body" | gh issue edit 356 --repo adamgell/cmtraceopen --body-file -
 ```
 
 Expected: GitHub reports issue #356 updated and no other issue-body text changes.
@@ -417,6 +422,16 @@ function assertSourceQualityRequirements(workflow) {
   );
   assert.match(
     job,
+    /^          if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then\n            base="\$PR_BASE_SHA"\n          else\n            base="\$BEFORE_SHA"\n          fi$/m,
+    "event-specific changed-range base selection missing"
+  );
+  assert.match(
+    job,
+    /^          if ! git cat-file -e "\$\{base\}\^\{commit\}" 2>\/dev\/null; then\n            base="\$\(git rev-list --max-parents=0 HEAD\)"\n          fi$/m,
+    "unavailable changed-range base fallback missing"
+  );
+  assert.match(
+    job,
     /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          elif \[\[ "\$base" == "\$\(git rev-parse HEAD\)" \]\]; then\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          else\n            git diff --check "\$base\.\.\.HEAD"\n          fi$/m,
     "range whitespace gate missing"
   );
@@ -505,7 +520,10 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          git cat-file -e "${base}^{commit}"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
           if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
             git diff --check "$base...HEAD"
           elif [[ "$base" == "$(git rev-parse HEAD)" ]]; then
