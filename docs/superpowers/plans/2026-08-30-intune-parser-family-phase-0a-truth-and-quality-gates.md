@@ -482,8 +482,8 @@ function assertSourceQualityRequirements(workflow) {
   );
   assert.match(
     job,
-    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          elif \[\[ "\$base" == "\$\(git rev-parse HEAD\)" \]\]; then\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          else\n            git diff --check "\$base\.\.\.HEAD"\n          fi$/m,
-    "range whitespace gate missing"
+    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          else\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          fi$/m,
+    "range whitespace gate must compare every no-parent base from the empty tree"
   );
 }
 
@@ -576,10 +576,8 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
 
           if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
             git diff --check "$base...HEAD"
-          elif [[ "$base" == "$(git rev-parse HEAD)" ]]; then
-            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           else
-            git diff --check "$base...HEAD"
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           fi
 ```
 
