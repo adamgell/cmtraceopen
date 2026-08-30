@@ -15,6 +15,7 @@ const virtualizerState = vi.hoisted(() => ({
   cacheResetCalls: 0,
   resizeItemCalls: 0,
   visibleCount: null as number | null,
+  scrollToIndex: vi.fn(),
   recalculate: () => undefined,
   measureElementSize: (element: HTMLElement) => {
     const hasLevelBadge = element.querySelector("[data-evtx-level-badge]") !== null;
@@ -103,9 +104,9 @@ vi.mock("@tanstack/react-virtual", () => ({
       virtualizerState.measuredSizes.get(index) ??
       estimateSize(index);
     const getTotalSize = () => {
-      virtualizerState.totalSize = Array.from({ length: count }, (_, index) =>
-        measuredSize(index)
-      ).reduce((total, size) => total + size, 0);
+      let totalSize = 0;
+      for (let index = 0; index < count; index += 1) totalSize += measuredSize(index);
+      virtualizerState.totalSize = totalSize;
       return virtualizerState.totalSize;
     };
     const getVirtualItems = () => {
@@ -143,7 +144,7 @@ vi.mock("@tanstack/react-virtual", () => ({
       measureElement: virtualizerState.measureElement,
       resizeItem: virtualizerState.resizeItem,
       measure: virtualizerState.measure,
-      scrollToIndex: vi.fn(),
+      scrollToIndex: virtualizerState.scrollToIndex,
     };
   },
 }));
@@ -228,6 +229,7 @@ describe("event-viewer shared font metrics", () => {
     virtualizerState.cacheResetCalls = 0;
     virtualizerState.resizeObserverCalls = 0;
     virtualizerState.resizeItemCalls = 0;
+    virtualizerState.scrollToIndex.mockClear();
     virtualizerState.resizedSizes.clear();
     virtualizerState.totalSize = 0;
     useUiStore.getState().resetLogAccessibilityPreferences();
@@ -567,6 +569,49 @@ describe("event-viewer shared font metrics", () => {
       largeList.rowHeight +
         (largeList.rowLineHeight + LEVEL_BADGE_PRESENT_OFFSET) * 2,
     );
+  });
+  it("keeps a 100,000-record view addressable with a bounded DOM window", () => {
+    seedEventLog();
+    const records = Array.from({ length: 100_000 }, (_, index) => ({
+      ...RECORD,
+      id: index + 1,
+      eventRecordId: index + 1,
+      timestampEpoch: index + 1,
+      message: `Event ${index + 1}`,
+    }));
+    useEvtxStore.setState({
+      records,
+      channels: [
+        {
+          name: "Application",
+          eventCount: records.length,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      groupBy: [],
+      sortField: "time",
+      sortDirection: "asc",
+      selectedRecordId: 1,
+    });
+    virtualizerState.visibleCount = 20;
+
+    const timeline = render(<EvtxTimeline nowEpoch={100_001} />);
+    const grid = timeline.getByRole("grid", {
+      name: "Event log timeline - 100000 records",
+    });
+    const rows = recordGridRows(timeline.container);
+
+    expect(grid).toHaveAttribute("aria-rowcount", "100000");
+    expect(rows).toHaveLength(20);
+    expect(virtualizerState.items).toHaveLength(20);
+    expect(rows[0]).toHaveAttribute("data-index", "0");
+
+    fireEvent.keyDown(rows[0], { key: "End" });
+
+    expect(virtualizerState.scrollToIndex).toHaveBeenLastCalledWith(99_999, {
+      align: "auto",
+    });
+    expect(useEvtxStore.getState().selectedRecordId).toBe(100_000);
   });
   it("keeps the virtualizer cache when a clock tick leaves row identities unchanged", () => {
     seedEventLog();

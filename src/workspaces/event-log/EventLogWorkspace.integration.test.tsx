@@ -223,6 +223,44 @@ describe("EventLogWorkspace diagnosis and timeline wiring", () => {
     );
   });
 
+  it("defers full timeline and diagnosis work until a streamed load settles", async () => {
+    const newer = {
+      ...RECORD,
+      id: 2,
+      eventRecordId: 102,
+      message: "Newer event",
+    };
+    useEvtxStore.setState({
+      records: [RECORD],
+      channels: [
+        {
+          name: "Application",
+          eventCount: 2,
+          sourceType: { file: { path: "sample.evtx" } },
+        },
+      ],
+      selectedChannels: new Set(["Application"]),
+      loadedChannels: new Set<string>(),
+      sourceMode: "live",
+      timeWindow: "all",
+      isLoading: true,
+    });
+
+    render(<EventLogWorkspace />);
+    act(() => useEvtxStore.setState({ records: [RECORD, newer] }));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
+
+    expect(mocks.buildTimeline).not.toHaveBeenCalled();
+    expect(mocks.diagnose).not.toHaveBeenCalled();
+
+    act(() => useEvtxStore.setState({ isLoading: false }));
+    await waitFor(() => expect(mocks.buildTimeline).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.diagnose).toHaveBeenCalledTimes(1));
+    expect(mocks.buildTimeline).toHaveBeenCalledWith([RECORD, newer], []);
+  });
+
   it("serializes timeline builds and runs only the newest queued snapshot", async () => {
     const firstBuild = deferred<typeof TIMELINE>();
     const newer = {

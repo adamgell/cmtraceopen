@@ -1285,6 +1285,67 @@ describe("records that arrive in batches while the query runs", () => {
     resolveQuery(streamedReply("System", 3));
     await query;
   });
+  it("publishes a long stream geometrically instead of re-sorting every batch", async () => {
+    let resolveQuery!: (value: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveQuery = resolve;
+        })
+    );
+    const query = useEvtxStore.getState().queryChannels(["Security"]);
+    await Promise.resolve();
+    const latestCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+    const requestId = (latestCall?.[1] as { requestId?: string } | undefined)?.requestId;
+    if (!requestId) throw new Error("query request did not include a request ID");
+
+    const visibleLengths: number[] = [];
+    const unsubscribe = useEvtxStore.subscribe((state, previous) => {
+      if (state.records !== previous.records) visibleLengths.push(state.records.length);
+    });
+    for (let sequence = 0; sequence < 8; sequence += 1) {
+      emitBatch("Security", sequence, [record("Security", sequence + 1)], requestId);
+      await Promise.resolve();
+    }
+    unsubscribe();
+
+    expect(visibleLengths).toEqual([1, 2, 4, 8]);
+
+    emitTerminal("Security", 8, 8, requestId);
+    resolveQuery(streamedReply("Security", 8));
+    await query;
+    expect(useEvtxStore.getState().records).toHaveLength(8);
+  });
+  it("retains the unpublished suffix when a streamed query rejects", async () => {
+    let rejectQuery!: (reason?: unknown) => void;
+    invoke.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectQuery = reject;
+        })
+    );
+    const query = useEvtxStore.getState().queryChannels(["Security"]);
+    await Promise.resolve();
+    const latestCall = invoke.mock.calls[invoke.mock.calls.length - 1];
+    const requestId = (latestCall?.[1] as { requestId?: string } | undefined)?.requestId;
+    if (!requestId) throw new Error("query request did not include a request ID");
+
+    for (let sequence = 0; sequence < 3; sequence += 1) {
+      emitBatch("Security", sequence, [record("Security", sequence + 1)], requestId);
+      await Promise.resolve();
+    }
+    expect(useEvtxStore.getState().records).toHaveLength(2);
+
+    rejectQuery(new Error("access denied"));
+    await query;
+
+    expect(useEvtxStore.getState().records.map((item) => item.eventRecordId)).toEqual([
+      1, 2, 3,
+    ]);
+    expect(useEvtxStore.getState().coverageGaps).toContain(
+      "Security: not read (access denied)"
+    );
+  });
   it("deduplicates an equivalent producerless terminal record after a streamed batch", async () => {
     const streamed = {
       ...record("Application", 0),
@@ -2050,7 +2111,7 @@ describe("remote event sources", () => {
     expect(useEvtxStore.getState().sourceMode).toBeNull();
   });
 
-  it("loads a thousand selected channels with bounded query concurrency and records", async () => {
+  it("loads a thousand selected channels with bounded concurrency and no record cap", async () => {
     const channels = Array.from({ length: 1_000 }, (_, index) => `Channel-${index}`);
     let active = 0;
     let peak = 0;
@@ -2059,7 +2120,10 @@ describe("remote event sources", () => {
       publications += 1;
     });
     invoke.mockImplementation(
-      async (_name: string, args: { channels: string[]; maxEvents: number; requestId: string }) => {
+      async (
+        _name: string,
+        args: { channels: string[]; maxEvents: number | null; requestId: string },
+      ) => {
         active += 1;
         peak = Math.max(peak, active);
         await Promise.resolve();
@@ -2087,10 +2151,136 @@ describe("remote event sources", () => {
     expect(peak).toBe(4);
     expect(
       invoke.mock.calls.every((call) =>
-        Object.is((call[1] as { maxEvents?: number }).maxEvents, 25)
+        Object.is((call[1] as { maxEvents?: number | null }).maxEvents, null)
+      )
+    ).toBe(true);
+    expect(useEvtxStore.getState().coverageGaps).not.toContainEqual(
+      expect.stringContaining("bounded to")
+    );
+    expect(publications).toBeLessThan(10);
+    expect(useEvtxStore.getState().isLoading).toBe(false);
+  });
+
+  it(
+    "retains 150,000 records from one uncapped channel without argument overflow",
+    async () => {
+      const recordCount = 150_000;
+      const records = Array.from({ length: recordCount }, (_, index) =>
+        streamedRecord("Security", index + 1)
+      );
+      invoke.mockImplementationOnce(
+        async (_name: string, args: { requestId: string }) => {
+          emitTerminal("Security", 0, recordCount, args.requestId);
+          return {
+            records,
+            channels: [
+              { name: "Security", eventCount: recordCount, sourceType: "live" as const },
+            ],
+            totalRecords: recordCount,
+            parseErrors: 0,
+            errorMessages: [],
+            coverageGaps: [],
+          };
+        }
+      );
+
+      await useEvtxStore.getState().queryChannels(["Security"]);
+
+      expect(useEvtxStore.getState().records).toHaveLength(recordCount);
+      expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+    },
+    30_000
+  );
+
+  it("publishes one-record channels on a request-wide geometric cadence", async () => {
+    const channelNames = Array.from({ length: 1_000 }, (_, index) => `Channel-${index}`);
+    let recordPublications = 0;
+    const unsubscribe = useEvtxStore.subscribe((state, previous) => {
+      if (state.records !== previous.records) recordPublications += 1;
+    });
+    invoke.mockImplementation(
+      async (_name: string, args: { channels: string[]; requestId: string }) => {
+        const channel = args.channels[0];
+        const id = Number(channel.slice("Channel-".length)) + 1;
+        emitBatch(channel, 0, [streamedRecord(channel, id)], args.requestId);
+        await Promise.resolve();
+        emitTerminal(channel, 1, 1, args.requestId);
+        return {
+          records: [],
+          channels: [{ name: channel, eventCount: 1, sourceType: "live" as const }],
+          totalRecords: 1,
+          parseErrors: 0,
+          errorMessages: [],
+          coverageGaps: [],
+        };
+      }
+    );
+
+    try {
+      await useEvtxStore.getState().queryChannels(channelNames);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(useEvtxStore.getState().records).toHaveLength(1_000);
+    expect(recordPublications).toBeLessThan(20);
+  });
+
+  it("refreshes a thousand loaded channels in one bounded completion publication", async () => {
+    const channelNames = Array.from({ length: 1_000 }, (_, index) => `Channel-${index}`);
+    useEvtxStore.setState({
+      channels: channelNames.map((name) => ({
+        name,
+        eventCount: 0,
+        sourceType: "live" as const,
+      })),
+      loadedChannels: new Set(channelNames),
+      selectedChannels: new Set(channelNames),
+      sourceMode: "live",
+    });
+    let active = 0;
+    let peak = 0;
+    let publications = 0;
+    const unsubscribe = useEvtxStore.subscribe(() => {
+      publications += 1;
+    });
+    invoke.mockImplementation(
+      async (
+        _name: string,
+        args: { channels: string[]; maxEvents: number | null; requestId: string },
+      ) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await Promise.resolve();
+        const channel = args.channels[0];
+        emitTerminal(channel, 0, 0, args.requestId);
+        active -= 1;
+        return {
+          records: [],
+          channels: [{ name: channel, eventCount: 0, sourceType: "live" as const }],
+          totalRecords: 0,
+          parseErrors: 0,
+          errorMessages: [],
+          coverageGaps: [],
+        };
+      },
+    );
+
+    try {
+      await useEvtxStore.getState().refreshLoadedChannels();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(invoke).toHaveBeenCalledTimes(1_000);
+    expect(peak).toBe(4);
+    expect(
+      invoke.mock.calls.every((call) =>
+        Object.is((call[1] as { maxEvents?: number | null }).maxEvents, null)
       )
     ).toBe(true);
     expect(publications).toBeLessThan(10);
+    expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(channelNames));
     expect(useEvtxStore.getState().isLoading).toBe(false);
   });
 });

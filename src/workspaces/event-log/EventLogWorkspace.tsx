@@ -91,19 +91,22 @@ export function EventLogWorkspace() {
   const columnOrder = useEvtxStore((s) => s.columnConfig.order);
   const visibleRecords = useMemo(
     () =>
-      selectVisibleRecords({
-        records,
-        selectedChannels,
-        filterLevels,
-        nowEpoch,
-        filterEventIds,
-        filterSearch,
-        quickFilter,
-        visibleColumns: columnOrder,
-        timeZoneMode,
-        timeWindow,
-      }),
+      isLoading
+        ? []
+        : selectVisibleRecords({
+            records,
+            selectedChannels,
+            filterLevels,
+            nowEpoch,
+            filterEventIds,
+            filterSearch,
+            quickFilter,
+            visibleColumns: columnOrder,
+            timeZoneMode,
+            timeWindow,
+          }),
     [
+      isLoading,
       records,
       selectedChannels,
       filterLevels,
@@ -237,6 +240,17 @@ export function EventLogWorkspace() {
     pump.timer = null;
     pump.pending = null;
 
+    if (isLoading) {
+      setDiagnosis(null);
+      setDiagnosisError(null);
+      return () => {
+        if (pump.timer !== null) window.clearTimeout(pump.timer);
+        pump.timer = null;
+        if (pump.revision !== revision) return;
+        pump.pending = null;
+      };
+    }
+
     if (
       records.length === 0 &&
       diagnosisCoverageGaps.length === 0 &&
@@ -318,6 +332,7 @@ export function EventLogWorkspace() {
     visibleTimeline,
     diagnosisCoverageGaps,
     scopedLogEntries,
+    isLoading,
   ]);
 
   useEffect(() => {
@@ -327,6 +342,19 @@ export function EventLogWorkspace() {
     if (pump.timer !== null) window.clearTimeout(pump.timer);
     pump.timer = null;
     pump.pending = null;
+
+    if (isLoading) {
+      timelineInputsRef.current = null;
+      setTimelinePending(true);
+      setTimeline(EMPTY_TIMELINE);
+      setTimelineError(null);
+      return () => {
+        if (pump.timer !== null) window.clearTimeout(pump.timer);
+        pump.timer = null;
+        if (pump.revision !== revision) return;
+        pump.pending = null;
+      };
+    }
 
     if (records.length === 0 && scopedLogEntries.length === 0) {
       timelineInputsRef.current = { records, entries: scopedLogEntries };
@@ -386,7 +414,7 @@ export function EventLogWorkspace() {
       if (pump.revision !== revision) return;
       pump.pending = null;
     };
-  }, [scopedLogEntries, records]);
+  }, [scopedLogEntries, records, isLoading]);
 
   const hasData =
     scopedLogEntries.length > 0 ||

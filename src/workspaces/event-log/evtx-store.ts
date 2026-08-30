@@ -57,7 +57,6 @@ type ServerFilter = EventQueryFilterSubset & {
 };
 
 const MAX_CONCURRENT_CHANNEL_QUERIES = 4;
-const MAX_LIVE_VIEW_RECORDS = 25_000;
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -78,9 +77,6 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function implicitPerChannelLimit(channelCount: number): number {
-  return Math.max(1, Math.floor(MAX_LIVE_VIEW_RECORDS / Math.max(1, channelCount)));
-}
 function decimalIdParts(record: EvtxRecord): {
   valid: boolean;
   digits: string;
@@ -242,6 +238,10 @@ function appendUniqueRecords(
     records: [...existing, ...unique],
     droppedAgainstExisting,
   };
+}
+
+function appendRecords(target: EvtxRecord[], incoming: readonly EvtxRecord[]): void {
+  for (const record of incoming) target.push(record);
 }
 let preservedSelectedRecordKey: string | null = null;
 
@@ -1290,9 +1290,6 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     // It also isolates failure. A single request fails as a whole, so one unreadable channel threw
     // away the results of every channel queried alongside it and left the view empty.
     let loadError: string | null = null;
-    const perChannelLimit = maxEvents ?? implicitPerChannelLimit(channels.length);
-    let implicitLimitReached = false;
-
     // Anything left over from an earlier attempt at these channels is dropped, so a retry cannot
     // count a previous run's batches towards this one.
     invalidateAllStreamedRecords(requestId);
@@ -1307,7 +1304,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             requestId,
             remoteMachine,
             [ch],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : perChannelLimit,
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : maxEvents ?? null,
             buildServerFilter(
               filterSnapshot.timeWindow,
               filterSnapshot.filterEventIds,
@@ -1340,7 +1337,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         if (!result) {
           await waitForStreamReconciliation(channel, requestId);
           if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          drainStreamedRecords(channel, requestId);
+          appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
           acknowledgeStreamedRecords(channel, requestId);
           reportedGaps.push(`${context}: not read (${error ?? "unknown error"})`);
           continue;
@@ -1350,10 +1347,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
-        if (maxEvents === undefined && records.length >= perChannelLimit) {
-          implicitLimitReached = true;
-        }
-        recordsToMerge.push(...records);
+        appendRecords(recordsToMerge, records);
         for (const resultChannel of result.channels) {
           eventCounts.set(resultChannel.name, resultChannel.eventCount);
         }
@@ -1370,7 +1364,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
         acknowledgeStreamedRecords(channel, requestId);
       } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        drainStreamedRecords(channel, requestId);
+        appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
         acknowledgeStreamedRecords(channel, requestId);
         const message =
           processingError instanceof Error ? processingError.message : String(processingError);
@@ -1380,16 +1374,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       }
     }
 
-    if (implicitLimitReached) {
-      reportedGaps.push(
-        `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${channels.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`
-      );
-    }
-
     // Commit all channel outcomes together. Hundreds of synchronous store publications made React
     // repeatedly restart its external-store subscribers and eventually trip its maximum-update
     // guard when "All channels" was used.
     const processedChannelNames = [...processedChannels];
+    clearVisibleRequestPublication(requestId);
     set((state) => {
       const merged = mergeRecordsPreservingSelection(
         state.records,
@@ -1494,104 +1483,128 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
       get().filterEventIds,
       get().filterLevels
     );
-    const perChannelLimit = implicitPerChannelLimit(loaded.length);
-    let implicitLimitReached = false;
     for (const channel of loaded) resetStreamedRecords([channel], requestId);
     // Refresh invokes the streaming command directly, so drain its batch before merging the
-    // command reply (which intentionally carries only records not emitted in batches).
-    await mapWithConcurrency(loaded, MAX_CONCURRENT_CHANNEL_QUERIES, async (ch) => {
-      const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+    // command reply (which intentionally carries only records not emitted in batches). Channel
+    // completion metadata is published once after every worker settles; publishing it once per
+    // channel can synchronously restart hundreds of React external-store subscribers.
+    const results = await mapWithConcurrency(
+      loaded,
+      MAX_CONCURRENT_CHANNEL_QUERIES,
+      async (channel) => {
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) {
+          return { channel, result: null, error: null, stale: true };
+        }
+        try {
+          const result = await invokeEventQuery<EvtxParseResult>(
+            requestId,
+            remoteMachine,
+            [channel],
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : null,
+            buildServerFilter(
+              filterSnapshot.timeWindow,
+              filterSnapshot.filterEventIds,
+              filterSnapshot.filterLevels
+            )
+          );
+          observeStreamReply(channel, requestId, { kind: "success" });
+          return { channel, result, error: null, stale: false };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          observeStreamReply(channel, requestId, { kind: "error", message });
+          return { channel, result: null, error: message, stale: false };
+        }
+      }
+    );
+    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+    const recordsToMerge: EvtxRecord[] = [];
+    const eventCounts = new Map<string, number>();
+    const channelUsability = new Map<string, boolean>();
+    const reportedGaps: string[] = [];
+    const reportedDetails: EvtxCoverageGap[] = [];
+    let loadError: string | null = null;
+
+    for (const { channel, result, error, stale } of results) {
+      if (stale || !isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+      const context = remoteMachine ? `${remoteMachine}/${channel}` : channel;
       try {
-        resetStreamedRecords([ch], requestId);
-        const result = await invokeEventQuery<EvtxParseResult>(
-          requestId,
-          remoteMachine,
-          [ch],
-          hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : perChannelLimit,
-          buildServerFilter(
-            filterSnapshot.timeWindow,
-            filterSnapshot.filterEventIds,
-            filterSnapshot.filterLevels
-          )
-        );
-        observeStreamReply(ch, requestId, { kind: "success" });
+        if (!result) {
+          await waitForStreamReconciliation(channel, requestId);
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+          appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
+          acknowledgeStreamedRecords(channel, requestId);
+          const message = error ?? "unknown error";
+          console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
+          loadError ??= `${context}: ${message}`;
+          reportedGaps.push(`${context}: not read (${message})`);
+          channelUsability.set(channel, false);
+          continue;
+        }
+
+        await waitForStreamReconciliation(channel, requestId);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        await waitForStreamReconciliation(ch, requestId);
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const reconciliation = reconcileStreamedResult(ch, requestId, result, context);
+        const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
-        if (records.length >= perChannelLimit) implicitLimitReached = true;
-        const s = get();
-        const merged = mergeRecordsPreservingSelection(
-          s.records,
-          s.selectedRecordId,
-          records
+        appendRecords(recordsToMerge, records);
+        for (const resultChannel of result.channels) {
+          eventCounts.set(resultChannel.name, resultChannel.eventCount);
+        }
+        reportedGaps.push(...reconciliation.gaps);
+        reportedDetails.push(...checked.coverageGaps);
+        channelUsability.set(
+          channel,
+          hasUsableChannelData(
+            records.length,
+            result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
+            reconciliation.gaps.length,
+            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
+          )
         );
-        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-        const newChannels = s.channels.map((c) => ({
-          ...c,
-          eventCount: countMap.get(c.name) ?? c.eventCount,
-        }));
-        const reportedGaps = reconciliation.gaps;
-        const newLoaded = new Set(s.loadedChannels);
-        const channelHasUsableData = hasUsableChannelData(
-          records.length,
-          result.channels.find((c) => c.name === ch)?.eventCount ?? 0,
-          reportedGaps.length,
-          reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
-        );
-        if (channelHasUsableData) newLoaded.add(ch);
-        else newLoaded.delete(ch);
-
-        set({
-          ...merged,
-          channels: newChannels,
-          loadedChannels: newLoaded,
-          loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, reportedGaps),
-          coverageDetails: mergeStructuredCoverageGaps(s.coverageDetails, checked.coverageGaps),
-        });
-      } catch (e) {
+        acknowledgeStreamedRecords(channel, requestId);
+      } catch (processingError) {
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        observeStreamReply(
-          ch,
-          requestId,
-          { kind: "error", message: e instanceof Error ? e.message : String(e) }
-        );
-        await waitForStreamReconciliation(ch, requestId);
-        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        drainStreamedRecords(ch, requestId);
-        acknowledgeStreamedRecords(ch, requestId);
-        const message = e instanceof Error ? e.message : String(e);
-        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
-        console.warn(`[evtx] Refresh failed for ${context}: ${message}`);
-        // Recorded, not only logged. The refresh cleared the previous gaps, so a silent failure
-        // here presents a view that is missing a whole channel as complete.
-        set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-            `${context}: not read (${message})`,
-          ]),
-          loadError: s.loadError ?? `${context}: ${message}`,
-        }));
+        appendRecords(recordsToMerge, drainStreamedRecords(channel, requestId).records);
+        acknowledgeStreamedRecords(channel, requestId);
+        const message =
+          processingError instanceof Error ? processingError.message : String(processingError);
+        console.warn(`[evtx] Failed to process refreshed ${context}: ${message}`);
+        loadError ??= `${context}: ${message}`;
+        reportedGaps.push(`${context}: not read (${message})`);
+        channelUsability.set(channel, false);
       }
-    });
-    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-    if (implicitLimitReached) {
-      set((current) => ({
-        coverageGaps: mergeCoverageGaps(current.coverageGaps, [
-          `Live view is bounded to ${MAX_LIVE_VIEW_RECORDS.toLocaleString()} events across ${loaded.length.toLocaleString()} selected channels; narrow the channels or date range to inspect older events.`,
-        ]),
-      }));
     }
+
     const finalState = get();
+    const merged = mergeRecordsPreservingSelection(
+      finalState.records,
+      finalState.selectedRecordId,
+      recordsToMerge
+    );
+    const loadedChannels = new Set(
+      [...channelUsability].filter(([, usable]) => usable).map(([channel]) => channel)
+    );
+    const nextCoverageGaps = mergeCoverageGaps(finalState.coverageGaps, reportedGaps);
     const remoteRefreshFailed =
       remoteMachine !== null &&
-      finalState.loadedChannels.size === 0 &&
-      finalState.coverageGaps.length > 0;
+      loadedChannels.size === 0 &&
+      nextCoverageGaps.length > 0;
+    clearVisibleRequestPublication(requestId);
     set({
+      ...merged,
+      channels: finalState.channels.map((channel) => ({
+        ...channel,
+        eventCount: eventCounts.get(channel.name) ?? channel.eventCount,
+      })),
+      loadedChannels,
+      coverageGaps: nextCoverageGaps,
+      coverageDetails: mergeStructuredCoverageGaps(
+        finalState.coverageDetails,
+        reportedDetails
+      ),
       sourceMode: remoteRefreshFailed ? null : finalState.sourceMode,
       isLoading: false,
+      loadError,
       loadingChannel: null,
       loadingProgress: null,
       loadElapsedMs: performance.now() - startTime,
@@ -2084,6 +2097,8 @@ interface PendingStream {
   channel: string;
   requestId: string;
   records: EvtxRecord[];
+  stableRecordKeys: Set<string>;
+  producerlessRecords: Set<EvtxRecord>;
   receivedRecordCount: number;
   sequences: Set<number>;
   terminal?: { sequenceCount: number; totalRecords: number };
@@ -2118,10 +2133,19 @@ interface QueuedVisibleBatch {
 const queuedVisibleBatches = new Map<string, QueuedVisibleBatch>();
 let visibleBatchFlushScheduled = false;
 
+interface VisibleRequestPublication {
+  publishedRecordCount: number;
+  unpublishedRecords: EvtxRecord[];
+}
+
+const visibleRequestPublications = new Map<string, VisibleRequestPublication>();
+const queuedVisibleRequestIds = new Set<string>();
+
 function flushQueuedVisibleBatches(): void {
   visibleBatchFlushScheduled = false;
   const queued = [...queuedVisibleBatches.values()];
   queuedVisibleBatches.clear();
+  queuedVisibleRequestIds.clear();
   const recordsByRequest = new Map<string, EvtxRecord[]>();
   for (const batch of queued) {
     if (
@@ -2157,9 +2181,46 @@ function queueVisibleBatch(channel: string, requestId: string, records: EvtxReco
     requestId,
     records: appendUniqueRecords(existing?.records ?? [], records).records,
   });
+  queuedVisibleRequestIds.add(requestId);
   if (visibleBatchFlushScheduled) return;
   visibleBatchFlushScheduled = true;
   queueMicrotask(flushQueuedVisibleBatches);
+}
+
+function queueRequestVisibleRecords(
+  channel: string,
+  requestId: string,
+  records: readonly EvtxRecord[]
+): void {
+  if (records.length === 0) return;
+  let publication = visibleRequestPublications.get(requestId);
+  if (!publication) {
+    publication = { publishedRecordCount: 0, unpublishedRecords: [] };
+    visibleRequestPublications.set(requestId, publication);
+  }
+  appendRecords(publication.unpublishedRecords, records);
+
+  const publishThreshold = Math.max(1, publication.publishedRecordCount);
+  if (
+    publication.publishedRecordCount !== 0 &&
+    !queuedVisibleRequestIds.has(requestId) &&
+    publication.unpublishedRecords.length < publishThreshold
+  ) {
+    return;
+  }
+
+  const visibleRecords = publication.unpublishedRecords;
+  publication.unpublishedRecords = [];
+  publication.publishedRecordCount += visibleRecords.length;
+  queueVisibleBatch(channel, requestId, visibleRecords);
+}
+
+function clearVisibleRequestPublication(requestId: string): void {
+  visibleRequestPublications.delete(requestId);
+  for (const [key, batch] of queuedVisibleBatches) {
+    if (batch.requestId === requestId) queuedVisibleBatches.delete(key);
+  }
+  queuedVisibleRequestIds.delete(requestId);
 }
 
 function createPendingStream(channel: string, requestId: string): PendingStream {
@@ -2167,6 +2228,8 @@ function createPendingStream(channel: string, requestId: string): PendingStream 
     channel,
     requestId,
     records: [],
+    stableRecordKeys: new Set<string>(),
+    producerlessRecords: new Set<EvtxRecord>(),
     receivedRecordCount: 0,
     sequences: new Set<number>(),
     terminalSynthetic: false,
@@ -2177,6 +2240,26 @@ function createPendingStream(channel: string, requestId: string): PendingStream 
   };
   pendingBatches.set(streamKey(channel, requestId), pending);
   return pending;
+}
+
+function appendPendingStreamRecords(
+  pending: PendingStream,
+  records: readonly EvtxRecord[]
+): EvtxRecord[] {
+  const appended: EvtxRecord[] = [];
+  for (const record of records) {
+    const key = recordKey(record);
+    if (key === null) {
+      if (pending.producerlessRecords.has(record)) continue;
+      pending.producerlessRecords.add(record);
+    } else {
+      if (pending.stableRecordKeys.has(key)) continue;
+      pending.stableRecordKeys.add(key);
+    }
+    pending.records.push(record);
+    appended.push(record);
+  }
+  return appended;
 }
 
 function pendingFor(channel: string, requestId: string): PendingStream | undefined {
@@ -2216,6 +2299,9 @@ function cancelPendingStream(pending: PendingStream): void {
 function cancelAllPendingStreams(): void {
   for (const pending of pendingBatches.values()) cancelPendingStream(pending);
   pendingBatches.clear();
+  queuedVisibleBatches.clear();
+  queuedVisibleRequestIds.clear();
+  visibleRequestPublications.clear();
 }
 
 function settlePendingStream(pending: PendingStream): void {
@@ -2288,9 +2374,12 @@ function reconcileStreamedResult(
 ): StreamReconciliation {
   const checked = assertParseResultShape(result);
   const streamed = drainStreamedRecords(channel, requestId);
-  const appended = appendUniqueRecords(streamed.records, result.records, {
-    deduplicateProducerless: true,
-  });
+  const appended =
+    result.records.length === 0
+      ? { records: streamed.records, droppedAgainstExisting: 0 }
+      : appendUniqueRecords(streamed.records, result.records, {
+          deduplicateProducerless: true,
+        });
   const records = appended.records;
   const gaps = [...checked.errorMessages, ...checked.coverageGaps.map(formatCoverageGap)];
   if (streamed.missingSequences.length > 0) {
@@ -2345,11 +2434,13 @@ listen<{ channel: string; requestId: string; sequence: number; records: EvtxReco
     pending.sequences.add(sequence);
     pending.receivedRecordCount += records.length;
     if (records.length > 0) {
-      pending.records = appendUniqueRecords(pending.records, records).records;
+      const appended = appendPendingStreamRecords(pending, records);
 
-      // Batches remain visible while a request is running, but same-turn deliveries share one
-      // identity-preserving merge/sort instead of repeatedly sorting the full visible set.
-      queueVisibleBatch(channel, requestId, records);
+      // Publish the first rows immediately, then double the visible prefix across the whole
+      // request. A 400,000-record all-channel scan therefore causes O(log n) full-list merges
+      // instead of one merge/sort/id remap for every 256-record batch or one-record channel.
+      // Same-turn deliveries join the already queued publication.
+      queueRequestVisibleRecords(channel, requestId, appended);
     }
 
     // A terminal can race the final batch. Keep the pending state until the consumer acknowledges
