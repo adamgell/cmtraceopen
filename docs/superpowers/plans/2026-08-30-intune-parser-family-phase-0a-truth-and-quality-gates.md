@@ -85,9 +85,9 @@ Expected: the cherry-pick succeeds without conflict and the branch differs from 
 Run:
 
 ```bash
-rg -n "ACCEPTED by the repository owner on 2026-08-30" docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md
-rg -n "approved this design plus ADR-004 Revision 2" docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md
-rg -n "^# Intune Parser Family Phase 0A Truth and Quality Gates Implementation Plan" docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md
+test "$(rg -o 'ACCEPTED by the repository owner on 2026-08-30' docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md | wc -l | tr -d ' ')" = 1
+test "$(rg -o 'approved this design plus ADR-004 Revision 2' docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md | wc -l | tr -d ' ')" = 1
+test "$(rg -o '^# Intune Parser Family Phase 0A Truth and Quality Gates Implementation Plan' docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md | wc -l | tr -d ' ')" = 1
 git diff --check origin/main...HEAD
 ```
 
@@ -133,7 +133,13 @@ Expected: GitHub reports issue #356 updated and no other issue-body text changes
 Run:
 
 ```bash
-gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body | rg '^\s*- \[[ x]\] #[0-9]+'
+tracker_lines="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body | rg '^\s*- \[[ x]\] #[0-9]+')"
+test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[[ x]\] #[0-9]+')" = 17
+test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[x\] #[0-9]+')" = 12
+test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[ \] #[0-9]+')" = 5
+diff -u \
+  <(printf '%s\n' 354 361 365 369 371) \
+  <(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[ \][[:space:]]+#([0-9]+).*/\1/p' | sort -n)
 ```
 
 Expected: exactly 12 entries are `[x]`; only #354, #361, #365, #369, and #371 remain `[ ]`.
@@ -324,23 +330,89 @@ import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
 
+function assertRequiredTriggers(workflow) {
+  assert.match(
+    workflow,
+    /^on:\n  push:\n    branches: \[main, codex\/parser-family-skeleton\]\n  pull_request:\n(?:    #.*\n)*    branches: \[main, codex\/parser-family-skeleton\]$/m,
+    "main push and pull-request triggers missing"
+  );
+}
+
+function sourceQualityJob(workflow) {
+  const sourceQuality = workflow.match(/^  source-quality:\n/m);
+  assert.ok(sourceQuality, "source-quality job missing");
+
+  const jobLines = [];
+  for (const line of workflow.slice(sourceQuality.index + sourceQuality[0].length).split("\n")) {
+    if (line === "" || /^ {4}/.test(line)) {
+      jobLines.push(line);
+    } else {
+      break;
+    }
+  }
+
+  return jobLines.join("\n");
+}
+
+function assertSourceQualityRequirements(workflow) {
+  const job = sourceQualityJob(workflow);
+
+  assert.match(job, /^    steps:\n/m, "source-quality steps missing");
+  assert.match(
+    job,
+    /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
+    "full-history credential-free checkout missing"
+  );
+  assert.match(
+    job,
+    /^      - name: Setup pinned Rust quality toolchain\n        uses: dtolnay\/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: "1\.92\.0"\n          components: rustfmt\n          targets: wasm32-unknown-unknown$/m,
+    "pinned rustfmt and wasm toolchain missing"
+  );
+  assert.match(
+    job,
+    /^      - name: Rust formatting\n        run: cargo fmt --all -- --check$/m,
+    "format gate missing"
+  );
+  assert.match(
+    job,
+    /^      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown$/m,
+    "parser wasm gate missing"
+  );
+  assert.match(
+    job,
+    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          git diff --check "\$base\.\.\.HEAD"$/m,
+    "range whitespace gate missing"
+  );
+}
+
 test("source-quality gates formatting, wasm portability, and the changed range", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
 
-  assert.match(workflow, /^  source-quality:\n/m, "source-quality job missing");
-  assert.match(workflow, /fetch-depth: 0/, "full history is required for range checks");
-  assert.match(workflow, /toolchain: "1\.92\.0"/, "rustfmt toolchain must be pinned");
-  assert.match(workflow, /components: rustfmt/, "rustfmt component must be installed");
-  assert.match(workflow, /targets: wasm32-unknown-unknown/, "wasm target must be installed");
-  assert.match(workflow, /cargo fmt --all -- --check/, "format gate missing");
-  assert.match(
-    workflow,
-    /cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown/,
-    "parser wasm gate missing"
-  );
-  assert.match(workflow, /git diff --check "\$base\.\.\.HEAD"/, "range whitespace gate missing");
-  assert.match(workflow, /github\.event\.pull_request\.base\.sha/, "PR base SHA missing");
-  assert.match(workflow, /github\.event\.before/, "push base SHA missing");
+  assertRequiredTriggers(workflow);
+  assertSourceQualityRequirements(workflow);
+});
+
+test("source-quality requirements cannot be satisfied outside the job", () => {
+  const inertWorkflow = `jobs:
+  source-quality:
+    name: Source Quality
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+  check:
+    # fetch-depth: 0
+    # persist-credentials: false
+    # toolchain: "1.92.0"
+    # components: rustfmt
+    # targets: wasm32-unknown-unknown
+    # cargo fmt --all -- --check
+    # cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+    # git diff --check "$base...HEAD"
+    # github.event.pull_request.base.sha
+    # github.event.before
+`;
+
+  assert.throws(() => assertSourceQualityRequirements(inertWorkflow));
 });
 ```
 
@@ -366,6 +438,7 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup pinned Rust quality toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable

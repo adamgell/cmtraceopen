@@ -4,6 +4,14 @@ import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
 
+function assertRequiredTriggers(workflow) {
+  assert.match(
+    workflow,
+    /^on:\n  push:\n    branches: \[main, codex\/parser-family-skeleton\]\n  pull_request:\n(?:    #.*\n)*    branches: \[main, codex\/parser-family-skeleton\]$/m,
+    "main push and pull-request triggers missing"
+  );
+}
+
 function sourceQualityJob(workflow) {
   const sourceQuality = workflow.match(/^  source-quality:\n/m);
   assert.ok(sourceQuality, "source-quality job missing");
@@ -54,6 +62,7 @@ function assertSourceQualityRequirements(workflow) {
 test("source-quality gates formatting, wasm portability, and the changed range", async () => {
   const workflow = await readFile(workflowUrl, "utf8");
 
+  assertRequiredTriggers(workflow);
   assertSourceQualityRequirements(workflow);
 });
 
