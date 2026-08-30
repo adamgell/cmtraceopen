@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -7,7 +7,6 @@ import {
   Option,
   tokens,
 } from "@fluentui/react-components";
-import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   selectVisibleRecords,
@@ -38,11 +37,8 @@ import {
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 import { timeZoneLabel } from "./evtx-time";
-import {
-  EVTX_EXPORT_FORMATS,
-  exportPayload,
-  isValidExportByteCount,
-} from "./evtx-export";
+import { EVTX_EXPORT_FORMATS } from "./evtx-export";
+import { streamEventLogExport } from "./event-export-session";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
@@ -179,6 +175,14 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const resetColumns = useEvtxStore((s) => s.resetColumns);
 
   const [exportState, setExportState] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const exportAbortRef = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      exportAbortRef.current?.abort();
+    },
+    [],
+  );
   // An in-app field rather than window.prompt. Tauri's macOS webview is WKWebView, which does not
   // implement prompt, so the save-filter action silently did nothing on macOS.
   const [pendingName, setPendingName] = useState<string | null>(null);
@@ -224,6 +228,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
+    if (exportAbortRef.current !== null) return;
     const state = useEvtxStore.getState();
     const visibleColumns = state.columnConfig.order;
     const records = sortRecords(
@@ -252,31 +257,36 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         filters: [{ name: format.label, extensions: [format.extension] }],
       });
       if (!destination) return;
-      setExportState("Exporting...");
-      // The delimited writers read neither rawXml nor eventData, and rawXml dominates the payload:
-      // sending them for a CSV export serializes every record's XML and field list across the IPC
-      // bridge for nothing, which on a hundred-thousand-record export is the bulk of the transfer.
-      const payload = exportPayload(format.value, records);
-      const bytes = await invoke<unknown>("evtx_export_records", {
-        records: payload,
+      const controller = new AbortController();
+      exportAbortRef.current = controller;
+      setIsExporting(true);
+      setExportState(`Exporting 0 of ${records.length.toLocaleString()} events...`);
+      const result = await streamEventLogExport({
+        records,
         format: format.value,
         destination,
         sourcePaths: state.sourcePaths,
+        signal: controller.signal,
+        onProgress: (received, expected) => {
+          setExportState(
+            `Exporting ${received.toLocaleString()} of ${expected.toLocaleString()} events...`,
+          );
+        },
       });
-      // The IPC boundary is typed by assertion, not by the compiler. A malformed reply would
-      // otherwise render as "Exported ... (NaN KB)", which still reads as success, and an operator
-      // would believe a file was written.
-      // A safe integer, not merely finite: a count past Number.MAX_SAFE_INTEGER would format into
-      // a confidently wrong size.
-      if (!isValidExportByteCount(bytes)) {
-        setExportState("Export failed: the writer did not report how much it wrote");
-        return;
-      }
-      setExportState(`Exported ${records.length} events (${Math.round(bytes / 1024)} KB)`);
-    } catch (error) {
       setExportState(
-        `Export failed: ${error instanceof Error ? error.message : String(error)}`
+        `Exported ${result.records.toLocaleString()} events (${result.bytes.toLocaleString()} bytes)`,
       );
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setExportState("Export cancelled");
+      } else {
+        setExportState(
+          `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } finally {
+      exportAbortRef.current = null;
+      setIsExporting(false);
     }
   };
 
@@ -554,6 +564,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         placeholder="Export"
         value=""
         selectedOptions={[]}
+        disabled={isExporting}
         style={{ minWidth: "96px" }}
         title="Export the events currently shown, using the same filters as the list"
         onOptionSelect={(_, data) => {
@@ -567,6 +578,16 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
           </Option>
         ))}
       </Dropdown>
+
+      {isExporting && (
+        <Button
+          size="small"
+          appearance="subtle"
+          onClick={() => exportAbortRef.current?.abort()}
+        >
+          Cancel export
+        </Button>
+      )}
 
       {pendingName !== null && (
         <Input

@@ -434,7 +434,13 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_clear_channel,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_export_records,
+            event_log::export_session::evtx_create_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_append_export_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_finalize_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_close_export_session,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
             #[cfg(feature = "event-log")]

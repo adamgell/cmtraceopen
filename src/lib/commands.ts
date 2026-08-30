@@ -1643,6 +1643,107 @@ function decodeDiagnosisSummary(
   return value;
 }
 
+export type EventLogExportFormat =
+  | "csv"
+  | "tsv"
+  | "json"
+  | "xml"
+  | "html"
+  | "rawXml";
+
+export interface EventLogExportSessionStatus {
+  sessionId: string;
+  nextSequence: number;
+  receivedRecords: number;
+  receivedBytes: number;
+  expectedRecords: number;
+}
+
+export interface EventLogExportResult {
+  sessionId: string;
+  records: number;
+  bytes: number;
+}
+
+function isEventLogExportSessionId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function decodeEventLogExportSessionStatus(
+  value: unknown,
+  commandName: string,
+): EventLogExportSessionStatus {
+  const status = decodeRecordResponse<EventLogExportSessionStatus>(
+    value,
+    commandName,
+    {
+      sessionId: isEventLogExportSessionId,
+      nextSequence: isNonNegativeCommandCount,
+      receivedRecords: isNonNegativeCommandCount,
+      receivedBytes: isNonNegativeCommandCount,
+      expectedRecords: isNonNegativeCommandCount,
+    },
+  );
+  if (status.receivedRecords > status.expectedRecords) {
+    return invalidCommandResponse(commandName);
+  }
+  return status;
+}
+
+function decodeEventLogExportResult(
+  value: unknown,
+  commandName: string,
+): EventLogExportResult {
+  return decodeRecordResponse<EventLogExportResult>(value, commandName, {
+    sessionId: isEventLogExportSessionId,
+    records: isNonNegativeCommandCount,
+    bytes: isNonNegativeCommandCount,
+  });
+}
+
+export async function createEventLogExportSession(
+  format: EventLogExportFormat,
+  destination: string,
+  sourcePaths: string[],
+  expectedRecords: number,
+): Promise<EventLogExportSessionStatus> {
+  return invokeCommand("evtx_create_export_session", {
+    format,
+    destination,
+    sourcePaths,
+    expectedRecords,
+  });
+}
+
+export async function appendEventLogExportChunk(
+  sessionId: string,
+  sequence: number,
+  payloadBase64: string,
+): Promise<EventLogExportSessionStatus> {
+  return invokeCommand("evtx_append_export_chunk", {
+    sessionId,
+    sequence,
+    payloadBase64,
+  });
+}
+
+export async function finalizeEventLogExportSession(
+  sessionId: string,
+): Promise<EventLogExportResult> {
+  return invokeCommand("evtx_finalize_export_session", { sessionId });
+}
+
+export async function closeEventLogExportSession(
+  sessionId: string,
+): Promise<void> {
+  await invokeCommand("evtx_close_export_session", { sessionId });
+}
+
 export interface EventLogAnalysisRecordInput {
   record: EvtxRecord;
   originalSerializedBytes: number | null;
@@ -2843,6 +2944,10 @@ const COMMAND_DECODERS = {
   evtx_expand_sources: decodeEventLogSourceManifest,
   evtx_parse_manifest: decodeEventLogParseResult,
   evtx_clear_channel: decodeEventLogClearResponse,
+  evtx_create_export_session: decodeEventLogExportSessionStatus,
+  evtx_append_export_chunk: decodeEventLogExportSessionStatus,
+  evtx_finalize_export_session: decodeEventLogExportResult,
+  evtx_close_export_session: decodeUnitResponse,
   evtx_create_analysis_session: decodeEventLogAnalysisSessionStatus,
   evtx_append_analysis_chunk: decodeEventLogAnalysisSessionStatus,
   evtx_finalize_analysis_session: decodeEventLogAnalysisSessionStatus,

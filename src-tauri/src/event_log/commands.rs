@@ -576,36 +576,6 @@ pub async fn evtx_clear_channel(
     }
 }
 
-/// Writes `records` to `destination` in `format`.
-///
-/// The records travel from the frontend rather than being re-queried, so what is exported is
-/// exactly what the operator was looking at, including any client-side filtering they had applied.
-/// Re-querying would risk exporting a different set than the one on screen.
-#[tauri::command]
-pub async fn evtx_export_records(
-    records: Vec<super::models::EvtxRecord>,
-    format: super::export::ExportFormat,
-    destination: String,
-    source_paths: Vec<String>,
-) -> Result<u64, String> {
-    let record_count = records.len();
-    let destination_path = std::path::PathBuf::from(&destination);
-    let mut protected_sources = source_paths;
-    protected_sources.extend(records.iter().map(|record| record.source_label.clone()));
-    super::writer::reject_source_destination(&protected_sources, Some(&destination_path))?;
-    let destination_for_log = destination.clone();
-    let rendered = tokio::task::spawn_blocking(move || {
-        super::writer::write_records_to_destination(&records, format, Some(&destination_path))
-            .map(|stats| stats.bytes)
-    })
-    .await
-    .map_err(|error| format!("export task failed: {error}"))??;
-    log::info!(
-        "event=evtx_export destination=\"{destination_for_log}\" records={record_count} bytes={rendered}"
-    );
-    Ok(rendered)
-}
-
 /// Loads EvtxECmd `.map` files from `directory` into the application's registry.
 ///
 /// Returns what loaded, what was superseded, and what failed, so an operator can see why an event
@@ -1469,29 +1439,6 @@ mod tests {
             keywords: None,
             mapped: Vec::new(),
         }
-    }
-
-    #[test]
-    fn export_rejects_record_source_when_source_paths_are_omitted() {
-        let source = std::env::temp_dir().join(format!(
-            "cmtraceopen-event-export-source-{}.evtx",
-            std::process::id()
-        ));
-        let mut record = diagnosis_record(
-            super::super::models::EvtxOriginKind::Event,
-            "Enrollment failed",
-        );
-        record.source_label = source.to_string_lossy().into_owned();
-
-        let error = tauri::async_runtime::block_on(super::evtx_export_records(
-            vec![record],
-            super::super::export::ExportFormat::Csv,
-            source.to_string_lossy().into_owned(),
-            Vec::new(),
-        ))
-        .expect_err("record source must remain protected even without source_paths");
-
-        assert!(error.contains("cannot overwrite"));
     }
 
     #[test]

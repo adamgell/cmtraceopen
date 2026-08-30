@@ -11,6 +11,8 @@ use crate::esp::session::{EspSessionError, EspSessionManager};
 #[cfg(feature = "event-log")]
 use crate::event_log::analysis_session::EventLogAnalysisSessionRegistry;
 #[cfg(feature = "event-log")]
+use crate::event_log::export_session::EventLogExportSessionRegistry;
+#[cfg(feature = "event-log")]
 use crate::event_log::provider_db::ProviderStore;
 use crate::parser::ResolvedParser;
 #[cfg(feature = "sccm-diagnostics")]
@@ -67,6 +69,9 @@ pub struct AppState {
     /// Backend-owned, chunk-fed timeline/diagnosis snapshots keyed by opaque session id.
     #[cfg(feature = "event-log")]
     pub(crate) event_log_analysis_sessions: Mutex<EventLogAnalysisSessionRegistry>,
+    /// Backend-owned, bounded-transport GUI export sessions keyed by opaque session id.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_export_sessions: Arc<Mutex<EventLogExportSessionRegistry>>,
 }
 
 impl AppState {
@@ -96,6 +101,8 @@ impl AppState {
             provider_store: Arc::new(RwLock::new(ProviderStore::default())),
             #[cfg(feature = "event-log")]
             event_log_analysis_sessions: Mutex::new(HashMap::new()),
+            #[cfg(feature = "event-log")]
+            event_log_export_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

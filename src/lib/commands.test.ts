@@ -14,7 +14,10 @@ import {
   graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   appendEventLogAnalysisChunk,
+  appendEventLogExportChunk,
   clearEventLogChannel,
+  closeEventLogExportSession,
+  createEventLogExportSession,
   openLogFile,
   parseEventLogManifest,
   expandEventLogSources,
@@ -29,6 +32,7 @@ import {
   diagnoseEventLogAnalysisSession,
   EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT,
   queryEventLogAnalysisTimeline,
+  finalizeEventLogExportSession,
 } from "./commands";
 import type {
   EvtxCoverageGap,
@@ -99,6 +103,84 @@ function makeHostileErrorProxy(secretPrefix: string): {
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("event export session IPC response validation", () => {
+  it("decodes bounded export session status and final statistics", async () => {
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({
+        sessionId: "export-1",
+        nextSequence: 0,
+        receivedRecords: 0,
+        receivedBytes: 0,
+        expectedRecords: 2,
+      })
+      .mockResolvedValueOnce({
+        sessionId: "export-1",
+        nextSequence: 1,
+        receivedRecords: 2,
+        receivedBytes: 128,
+        expectedRecords: 2,
+      })
+      .mockResolvedValueOnce({ sessionId: "export-1", records: 2, bytes: 4096 })
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      createEventLogExportSession(
+        "json",
+        "C:/exports/events.json",
+        ["C:/logs/source.evtx"],
+        2,
+      ),
+    ).resolves.toMatchObject({ sessionId: "export-1", expectedRecords: 2 });
+    await expect(
+      appendEventLogExportChunk("export-1", 0, "e30K"),
+    ).resolves.toMatchObject({ nextSequence: 1, receivedRecords: 2 });
+    await expect(finalizeEventLogExportSession("export-1")).resolves.toEqual({
+      sessionId: "export-1",
+      records: 2,
+      bytes: 4096,
+    });
+    await expect(closeEventLogExportSession("export-1")).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { sessionId: "", nextSequence: 0, receivedRecords: 0, receivedBytes: 0, expectedRecords: 0 },
+    {
+      sessionId: "export-1",
+      nextSequence: -1,
+      receivedRecords: 0,
+      receivedBytes: 0,
+      expectedRecords: 0,
+    },
+    {
+      sessionId: "export-1",
+      nextSequence: 0,
+      receivedRecords: Number.MAX_SAFE_INTEGER + 1,
+      receivedBytes: 0,
+      expectedRecords: 0,
+    },
+  ])("rejects malformed export status %#", async (response) => {
+    vi.mocked(invoke).mockResolvedValue(response);
+
+    await expect(
+      createEventLogExportSession("json", "C:/events.json", [], 0),
+    ).rejects.toThrow(
+      "Command 'evtx_create_export_session' returned an invalid response.",
+    );
+  });
+
+  it("rejects unsafe final byte counts", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      sessionId: "export-1",
+      records: 1,
+      bytes: Number.MAX_SAFE_INTEGER + 1,
+    });
+
+    await expect(finalizeEventLogExportSession("export-1")).rejects.toThrow(
+      "Command 'evtx_finalize_export_session' returned an invalid response.",
+    );
+  });
 });
 
 describe("parse and folder IPC response validation", () => {

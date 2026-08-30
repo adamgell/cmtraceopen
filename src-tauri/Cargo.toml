@@ -74,7 +74,7 @@ encoding_rs = "0.8"
 log = "0.4"
 thiserror = "2"
 notify = "8"
-tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net"] }
+tokio = { version = "1", features = ["fs", "io-util", "sync", "rt", "net", "time"] }
 rayon = "1.10"
 font-kit = "0.14"
 # evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 could not parse.

@@ -162,6 +162,10 @@ import { EvtxDetailPane } from "./EvtxDetailPane";
 import { EvtxFilterBar } from "./EvtxFilterBar";
 import { EvtxTimeline } from "./EvtxTimeline";
 import { SourcePicker } from "./SourcePicker";
+import {
+  MAX_EXPORT_CHUNK_BYTES,
+  MAX_EXPORT_CHUNK_RECORDS,
+} from "./evtx-export";
 import type { EvtxRecord } from "./types";
 
 const RECORD: EvtxRecord = {
@@ -847,7 +851,32 @@ describe("EventLogWorkspace fixtures", () => {
     useEvtxStore.setState({ records: [boundaryRecord], timeWindow: "1h" });
     vi.spyOn(Date, "now").mockReturnValue(nowEpoch + 2);
     vi.mocked(save).mockResolvedValue("/tmp/events.json");
-    invoke.mockResolvedValue(128);
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "evtx_create_export_session") {
+        return {
+          sessionId: "export-clock-snapshot",
+          nextSequence: 0,
+          receivedRecords: 0,
+          receivedBytes: 0,
+          expectedRecords: args?.expectedRecords,
+        };
+      }
+      if (command === "evtx_append_export_chunk") {
+        const payload = atob(args?.payloadBase64 as string);
+        return {
+          sessionId: "export-clock-snapshot",
+          nextSequence: (args?.sequence as number) + 1,
+          receivedRecords: payload.split("\n").length - 1,
+          receivedBytes: payload.length,
+          expectedRecords: 1,
+        };
+      }
+      if (command === "evtx_finalize_export_session") {
+        return { sessionId: "export-clock-snapshot", records: 1, bytes: 128 };
+      }
+      if (command === "load_markers") return null;
+      return undefined;
+    });
 
     render(<EvtxFilterBar nowEpoch={nowEpoch} />);
     fireEvent.click(
@@ -859,10 +888,116 @@ describe("EventLogWorkspace fixtures", () => {
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith(
-        "evtx_export_records",
-        expect.objectContaining({ records: [boundaryRecord] }),
+        "evtx_append_export_chunk",
+        expect.objectContaining({ sequence: 0, payloadBase64: expect.any(String) }),
       ),
     );
+    const append = invoke.mock.calls.find(([command]) => command === "evtx_append_export_chunk");
+    const transported = JSON.parse(
+      atob((append?.[1] as { payloadBase64: string }).payloadBase64).trimEnd(),
+    );
+    expect(transported).toEqual(boundaryRecord);
+    expect(invoke).not.toHaveBeenCalledWith("evtx_export_records", expect.anything());
+  });
+
+  it("streams thousands of only the filtered records in visible sort order", async () => {
+    const records = Array.from({ length: 2_505 }, (_, index): EvtxRecord => ({
+      ...RECORD,
+      id: index + 1,
+      eventRecordId: index + 1,
+      timestampEpoch: index + 1,
+      channel: index % 5 === 0 ? "System" : "Application",
+      level: index % 7 === 0 ? "Warning" : "Error",
+      message: index % 11 === 0 ? `drop-${index}` : `keep-${index}`,
+    }));
+    const expected = records
+      .filter(
+        (record) =>
+          record.channel === "Application" &&
+          record.level === "Error" &&
+          record.message.includes("keep"),
+      )
+      .sort((left, right) => right.timestampEpoch - left.timestampEpoch);
+    seedEventLog();
+    useEvtxStore.setState({
+      records,
+      selectedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Error"]),
+      filterSearch: "keep",
+      sortField: "time",
+      sortDirection: "desc",
+      timeWindow: "all",
+    });
+    vi.mocked(save).mockResolvedValue("/tmp/events.json");
+    let receivedRecords = 0;
+    let receivedBytes = 0;
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "evtx_create_export_session") {
+        return {
+          sessionId: "large-visible-export",
+          nextSequence: 0,
+          receivedRecords: 0,
+          receivedBytes: 0,
+          expectedRecords: args?.expectedRecords,
+        };
+      }
+      if (command === "evtx_append_export_chunk") {
+        const payload = atob(args?.payloadBase64 as string);
+        receivedRecords += payload.split("\n").length - 1;
+        receivedBytes += payload.length;
+        return {
+          sessionId: "large-visible-export",
+          nextSequence: (args?.sequence as number) + 1,
+          receivedRecords,
+          receivedBytes,
+          expectedRecords: expected.length,
+        };
+      }
+      if (command === "evtx_finalize_export_session") {
+        return {
+          sessionId: "large-visible-export",
+          records: receivedRecords,
+          bytes: 9_999,
+        };
+      }
+      if (command === "load_markers") return null;
+      return undefined;
+    });
+
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+    fireEvent.click(
+      screen.getByTitle(
+        "Export the events currently shown, using the same filters as the list",
+      ),
+    );
+    fireEvent.click(screen.getByText("JSON"));
+
+    await screen.findByText(
+      `Exported ${expected.length.toLocaleString()} events (9,999 bytes)`,
+    );
+    const appendCalls = invoke.mock.calls.filter(
+      ([command]) => command === "evtx_append_export_chunk",
+    );
+    expect(appendCalls.length).toBeGreaterThan(1);
+    const binary = appendCalls
+      .map(([, args]) => atob((args as { payloadBase64: string }).payloadBase64))
+      .join("");
+    const transported = new TextDecoder()
+      .decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as EvtxRecord);
+    expect(transported.map((record) => record.id)).toEqual(
+      expected.map((record) => record.id),
+    );
+    for (const [, args] of appendCalls) {
+      const payload = atob((args as { payloadBase64: string }).payloadBase64);
+      expect(payload.length).toBeLessThanOrEqual(MAX_EXPORT_CHUNK_BYTES);
+      expect(payload.split("\n").length - 1).toBeLessThanOrEqual(
+        MAX_EXPORT_CHUNK_RECORDS,
+      );
+    }
+    expect(invoke).not.toHaveBeenCalledWith("evtx_export_records", expect.anything());
   });
 
   it("advances relative time windows when the loaded records refresh", async () => {

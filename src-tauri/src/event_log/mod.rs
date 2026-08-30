@@ -4,6 +4,7 @@ pub mod capture;
 pub mod commands;
 pub mod event_node;
 pub mod export;
+pub mod export_session;
 pub mod fetch;
 pub mod maps;
 pub mod models;
