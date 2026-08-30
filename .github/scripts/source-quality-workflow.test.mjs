@@ -32,6 +32,14 @@ function assertSourceQualityRequirements(workflow) {
   const job = sourceQualityJob(workflow);
 
   assert.match(job, /^    steps:\n/m, "source-quality steps missing");
+  assert.doesNotMatch(job, /^    if:/m, "source-quality job must not be conditional");
+  assert.doesNotMatch(job, /^        if:/m, "source-quality steps must not be conditional");
+  assert.doesNotMatch(job, /^        continue-on-error:/m, "source-quality steps must not soften failures");
+  assert.doesNotMatch(
+    job,
+    /^[ \t]*(?:exit|return)\b/m,
+    "source-quality scripts must not exit before validation"
+  );
   assert.match(
     job,
     /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
@@ -76,7 +84,7 @@ test("source-quality gates formatting, wasm portability, and the changed range",
   assertSourceQualityRequirements(workflow);
 });
 
-test("source-quality requirements cannot be satisfied outside the job", () => {
+test("source-quality requirements reject bypasses", async () => {
   const inertWorkflow = `jobs:
   source-quality:
     name: Source Quality
@@ -97,4 +105,27 @@ test("source-quality requirements cannot be satisfied outside the job", () => {
 `;
 
   assert.throws(() => assertSourceQualityRequirements(inertWorkflow));
+
+  const workflow = await readFile(workflowUrl, "utf8");
+  const disabledJob = workflow.replace(
+    /^  source-quality:\n/m,
+    "  source-quality:\n    if: ${{ github.repository != 'adamgell/cmtraceopen' }}\n"
+  );
+  const disabledFormatting = workflow.replace(
+    "      - name: Rust formatting\n        run: cargo fmt --all -- --check",
+    "      - name: Rust formatting\n        run: cargo fmt --all -- --check\n        if: false"
+  );
+  const softFailingWasm = workflow.replace(
+    "      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown",
+    "      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown\n        continue-on-error: true"
+  );
+  const earlyExit = workflow.replace(
+    '        run: |\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '        run: |\n          exit 0\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
+
+  assert.throws(() => assertSourceQualityRequirements(disabledJob));
+  assert.throws(() => assertSourceQualityRequirements(disabledFormatting));
+  assert.throws(() => assertSourceQualityRequirements(softFailingWasm));
+  assert.throws(() => assertSourceQualityRequirements(earlyExit));
 });
