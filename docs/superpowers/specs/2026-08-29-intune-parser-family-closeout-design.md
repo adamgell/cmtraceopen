@@ -3,19 +3,24 @@
 ## Status
 
 The repository owner authorized ownership of the complete issue #356 program on
-2026-08-29. This document refreshes the 2026-07-29 parser-family design against
-current `main` and defines the work required before the epic can truthfully
-close.
+2026-08-29 and approved this design plus ADR-004 Revision 2 as the implementation
+contract on 2026-08-30. This document refreshes the 2026-07-29 parser-family
+design against current `main` and defines the work required before the epic can
+truthfully close.
 
 This document supersedes the Intune compatibility, skeleton, and completion
 sections of `2026-07-29-parser-family-architecture-design.md`. It does not
 change that document's SCCM architecture.
 
-Its redaction implementation depends on the separately proposed
-`ADR-004-redaction-scope-revision-2.md`. That ADR supersedes Revision 1's
-deferred algorithm, derivation, secret-source, local-preserving API, IPC, and
-migration questions only after repository-owner approval. No redaction code in
-this program starts while Revision 2 is proposed.
+Its redaction implementation is governed by the accepted
+`ADR-004-redaction-scope-revision-2.md`, which supersedes Revision 1's deferred
+algorithm, derivation, secret-source, local-preserving API, IPC, and migration
+questions.
+
+Approval was reverified against `origin/main` at
+`2f8b5cf3339df95b0798bdeb376b37c58cec91d3`. The only intervening main commit
+after the audited baseline was release/CI work from PR #587; it changed no
+Intune parser-family contract or child-issue state.
 
 Baseline audited for this design:
 
@@ -464,11 +469,9 @@ prove importer safety, but they cannot prove a product schema.
 ### Redaction and publication boundary
 
 Accepted ADR-004 Revision 1 is a shared foundation, not a final checklist
-adjective. Proposed ADR-004 Revision 2 resolves the questions Revision 1 left
-open; this section summarizes the proposed contract but does not supersede the
-accepted ADR by itself. After Revision 2 is accepted and before a new native or
-import route becomes callable, each Intune lane converges on one export
-contract:
+adjective. Accepted ADR-004 Revision 2 resolves the questions Revision 1 left
+open. Before a new native or import route becomes callable, each Intune lane
+converges on one export contract:
 
 - the only publicly constructible published analysis/export type is projected;
 - local-preserving intermediate analysis and reduction types are explicitly
@@ -645,8 +648,8 @@ PR before the format gate is enabled. That diff contains no behavior changes.
 
 ### Phase 0: program truth and foundations
 
-1. Publish this refreshed design and proposed ADR-004 Revision 2; after both are
-   approved, publish the task-by-task implementation plan.
+1. Publish this refreshed design and accepted ADR-004 Revision 2, then publish
+   the task-by-task implementation plan.
 2. Reconcile #356's stale checklist and annotate closed children whose original
    acceptance remains unproven.
 3. Reopen an original child when its own acceptance criteria are still unmet;
@@ -660,7 +663,7 @@ PR before the format gate is enabled. That diff contains no behavior changes.
 6. Replace the synthetic-only fixture harness with the provenance classes,
    audit all Intune manifests, and open each missing observed-anchor acquisition
    lane. Remove or downgrade unsupported claims rather than grandfathering them.
-7. After ADR-004 Revision 2 is accepted, land the lower redaction primitive with
+7. Under accepted ADR-004 Revision 2, land the lower redaction primitive with
    the existing ESP command/event/frontend route as its first end-to-end
    consumer. In the same slice, land V2 projected capture export and bounded
    native replay, and delete every V1/bare-snapshot/frontend-direct replay path.
