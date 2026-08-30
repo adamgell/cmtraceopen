@@ -68,10 +68,14 @@ diff -u \
     docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md \
     docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md \
     docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md | sort) \
-  <(git diff --name-only 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head" | sort)
+  <(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head" \
+    | while IFS= read -r commit; do
+        git diff-tree --no-commit-id --name-only -r -m "$commit"
+      done \
+    | sort -u)
 ```
 
-Expected: local and remote `main` are identical, the planning head descends from the audited baseline, and the diff contains exactly the spec, ADR, and this plan.
+Expected: local and remote `main` are identical, the planning head descends from the audited baseline, and every commit in the planning range touches only the spec, ADR, and this plan.
 
 - [ ] **Step 2: Import only the approved documentation history**
 
@@ -534,7 +538,7 @@ cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 git diff --check
 ```
 
-Expected: the Node test passes `1/1`, actionlint emits no finding, formatting and wasm checks pass, and Git reports no whitespace error.
+Expected: the Node test passes `2/2`, actionlint emits no finding, formatting and wasm checks pass, and Git reports no whitespace error.
 
 - [ ] **Step 5: Commit the executable CI gate**
 
