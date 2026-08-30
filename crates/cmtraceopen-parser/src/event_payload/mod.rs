@@ -57,7 +57,7 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     }
 
     let mut bytes = Vec::with_capacity(digits.len() / 2);
-    for pair in digits.chunks_exact(2) {
+    for pair in digits.as_chunks::<2>().0 {
         let high = (pair[0] as char).to_digit(16)?;
         let low = (pair[1] as char).to_digit(16)?;
         bytes.push(((high << 4) | low) as u8);
@@ -92,7 +92,9 @@ fn decode_utf16le(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     String::from_utf16(&units).ok()

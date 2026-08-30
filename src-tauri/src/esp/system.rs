@@ -1346,13 +1346,13 @@ impl SystemQueryWorkerPool {
 
     #[cfg(test)]
     fn shutdown_and_join(&self) -> usize {
-        let workers = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .workers
-            .drain(..)
-            .collect::<Vec<_>>();
+        let workers = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut state.workers)
+        };
         let joined = workers.len();
         for worker in workers {
             let SystemQueryWorker { sender, handle, .. } = worker;

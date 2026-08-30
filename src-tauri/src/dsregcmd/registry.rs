@@ -369,16 +369,20 @@ fn load_registry_map(path: &Path, artifact_paths: &mut Vec<String>) -> RegistryK
 fn decode_reg_content(bytes: &[u8]) -> Option<String> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect::<Vec<u16>>();
         return Some(String::from_utf16_lossy(&units));
     }
 
     if bytes.starts_with(&[0xFE, 0xFF]) {
         let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_be_bytes(*chunk))
             .collect::<Vec<u16>>();
         return Some(String::from_utf16_lossy(&units));
     }

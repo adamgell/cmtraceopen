@@ -2,14 +2,22 @@ name: "CMTrace Open: Publish to winget"
 
 on:
   release:
-    types: [published]
+    types: [published, edited]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to test (e.g. v1.5.0)"
+        description: "Release tag to process (e.g. v1.5.2)"
         required: true
+      submit:
+        description: "Submit manifests to microsoft/winget-pkgs"
+        type: boolean
+        default: true
 
 permissions: {}
+
+concurrency:
+  group: winget-publish
+  cancel-in-progress: false
 
 jobs:
   winget:
@@ -20,7 +28,7 @@ jobs:
       contents: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -100,12 +108,10 @@ jobs:
           Get-Content -LiteralPath $manifest.FullName -Raw | Write-Host
           Write-Host "::endgroup::"
 
-      # Only a published release submits. workflow_dispatch is a rehearsal, which
-      # is what its own input description ("Release tag to test") always implied,
-      # and submitting from a manual run would open a duplicate pull request on
-      # microsoft/winget-pkgs for a version that is already published.
+      # Release events submit automatically. Manual runs submit by default and
+      # can opt into a rehearsal with submit=false.
       - name: Submit to winget-pkgs
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.submit
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
