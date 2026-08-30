@@ -1,13 +1,13 @@
 # ADR-004 Revision 2: redaction mechanism and publication binding
 
-- **Status:** PROPOSED. This document has no authority until the repository
-  owner accepts it. On acceptance it expressly revises Revision 1 Ruling 1's
-  named public local-preserving entry point to a private lane-only intermediate;
-  decides Revision 1's deferred per-lane no-context response as **decline** for
-  every Intune lane; and decides the deferred IPC/emit binding, secret source
-  and lifetime, primitive, domain framing, tag encoding/version, dependency
-  ownership, ESP session-capture replay format, and migration order. All
-  portions of Revision 1 not expressly revised or decided here remain in force.
+- **Status:** ACCEPTED by the repository owner on 2026-08-30. This revision
+  expressly revises Revision 1 Ruling 1's named public local-preserving entry
+  point to a private lane-only intermediate; decides Revision 1's deferred
+  per-lane no-context response as **decline** for every Intune lane; and decides
+  the deferred IPC/emit binding, secret source and lifetime, primitive, domain
+  framing, tag encoding/version, dependency ownership, ESP session-capture
+  replay format, and migration order. All portions of Revision 1 not expressly
+  revised or decided here remain in force.
 - **Context:** ADR-004 Revision 1 selected a caller-owned opaque context and
   per-analysis keyed equality, but deliberately did not choose the mechanism or
   bind application publication surfaces. Issue #356 now needs native and import
