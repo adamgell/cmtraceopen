@@ -953,6 +953,13 @@ Each planned native target is built and executed by the checked-in runner from
 the one exact compiler artifact, then validates its native-acceptance test
 contract before it launches that artifact:
 
+In this protocol, `<target>` means only the native `cmtrace-open` acceptance
+integration-test target named in the fourth closure-ledger table column, such as
+`intune_issue_354_acceptance`. It never names the focused pure
+`cmtraceopen-parser` target in the second column. Focused gates run separately
+exactly as shown in that second column under `-p cmtraceopen-parser`. Native
+artifact resolution remains `-p cmtrace-open --features full`.
+
 ```text
 cargo test --locked -p cmtrace-open --features full --target <required-native-target-triple> --test <target> --no-run --message-format=json
 <the sole matching compiler-artifact.executable> --list --format terse
@@ -1015,6 +1022,10 @@ printf '%s\n' "$protocol" | rg -F -- '--list --ignored --format terse'
 printf '%s\n' "$protocol" | rg -F -- 'complete list is non-empty'
 printf '%s\n' "$protocol" | rg -F -- 'ignored list equals the complete list exactly'
 printf '%s\n' "$protocol" | rg -F -- '#[ignore = "native acceptance runner only"]'
+printf '%s\n' "$protocol" | rg -F -- '<target> means only the native `cmtrace-open` acceptance'
+printf '%s\n' "$protocol" | rg -F -- 'It never names the focused pure `cmtraceopen-parser` target in the second column.'
+printf '%s\n' "$protocol" | rg -F -- 'Focused gates run separately exactly as shown in that second column under `-p cmtraceopen-parser`.'
+printf '%s\n' "$protocol" | rg -F -- 'Native artifact resolution remains `-p cmtrace-open --features full`.'
 planned_rows="$(rg '^\| #(361|365|369|371) \|' "$design")"
 test "$(printf '%s\n' "$planned_rows" | wc -l | tr -d ' ')" = 4
 for doc in "${accepted_docs[@]}"; do
