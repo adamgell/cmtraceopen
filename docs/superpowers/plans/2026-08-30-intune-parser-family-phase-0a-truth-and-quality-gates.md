@@ -728,19 +728,25 @@ bash -c '
 test ! -e "$failed_receipt"
 test ! -e "${failed_receipt}.tmp"
 
-finalization_failed_receipt="${receipt_dir}/finalization-failed.json"
-bash -c '
+publication_failed_receipt="${receipt_dir}/publication-failed.json"
+if bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
   trap "rm -f -- \"$tmp\"" EXIT
   rm -f -- "$receipt" "$tmp"
+  mv() {
+    test -e "$1"
+    return 1
+  }
   jq -n "{schema: \"phase0a-gate-receipt\"}" > "$tmp"
-  jq -n "error(\"injected finalization failure\")" > /dev/null
   mv "$tmp" "$receipt"
-' bash "$finalization_failed_receipt" 2>/dev/null || true
-test ! -e "$finalization_failed_receipt"
-test ! -e "${finalization_failed_receipt}.tmp"
+' bash "$publication_failed_receipt" 2>/dev/null; then
+  echo "expected receipt publication to fail" >&2
+  exit 1
+fi
+test ! -e "$publication_failed_receipt"
+test ! -e "${publication_failed_receipt}.tmp"
 
 bash -c '
   set -euo pipefail
@@ -767,8 +773,8 @@ jq -e '
    .gates.diff_check] | all)' "$successful_receipt" >/dev/null
 ```
 
-Expected: both the injected early-gate failure and the injected finalization
-failure leave no receipt or temp file; the successful path atomically creates a
+Expected: the injected early-gate failure and actual `mv` publication failure
+leave no receipt or temp file; the successful path atomically creates a
 complete, all-true receipt and disables its cleanup trap after `mv`.
 
 Run this local, non-mutating receipt-predicate matrix:
