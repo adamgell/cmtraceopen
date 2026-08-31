@@ -45,6 +45,26 @@ describe("buildEndpointConnectivityGroup", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].rows[0].label).toBe("not a url");
   });
+  it("falls back to the endpoint text when the parsed hostname is empty", () => {
+    const result = resultWith({
+      activeEvidence: {
+        connectivityTests: [
+          {
+            endpoint: "file:///path",
+            reachable: false,
+            statusCode: null,
+            latencyMs: null,
+            errorMessage: "boom",
+            timestamp: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        scpQuery: null,
+      },
+    });
+
+    const groups = buildEndpointConnectivityGroup(result);
+    expect(groups[0].rows[0].label).toBe("file:///path");
+  });
 });
 
 describe("buildProxyConfigGroup", () => {

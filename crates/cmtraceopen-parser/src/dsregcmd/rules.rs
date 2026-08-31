@@ -751,8 +751,8 @@ fn build_diagnostics(
             "aadsts50126-detailed",
             IntuneDiagnosticSeverity::Error,
             "credentials",
-            "Server error description reports AADSTS50126",
-            "The detailed server error description indicates invalid username or password during authentication.",
+            "Server error reports AADSTS50126",
+            "The server error fields indicate invalid username or password during authentication.",
             vec![
                 render_optional("Server Message", &facts.registration.server_message),
                 render_optional(
@@ -2102,6 +2102,24 @@ mod tests {
                 .iter()
                 .any(|d| d.id == "ad-replication-issue"),
             "exact 1312 token should fire the replication rule"
+        );
+    }
+    #[test]
+    fn ad_replication_rule_matches_punctuation_adjacent_tokens() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : [1312]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "bracket-adjacent 1312 token should fire the replication rule"
         );
     }
 

@@ -861,7 +861,8 @@ export function buildEnterpriseMgmtTasksGroup(
 // ---------------------------------------------------------------------------
 function endpointHostname(endpoint: string): string {
   try {
-    return new URL(endpoint).hostname;
+    const hostname = new URL(endpoint).hostname;
+    return hostname || endpoint;
   } catch {
     return endpoint;
   }

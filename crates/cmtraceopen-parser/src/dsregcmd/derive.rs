@@ -412,13 +412,15 @@ pub(super) fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
 }
 /// Match a Win32 error by decimal value or lowercase hex form (`1312` or
 /// `0x520`) as a whole token, so codes embedded in larger numbers or hex
-/// HRESULTs do not false-positive.
+/// HRESULTs do not false-positive. Surrounding punctuation such as brackets
+/// or commas is ignored.
 pub(super) fn contains_win32_code(aggregated: &str, decimal: u32) -> bool {
     let decimal_text = decimal.to_string();
     let hex_text = format!("0x{decimal:x}");
-    aggregated
-        .split_whitespace()
-        .any(|token| token == decimal_text || token == hex_text)
+    aggregated.split_whitespace().any(|token| {
+        let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        token == decimal_text || token == hex_text
+    })
 }
 
 pub(super) fn is_failure(field: &Option<String>) -> bool {
