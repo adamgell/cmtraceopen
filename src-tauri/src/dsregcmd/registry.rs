@@ -921,6 +921,24 @@ mod tests {
             other => panic!("expected string value, got {other:?}"),
         }
     }
+    #[test]
+    fn preserves_literal_backslashes_before_escaped_quotes() {
+        // Encodes C:\dir + two literal backslashes + "quoted": the .reg
+        // escape chain is \\ for each literal backslash and \" for the quote.
+        let sample = r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Test]
+"Value"="C:\\dir\\\\\"quoted\""
+"#;
+        let registry = parse_reg_snapshot(sample);
+        let values = registry
+            .get(r"HKEY_LOCAL_MACHINE\SOFTWARE\Test")
+            .expect("expected parsed key");
+        match values.get("value") {
+            Some(RegistryValue::String(value)) => {
+                assert_eq!(value, r#"C:\dir\\"quoted""#);
+            }
+            other => panic!("expected string value, got {other:?}"),
+        }
+    }
 
     #[test]
     fn extracts_dword_from_hex_string() {

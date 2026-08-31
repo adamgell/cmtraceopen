@@ -858,16 +858,42 @@ fn build_diagnostics(
     if contains_win32_code(&aggregated_errors, 1312)
         || contains_win32_code(&aggregated_errors, 1317)
     {
+        let mut evidence = Vec::new();
+        for (label, value) in [
+            (
+                "Client ErrorCode",
+                facts.registration.client_error_code.as_deref(),
+            ),
+            (
+                "Server ErrorCode",
+                facts.registration.server_error_code.as_deref(),
+            ),
+            (
+                "Server Message",
+                facts.registration.server_message.as_deref(),
+            ),
+            (
+                "Server Error Description",
+                facts.registration.server_error_description.as_deref(),
+            ),
+            ("Attempt Status", facts.diagnostics.attempt_status.as_deref()),
+            ("HTTP Error", facts.diagnostics.http_error.as_deref()),
+        ] {
+            if let Some(value) = value {
+                let lower = value.to_ascii_lowercase();
+                if contains_win32_code(&lower, 1312) || contains_win32_code(&lower, 1317) {
+                    evidence.push(format!("{label}: {value}"));
+                }
+            }
+        }
+
         diagnostics.push(issue(
             "ad-replication-issue",
             IntuneDiagnosticSeverity::Error,
             "dynamic",
             "AD object lookup or logon-session error detected",
             "The aggregated registration errors contain 1312 (ERROR_NO_SUCH_LOGON_SESSION) or 1317 (ERROR_NO_SUCH_DOMAIN), which point to an AD object lookup or logon-session problem during hybrid join.",
-            vec![
-                render_optional("Client ErrorCode", &facts.registration.client_error_code),
-                render_optional("Server ErrorCode", &facts.registration.server_error_code),
-            ],
+            evidence,
             vec![
                 "Verify the computer account exists and is consistent across domain controllers.".to_string(),
                 "Confirm the domain is reachable and resolves correctly from the device.".to_string(),
