@@ -348,7 +348,7 @@ leaf.
 ### Bounded direct-file and import reads
 
 The source-envelope invariants are not Windows-only. Every direct log, supplied
-report, and imported file—including #361, #368, #371, and #372—has a leaf-owned
+report, and imported file, including #361, #368, #371, and #372, has a leaf-owned
 versioned envelope with the complete status vocabulary and explicit raw-byte,
 read-work, decode-work, record, and elapsed-time limits. The native side opens a
 selected file once, establishes a stable handle/file identity and SHA-256 under
@@ -1002,6 +1002,13 @@ build or execute a native target:
 ```bash
 set -euo pipefail
 design=docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md
+accepted_docs=(
+  docs/architecture/decisions/ADR-004-redaction-scope-revision-2.md
+  docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md
+  "$design"
+)
+em_dash="$(printf '\342\200\224')"
+en_dash="$(printf '\342\200\223')"
 protocol="$(sed -n '/^Each planned native target is built and executed/,/^### Native ignored-test contract self-check$/p' "$design")"
 printf '%s\n' "$protocol" | rg -F -- '--list --format terse'
 printf '%s\n' "$protocol" | rg -F -- '--list --ignored --format terse'
@@ -1010,7 +1017,10 @@ printf '%s\n' "$protocol" | rg -F -- 'ignored list equals the complete list exac
 printf '%s\n' "$protocol" | rg -F -- '#[ignore = "native acceptance runner only"]'
 planned_rows="$(rg '^\| #(361|365|369|371) \|' "$design")"
 test "$(printf '%s\n' "$planned_rows" | wc -l | tr -d ' ')" = 4
-test -z "$(printf '%s\n' "$planned_rows" | rg '—' || true)"
+for doc in "${accepted_docs[@]}"; do
+  test -z "$(rg -F "$em_dash" "$doc" || true)"
+  test -z "$(rg -F "$en_dash" "$doc" || true)"
+done
 ```
 
 Expected: every assertion exits `0`; the four planned-target rows contain no em

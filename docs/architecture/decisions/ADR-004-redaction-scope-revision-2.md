@@ -17,12 +17,14 @@
 - **Implementation:** this ADR changes no production code. The approved issue
   #356 implementation plan will deliver the rulings as vertical slices.
 
-## Ruling 1: one public context path, lower than every workload
+## Ruling 1: future public context path, lower than every workload
 
-The public API is
-`cmtraceopen_parser::intune::redaction::RedactionContext`.
+The first implementation/consumer slice will introduce the public API
+`cmtraceopen_parser::intune::redaction::RedactionContext`. This accepted ADR
+defines its future type contract and changes no production code.
 
-The type owns exactly 32 secret bytes in `Zeroizing<[u8; 32]>`. It has no
+When introduced, the type will own exactly 32 secret bytes in
+`Zeroizing<[u8; 32]>`. It has no
 constructor from a raw array because `[u8; 32]` is `Copy` and would leave a
 caller buffer behind. `RedactionContext::try_fill` allocates the zeroizing
 storage internally and gives a caller-supplied closure one mutable borrow to
@@ -37,7 +39,7 @@ not trim, parse, label, compare, persist, or infer an identity from it. Revision
 2 decides that its bytes are the HMAC key; that cryptographic use does not give
 the bytes application semantics.
 
-Private shared implementation lives under `intune::redaction`:
+Private shared implementation will live under `intune::redaction`:
 
 - `derivation` owns token construction and framing;
 - `management_text` owns a byte-for-byte relocation of the one masking grammar
@@ -126,8 +128,8 @@ token equality with the exporting operation.
 
 Replay cannot rely on the original workload grammar to rediscover a value that
 the exporter already replaced. For each imported `ProjectedText`, it segments
-left-to-right around every non-overlapping exact token span—literal `cti1_`
-followed by exactly 43 URL-safe Base64 characters—at any byte position. Each
+left-to-right around every non-overlapping exact token span: literal `cti1_`
+followed by exactly 43 URL-safe Base64 characters at any byte position. Each
 token span is reminted from the complete old-token bytes under the fresh
 context and that field's semantic domain; each intervening segment runs through
 the lane's normal text projection so injected raw values are still classified.
@@ -249,9 +251,10 @@ An implementation plan may reorder independent items within one numbered group
 for lab availability, but it may not expose a new route before that lane has the
 new publication boundary.
 
-## Ruling 9: executable conformance
+## Ruling 9: future executable conformance
 
-One shared helper runs against every Intune lane and proves:
+The first implementation/consumer slice will add one shared helper that runs
+against every Intune lane and proves:
 
 - equal canonical inputs under one context/domain have equal tokens;
 - the same input under different contexts, lanes, or semantic domains has

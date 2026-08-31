@@ -656,6 +656,7 @@ Run:
 set -euo pipefail
 receipt_path=.superpowers/sdd/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates/phase0a-gate-receipt.json
 receipt_tmp="${receipt_path}.tmp"
+trap 'rm -f -- "$receipt_tmp"' EXIT
 mkdir -p "$(dirname "$receipt_path")"
 rm -f -- "$receipt_path" "$receipt_tmp"
 head_sha="$(git rev-parse HEAD)"
@@ -694,13 +695,16 @@ jq -n \
       diff_check: true
     }}' > "$receipt_tmp"
 mv "$receipt_tmp" "$receipt_path"
+trap - EXIT
 )
 ```
 
 Expected: `set -euo pipefail` stops on the first failed gate; the fixed ignored
 receipt and its exact temporary file are removed before execution, so neither
-exists after a failure. Only after every gate and the clean-status assertion
-pass does the command atomically publish `phase0a-gate-receipt.json`, with
+exists after a failed gate or receipt-finalization failure. The EXIT trap removes
+only that exact temporary file on failure. Only after every gate and the
+clean-status assertion pass does the command atomically publish
+`phase0a-gate-receipt.json`, disable the trap, and retain the receipt with
 schema/version, exact `head`/`base`, and `true` for every named gate used in the
 Issue #356 PASS sentence.
 
@@ -715,6 +719,7 @@ bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
+  trap "rm -f -- \"$tmp\"" EXIT
   rm -f -- "$receipt" "$tmp"
   false
   jq -n "{schema: \"phase0a-gate-receipt\"}" > "$tmp"
@@ -723,10 +728,25 @@ bash -c '
 test ! -e "$failed_receipt"
 test ! -e "${failed_receipt}.tmp"
 
+finalization_failed_receipt="${receipt_dir}/finalization-failed.json"
 bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
+  trap "rm -f -- \"$tmp\"" EXIT
+  rm -f -- "$receipt" "$tmp"
+  jq -n "{schema: \"phase0a-gate-receipt\"}" > "$tmp"
+  jq -n "error(\"injected finalization failure\")" > /dev/null
+  mv "$tmp" "$receipt"
+' bash "$finalization_failed_receipt" 2>/dev/null || true
+test ! -e "$finalization_failed_receipt"
+test ! -e "${finalization_failed_receipt}.tmp"
+
+bash -c '
+  set -euo pipefail
+  receipt="$1"
+  tmp="${receipt}.tmp"
+  trap "rm -f -- \"$tmp\"" EXIT
   jq -n --arg head test-head --arg base test-base \
     "{schema: \"phase0a-gate-receipt\", version: 1, head: \$head, base: \$base,
       gates: {rustfmt: true, parser_tests: true, app_all_features_tests: true,
@@ -735,6 +755,7 @@ bash -c '
       typescript_noemit: true, workflow_contract: true, actionlint: true,
       diff_check: true}}" > "$tmp"
   mv "$tmp" "$receipt"
+  trap - EXIT
 ' bash "$successful_receipt"
 jq -e '
   .schema == "phase0a-gate-receipt" and .version == 1 and
@@ -746,8 +767,9 @@ jq -e '
    .gates.diff_check] | all)' "$successful_receipt" >/dev/null
 ```
 
-Expected: the injected failed early command leaves no receipt or temp file; the
-successful path atomically creates a complete, all-true receipt.
+Expected: both the injected early-gate failure and the injected finalization
+failure leave no receipt or temp file; the successful path atomically creates a
+complete, all-true receipt and disables its cleanup trap after `mv`.
 
 - [ ] **Step 2: Inspect the exact committed range**
 
