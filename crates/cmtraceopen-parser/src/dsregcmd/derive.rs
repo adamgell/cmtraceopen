@@ -416,10 +416,13 @@ pub(super) fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
 /// or commas is ignored.
 pub(super) fn contains_win32_code(aggregated: &str, decimal: u32) -> bool {
     let decimal_text = decimal.to_string();
-    let hex_text = format!("0x{decimal:x}");
     aggregated.split_whitespace().any(|token| {
         let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-        token == decimal_text || token == hex_text
+        token == decimal_text
+            || token
+                .strip_prefix("0x")
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                .is_some_and(|value| value == decimal)
     })
 }
 
@@ -454,6 +457,22 @@ pub(super) fn render_phase_code_evidence(facts: &DsregcmdFacts, code: &str) -> S
         (
             "Token Acquisition Test",
             facts.pre_join_tests.token_acquisition_test.as_deref(),
+        ),
+        (
+            "DRS Discovery Test",
+            facts.pre_join_tests.drs_discovery_test.as_deref(),
+        ),
+        (
+            "AD Configuration Test",
+            facts.pre_join_tests.ad_configuration_test.as_deref(),
+        ),
+        (
+            "DRS Connectivity Test",
+            facts.pre_join_tests.drs_connectivity_test.as_deref(),
+        ),
+        (
+            "AD Connectivity Test",
+            facts.pre_join_tests.ad_connectivity_test.as_deref(),
         ),
     ];
 

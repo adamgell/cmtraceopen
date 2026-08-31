@@ -75,16 +75,6 @@ pub fn analyze_dsregcmd(
     extended.append(&mut rules::build_event_log_diagnostics(&result));
     result.diagnostics.append(&mut extended);
 
-    // A specific endpoint-unreachable rule is stronger evidence than the
-    // generic network marker warning; drop the generic one when it fired.
-    if result
-        .diagnostics
-        .iter()
-        .any(|d| d.id.starts_with("endpoint-unreachable-"))
-    {
-        result.diagnostics.retain(|d| d.id != "network-issue");
-    }
-
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
         result.diagnostics.len(),
@@ -1152,7 +1142,7 @@ mod tests {
         assert!(error.to_string().contains("only supported on Windows"));
     }
     #[test]
-    fn network_issue_suppressed_when_endpoint_unreachable_diagnostic_present() {
+    fn network_issue_and_endpoint_unreachable_both_fire() {
         use super::analyze_dsregcmd;
 
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -1186,8 +1176,8 @@ mod tests {
             "endpoint-unreachable-drs should fire for the unreachable DRS endpoint"
         );
         assert!(
-            !result.diagnostics.iter().any(|d| d.id == "network-issue"),
-            "network-issue should be suppressed when a specific endpoint rule fired"
+            result.diagnostics.iter().any(|d| d.id == "network-issue"),
+            "network-issue carries the marker code from the capture text and is independent evidence"
         );
     }
 }

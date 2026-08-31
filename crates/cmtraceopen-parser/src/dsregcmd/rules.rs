@@ -2148,6 +2148,24 @@ mod tests {
             "bracket-adjacent 1312 token should fire the replication rule"
         );
     }
+    #[test]
+    fn ad_replication_rule_matches_zero_padded_hex_form() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 0x00000520
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "zero-padded hex form of 1312 should fire the replication rule"
+        );
+    }
 
     #[test]
     fn has_code_matches_ad_connectivity_test_field() {
