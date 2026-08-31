@@ -26,10 +26,11 @@ The type owns exactly 32 secret bytes in `Zeroizing<[u8; 32]>`. It has no
 constructor from a raw array because `[u8; 32]` is `Copy` and would leave a
 caller buffer behind. `RedactionContext::try_fill` allocates the zeroizing
 storage internally and gives a caller-supplied closure one mutable borrow to
-fill it in place. The type has no accessor, parser, serializer, `Debug`,
-`Display`, semantic identity, or default. It is not `Clone` or `Copy`; its
-storage clears on every success/error/drop path through the maintained
-`zeroize` crate.
+fill it in place. On successful construction, the filled key remains in the
+context until the operation ends and the context is dropped. The type has no
+accessor, parser, serializer, `Debug`, `Display`, semantic identity, or
+default. It is not `Clone` or `Copy`; the maintained `zeroize` crate clears its
+storage on drop, including normal completion, error, and unwind paths.
 
 The context is opaque in the sense established by Revision 1: the parser does
 not trim, parse, label, compare, persist, or infer an identity from it. Revision
