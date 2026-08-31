@@ -6,6 +6,11 @@ const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
 const expectedSourceQualityJob = `  source-quality:
     name: Source Quality (fmt / wasm / whitespace)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,7 +80,17 @@ function sourceQualityJob(workflow) {
   return sourceQuality[0] + jobLines.join("\n");
 }
 
+function assertWorkflowPreamble(workflow) {
+  const jobsStart = workflow.indexOf("\njobs:\n");
+  assert.notEqual(jobsStart, -1, "workflow jobs missing");
+
+  const preamble = workflow.slice(0, jobsStart);
+  assert.doesNotMatch(preamble, /^defaults:/m, "root workflow defaults are not allowed");
+  assert.doesNotMatch(preamble, /^env:/m, "root workflow environment is not allowed");
+}
+
 function assertSourceQualityRequirements(workflow) {
+  assertWorkflowPreamble(workflow);
   assert.equal(
     sourceQualityJob(workflow),
     expectedSourceQualityJob,
@@ -145,6 +160,14 @@ test("source-quality requirements reject bypasses", async () => {
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
     "      - name: Disable later shell failures\n        run: |\n          printf 'exit 0\\n' > \"$GITHUB_WORKSPACE/skip.sh\"\n          printf 'BASH_ENV=%s/skip.sh\\n' \"$GITHUB_WORKSPACE\" >> \"$GITHUB_ENV\"\n\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
   );
+  const rootShell = workflow.replace(
+    "\njobs:\n",
+    "\ndefaults:\n  run:\n    shell: bash -c 'bash \"$1\"; exit 0' _ {0}\n\njobs:\n"
+  );
+  const rootBashEnv = workflow.replace(
+    "\njobs:\n",
+    "\nenv:\n  BASH_ENV: $GITHUB_WORKSPACE/skip.sh\n\njobs:\n"
+  );
 
   assert.throws(() => assertSourceQualityRequirements(disabledJob));
   assert.throws(() => assertSourceQualityRequirements(disabledFormatting));
@@ -154,4 +177,6 @@ test("source-quality requirements reject bypasses", async () => {
   assert.throws(() => assertSourceQualityRequirements(inlineExit));
   assert.throws(() => assertSourceQualityRequirements(customShell));
   assert.throws(() => assertSourceQualityRequirements(bashEnvBypass));
+  assert.throws(() => assertSourceQualityRequirements(rootShell));
+  assert.throws(() => assertSourceQualityRequirements(rootBashEnv));
 });
