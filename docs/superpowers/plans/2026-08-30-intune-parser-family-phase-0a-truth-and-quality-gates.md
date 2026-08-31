@@ -146,12 +146,9 @@ Run:
 ```bash
 (
 set -euo pipefail
-: "${ISSUE_356_BODY_EDIT_LEASE:?repository owner must hold the exclusive issue #356 body-edit lease}"
-test "$ISSUE_356_BODY_EDIT_LEASE" = repository-owner-held-exclusive
 original_body_file="$(mktemp)"
 updated_body_file="$(mktemp)"
-prewrite_body_file="$(mktemp)"
-postwrite_body_file="$(mktemp)"
+delta_file="$(mktemp)"
 gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$original_body_file"
 test "$(rg -c -- '- \[ \] #357([^0-9]|$)' "$original_body_file")" = 1
 test "$(rg -c -- '- \[ \] #363([^0-9]|$)' "$original_body_file")" = 1
@@ -159,21 +156,24 @@ sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #
   "$original_body_file" > "$updated_body_file"
 test "$(rg -c -- '- \[x\] #357([^0-9]|$)' "$updated_body_file")" = 1
 test "$(rg -c -- '- \[x\] #363([^0-9]|$)' "$updated_body_file")" = 1
-gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$prewrite_body_file"
-cmp -s "$original_body_file" "$prewrite_body_file"
-jq -Rs '{body: .}' "$updated_body_file" \
-  | gh api --method PATCH repos/adamgell/cmtraceopen/issues/356 --input - >/dev/null
-gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$postwrite_body_file"
-cmp -s "$updated_body_file" "$postwrite_body_file"
+diff -u --label issue-356/current --label issue-356/proposed \
+  "$original_body_file" "$updated_body_file" > "$delta_file" || test "$?" = 1
+test "$(rg -c '^@@ ' "$delta_file")" = 2
+test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | rg -c ' #((357)|(363))([^0-9]|$)')" = 4
+test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | wc -l | tr -d ' ')" = 4
+printf '%s\n' 'Proposed owner-only Issue #356 body delta:'
+sed -n '1,$p' "$delta_file"
+printf 'Current body SHA-256: '; shasum -a 256 "$original_body_file" | awk '{print $1}'
+printf 'Proposed body SHA-256: '; shasum -a 256 "$updated_body_file" | awk '{print $1}'
+printf '%s\n' 'STOP: the repository owner must refresh Issue #356 in the GitHub UI and manually save only these two checkbox-token changes during an owner-controlled exclusive edit window. The agent must not mutate the issue body; do not continue until the owner confirms the manual save.'
 )
 ```
 
-`ISSUE_356_BODY_EDIT_LEASE=repository-owner-held-exclusive` means the repository
-owner has exclusively reserved issue #356 body editing for this operation.
-GitHub does not support conditional unsafe `PATCH` requests for this endpoint,
-so the lease plus exact immediate pre-write and post-write byte comparisons is
-the required serialization path. Expected: the stale pre-write check succeeds,
-GitHub updates #356, and the post-write body exactly matches `updated_body`.
+Expected: this agent performs only read-only GitHub access, displays exactly two
+checkbox hunks and both body hashes, then stops. The repository owner refreshes
+Issue #356 in the GitHub UI and manually changes only the #357 and #363 tokens
+from `[ ]` to `[x]` under an owner-controlled exclusive edit window. Execution
+does not continue until the owner confirms that manual save.
 
 - [ ] **Step 3: Verify the corrected body against live state**
 
@@ -182,17 +182,23 @@ Run:
 ```bash
 (
 set -euo pipefail
-tracker_lines="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body | rg '^\s*- \[[ x]\] #[0-9]+')"
+server_body_file="$(mktemp)"
+gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$server_body_file"
+tracker_lines="$(rg '^\s*- \[[ x]\] #[0-9]+' "$server_body_file")"
 test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[[ x]\] #[0-9]+')" = 17
 test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[x\] #[0-9]+')" = 12
 test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[ \] #[0-9]+')" = 5
+test "$(rg -c -- '- \[x\] #357([^0-9]|$)' "$server_body_file")" = 1
+test "$(rg -c -- '- \[x\] #363([^0-9]|$)' "$server_body_file")" = 1
 diff -u \
   <(printf '%s\n' 354 361 365 369 371) \
   <(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[ \][[:space:]]+#([0-9]+).*/\1/p' | sort -n)
 )
 ```
 
-Expected: exactly 12 entries are `[x]`; only #354, #361, #365, #369, and #371 remain `[ ]`.
+Expected: this read-only server-body verification confirms exactly 12 entries
+are `[x]`, only #354, #361, #365, #369, and #371 remain `[ ]`, and the server
+records #357 and #363 as the two owner-saved checkbox edits.
 
 - [ ] **Step 4: Record approval and the acceptance distinction on the epic**
 
@@ -233,50 +239,27 @@ done
 
 Expected: each closed child receives one policy annotation with its own issue number. No issue is reopened by this task; a lane plan may reopen its original issue only after reproducing a missing acceptance criterion.
 
-- [ ] **Step 6: Prove failed reads and comments stop before later mutations**
+- [ ] **Step 6: Prove the proposed owner delta has exactly two tokens**
 
-Run this local negative proof. Its substituted commands do not contact GitHub:
+Run this local, non-mutating proof. It does not contact GitHub:
 
 ```bash
-failed_read_marker="$(
-  bash -c 'set -euo pipefail; issue_body="$(false)"; printf edit-reached' \
-    2>/dev/null || true
-)"
-test -z "$failed_read_marker"
-
-failed_comment_marker="$(
-  bash -c '
-    set -euo pipefail
-    for issue in 357 358; do
-      if test "$issue" = 357; then
-        printf body | false
-      else
-        printf body | true
-      fi
-    done
-    printf later-comment-reached
-  ' 2>/dev/null || true
-)"
-test -z "$failed_comment_marker"
-
-changed_prewrite_marker="$(
-  bash -c '
-    set -euo pipefail
-    original_body_file="$(mktemp)"
-    prewrite_body_file="$(mktemp)"
-    printf original > "$original_body_file"
-    printf changed > "$prewrite_body_file"
-    if cmp -s "$original_body_file" "$prewrite_body_file"; then
-      printf edit-reached
-    fi
-  '
-)"
-test -z "$changed_prewrite_marker"
+original_body_file="$(mktemp)"
+updated_body_file="$(mktemp)"
+delta_file="$(mktemp)"
+printf '%s\n' '- [ ] #357 Win32 app deployment transactions' filler-1 filler-2 filler-3 filler-4 filler-5 filler-6 filler-7 '- [ ] #363 Windows configuration policy evidence' > "$original_body_file"
+sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #363\1/' \
+  "$original_body_file" > "$updated_body_file"
+diff -u --label issue-356/current --label issue-356/proposed \
+  "$original_body_file" "$updated_body_file" > "$delta_file" || test "$?" = 1
+test "$(rg -c '^@@ ' "$delta_file")" = 2
+test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | wc -l | tr -d ' ')" = 4
+test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | rg -c ' #((357)|(363))([^0-9]|$)')" = 4
 ```
 
-Expected: all three assertions exit `0`. A failed precondition read prevents the
-edit marker, a changed pre-write body prevents the edit marker, and a failed
-earlier child comment prevents all later loop work.
+Expected: all assertions exit `0`; the displayed proposal has exactly two
+hunks and exactly the #357/#363 remove/add token lines. No GitHub mutation path
+exists in this proof or in Task 2 Step 2.
 
 ### Task 3: Establish the Mechanical Rustfmt Baseline
 
@@ -669,6 +652,15 @@ Expected: one commit containing only the workflow and its contract test.
 Run:
 
 ```bash
+(
+set -euo pipefail
+receipt_path=.superpowers/sdd/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates/phase0a-gate-receipt.json
+receipt_tmp="${receipt_path}.tmp"
+mkdir -p "$(dirname "$receipt_path")"
+rm -f -- "$receipt_path" "$receipt_tmp"
+head_sha="$(git rev-parse HEAD)"
+base_sha="$(git rev-parse origin/main)"
+
 cargo +1.92.0 fmt --all -- --check
 cargo test --locked -p cmtraceopen-parser
 cargo test --locked -p cmtrace-open --all-features
@@ -682,9 +674,80 @@ node --test .github/scripts/source-quality-workflow.test.mjs
 actionlint .github/workflows/cmtrace-ci.yml
 git diff --check origin/main...HEAD
 test -z "$(git status --porcelain)"
+
+jq -n \
+  --arg head "$head_sha" \
+  --arg base "$base_sha" \
+  '{schema: "phase0a-gate-receipt", version: 1, head: $head, base: $base,
+    gates: {
+      rustfmt: true,
+      parser_tests: true,
+      app_all_features_tests: true,
+      parser_strict_clippy: true,
+      workspace_all_targets_all_features_clippy: true,
+      parser_wasm: true,
+      workspace_all_features_check: true,
+      frontend_tests: true,
+      typescript_noemit: true,
+      workflow_contract: true,
+      actionlint: true,
+      diff_check: true
+    }}' > "$receipt_tmp"
+mv "$receipt_tmp" "$receipt_path"
+)
 ```
 
-Expected: every command exits `0`, the worktree is clean, and the recorded evidence separates test, lint, wasm, workflow, and hygiene results.
+Expected: `set -euo pipefail` stops on the first failed gate; the fixed ignored
+receipt and its exact temporary file are removed before execution, so neither
+exists after a failure. Only after every gate and the clean-status assertion
+pass does the command atomically publish `phase0a-gate-receipt.json`, with
+schema/version, exact `head`/`base`, and `true` for every named gate used in the
+Issue #356 PASS sentence.
+
+Run this local, non-mutating receipt proof:
+
+```bash
+receipt_dir="$(mktemp -d)"
+failed_receipt="${receipt_dir}/failed.json"
+successful_receipt="${receipt_dir}/successful.json"
+
+bash -c '
+  set -euo pipefail
+  receipt="$1"
+  tmp="${receipt}.tmp"
+  rm -f -- "$receipt" "$tmp"
+  false
+  jq -n "{schema: \"phase0a-gate-receipt\"}" > "$tmp"
+  mv "$tmp" "$receipt"
+' bash "$failed_receipt" 2>/dev/null || true
+test ! -e "$failed_receipt"
+test ! -e "${failed_receipt}.tmp"
+
+bash -c '
+  set -euo pipefail
+  receipt="$1"
+  tmp="${receipt}.tmp"
+  jq -n --arg head test-head --arg base test-base \
+    "{schema: \"phase0a-gate-receipt\", version: 1, head: \$head, base: \$base,
+      gates: {rustfmt: true, parser_tests: true, app_all_features_tests: true,
+      parser_strict_clippy: true, workspace_all_targets_all_features_clippy: true,
+      parser_wasm: true, workspace_all_features_check: true, frontend_tests: true,
+      typescript_noemit: true, workflow_contract: true, actionlint: true,
+      diff_check: true}}" > "$tmp"
+  mv "$tmp" "$receipt"
+' bash "$successful_receipt"
+jq -e '
+  .schema == "phase0a-gate-receipt" and .version == 1 and
+  .head == "test-head" and .base == "test-base" and
+  [.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+   .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
+   .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
+   .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
+   .gates.diff_check] | all)' "$successful_receipt" >/dev/null
+```
+
+Expected: the injected failed early command leaves no receipt or temp file; the
+successful path atomically creates a complete, all-true receipt.
 
 - [ ] **Step 2: Inspect the exact committed range**
 
@@ -807,9 +870,26 @@ Expected: local, remote, and PR head match; the PR base is the currently fetched
 Run:
 
 ```bash
+set -euo pipefail
 head_sha="$(git rev-parse HEAD)"
 base_sha="$(git rev-parse origin/main)"
+pr_head="$(gh pr view --repo adamgell/cmtraceopen --json headRefOid --jq .headRefOid)"
+pr_base="$(gh pr view --repo adamgell/cmtraceopen --json baseRefOid --jq .baseRefOid)"
 pr_url="$(gh pr view --repo adamgell/cmtraceopen --json url --jq .url)"
+receipt_path=.superpowers/sdd/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates/phase0a-gate-receipt.json
+test -f "$receipt_path"
+test "$head_sha" = "$pr_head"
+test "$base_sha" = "$pr_base"
+jq -e --arg head "$head_sha" --arg base "$base_sha" '
+  .schema == "phase0a-gate-receipt" and .version == 1 and
+  .head == $head and .base == $base and
+  [.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+   .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
+   .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
+   .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
+   .gates.diff_check] | all)
+' "$receipt_path" >/dev/null
+
 printf '%s\n' \
   'Phase 0A: program truth and source-quality gates' \
   '' \
@@ -823,7 +903,10 @@ printf '%s\n' \
   | gh issue comment 356 --repo adamgell/cmtraceopen --body-file -
 ```
 
-Expected: issue #356 receives one exact-SHA update with no claim of merge, native validation, child completion, or epic closure.
+Expected: the fixed readable PASS labels are emitted only after the receipt
+exists, binds the exact local/PR head and base, and has all 12 named gates set
+to `true`; the issue receives one exact-SHA update with no claim of merge,
+native validation, child completion, or epic closure.
 
 - [ ] **Step 3: Stop at owner integration authority**
 
