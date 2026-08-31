@@ -2192,6 +2192,43 @@ mod tests {
             "zero-padded hex form of 1312 should fire the replication rule"
         );
     }
+    #[test]
+    fn ad_replication_rule_matches_slash_delimited_code_lists() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 0x801c0021/1312
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "slash-delimited code lists should be evaluated per code"
+        );
+    }
+
+    #[test]
+    fn ad_replication_rule_does_not_match_embedded_name() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server Message : ERROR_1312 occurred
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            !analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "ERROR_1312 is a name, not a standalone code"
+        );
+    }
 
     #[test]
     fn has_code_matches_ad_connectivity_test_field() {

@@ -411,18 +411,21 @@ pub(super) fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
     codes.iter().any(|code| has_code(facts, code))
 }
 /// Match a Win32 error by decimal value or lowercase hex form (`1312` or
-/// `0x520`) as a whole token, so codes embedded in larger numbers or hex
-/// HRESULTs do not false-positive. Surrounding punctuation such as brackets
-/// or commas is ignored.
+/// `0x520`) as a whole token, so codes embedded in larger numbers, hex
+/// HRESULTs, or names like `ERROR_1312` do not false-positive. Comma- and
+/// slash-delimited code lists (e.g. `0x801c0021/0x80072ee2`) are evaluated
+/// per code, and surrounding punctuation such as brackets is ignored.
 pub(super) fn contains_win32_code(aggregated: &str, decimal: u32) -> bool {
     let decimal_text = decimal.to_string();
     aggregated.split_whitespace().any(|token| {
-        let token = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-        token == decimal_text
-            || token
-                .strip_prefix("0x")
-                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                .is_some_and(|value| value == decimal)
+        token.split(['/', ',']).any(|part| {
+            let part = part.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            part == decimal_text
+                || part
+                    .strip_prefix("0x")
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .is_some_and(|value| value == decimal)
+        })
     })
 }
 
