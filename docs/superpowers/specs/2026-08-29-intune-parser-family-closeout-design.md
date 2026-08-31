@@ -949,12 +949,30 @@ aggregate signatures are the only fields excluded from the aggregate-body
 digest.
 
 Each planned native target is built and executed by the checked-in runner from
-`C` using this exact two-step protocol on the named source-bearing platform:
+`C` on the named source-bearing platform. The runner first builds and resolves
+the one exact compiler artifact, then validates its native-acceptance test
+contract before it launches that artifact:
 
 ```text
 cargo test --locked -p cmtrace-open --features full --target <required-native-target-triple> --test <target> --no-run --message-format=json
-<the sole matching compiler-artifact.executable> --ignored --nocapture
+<the sole matching compiler-artifact.executable> --list --format terse
+<the sole matching compiler-artifact.executable> --list --ignored --format terse
+<the same exact hashed compiler-artifact.executable> --ignored --nocapture
 ```
+
+The immutable closure ledger entry for every native target includes a sorted,
+non-empty `nativeIgnoredTests` list of its expected test names. Before the final
+launch, the runner parses the terse names from both list invocations and
+requires: the complete list is non-empty; the ignored list equals the complete list exactly; and both observed sorted lists equal `nativeIgnoredTests` exactly.
+This proves every test compiled into that target is deliberately ignored before
+`--ignored` is used, so an ordinary test cannot be silently skipped.
+
+Every acceptance function in every native target carries exactly
+`#[ignore = "native acceptance runner only"]`. The runner's source validation
+reads the frozen target source named by the ledger and requires that exact
+annotation for every `nativeIgnoredTests` function; a missing or different
+annotation fails source review and runner validation. The ledger and source
+review may not fabricate a target or test name merely to satisfy this protocol.
 
 `cargo metadata --locked --no-deps` from `C` supplies the one expected
 `cmtrace-open` package ID and integration-test source path. A compiler-artifact
@@ -975,6 +993,29 @@ test invokes the application acquisition/import boundary, round-trips the
 leaf-owned wire envelope, calls the production parser and analyzer, and
 verifies the canonical redacted output. It may not substitute a fixture-only
 call to the parser.
+
+### Native ignored-test contract self-check
+
+This document-only check validates the frozen protocol wording; it does not
+build or execute a native target:
+
+```bash
+set -euo pipefail
+design=docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md
+protocol="$(sed -n '/^Each planned native target is built and executed/,/^### Native ignored-test contract self-check$/p' "$design")"
+printf '%s\n' "$protocol" | rg -F -- '--list --format terse'
+printf '%s\n' "$protocol" | rg -F -- '--list --ignored --format terse'
+printf '%s\n' "$protocol" | rg -F -- 'complete list is non-empty'
+printf '%s\n' "$protocol" | rg -F -- 'ignored list equals the complete list exactly'
+printf '%s\n' "$protocol" | rg -F -- '#[ignore = "native acceptance runner only"]'
+planned_rows="$(rg '^\| #(361|365|369|371) \|' "$design")"
+test "$(printf '%s\n' "$planned_rows" | wc -l | tr -d ' ')" = 4
+test -z "$(printf '%s\n' "$planned_rows" | rg '—' || true)"
+```
+
+Expected: every assertion exits `0`; the four planned-target rows contain no em
+dash, and the protocol continues to require deliberate ignored-only native
+execution rather than ordinary-suite execution.
 
 Because ESP publication/replay is a shared foundation rather than one child
 row, the aggregate record has a required `espPublication` object bound to `C`.
@@ -1014,17 +1055,17 @@ silently changed mid-program.
 | #358 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_microsoft_store` and `cargo test --locked -p cmtraceopen-parser --test intune_windows_microsoft_store_semantics` | Observed sanitized IME, AppWorkload, StoreAgent, AppX event, package-fact, Assignments, and InstallerOutcomes anchors, an explicitly inherited admitted contract, or narrowing of an unanchored variant; truncated member marked incomplete | Windows x64 target `intune_issue_358_acceptance`: Store-owned AppX/package-fact acquisition envelope to Store analyzer, with denied/empty/partial distinctions |
 | #359 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_scripts` | Observed sanitized AgentExecutor, IME, HealthScripts, and ScriptOutput anchors, an explicitly inherited admitted contract, or narrowing of an unanchored source | Windows x64 target `intune_issue_359_acceptance`: native command returns the typed script output consumed by TypeScript; no script semantic variant remains in `event_tracker` |
 | #360 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_remediations` | Observed sanitized HealthScripts, AgentExecutor, IME, and ScriptOutput anchors, an explicitly inherited admitted contract, or narrowing of an unanchored source | Windows x64 target `intune_issue_360_acceptance`: native command returns the typed remediation output consumed by TypeScript; no remediation semantic variant remains in `event_tracker` |
-| #361 | Planned target — the #361 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test intune_macos_apps` | Observed sanitized daemon and per-user agent logs for every claimed app/agent version | macOS arm64 target `intune_issue_361_acceptance`: separate stable-handle discovery/open of the system daemon and current-user agent roots, rotations in deterministic order, denial/inaccessibility for each root, raw/record/decode/time caps and cancellation, package analysis, then script analysis, with separate outputs and explicit gaps |
+| #361 | Planned target: the #361 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test intune_macos_apps` | Observed sanitized daemon and per-user agent logs for every claimed app/agent version | macOS arm64 target `intune_issue_361_acceptance`: separate stable-handle discovery/open of the system daemon and current-user agent roots, rotations in deterministic order, denial/inaccessibility for each root, raw/record/decode/time caps and cancellation, package analysis, then script analysis, with separate outputs and explicit gaps |
 | #362 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_autopilot` | Observed sanitized Autopilot event, diagnostics-report, `autopilot.identityFacts`, and `autopilot.espSession` anchors, explicitly inherited admitted contracts, or narrowing of unanchored sections | Windows x64 target `intune_issue_362_acceptance`: Autopilot-owned event/report envelopes to analyzer, including denied, unknown-version, and complete-empty cases |
 | #363 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_configuration` | Observed sanitized or exactly inherited anchors for EventLog, Registry, DiagnosticReport, IME, CCM, Agent, PlainText, UnifiedLog, and Graph/SuppliedFact device/service authority, with explicit removal/narrowing of every unanchored source | Windows x64 target `intune_issue_363_acceptance`: configuration-owned event, registry, setting-report, and imported/supplied-fact envelopes to analyzer, with timezone, authority-side, unknown-node, and no-service-query coverage |
 | #364 | `cargo test --locked -p cmtraceopen-parser --test intune_windows_compliance` | Observed sanitized compliance event/report, `custom_compliance`, `service_results`, `access_decisions`, and `device_context` anchors, explicitly inherited admitted contracts, or narrowing of unanchored inputs | Windows x64 target `intune_issue_364_acceptance`: compliance-owned event/report envelopes to analyzer, with incomplete evidence unable to prove compliance |
-| #365 | Planned target — the #365 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test intune_windows_updates` | Separate observed sanitized registry, Windows Update event, update-log, and supplied-policy anchors for each claimed profile | Windows x64 target `intune_issue_365_acceptance`: each leaf-owned source envelope plus combined reducer; unknown source yields no verdict, KB revision agreement and input-order independence are asserted |
+| #365 | Planned target: the #365 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test intune_windows_updates` | Separate observed sanitized registry, Windows Update event, update-log, and supplied-policy anchors for each claimed profile | Windows x64 target `intune_issue_365_acceptance`: each leaf-owned source envelope plus combined reducer; unknown source yields no verdict, KB revision agreement and input-order independence are asserted |
 | #366 | `cargo test --locked -p cmtraceopen-parser --test company_portal_windows_logs` | At least two observed sanitized supported-version anchors, or a narrowed single-profile contract | Windows x64 target `intune_issue_366_acceptance`: LocalState discovery, rotated aggregate load, access denial, append tail, and projected export |
 | #367 | `cargo test --locked -p cmtraceopen-parser --test company_portal_windows_package_state` | Observed sanitized canonical AppX JSON anchor; no legacy-format provenance class exists | Windows x64 target `intune_issue_367_acceptance`: native AppX command emits canonical JSON, parser admits it, analyzer/export pass, and the old legacy reader/wire absence check passes |
 | #368 | `cargo test --locked -p cmtraceopen-parser --test company_portal_macos_logs` | Observed sanitized logs for every supported version family; self-referential synthetic allowlists removed | macOS arm64 target `intune_issue_368_acceptance`: stable-handle known-source open, raw/record/decode/time caps, cancellation, content classification, canonical parser, malformed/rotation coverage, and projected export |
-| #369 | Planned target — the #369 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test company_portal_macos_diagnostics` | Observed sanitized saved report with container/member schema and #368 log anchor | macOS arm64 target `intune_issue_369_acceptance`: desktop import/dispatch, atomic archive admission, decoded member handoff to #368, analysis, redacted export, and cleanup on every outcome |
+| #369 | Planned target: the #369 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test company_portal_macos_diagnostics` | Observed sanitized saved report with container/member schema and #368 log anchor | macOS arm64 target `intune_issue_369_acceptance`: desktop import/dispatch, atomic archive admission, decoded member handoff to #368, analysis, redacted export, and cleanup on every outcome |
 | #370 | `cargo test --locked -p cmtraceopen-parser --test company_portal_macos_unified_log` | Observed sanitized unified-log capture proving every supported subsystem/profile | macOS arm64 target `intune_issue_370_acceptance`: native query emits bounded bytes and metadata, pure `parse_capture` constructs the result, denied/malformed/capped coverage survives, and cancellation/timeout each terminate and reap the child with distinct coverage |
-| #371 | Planned target — the #371 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test company_portal_android_diagnostics` | Observed sanitized artifact for each supported format/version/mode; generic ZIP and logcat retained only as negatives | macOS arm64 desktop target `intune_issue_371_acceptance`: stable-handle file selection/dispatch, raw/record/decode/time caps, cancellation, atomic admission, decode, analyzer, projected export, and no device-access claim |
+| #371 | Planned target: the #371 issue-scoped plan must create before running: `cargo test --locked -p cmtraceopen-parser --test company_portal_android_diagnostics` | Observed sanitized artifact for each supported format/version/mode; generic ZIP and logcat retained only as negatives | macOS arm64 desktop target `intune_issue_371_acceptance`: stable-handle file selection/dispatch, raw/record/decode/time caps, cancellation, atomic admission, decode, analyzer, projected export, and no device-access claim |
 | #372 | `cargo test --locked -p cmtraceopen-parser --test company_portal_ios_console` | Observed sanitized Console export; each locale alias independently anchored or removed | macOS arm64 desktop target `intune_issue_372_acceptance`: stable-handle file selection/dispatch, raw/record/decode/time caps, cancellation, Console admission, analyzer, projected export, with automated-device-access explicitly not applicable |
 
 The application import rows also run focused frontend tests proving selection
