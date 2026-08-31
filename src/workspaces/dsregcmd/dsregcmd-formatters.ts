@@ -362,6 +362,12 @@ export function toneForPrtState(
     return "bad";
   }
 
+  if (stalePrt === null || stalePrt === undefined) {
+    // Freshness is unknown (no Client Time in the capture): do not claim
+    // the PRT is healthy.
+    return "neutral";
+  }
+
   return stalePrt ? "warn" : "good";
 }
 

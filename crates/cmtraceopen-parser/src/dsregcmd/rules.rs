@@ -862,17 +862,17 @@ fn build_diagnostics(
             "ad-replication-issue",
             IntuneDiagnosticSeverity::Error,
             "dynamic",
-            "Directory replication or lookup issue detected",
-            "The aggregated registration errors contain 1312 or 1317, which commonly show up during AD replication or object lookup problems.",
+            "AD object lookup or logon-session error detected",
+            "The aggregated registration errors contain 1312 (ERROR_NO_SUCH_LOGON_SESSION) or 1317 (ERROR_NO_SUCH_DOMAIN), which point to an AD object lookup or logon-session problem during hybrid join.",
             vec![
                 render_optional("Client ErrorCode", &facts.registration.client_error_code),
                 render_optional("Server ErrorCode", &facts.registration.server_error_code),
             ],
             vec![
-                "Check the health of the on-premises AD object and replication status.".to_string(),
                 "Verify the computer account exists and is consistent across domain controllers.".to_string(),
+                "Confirm the domain is reachable and resolves correctly from the device.".to_string(),
             ],
-            vec!["Resolve the directory replication issue, then retry hybrid join.".to_string()],
+            vec!["Resolve the directory lookup or logon-session issue, then retry hybrid join.".to_string()],
         ));
     }
 
