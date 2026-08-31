@@ -760,7 +760,7 @@ bash -c '
 jq -e '
   .schema == "phase0a-gate-receipt" and .version == 1 and
   .head == "test-head" and .base == "test-base" and
-  [.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+  ([.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
    .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
    .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
    .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
@@ -770,6 +770,58 @@ jq -e '
 Expected: both the injected early-gate failure and the injected finalization
 failure leave no receipt or temp file; the successful path atomically creates a
 complete, all-true receipt and disables its cleanup trap after `mv`.
+
+Run this local, non-mutating receipt-predicate matrix:
+
+```bash
+set -euo pipefail
+matrix_dir="$(mktemp -d)"
+trap 'rm -rf -- "$matrix_dir"' EXIT
+valid_receipt="${matrix_dir}/valid.json"
+false_gate_receipt="${matrix_dir}/false-gate.json"
+missing_gate_receipt="${matrix_dir}/missing-gate.json"
+wrong_head_receipt="${matrix_dir}/wrong-head.json"
+wrong_base_receipt="${matrix_dir}/wrong-base.json"
+wrong_schema_receipt="${matrix_dir}/wrong-schema.json"
+wrong_version_receipt="${matrix_dir}/wrong-version.json"
+
+assert_receipt() {
+  jq -e --arg head "$2" --arg base "$3" '
+    .schema == "phase0a-gate-receipt" and .version == 1 and
+    .head == $head and .base == $base and
+    ([.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+      .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
+      .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
+      .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
+      .gates.diff_check] | all)
+  ' "$1" >/dev/null
+}
+
+jq -n --arg head test-head --arg base test-base \
+  '{schema: "phase0a-gate-receipt", version: 1, head: $head, base: $base,
+    gates: {rustfmt: true, parser_tests: true, app_all_features_tests: true,
+    parser_strict_clippy: true, workspace_all_targets_all_features_clippy: true,
+    parser_wasm: true, workspace_all_features_check: true, frontend_tests: true,
+    typescript_noemit: true, workflow_contract: true, actionlint: true,
+    diff_check: true}}' > "$valid_receipt"
+assert_receipt "$valid_receipt" test-head test-base
+
+jq '.gates.rustfmt = false' "$valid_receipt" > "$false_gate_receipt"
+jq 'del(.gates.rustfmt)' "$valid_receipt" > "$missing_gate_receipt"
+jq '.head = "wrong-head"' "$valid_receipt" > "$wrong_head_receipt"
+jq '.base = "wrong-base"' "$valid_receipt" > "$wrong_base_receipt"
+jq '.schema = "wrong-schema"' "$valid_receipt" > "$wrong_schema_receipt"
+jq '.version = 2' "$valid_receipt" > "$wrong_version_receipt"
+! assert_receipt "$false_gate_receipt" test-head test-base
+! assert_receipt "$missing_gate_receipt" test-head test-base
+! assert_receipt "$wrong_head_receipt" test-head test-base
+! assert_receipt "$wrong_base_receipt" test-head test-base
+! assert_receipt "$wrong_schema_receipt" test-head test-base
+! assert_receipt "$wrong_version_receipt" test-head test-base
+```
+
+Expected: the all-true receipt with exact head/base passes; a false or missing
+gate, wrong head/base, wrong schema, and wrong version each fail the predicate.
 
 - [ ] **Step 2: Inspect the exact committed range**
 
@@ -905,7 +957,7 @@ test "$base_sha" = "$pr_base"
 jq -e --arg head "$head_sha" --arg base "$base_sha" '
   .schema == "phase0a-gate-receipt" and .version == 1 and
   .head == $head and .base == $base and
-  [.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+  ([.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
    .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
    .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
    .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
