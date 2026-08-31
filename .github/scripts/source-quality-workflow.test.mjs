@@ -50,7 +50,11 @@ const expectedSourceQualityJob = `  source-quality:
           fi
 
           if git rev-parse --verify "\${base}^" >/dev/null 2>&1; then
-            git diff --check "$base...HEAD"
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --check "$base...HEAD"
+            else
+              git diff --check "$base..HEAD"
+            fi
           else
             git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           fi
@@ -168,6 +172,10 @@ test("source-quality requirements reject bypasses", async () => {
     "\njobs:\n",
     "\nenv:\n  BASH_ENV: $GITHUB_WORKSPACE/skip.sh\n\njobs:\n"
   );
+  const pushThreeDotRange = workflow.replace(
+    '            git diff --check "$base..HEAD"',
+    '            git diff --check "$base...HEAD"'
+  );
 
   assert.throws(() => assertSourceQualityRequirements(disabledJob));
   assert.throws(() => assertSourceQualityRequirements(disabledFormatting));
@@ -179,4 +187,5 @@ test("source-quality requirements reject bypasses", async () => {
   assert.throws(() => assertSourceQualityRequirements(bashEnvBypass));
   assert.throws(() => assertSourceQualityRequirements(rootShell));
   assert.throws(() => assertSourceQualityRequirements(rootBashEnv));
+  assert.throws(() => assertSourceQualityRequirements(pushThreeDotRange));
 });

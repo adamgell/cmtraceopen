@@ -59,7 +59,11 @@ jobs:
           fi
 
           if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
-            git diff --check "$base...HEAD"
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --check "$base...HEAD"
+            else
+              git diff --check "$base..HEAD"
+            fi
           else
             git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           fi
