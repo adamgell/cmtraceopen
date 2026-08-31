@@ -228,7 +228,6 @@ export interface DsregcmdProxyEvidence {
   proxyOverride: string | null;
   autoConfigUrl: string | null;
   wpadDetected: boolean;
-  winhttpProxy: string | null;
 }
 
 export interface DsregcmdEnrollmentEntry {

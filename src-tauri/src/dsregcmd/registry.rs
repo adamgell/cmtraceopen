@@ -19,7 +19,6 @@ const HKCU_MICROSOFT_POLICIES_FILE: &str = "hkcu-microsoft-policies.reg";
 const HKLM_MICROSOFT_POLICIES_FILE: &str = "hklm-microsoft-policies.reg";
 const OS_VERSION_FILE: &str = "os-version.reg";
 const PROXY_INTERNET_SETTINGS_FILE: &str = "proxy-internet-settings.reg";
-const PROXY_CONNECTIONS_FILE: &str = "proxy-connections.reg";
 const ENROLLMENTS_FILE: &str = "enrollments.reg";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,11 +209,9 @@ pub fn load_os_version_evidence(bundle_path: &Path) -> Option<DsregcmdOsVersionE
 
 pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> {
     let ie_path = registry_file_path(bundle_path, PROXY_INTERNET_SETTINGS_FILE);
-    let conn_path = registry_file_path(bundle_path, PROXY_CONNECTIONS_FILE);
 
     let mut artifact_paths = Vec::new();
     let ie_registry = load_registry_map(&ie_path, &mut artifact_paths);
-    let conn_registry = load_registry_map(&conn_path, &mut artifact_paths);
 
     if artifact_paths.is_empty() {
         return None;
@@ -234,18 +231,8 @@ pub fn load_proxy_evidence(bundle_path: &Path) -> Option<DsregcmdProxyEvidence> 
         break;
     }
 
-    if let Some(ref url) = evidence.auto_config_url {
+    if let Some(url) = &evidence.auto_config_url {
         evidence.wpad_detected = url.to_ascii_lowercase().contains("wpad");
-    }
-
-    // Check for WinHTTP proxy in connections registry
-    for (key_path, values) in &conn_registry {
-        let lower = key_path.to_ascii_lowercase();
-        if lower.contains("\\internet settings\\connections") {
-            evidence.winhttp_proxy = extract_string_value(values, "WinHttpSettings")
-                .or_else(|| extract_string_value(values, "DefaultConnectionSettings"));
-            break;
-        }
     }
 
     Some(evidence)
@@ -313,7 +300,14 @@ fn extract_dword_value(values: &HashMap<String, RegistryValue>, value_name: &str
     let key = value_name.to_ascii_lowercase();
     values.get(&key).and_then(|v| match v {
         RegistryValue::Dword(d) => Some(*d),
-        RegistryValue::String(s) => s.trim().parse().ok(),
+        RegistryValue::String(s) => {
+            let trimmed = s.trim();
+            if let Some(hex) = trimmed.strip_prefix("0x") {
+                u32::from_str_radix(hex, 16).ok()
+            } else {
+                trimmed.parse().ok()
+            }
+        }
     })
 }
 
@@ -327,14 +321,17 @@ fn annotate_missing_policy_evidence(evidence: &mut DsregcmdWhfbPolicyEvidence) {
         "Registry artifacts were captured, but no mapped PassportForWork policy values were present in this bundle.".to_string(),
     );
 
-    if evidence.policy_enabled.display_value.is_none() && evidence.policy_enabled.note.is_none() {
-        evidence.policy_enabled.note = missing_note.clone();
-    }
-
-    if evidence.post_logon_enabled.display_value.is_none()
-        && evidence.post_logon_enabled.note.is_none()
-    {
-        evidence.post_logon_enabled.note = missing_note;
+    for field in [
+        &mut evidence.policy_enabled,
+        &mut evidence.post_logon_enabled,
+        &mut evidence.pin_recovery_enabled,
+        &mut evidence.require_security_device,
+        &mut evidence.use_certificate_for_on_prem_auth,
+        &mut evidence.use_cloud_trust_for_on_prem_auth,
+    ] {
+        if field.display_value.is_none() && field.note.is_none() {
+            field.note = missing_note.clone();
+        }
     }
 }
 
@@ -628,7 +625,9 @@ fn parse_registry_value(value: &str) -> Option<RegistryValue> {
 
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
         return Some(RegistryValue::String(
-            value[1..value.len() - 1].replace("\\\\", "\\"),
+            value[1..value.len() - 1]
+                .replace("\\\\", "\\")
+                .replace("\\\"", "\""),
         ));
     }
 
@@ -654,6 +653,9 @@ mod tests {
         parse_reg_snapshot,
     };
     use crate::dsregcmd::models::DsregcmdEvidenceSource;
+    use std::collections::HashMap;
+
+    use super::{extract_dword_value, RegistryValue};
 
     #[test]
     fn parses_registry_snapshot_values() {
@@ -902,5 +904,81 @@ mod tests {
             admin_entry.guid.as_deref(),
             Some("{22222222-3333-4444-5555-666666666666}")
         );
+    }
+    #[test]
+    fn parses_escaped_quotes_in_registry_strings() {
+        let sample = r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Test]
+"Value"="C:\\path with \"quotes\""
+"#;
+        let registry = parse_reg_snapshot(sample);
+        let values = registry
+            .get(r"HKEY_LOCAL_MACHINE\SOFTWARE\Test")
+            .expect("expected parsed key");
+        match values.get("value") {
+            Some(RegistryValue::String(value)) => {
+                assert_eq!(value, r#"C:\path with "quotes""#);
+            }
+            other => panic!("expected string value, got {other:?}"),
+        }
+    }
+    #[test]
+    fn preserves_literal_backslashes_before_escaped_quotes() {
+        // Encodes C:\dir + two literal backslashes + "quoted": the .reg
+        // escape chain is \\ for each literal backslash and \" for the quote.
+        let sample = r#"[HKEY_LOCAL_MACHINE\SOFTWARE\Test]
+"Value"="C:\\dir\\\\\"quoted\""
+"#;
+        let registry = parse_reg_snapshot(sample);
+        let values = registry
+            .get(r"HKEY_LOCAL_MACHINE\SOFTWARE\Test")
+            .expect("expected parsed key");
+        match values.get("value") {
+            Some(RegistryValue::String(value)) => {
+                assert_eq!(value, r#"C:\dir\\"quoted""#);
+            }
+            other => panic!("expected string value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extracts_dword_from_hex_string() {
+        let mut values = HashMap::new();
+        values.insert(
+            "ubr".to_string(),
+            RegistryValue::String("0x00000FA0".to_string()),
+        );
+        assert_eq!(extract_dword_value(&values, "UBR"), Some(4000));
+    }
+
+    #[test]
+    fn annotates_missing_note_on_all_policy_fields() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+
+        std::fs::write(
+            registry_dir.join("policymanager-device.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\Current\Device\SomeOtherPolicy]
+"Value"=dword:00000001
+"#,
+        )
+        .expect("write registry sample");
+
+        let evidence = load_whfb_policy_evidence(temp_dir.path());
+        for field in [
+            &evidence.policy_enabled,
+            &evidence.post_logon_enabled,
+            &evidence.pin_recovery_enabled,
+            &evidence.require_security_device,
+            &evidence.use_certificate_for_on_prem_auth,
+            &evidence.use_cloud_trust_for_on_prem_auth,
+        ] {
+            assert!(
+                field.note.is_some(),
+                "missing-note annotation should cover every policy field"
+            );
+        }
     }
 }

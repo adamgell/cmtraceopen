@@ -279,7 +279,6 @@ function analysisResult(): DsregcmdAnalysisResult {
       proxyOverride: null,
       autoConfigUrl: null,
       wpadDetected: false,
-      winhttpProxy: null,
     },
     enrollmentEvidence: {
       enrollmentCount: 1,
@@ -415,5 +414,41 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getByRole("button", { name: "Save JSON..." })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save summary..." })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show raw input" })).toBeInTheDocument();
+  });
+  it("DSREG-007 sidebar top findings are severity-sorted", () => {
+    const result = analysisResult();
+    result.diagnostics = [
+      {
+        id: "info-finding",
+        severity: "Info",
+        category: "test",
+        title: "Info finding",
+        summary: "info summary",
+        evidence: [],
+        nextChecks: [],
+        suggestedFixes: [],
+      },
+      {
+        id: "error-finding",
+        severity: "Error",
+        category: "test",
+        title: "Error finding",
+        summary: "error summary",
+        evidence: [],
+        nextChecks: [],
+        suggestedFixes: [],
+      },
+    ];
+    useDsregcmdStore
+      .getState()
+      .setResults("AzureAdJoined : YES", result, sourceContext());
+    render(<DsregcmdSidebar />);
+
+    const titles = screen
+      .getAllByText(/finding/)
+      .map((element) => element.textContent ?? "");
+    expect(titles.indexOf("Error finding")).toBeLessThan(
+      titles.indexOf("Info finding"),
+    );
   });
 });

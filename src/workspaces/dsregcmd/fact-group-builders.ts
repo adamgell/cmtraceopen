@@ -731,10 +731,6 @@ export function buildProxyConfigGroup(
             ? ("warn" as const)
             : ("neutral" as const),
         },
-        {
-          label: "WinHTTP Proxy",
-          value: formatValue(result.proxyEvidence.winhttpProxy),
-        },
       ]),
     },
   ];
@@ -863,6 +859,15 @@ export function buildEnterpriseMgmtTasksGroup(
 // ---------------------------------------------------------------------------
 // Endpoint Connectivity (conditional)
 // ---------------------------------------------------------------------------
+function endpointHostname(endpoint: string): string {
+  try {
+    const hostname = new URL(endpoint).hostname;
+    return hostname || endpoint;
+  } catch {
+    return endpoint;
+  }
+}
+
 
 export function buildEndpointConnectivityGroup(
   result: DsregcmdAnalysisResult,
@@ -876,7 +881,7 @@ export function buildEndpointConnectivityGroup(
       title: "Endpoint Connectivity",
       caption: "Live reachability tests to required Microsoft Entra endpoints.",
       rows: result.activeEvidence.connectivityTests.map((test) => ({
-        label: new URL(test.endpoint).hostname,
+        label: endpointHostname(test.endpoint),
         value: test.reachable
           ? `Reachable${test.statusCode ? ` (${test.statusCode})` : ""}${test.latencyMs != null ? ` — ${test.latencyMs}ms` : ""}`
           : `Unreachable${test.errorMessage ? ` — ${test.errorMessage}` : ""}`,

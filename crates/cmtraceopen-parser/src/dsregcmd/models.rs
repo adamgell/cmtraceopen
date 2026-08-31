@@ -287,7 +287,6 @@ pub struct DsregcmdProxyEvidence {
     pub proxy_override: Option<String>,
     pub auto_config_url: Option<String>,
     pub wpad_detected: bool,
-    pub winhttp_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
