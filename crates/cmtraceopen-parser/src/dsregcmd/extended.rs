@@ -328,7 +328,16 @@ pub fn build_active_diagnostics_rules(
     if let Some(scp) = active.scp_query.as_ref() {
         let is_domain_joined = result.facts.join_state.domain_joined == Some(true);
 
-        if !scp.scp_found && is_domain_joined && scp.error.is_none() {
+        // A query that found the SCP object but no keywords is a real
+        // configuration signal, not a tooling failure: report it. Other query
+        // errors (missing AD module, nltest/PowerShell failures) are coverage
+        // gaps and must not be reported as SCP absence. The sentinel text is
+        // produced by the single keywordless path in connectivity::query_scp.
+        let scp_query_failed = scp
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.contains("no keywords"));
+        if !scp.scp_found && is_domain_joined && !scp_query_failed {
             diagnostics.push(issue(
                 "scp-not-found",
                 IntuneDiagnosticSeverity::Error,

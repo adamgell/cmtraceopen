@@ -2050,6 +2050,32 @@ mod tests {
             "scp-not-found must not fire when the SCP query itself failed"
         );
     }
+    #[test]
+    fn scp_not_found_fires_for_keywordless_scp_object() {
+        use super::build_active_diagnostics_rules;
+        use crate::dsregcmd::models::{DsregcmdActiveEvidence, DsregcmdScpQueryResult};
+
+        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        result.facts.join_state.domain_joined = Some(true);
+        result.active_evidence = Some(DsregcmdActiveEvidence {
+            connectivity_tests: Vec::new(),
+            scp_query: Some(DsregcmdScpQueryResult {
+                scp_found: false,
+                tenant_domain: None,
+                azuread_id: None,
+                keywords: Vec::new(),
+                domain_controller: None,
+                error: Some("SCP object exists but has no keywords.".to_string()),
+            }),
+        });
+
+        let extended = build_active_diagnostics_rules(&result);
+        assert!(
+            extended.iter().any(|d| d.id == "scp-not-found"),
+            "a keywordless SCP object is a configuration signal and must fire"
+        );
+    }
 
     #[test]
     fn stale_prt_not_derived_without_client_time() {
