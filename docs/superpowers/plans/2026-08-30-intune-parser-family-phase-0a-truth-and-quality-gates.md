@@ -274,7 +274,7 @@ changed_prewrite_marker="$(
 test -z "$changed_prewrite_marker"
 ```
 
-Expected: both assertions exit `0`. A failed precondition read prevents the
+Expected: all three assertions exit `0`. A failed precondition read prevents the
 edit marker, a changed pre-write body prevents the edit marker, and a failed
 earlier child comment prevents all later loop work.
 
