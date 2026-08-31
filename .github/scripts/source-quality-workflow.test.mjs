@@ -3,6 +3,31 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
+const expectedChangedRangeStep = `      - name: Changed-range whitespace
+        env:
+          BEFORE_SHA: \${{ github.event.before }}
+          PR_BASE_SHA: \${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+
+          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if ! git cat-file -e "\${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if git rev-parse --verify "\${base}^" >/dev/null 2>&1; then
+            git diff --check "$base...HEAD"
+          else
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          fi
+`;
 
 function assertRequiredTriggers(workflow) {
   assert.match(
@@ -28,18 +53,25 @@ function sourceQualityJob(workflow) {
   return jobLines.join("\n");
 }
 
+function changedRangeStep(job) {
+  const stepStart = job.match(/^      - name: Changed-range whitespace\n/m);
+  assert.ok(stepStart, "changed-range whitespace step missing");
+
+  return job
+    .slice(stepStart.index)
+    .split("\n")
+    .filter((line) => !/^[ \t]*#/.test(line))
+    .join("\n");
+}
+
 function assertSourceQualityRequirements(workflow) {
   const job = sourceQualityJob(workflow);
 
   assert.match(job, /^    steps:\n/m, "source-quality steps missing");
   assert.doesNotMatch(job, /^    if:/m, "source-quality job must not be conditional");
+  assert.doesNotMatch(job, /^    continue-on-error:/m, "source-quality job must not soften failures");
   assert.doesNotMatch(job, /^        if:/m, "source-quality steps must not be conditional");
   assert.doesNotMatch(job, /^        continue-on-error:/m, "source-quality steps must not soften failures");
-  assert.doesNotMatch(
-    job,
-    /^[ \t]*(?:exit|return)\b/m,
-    "source-quality scripts must not exit before validation"
-  );
   assert.match(
     job,
     /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
@@ -60,20 +92,10 @@ function assertSourceQualityRequirements(workflow) {
     /^      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown$/m,
     "parser wasm gate missing"
   );
-  assert.match(
-    job,
-    /^          if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then\n            base="\$PR_BASE_SHA"\n          else\n            base="\$BEFORE_SHA"\n          fi$/m,
-    "event-specific changed-range base selection missing"
-  );
-  assert.match(
-    job,
-    /^          if ! git cat-file -e "\$\{base\}\^\{commit\}" 2>\/dev\/null; then\n            base="\$\(git rev-list --max-parents=0 HEAD\)"\n          fi$/m,
-    "unavailable changed-range base fallback missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          else\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          fi$/m,
-    "range whitespace gate must compare every no-parent base from the empty tree"
+  assert.equal(
+    changedRangeStep(job),
+    expectedChangedRangeStep,
+    "changed-range whitespace step must match the complete executable contract"
   );
 }
 
@@ -123,9 +145,29 @@ test("source-quality requirements reject bypasses", async () => {
     '        run: |\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
     '        run: |\n          exit 0\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
   );
+  const softFailingJob = workflow.replace(
+    /^  source-quality:\n/m,
+    "  source-quality:\n    continue-on-error: true\n"
+  );
+  const inlineExit = workflow.replace(
+    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '          if true; then exit 0; fi\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
+  const commentedExit = workflow.replace(
+    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '          # exit 0\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
+  const quotedExitMention = workflow.replace(
+    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '          # "exit 0"\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
 
   assert.throws(() => assertSourceQualityRequirements(disabledJob));
   assert.throws(() => assertSourceQualityRequirements(disabledFormatting));
   assert.throws(() => assertSourceQualityRequirements(softFailingWasm));
   assert.throws(() => assertSourceQualityRequirements(earlyExit));
+  assert.throws(() => assertSourceQualityRequirements(softFailingJob));
+  assert.throws(() => assertSourceQualityRequirements(inlineExit));
+  assert.doesNotThrow(() => assertSourceQualityRequirements(commentedExit));
+  assert.doesNotThrow(() => assertSourceQualityRequirements(quotedExitMention));
 });
