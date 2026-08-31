@@ -4,9 +4,9 @@ use crate::dsregcmd::models::{
 use crate::intune::models::IntuneDiagnosticSeverity;
 
 use super::derive::{
-    aggregated_error_text, contains_text, derive_facts, equals_text, has_code, is_failure,
-    is_failure_text, is_missing, issue, push_test_failure, render_bool, render_optional,
-    render_phase_code_evidence,
+    aggregated_error_text, contains_text, contains_win32_code, derive_facts, equals_text, has_code,
+    is_failure, is_failure_text, is_missing, issue, push_test_failure, render_bool,
+    render_optional, render_phase_code_evidence,
 };
 
 // Re-export public items that external callers depend on.
@@ -744,17 +744,22 @@ fn build_diagnostics(
         ));
     }
 
-    if contains_text(&facts.registration.server_error_description, "aadsts50126") {
+    if contains_text(&facts.registration.server_error_description, "aadsts50126")
+        || contains_text(&facts.registration.server_message, "aadsts50126")
+    {
         diagnostics.push(issue(
             "aadsts50126-detailed",
             IntuneDiagnosticSeverity::Error,
             "credentials",
             "Server error description reports AADSTS50126",
             "The detailed server error description indicates invalid username or password during authentication.",
-            vec![render_optional(
-                "Server Error Description",
-                &facts.registration.server_error_description,
-            )],
+            vec![
+                render_optional("Server Message", &facts.registration.server_message),
+                render_optional(
+                    "Server Error Description",
+                    &facts.registration.server_error_description,
+                ),
+            ],
             vec![
                 "Compare the user identity in dsregcmd with the expected sign-in account.".to_string(),
                 "Review conditional access or federation prompts that may have redirected the flow.".to_string(),
@@ -850,7 +855,9 @@ fn build_diagnostics(
         ));
     }
 
-    if aggregated_errors.contains("1312") || aggregated_errors.contains("1317") {
+    if contains_win32_code(&aggregated_errors, 1312)
+        || contains_win32_code(&aggregated_errors, 1317)
+    {
         diagnostics.push(issue(
             "ad-replication-issue",
             IntuneDiagnosticSeverity::Error,
@@ -944,21 +951,6 @@ fn build_diagnostics(
                 "Review whether the user is fully signed in to Windows with a work account.".to_string(),
             ],
             vec!["Refresh the account session or sign in again to restore WAM defaults.".to_string()],
-        ));
-    }
-
-    if contains_text(&facts.registration.server_message, "aadsts50126") {
-        diagnostics.push(issue(
-            "aadsts50126",
-            IntuneDiagnosticSeverity::Warning,
-            "credentials",
-            "Server message reports AADSTS50126",
-            "The high-level server message indicates invalid credentials or an authentication mismatch.",
-            vec![render_optional("Server Message", &facts.registration.server_message)],
-            vec![
-                "Compare the user identity, credential type, and endpoint URI in the diagnostics block.".to_string(),
-            ],
-            vec!["Retry sign-in with the correct account and credentials.".to_string()],
         ));
     }
 
@@ -1381,32 +1373,6 @@ fn build_diagnostics(
         }
     }
 
-    // Enhanced SCP heuristic — SCP tenant mismatch hint
-    if is_failure(&facts.pre_join_tests.drs_discovery_test)
-        && is_failure(&facts.pre_join_tests.ad_configuration_test)
-        && facts.tenant_details.tenant_id.is_some()
-    {
-        diagnostics.push(issue(
-            "scp-tenant-mismatch-hint",
-            IntuneDiagnosticSeverity::Warning,
-            "configuration",
-            "Check SCP tenant alignment after migration or reconfiguration",
-            "Both DRS discovery and AD configuration tests failed while tenant details are present. This pattern can occur when the SCP points to a different tenant than expected, such as after a tenant migration or domain reconfiguration.",
-            vec![
-                render_optional("DRS Discovery Test", &facts.pre_join_tests.drs_discovery_test),
-                render_optional("AD Configuration Test", &facts.pre_join_tests.ad_configuration_test),
-                render_optional("TenantId", &facts.tenant_details.tenant_id),
-            ],
-            vec![
-                "Compare the tenant ID in the SCP with the expected target tenant.".to_string(),
-                "Check if the organization recently migrated tenants or reconfigured hybrid join.".to_string(),
-            ],
-            vec![
-                "Update the SCP to point to the correct tenant domain and re-run Azure AD Connect.".to_string(),
-            ],
-        ));
-    }
-
     diagnostics
 }
 
@@ -1545,7 +1511,6 @@ mod tests {
             "ad-connectivity-failed",
             "invalid-credentials",
             "aadsts50126-detailed",
-            "aadsts50126",
             "network-issue",
             "stale-prt",
             "no-tpm-protection",
@@ -1935,53 +1900,6 @@ mod tests {
     }
 
     #[test]
-    fn emits_scp_tenant_mismatch_hint_when_both_tests_fail() {
-        let sample = r#"
- AzureAdJoined : NO
- DomainJoined : YES
- WorkplaceJoined : NO
- TenantId : 11111111-2222-3333-4444-555555555555
- AzureAdPrt : NO
- DRS Discovery Test : FAIL [0x801c0021]
- AD Configuration Test : FAIL [0x801c001d]
-"#;
-        let facts = parse_dsregcmd(sample).expect("parse tenant mismatch sample");
-        let analysis = analyze_facts(facts, sample);
-        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
-
-        assert!(
-            ids.contains(&"scp-tenant-mismatch-hint"),
-            "missing scp-tenant-mismatch-hint"
-        );
-        let rule = analysis
-            .diagnostics
-            .iter()
-            .find(|i| i.id == "scp-tenant-mismatch-hint")
-            .unwrap();
-        assert_eq!(rule.severity, IntuneDiagnosticSeverity::Warning);
-    }
-
-    #[test]
-    fn does_not_emit_scp_tenant_mismatch_without_tenant_id() {
-        let sample = r#"
- AzureAdJoined : NO
- DomainJoined : YES
- WorkplaceJoined : NO
- AzureAdPrt : NO
- DRS Discovery Test : FAIL [0x801c0021]
- AD Configuration Test : FAIL [0x801c001d]
-"#;
-        let facts = parse_dsregcmd(sample).expect("parse no tenant sample");
-        let analysis = analyze_facts(facts, sample);
-        let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
-
-        assert!(
-            !ids.contains(&"scp-tenant-mismatch-hint"),
-            "should not fire without tenant ID"
-        );
-    }
-
-    #[test]
     fn mdm_confirmed_via_registry_diagnostic_fires_when_cross_referenced() {
         use super::{apply_enrollment_cross_reference, build_extended_diagnostics};
         use crate::dsregcmd::models::{
@@ -2104,6 +2022,197 @@ mod tests {
                 .iter()
                 .any(|d| d.id == "enrollment-missing-on-joined"),
             "enrollment-missing-on-joined should be suppressed when cross-reference confirms MDM"
+        );
+    }
+    #[test]
+    fn scp_not_found_suppressed_when_scp_query_errored() {
+        use super::build_active_diagnostics_rules;
+        use crate::dsregcmd::models::{DsregcmdActiveEvidence, DsregcmdScpQueryResult};
+
+        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        result.facts.join_state.domain_joined = Some(true);
+        result.active_evidence = Some(DsregcmdActiveEvidence {
+            connectivity_tests: Vec::new(),
+            scp_query: Some(DsregcmdScpQueryResult {
+                scp_found: false,
+                tenant_domain: None,
+                azuread_id: None,
+                keywords: Vec::new(),
+                domain_controller: None,
+                error: Some("Get-ADForest is not available on this device".to_string()),
+            }),
+        });
+
+        let extended = build_active_diagnostics_rules(&result);
+        assert!(
+            !extended.iter().any(|d| d.id == "scp-not-found"),
+            "scp-not-found must not fire when the SCP query itself failed"
+        );
+    }
+
+    #[test]
+    fn stale_prt_not_derived_without_client_time() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+
+        assert_eq!(analysis.derived.prt_age_hours, None);
+        assert_eq!(analysis.derived.stale_prt, None);
+        assert_eq!(analysis.derived.certificate_days_remaining, None);
+    }
+
+    #[test]
+    fn ad_replication_rule_does_not_match_substring_codes() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 0x80071312
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            !analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "0x80071312 must not match the 1312 replication rule"
+        );
+    }
+
+    #[test]
+    fn ad_replication_rule_fires_on_exact_1312_token() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 1312
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "exact 1312 token should fire the replication rule"
+        );
+    }
+
+    #[test]
+    fn has_code_matches_ad_connectivity_test_field() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ AD Connectivity Test : FAIL [0xcaa90017]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "adal-protocol-not-supported"),
+            "ADAL codes in AD Connectivity Test should match has_code rules"
+        );
+    }
+
+    #[test]
+    fn certificate_validity_with_single_timestamp_not_parsed_as_expiry() {
+        let sample = r#"
+ AzureAdJoined : YES
+ DomainJoined : NO
+ AzureAdPrt : YES
+ DeviceCertificateValidity : [ 2025-03-01 00:00:00.000 UTC -- ]
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert_eq!(analysis.derived.certificate_valid_from, None);
+        assert_eq!(analysis.derived.certificate_valid_to, None);
+    }
+
+    #[test]
+    fn aadsts50126_fires_from_server_message_alone() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server Message : AADSTS50126 Invalid username or password
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "aadsts50126-detailed"),
+            "server message AADSTS50126 should fire the detailed rule"
+        );
+    }
+
+    #[test]
+    fn time_skew_rule_requires_time_specific_messages() {
+        use super::build_event_log_diagnostics;
+        use crate::intune::models::{
+            EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry,
+            EventLogSeverity,
+        };
+
+        let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        result.event_log_analysis = Some(EventLogAnalysis {
+            source_kind: EventLogAnalysisSource::Bundle,
+            entries: vec![EventLogEntry {
+                id: 1,
+                channel: EventLogChannel::SystemLog,
+                channel_display: "System".to_string(),
+                provider: "SomeProvider".to_string(),
+                event_id: 100,
+                severity: EventLogSeverity::Warning,
+                timestamp: "2026-01-01T00:00:00.000Z".to_string(),
+                computer: None,
+                message: "The service clocked a new request".to_string(),
+                correlation_activity_id: None,
+                source_file: "System.evtx".to_string(),
+            }],
+            channel_summaries: Vec::new(),
+            correlation_links: Vec::new(),
+            parsed_file_count: 1,
+            total_entry_count: 1,
+            error_entry_count: 0,
+            warning_entry_count: 1,
+            timestamp_bounds: None,
+            live_query: None,
+        });
+
+        let extended = build_event_log_diagnostics(&result);
+        assert!(
+            !extended.iter().any(|d| d.id == "event-log-time-skew"),
+            "a System entry mentioning 'clock' without time-sync context must not fire the rule"
+        );
+    }
+
+    #[test]
+    fn pre_join_failures_dominate_prt_fields_on_not_joined_device() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+ Attempt Status : 0xc000006d
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert_eq!(
+            analysis.derived.dominant_phase,
+            DsregcmdDiagnosticPhase::Discover
         );
     }
 }

@@ -328,7 +328,7 @@ pub fn build_active_diagnostics_rules(
     if let Some(scp) = active.scp_query.as_ref() {
         let is_domain_joined = result.facts.join_state.domain_joined == Some(true);
 
-        if !scp.scp_found && is_domain_joined {
+        if !scp.scp_found && is_domain_joined && scp.error.is_none() {
             diagnostics.push(issue(
                 "scp-not-found",
                 IntuneDiagnosticSeverity::Error,
@@ -400,8 +400,7 @@ pub fn build_event_log_diagnostics(
         let message_lower = e.message.to_ascii_lowercase();
         (channel_display.contains("time service") || channel_display.contains("system"))
             && (message_lower.contains("time skew")
-                || message_lower.contains("time synchronization")
-                || message_lower.contains("clock"))
+                || message_lower.contains("time synchronization"))
     });
 
     if time_sync_errors && has_join_failures {

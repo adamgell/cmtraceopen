@@ -75,6 +75,16 @@ pub fn analyze_dsregcmd(
     extended.append(&mut rules::build_event_log_diagnostics(&result));
     result.diagnostics.append(&mut extended);
 
+    // A specific endpoint-unreachable rule is stronger evidence than the
+    // generic network marker warning; drop the generic one when it fired.
+    if result
+        .diagnostics
+        .iter()
+        .any(|d| d.id.starts_with("endpoint-unreachable-"))
+    {
+        result.diagnostics.retain(|d| d.id != "network-issue");
+    }
+
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
         result.diagnostics.len(),
@@ -93,15 +103,36 @@ fn load_active_evidence_from_bundle(
     let scp_path = connectivity_dir.join("scp-query.json");
 
     let connectivity_tests: Vec<crate::dsregcmd::DsregcmdConnectivityResult> =
-        std::fs::read_to_string(&tests_path)
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default();
+        match std::fs::read_to_string(&tests_path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(tests) => tests,
+                Err(error) => {
+                    log::warn!(
+                        "event=dsregcmd_connectivity_tests_parse_failed path={} error={}",
+                        tests_path.display(),
+                        error
+                    );
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        };
 
     let scp_query: Option<crate::dsregcmd::DsregcmdScpQueryResult> =
-        std::fs::read_to_string(&scp_path)
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok());
+        match std::fs::read_to_string(&scp_path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(query) => Some(query),
+                Err(error) => {
+                    log::warn!(
+                        "event=dsregcmd_scp_query_parse_failed path={} error={}",
+                        scp_path.display(),
+                        error
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
 
     if connectivity_tests.is_empty() && scp_query.is_none() {
         return None;
@@ -120,9 +151,20 @@ fn load_event_log_from_bundle(
         .join("evidence")
         .join("event-logs")
         .join("dsregcmd-events.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(analysis) => Some(analysis),
+            Err(error) => {
+                log::warn!(
+                    "event=dsregcmd_event_log_parse_failed path={} error={}",
+                    path.display(),
+                    error
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
 }
 
 fn load_scheduled_task_evidence_from_bundle(
@@ -132,9 +174,20 @@ fn load_scheduled_task_evidence_from_bundle(
         .join("evidence")
         .join("scheduled-tasks")
         .join("enterprise-mgmt-tasks.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(evidence) => Some(evidence),
+            Err(error) => {
+                log::warn!(
+                    "event=dsregcmd_scheduled_tasks_parse_failed path={} error={}",
+                    path.display(),
+                    error
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
 }
 
 #[tauri::command]
@@ -719,6 +772,8 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), crate::error::A
         pg_known_subject: null(),
     };
 
+    // WTD_REVOKE_NONE: no revocation network check. Acceptable for a local
+    // signed system binary; keeps verification offline and deterministic.
     let mut trust_data = WinTrustData {
         cb_struct: std::mem::size_of::<WinTrustData>() as u32,
         p_policy_callback_data: null_mut(),
@@ -1095,5 +1150,44 @@ mod tests {
     fn capture_command_returns_clear_error_on_unsupported_platform() {
         let error = capture_dsregcmd().expect_err("expected unsupported platform error");
         assert!(error.to_string().contains("only supported on Windows"));
+    }
+    #[test]
+    fn network_issue_suppressed_when_endpoint_unreachable_diagnostic_present() {
+        use super::analyze_dsregcmd;
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let connectivity_dir = temp_dir.path().join("evidence").join("connectivity");
+        std::fs::create_dir_all(&connectivity_dir).expect("create connectivity dir");
+        std::fs::write(
+            connectivity_dir.join("endpoint-tests.json"),
+            r#"[{"endpoint":"https://enterpriseregistration.windows.net","reachable":false,"statusCode":null,"latencyMs":100,"errorMessage":"timeout","timestamp":"2026-01-01T00:00:00Z"}]"#,
+        )
+        .expect("write endpoint tests");
+
+        let input = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+ Server Message : ERROR_WINHTTP_TIMEOUT
+"#;
+
+        let result = analyze_dsregcmd(
+            input.to_string(),
+            Some(temp_dir.path().to_string_lossy().to_string()),
+        )
+        .expect("analyze dsregcmd");
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "endpoint-unreachable-drs"),
+            "endpoint-unreachable-drs should fire for the unreachable DRS endpoint"
+        );
+        assert!(
+            !result.diagnostics.iter().any(|d| d.id == "network-issue"),
+            "network-issue should be suppressed when a specific endpoint rule fired"
+        );
     }
 }

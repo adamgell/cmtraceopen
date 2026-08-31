@@ -23,18 +23,17 @@ function channelKey(channel: EventLogChannel): string {
 }
 
 function formatTimestamp(iso: string): string {
-  try {
-    const date = new Date(iso);
-    return date.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
     return iso;
   }
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function getFileName(path: string): string {
@@ -86,15 +85,15 @@ export function DsregcmdEventLogSurface({ eventLogAnalysis }: DsregcmdEventLogSu
   const uniqueChannels = useMemo(() => {
     const seen = new Set<string>();
     const channels: { key: string; display: string }[] = [];
-    for (const entry of eventLogAnalysis.entries) {
-      const key = channelKey(entry.channel);
+    for (const summary of eventLogAnalysis.channelSummaries) {
+      const key = channelKey(summary.channel);
       if (!seen.has(key)) {
         seen.add(key);
-        channels.push({ key, display: entry.channelDisplay });
+        channels.push({ key, display: summary.channelDisplay });
       }
     }
     return channels;
-  }, [eventLogAnalysis.entries]);
+  }, [eventLogAnalysis.channelSummaries]);
 
   if (eventLogAnalysis.entries.length === 0) {
     return (

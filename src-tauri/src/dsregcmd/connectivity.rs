@@ -60,8 +60,10 @@ pub fn test_endpoint_connectivity() -> Vec<DsregcmdConnectivityResult> {
 #[cfg(target_os = "windows")]
 pub fn query_scp() -> DsregcmdScpQueryResult {
     let mut result = DsregcmdScpQueryResult::default();
+    let mut nltest_error: Option<String> = None;
 
-    // Try to find a domain controller via nltest
+    // Try to find a domain controller via nltest. Failure here is not fatal:
+    // the PowerShell SCP query below can still succeed without a DC name.
     let dc_output = crate::process_util::hidden_command("nltest")
         .arg("/dsgetdc:")
         .output();
@@ -86,7 +88,7 @@ pub fn query_scp() -> DsregcmdScpQueryResult {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let exit_code = output.status.code().unwrap_or_default();
-            result.error = Some(format!(
+            nltest_error = Some(format!(
                 "nltest /dsgetdc: failed (exit code {}): {}",
                 exit_code,
                 if stderr.is_empty() {
@@ -95,11 +97,9 @@ pub fn query_scp() -> DsregcmdScpQueryResult {
                     &stderr
                 }
             ));
-            return result;
         }
         Err(e) => {
-            result.error = Some(format!("nltest not available: {e}"));
-            return result;
+            nltest_error = Some(format!("nltest not available: {e}"));
         }
     }
 
@@ -154,10 +154,16 @@ try {
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            result.error = Some(format!("PowerShell SCP query failed: {stderr}"));
+            result.error = Some(match nltest_error {
+                Some(nltest) => format!("{nltest}; PowerShell SCP query failed: {stderr}"),
+                None => format!("PowerShell SCP query failed: {stderr}"),
+            });
         }
         Err(e) => {
-            result.error = Some(format!("PowerShell not available: {e}"));
+            result.error = Some(match nltest_error {
+                Some(nltest) => format!("{nltest}; PowerShell not available: {e}"),
+                None => format!("PowerShell not available: {e}"),
+            });
         }
     }
 

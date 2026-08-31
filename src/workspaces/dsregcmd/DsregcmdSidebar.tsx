@@ -1,6 +1,7 @@
 import { tokens } from "@fluentui/react-components";
 import { useDsregcmdStore } from "./dsregcmd-store";
 import { useAppActions } from "../../hooks/use-app-actions";
+import type { DsregcmdSeverity } from "./types";
 import {
   EmptyState,
   SectionHeader,
@@ -24,6 +25,16 @@ export function DsregcmdSidebar() {
   const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
   const warningCount = diagnostics.filter((item) => item.severity === "Warning").length;
   const infoCount = diagnostics.filter((item) => item.severity === "Info").length;
+function severityRank(severity: DsregcmdSeverity): number {
+  switch (severity) {
+    case "Error":
+      return 0;
+    case "Warning":
+      return 1;
+    case "Info":
+      return 2;
+  }
+}
 
   return (
     <>
@@ -84,7 +95,13 @@ export function DsregcmdSidebar() {
             {diagnostics.length === 0 ? (
               <EmptyState title="No diagnostics" body="The backend parser did not emit diagnostic findings for this capture." />
             ) : (
-              diagnostics.slice(0, 8).map((item) => (
+              [...diagnostics]
+                .sort(
+                  (left, right) =>
+                    severityRank(left.severity) - severityRank(right.severity),
+                )
+                .slice(0, 8)
+                .map((item) => (
                 <div key={item.id} style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: item.severity === 'Error' ? tokens.colorPaletteRedBackground1 : item.severity === 'Warning' ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2 }}>
                   <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? tokens.colorPaletteRedForeground2 : item.severity === 'Warning' ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteBlueForeground2 }}>{item.severity}</div>
                   <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{item.title}</div>
