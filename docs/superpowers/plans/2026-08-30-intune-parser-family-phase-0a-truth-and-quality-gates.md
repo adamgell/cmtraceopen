@@ -62,10 +62,14 @@ set -euo pipefail
 git fetch --prune origin
 execution_base="$(git rev-parse origin/main)"
 remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-planning_head="$(git ls-remote origin refs/heads/codex/issue356-epic-closeout-20260829 | awk '{print $1}')"
+verified_planning_head=1b2d06b6b57b88b5cab29e03fc7858cbe6dcc2ae
+remote_planning_head="$(git ls-remote origin refs/heads/codex/issue356-epic-closeout-20260829 | awk '{print $1}')"
 test "$execution_base" = "$remote_main"
-git merge-base --is-ancestor 59679c06b5dd1f5d59849a14d527f4b262b30a1c "$planning_head"
-planning_commits="$(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head")"
+test "$remote_planning_head" = "$verified_planning_head"
+git cat-file -e "${verified_planning_head}^{commit}"
+git merge-base --is-ancestor 59679c06b5dd1f5d59849a14d527f4b262b30a1c "$verified_planning_head"
+planning_commits="$(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$verified_planning_head")"
+test -n "$planning_commits"
 planning_paths="$(
   while IFS= read -r commit; do
     git diff-tree --no-commit-id --name-only -r -m "$commit" || exit 1
@@ -80,15 +84,17 @@ diff -u \
 )
 ```
 
-Expected: local and remote `main` are identical, the planning head descends from the audited baseline, and every commit in the planning range touches only the spec, ADR, and this plan.
+Expected: local and remote `main` are identical; the planning branch resolves once
+to accepted immutable SHA `1b2d06b6b57b88b5cab29e03fc7858cbe6dcc2ae`; that
+literal is a commit descending from the audited baseline; and every commit in
+that exact range touches only the spec, ADR, and this plan.
 
 - [ ] **Step 2: Import only the approved documentation history**
 
 Run:
 
 ```bash
-planning_head="$(git ls-remote origin refs/heads/codex/issue356-epic-closeout-20260829 | awk '{print $1}')"
-git cherry-pick 59679c06b5dd1f5d59849a14d527f4b262b30a1c.."$planning_head"
+git cherry-pick 59679c06b5dd1f5d59849a14d527f4b262b30a1c..1b2d06b6b57b88b5cab29e03fc7858cbe6dcc2ae
 git diff --name-only origin/main...HEAD | sort
 ```
 
@@ -140,18 +146,34 @@ Run:
 ```bash
 (
 set -euo pipefail
-issue_body="$(gh issue view 356 --repo adamgell/cmtraceopen --json body --jq .body)"
-test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #357([^0-9]|$)')" = 1
-test "$(printf '%s\n' "$issue_body" | rg -c -- '- \[ \] #363([^0-9]|$)')" = 1
-updated_body="$(printf '%s\n' "$issue_body" \
-  | sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #363\1/')"
-test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #357([^0-9]|$)')" = 1
-test "$(printf '%s\n' "$updated_body" | rg -c -- '- \[x\] #363([^0-9]|$)')" = 1
-printf '%s\n' "$updated_body" | gh issue edit 356 --repo adamgell/cmtraceopen --body-file -
+: "${ISSUE_356_BODY_EDIT_LEASE:?repository owner must hold the exclusive issue #356 body-edit lease}"
+test "$ISSUE_356_BODY_EDIT_LEASE" = repository-owner-held-exclusive
+original_body_file="$(mktemp)"
+updated_body_file="$(mktemp)"
+prewrite_body_file="$(mktemp)"
+postwrite_body_file="$(mktemp)"
+gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$original_body_file"
+test "$(rg -c -- '- \[ \] #357([^0-9]|$)' "$original_body_file")" = 1
+test "$(rg -c -- '- \[ \] #363([^0-9]|$)' "$original_body_file")" = 1
+sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #363\1/' \
+  "$original_body_file" > "$updated_body_file"
+test "$(rg -c -- '- \[x\] #357([^0-9]|$)' "$updated_body_file")" = 1
+test "$(rg -c -- '- \[x\] #363([^0-9]|$)' "$updated_body_file")" = 1
+gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$prewrite_body_file"
+cmp -s "$original_body_file" "$prewrite_body_file"
+jq -Rs '{body: .}' "$updated_body_file" \
+  | gh api --method PATCH repos/adamgell/cmtraceopen/issues/356 --input - >/dev/null
+gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$postwrite_body_file"
+cmp -s "$updated_body_file" "$postwrite_body_file"
 )
 ```
 
-Expected: GitHub reports issue #356 updated and no other issue-body text changes.
+`ISSUE_356_BODY_EDIT_LEASE=repository-owner-held-exclusive` means the repository
+owner has exclusively reserved issue #356 body editing for this operation.
+GitHub does not support conditional unsafe `PATCH` requests for this endpoint,
+so the lease plus exact immediate pre-write and post-write byte comparisons is
+the required serialization path. Expected: the stale pre-write check succeeds,
+GitHub updates #356, and the post-write body exactly matches `updated_body`.
 
 - [ ] **Step 3: Verify the corrected body against live state**
 
@@ -236,10 +258,25 @@ failed_comment_marker="$(
   ' 2>/dev/null || true
 )"
 test -z "$failed_comment_marker"
+
+changed_prewrite_marker="$(
+  bash -c '
+    set -euo pipefail
+    original_body_file="$(mktemp)"
+    prewrite_body_file="$(mktemp)"
+    printf original > "$original_body_file"
+    printf changed > "$prewrite_body_file"
+    if cmp -s "$original_body_file" "$prewrite_body_file"; then
+      printf edit-reached
+    fi
+  '
+)"
+test -z "$changed_prewrite_marker"
 ```
 
 Expected: both assertions exit `0`. A failed precondition read prevents the
-edit marker, and a failed earlier child comment prevents all later loop work.
+edit marker, a changed pre-write body prevents the edit marker, and a failed
+earlier child comment prevents all later loop work.
 
 ### Task 3: Establish the Mechanical Rustfmt Baseline
 
