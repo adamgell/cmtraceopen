@@ -3,7 +3,29 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
-const expectedChangedRangeStep = `      - name: Changed-range whitespace
+const expectedSourceQualityJob = `  source-quality:
+    name: Source Quality (fmt / wasm / whitespace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pinned Rust quality toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Parser wasm portability
+        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+
+      - name: Changed-range whitespace
         env:
           BEFORE_SHA: \${{ github.event.before }}
           PR_BASE_SHA: \${{ github.event.pull_request.base.sha }}
@@ -50,52 +72,14 @@ function sourceQualityJob(workflow) {
     }
   }
 
-  return jobLines.join("\n");
-}
-
-function changedRangeStep(job) {
-  const stepStart = job.match(/^      - name: Changed-range whitespace\n/m);
-  assert.ok(stepStart, "changed-range whitespace step missing");
-
-  return job
-    .slice(stepStart.index)
-    .split("\n")
-    .filter((line) => !/^[ \t]*#/.test(line))
-    .join("\n");
+  return sourceQuality[0] + jobLines.join("\n");
 }
 
 function assertSourceQualityRequirements(workflow) {
-  const job = sourceQualityJob(workflow);
-
-  assert.match(job, /^    steps:\n/m, "source-quality steps missing");
-  assert.doesNotMatch(job, /^    if:/m, "source-quality job must not be conditional");
-  assert.doesNotMatch(job, /^    continue-on-error:/m, "source-quality job must not soften failures");
-  assert.doesNotMatch(job, /^        if:/m, "source-quality steps must not be conditional");
-  assert.doesNotMatch(job, /^        continue-on-error:/m, "source-quality steps must not soften failures");
-  assert.match(
-    job,
-    /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
-    "full-history credential-free checkout missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Setup pinned Rust quality toolchain\n        uses: dtolnay\/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: "1\.92\.0"\n          components: rustfmt\n          targets: wasm32-unknown-unknown$/m,
-    "pinned rustfmt and wasm toolchain missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Rust formatting\n        run: cargo fmt --all -- --check$/m,
-    "format gate missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown$/m,
-    "parser wasm gate missing"
-  );
   assert.equal(
-    changedRangeStep(job),
-    expectedChangedRangeStep,
-    "changed-range whitespace step must match the complete executable contract"
+    sourceQualityJob(workflow),
+    expectedSourceQualityJob,
+    "source-quality job must match the complete ordered executable contract"
   );
 }
 
@@ -153,13 +137,13 @@ test("source-quality requirements reject bypasses", async () => {
     '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
     '          if true; then exit 0; fi\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
   );
-  const commentedExit = workflow.replace(
-    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
-    '          # exit 0\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  const customShell = workflow.replace(
+    "    steps:\n",
+    "    defaults:\n      run:\n        shell: bash -c 'bash \"$1\"; exit 0' _ {0}\n    steps:\n"
   );
-  const quotedExitMention = workflow.replace(
-    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
-    '          # "exit 0"\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  const bashEnvBypass = workflow.replace(
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    "      - name: Disable later shell failures\n        run: |\n          printf 'exit 0\\n' > \"$GITHUB_WORKSPACE/skip.sh\"\n          printf 'BASH_ENV=%s/skip.sh\\n' \"$GITHUB_WORKSPACE\" >> \"$GITHUB_ENV\"\n\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
   );
 
   assert.throws(() => assertSourceQualityRequirements(disabledJob));
@@ -168,6 +152,6 @@ test("source-quality requirements reject bypasses", async () => {
   assert.throws(() => assertSourceQualityRequirements(earlyExit));
   assert.throws(() => assertSourceQualityRequirements(softFailingJob));
   assert.throws(() => assertSourceQualityRequirements(inlineExit));
-  assert.doesNotThrow(() => assertSourceQualityRequirements(commentedExit));
-  assert.doesNotThrow(() => assertSourceQualityRequirements(quotedExitMention));
+  assert.throws(() => assertSourceQualityRequirements(customShell));
+  assert.throws(() => assertSourceQualityRequirements(bashEnvBypass));
 });
