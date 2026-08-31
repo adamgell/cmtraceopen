@@ -49,7 +49,7 @@ in that exact five-lane family use the lower private grammar. Microsoft Store,
 Autopilot, ESP, Company Portal, macOS, Android, and iOS retain their proven
 workload grammar. #366 shares only the context and derivation with the first
 consumer slice; it continues to use its existing ESP-derived text vocabulary.
-Any later grammar convergence requires observed corpora, byte-parity tests, and
+Any later grammar convergence requires corpora collected from observed runs, byte-parity tests, and
 an explicit ownership decision in that leaf. Workload-local projections
 continue to own sensitivity classification.
 
