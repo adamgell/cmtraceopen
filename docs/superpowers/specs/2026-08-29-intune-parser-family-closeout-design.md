@@ -1017,15 +1017,16 @@ accepted_docs=(
 em_dash="$(printf '\342\200\224')"
 en_dash="$(printf '\342\200\223')"
 protocol="$(sed -n '/^Each planned native target is built and executed/,/^### Native ignored-test contract self-check$/p' "$design")"
+normalized_protocol="$(printf '%s\n' "$protocol" | tr '\n' ' ' | tr -s ' ')"
 printf '%s\n' "$protocol" | rg -F -- '--list --format terse'
 printf '%s\n' "$protocol" | rg -F -- '--list --ignored --format terse'
 printf '%s\n' "$protocol" | rg -F -- 'complete list is non-empty'
 printf '%s\n' "$protocol" | rg -F -- 'ignored list equals the complete list exactly'
 printf '%s\n' "$protocol" | rg -F -- '#[ignore = "native acceptance runner only"]'
-printf '%s\n' "$protocol" | rg -F -- '<target> means only the native `cmtrace-open` acceptance'
-printf '%s\n' "$protocol" | rg -F -- 'It never names the focused pure `cmtraceopen-parser` target in the second column.'
-printf '%s\n' "$protocol" | rg -F -- 'Focused gates run separately exactly as shown in that second column under `-p cmtraceopen-parser`.'
-printf '%s\n' "$protocol" | rg -F -- 'Native artifact resolution remains `-p cmtrace-open --features full`.'
+printf '%s\n' "$normalized_protocol" | rg -F -- '`<target>` means only the native `cmtrace-open` acceptance integration-test target named in the fourth closure-ledger table column, such as `intune_issue_354_acceptance`.'
+printf '%s\n' "$normalized_protocol" | rg -F -- 'It never names the focused pure `cmtraceopen-parser` target in the second column.'
+printf '%s\n' "$normalized_protocol" | rg -F -- 'Focused gates run separately exactly as shown in that second column under `-p cmtraceopen-parser`.'
+printf '%s\n' "$normalized_protocol" | rg -F -- 'Native artifact resolution remains `-p cmtrace-open --features full`.'
 planned_rows="$(rg '^\| #(361|365|369|371) \|' "$design")"
 test "$(printf '%s\n' "$planned_rows" | wc -l | tr -d ' ')" = 4
 for doc in "${accepted_docs[@]}"; do

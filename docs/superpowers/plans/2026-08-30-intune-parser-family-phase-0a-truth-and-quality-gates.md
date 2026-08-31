@@ -182,23 +182,44 @@ Run:
 ```bash
 (
 set -euo pipefail
+expected_all_ids=$'354\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372'
+expected_checked_ids=$'357\n358\n359\n360\n362\n363\n364\n366\n367\n368\n370\n372'
+expected_unchecked_ids=$'354\n361\n365\n369\n371'
+
+assert_tracker_sets() {
+  local body_file="$1"
+  local tracker_lines all_ids checked_ids unchecked_ids
+  tracker_lines="$(rg '^\s*- \[[ x]\] #[0-9]+' "$body_file")"
+  all_ids="$(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[[ x]\][[:space:]]+#([0-9]+).*/\1/p' | sort -n)"
+  checked_ids="$(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[x\][[:space:]]+#([0-9]+).*/\1/p' | sort -n)"
+  unchecked_ids="$(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[ \][[:space:]]+#([0-9]+).*/\1/p' | sort -n)"
+  diff -u <(printf '%s\n' "$expected_all_ids") <(printf '%s\n' "$all_ids") || return 1
+  diff -u <(printf '%s\n' "$expected_checked_ids") <(printf '%s\n' "$checked_ids") || return 1
+  diff -u <(printf '%s\n' "$expected_unchecked_ids") <(printf '%s\n' "$unchecked_ids") || return 1
+}
+
+adversarial_body_file="$(mktemp)"
+trap 'rm -f -- "$adversarial_body_file"' EXIT
+printf '%s\n' \
+  '- [x] #357' '- [x] #358' '- [x] #359' '- [x] #360' '- [x] #362' '- [x] #363' \
+  '- [x] #364' '- [x] #366' '- [x] #367' '- [x] #368' '- [x] #370' '- [x] #358' \
+  '- [ ] #354' '- [ ] #361' '- [ ] #365' '- [ ] #369' '- [ ] #371' > "$adversarial_body_file"
+if assert_tracker_sets "$adversarial_body_file"; then
+  echo 'duplicate/bogus tracker fixture unexpectedly passed' >&2
+  exit 1
+fi
+
 server_body_file="$(mktemp)"
 gh api repos/adamgell/cmtraceopen/issues/356 | jq -jr .body > "$server_body_file"
-tracker_lines="$(rg '^\s*- \[[ x]\] #[0-9]+' "$server_body_file")"
-test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[[ x]\] #[0-9]+')" = 17
-test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[x\] #[0-9]+')" = 12
-test "$(printf '%s\n' "$tracker_lines" | rg -c '^\s*- \[ \] #[0-9]+')" = 5
-test "$(rg -c -- '- \[x\] #357([^0-9]|$)' "$server_body_file")" = 1
-test "$(rg -c -- '- \[x\] #363([^0-9]|$)' "$server_body_file")" = 1
-diff -u \
-  <(printf '%s\n' 354 361 365 369 371) \
-  <(printf '%s\n' "$tracker_lines" | sed -nE 's/^[[:space:]]*-[[:space:]]+\[ \][[:space:]]+#([0-9]+).*/\1/p' | sort -n)
+assert_tracker_sets "$server_body_file"
 )
 ```
 
-Expected: this read-only server-body verification confirms exactly 12 entries
-are `[x]`, only #354, #361, #365, #369, and #371 remain `[ ]`, and the server
-records #357 and #363 as the two owner-saved checkbox edits.
+Expected: the duplicate/missing-ID adversarial fixture fails, while this
+read-only server-body verification confirms exactly the complete tracker sets:
+checked #357, #358, #359, #360, #362, #363, #364, #366, #367, #368, #370, and
+#372; unchecked #354, #361, #365, #369, and #371; and no duplicate or
+unexpected tracker ID.
 
 - [ ] **Step 4: Record approval and the acceptance distinction on the epic**
 
@@ -441,6 +462,62 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
+const expectedSourceQualityJob = `  source-quality:
+    name: Source Quality (fmt / wasm / whitespace)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pinned Rust quality toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Parser wasm portability
+        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+
+      - name: Changed-range whitespace
+        env:
+          BEFORE_SHA: \${{ github.event.before }}
+          PR_BASE_SHA: \${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+
+          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if ! git cat-file -e "\${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if git rev-parse --verify "\${base}^" >/dev/null 2>&1; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --check "$base...HEAD"
+            else
+              git diff --check "$base..HEAD"
+            fi
+          else
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          fi
+`;
 
 function assertRequiredTriggers(workflow) {
   assert.match(
@@ -463,47 +540,24 @@ function sourceQualityJob(workflow) {
     }
   }
 
-  return jobLines.join("\n");
+  return sourceQuality[0] + jobLines.join("\n");
+}
+
+function assertWorkflowPreamble(workflow) {
+  const jobsStart = workflow.indexOf("\njobs:\n");
+  assert.notEqual(jobsStart, -1, "workflow jobs missing");
+
+  const preamble = workflow.slice(0, jobsStart);
+  assert.doesNotMatch(preamble, /^defaults:/m, "root workflow defaults are not allowed");
+  assert.doesNotMatch(preamble, /^env:/m, "root workflow environment is not allowed");
 }
 
 function assertSourceQualityRequirements(workflow) {
-  const job = sourceQualityJob(workflow);
-
-  assert.match(job, /^    steps:\n/m, "source-quality steps missing");
-  assert.match(
-    job,
-    /^      - uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false$/m,
-    "full-history credential-free checkout missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Setup pinned Rust quality toolchain\n        uses: dtolnay\/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable\n        with:\n          toolchain: "1\.92\.0"\n          components: rustfmt\n          targets: wasm32-unknown-unknown$/m,
-    "pinned rustfmt and wasm toolchain missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Rust formatting\n        run: cargo fmt --all -- --check$/m,
-    "format gate missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown$/m,
-    "parser wasm gate missing"
-  );
-  assert.match(
-    job,
-    /^          if \[\[ "\$GITHUB_EVENT_NAME" == "pull_request" \]\]; then\n            base="\$PR_BASE_SHA"\n          else\n            base="\$BEFORE_SHA"\n          fi$/m,
-    "event-specific changed-range base selection missing"
-  );
-  assert.match(
-    job,
-    /^          if ! git cat-file -e "\$\{base\}\^\{commit\}" 2>\/dev\/null; then\n            base="\$\(git rev-list --max-parents=0 HEAD\)"\n          fi$/m,
-    "unavailable changed-range base fallback missing"
-  );
-  assert.match(
-    job,
-    /^      - name: Changed-range whitespace\n        env:\n          BEFORE_SHA: \$\{\{ github\.event\.before \}\}\n          PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\n        run: \|\n(?:          .*\n|\n)*          if git rev-parse --verify "\$\{base\}\^" >\/dev\/null 2>&1; then\n            git diff --check "\$base\.\.\.HEAD"\n          else\n            git diff --check "\$\(git hash-object -t tree \/dev\/null\)" HEAD\n          fi$/m,
-    "range whitespace gate must compare every no-parent base from the empty tree"
+  assertWorkflowPreamble(workflow);
+  assert.equal(
+    sourceQualityJob(workflow),
+    expectedSourceQualityJob,
+    "source-quality job must match the complete ordered executable contract"
   );
 }
 
@@ -514,7 +568,7 @@ test("source-quality gates formatting, wasm portability, and the changed range",
   assertSourceQualityRequirements(workflow);
 });
 
-test("source-quality requirements cannot be satisfied outside the job", () => {
+test("source-quality requirements reject bypasses", async () => {
   const inertWorkflow = `jobs:
   source-quality:
     name: Source Quality
@@ -535,6 +589,64 @@ test("source-quality requirements cannot be satisfied outside the job", () => {
 `;
 
   assert.throws(() => assertSourceQualityRequirements(inertWorkflow));
+
+  const workflow = await readFile(workflowUrl, "utf8");
+  const disabledJob = workflow.replace(
+    /^  source-quality:\n/m,
+    "  source-quality:\n    if: ${{ github.repository != 'adamgell/cmtraceopen' }}\n"
+  );
+  const disabledFormatting = workflow.replace(
+    "      - name: Rust formatting\n        run: cargo fmt --all -- --check",
+    "      - name: Rust formatting\n        run: cargo fmt --all -- --check\n        if: false"
+  );
+  const softFailingWasm = workflow.replace(
+    "      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown",
+    "      - name: Parser wasm portability\n        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown\n        continue-on-error: true"
+  );
+  const earlyExit = workflow.replace(
+    '        run: |\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '        run: |\n          exit 0\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
+  const softFailingJob = workflow.replace(
+    /^  source-quality:\n/m,
+    "  source-quality:\n    continue-on-error: true\n"
+  );
+  const inlineExit = workflow.replace(
+    '          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then',
+    '          if true; then exit 0; fi\n          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then'
+  );
+  const customShell = workflow.replace(
+    "    steps:\n",
+    "    defaults:\n      run:\n        shell: bash -c 'bash \"$1\"; exit 0' _ {0}\n    steps:\n"
+  );
+  const bashEnvBypass = workflow.replace(
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    "      - name: Disable later shell failures\n        run: |\n          printf 'exit 0\\n' > \"$GITHUB_WORKSPACE/skip.sh\"\n          printf 'BASH_ENV=%s/skip.sh\\n' \"$GITHUB_WORKSPACE\" >> \"$GITHUB_ENV\"\n\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+  );
+  const rootShell = workflow.replace(
+    "\njobs:\n",
+    "\ndefaults:\n  run:\n    shell: bash -c 'bash \"$1\"; exit 0' _ {0}\n\njobs:\n"
+  );
+  const rootBashEnv = workflow.replace(
+    "\njobs:\n",
+    "\nenv:\n  BASH_ENV: $GITHUB_WORKSPACE/skip.sh\n\njobs:\n"
+  );
+  const pushThreeDotRange = workflow.replace(
+    '            git diff --check "$base..HEAD"',
+    '            git diff --check "$base...HEAD"'
+  );
+
+  assert.throws(() => assertSourceQualityRequirements(disabledJob));
+  assert.throws(() => assertSourceQualityRequirements(disabledFormatting));
+  assert.throws(() => assertSourceQualityRequirements(softFailingWasm));
+  assert.throws(() => assertSourceQualityRequirements(earlyExit));
+  assert.throws(() => assertSourceQualityRequirements(softFailingJob));
+  assert.throws(() => assertSourceQualityRequirements(inlineExit));
+  assert.throws(() => assertSourceQualityRequirements(customShell));
+  assert.throws(() => assertSourceQualityRequirements(bashEnvBypass));
+  assert.throws(() => assertSourceQualityRequirements(rootShell));
+  assert.throws(() => assertSourceQualityRequirements(rootBashEnv));
+  assert.throws(() => assertSourceQualityRequirements(pushThreeDotRange));
 });
 ```
 
@@ -556,6 +668,11 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
   source-quality:
     name: Source Quality (fmt / wasm / whitespace)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -595,10 +712,15 @@ Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
           fi
 
           if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
-            git diff --check "$base...HEAD"
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --check "$base...HEAD"
+            else
+              git diff --check "$base..HEAD"
+            fi
           else
             git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           fi
+
 ```
 
 In the existing frontend job's `Release script tests` step, make the command:
@@ -622,9 +744,30 @@ actionlint .github/workflows/cmtrace-ci.yml
 cargo +1.92.0 fmt --all -- --check
 cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 git diff --check
+documented_test="$(mktemp)"
+documented_job="$(mktemp)"
+trap 'rm -f -- "$documented_test" "$documented_job"' EXIT
+awk '
+  /^Create `\.github\/scripts\/source-quality-workflow\.test\.mjs` with:/ { want=1; next }
+  want && /^```javascript$/ { inside=1; next }
+  inside && /^```$/ { exit }
+  inside { print }
+' docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md > "$documented_test"
+awk '
+  /^Insert this job immediately after `jobs:` in `\.github\/workflows\/cmtrace-ci\.yml`:/ { want=1; next }
+  want && /^```yaml$/ { inside=1; next }
+  inside && /^```$/ { exit }
+  inside { print }
+' docs/superpowers/plans/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates.md > "$documented_job"
+diff -u .github/scripts/source-quality-workflow.test.mjs "$documented_test"
+diff -u \
+  <(sed -n '/^  source-quality:/,/^  check:/p' .github/workflows/cmtrace-ci.yml | sed '$d') \
+  "$documented_job"
 ```
 
-Expected: the Node test passes `2/2`, actionlint emits no finding, formatting and wasm checks pass, and Git reports no whitespace error.
+Expected: the Node test passes `2/2`, actionlint emits no finding, formatting
+and wasm checks pass, Git reports no whitespace error, and both documented
+snippets are byte-for-byte equal to their checked-in executable contracts.
 
 - [ ] **Step 5: Commit the executable CI gate**
 
@@ -770,7 +913,7 @@ jq -e '
    .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
    .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
    .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
-   .gates.diff_check] | all)' "$successful_receipt" >/dev/null
+   .gates.diff_check] | all(. == true))' "$successful_receipt" >/dev/null
 ```
 
 Expected: the injected early-gate failure and actual `mv` publication failure
@@ -790,6 +933,9 @@ wrong_head_receipt="${matrix_dir}/wrong-head.json"
 wrong_base_receipt="${matrix_dir}/wrong-base.json"
 wrong_schema_receipt="${matrix_dir}/wrong-schema.json"
 wrong_version_receipt="${matrix_dir}/wrong-version.json"
+string_gate_receipt="${matrix_dir}/string-gate.json"
+number_gate_receipt="${matrix_dir}/number-gate.json"
+object_gate_receipt="${matrix_dir}/object-gate.json"
 
 assert_receipt() {
   jq -e --arg head "$2" --arg base "$3" '
@@ -799,7 +945,7 @@ assert_receipt() {
       .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
       .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
       .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
-      .gates.diff_check] | all)
+      .gates.diff_check] | all(. == true))
   ' "$1" >/dev/null
 }
 
@@ -818,16 +964,23 @@ jq '.head = "wrong-head"' "$valid_receipt" > "$wrong_head_receipt"
 jq '.base = "wrong-base"' "$valid_receipt" > "$wrong_base_receipt"
 jq '.schema = "wrong-schema"' "$valid_receipt" > "$wrong_schema_receipt"
 jq '.version = 2' "$valid_receipt" > "$wrong_version_receipt"
+jq '.gates.rustfmt = "true"' "$valid_receipt" > "$string_gate_receipt"
+jq '.gates.rustfmt = 1' "$valid_receipt" > "$number_gate_receipt"
+jq '.gates.rustfmt = {}' "$valid_receipt" > "$object_gate_receipt"
 ! assert_receipt "$false_gate_receipt" test-head test-base
 ! assert_receipt "$missing_gate_receipt" test-head test-base
 ! assert_receipt "$wrong_head_receipt" test-head test-base
 ! assert_receipt "$wrong_base_receipt" test-head test-base
 ! assert_receipt "$wrong_schema_receipt" test-head test-base
 ! assert_receipt "$wrong_version_receipt" test-head test-base
+! assert_receipt "$string_gate_receipt" test-head test-base
+! assert_receipt "$number_gate_receipt" test-head test-base
+! assert_receipt "$object_gate_receipt" test-head test-base
 ```
 
-Expected: the all-true receipt with exact head/base passes; a false or missing
-gate, wrong head/base, wrong schema, and wrong version each fail the predicate.
+Expected: the all-literal-`true` receipt with exact head/base passes; a false,
+missing, string, number, or object gate, wrong head/base, wrong schema, and
+wrong version each fail the predicate.
 
 - [ ] **Step 2: Inspect the exact committed range**
 
@@ -967,7 +1120,7 @@ jq -e --arg head "$head_sha" --arg base "$base_sha" '
    .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
    .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
    .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
-   .gates.diff_check] | all)
+   .gates.diff_check] | all(. == true))
 ' "$receipt_path" >/dev/null
 
 printf '%s\n' \
