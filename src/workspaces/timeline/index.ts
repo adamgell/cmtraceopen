@@ -18,7 +18,7 @@ export const timelineWorkspace: WorkspaceDefinition = {
     fontSizing: true,
   },
   fileFilters: [
-    { name: "Log Files", extensions: ["log", "cmtlog", "evtx"] },
+    { name: "Log Files", extensions: ["log", "cmtlog"] },
     { name: "All Files", extensions: ["*"] },
   ],
   actionLabels: {

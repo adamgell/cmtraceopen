@@ -319,6 +319,18 @@ pub struct ParseResult {
     pub byte_offset: u64,
 }
 
+/// A path-specific diagnostic returned when listing or parsing a source could not inspect a child.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PathDiagnostic {
+    /// Normalized path string emitted by the parser with platform-native separators and lossy
+    /// conversion for non-Unicode path components.
+    pub path: String,
+    /// Description of why the child could not be inspected, such as access, traversal, or parse
+    /// failure.
+    pub reason: String,
+}
+
 /// Per-file parse metadata for an aggregated folder open.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -339,4 +351,8 @@ pub struct AggregateParseResult {
     pub parse_errors: u32,
     pub folder_path: String,
     pub files: Vec<AggregateParsedFileResult>,
+    /// Path diagnostics for child paths skipped or failed during folder listing or aggregate
+    /// parsing; each value records the path and reason for that child.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_errors: Vec<PathDiagnostic>,
 }

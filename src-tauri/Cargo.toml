@@ -3,6 +3,7 @@
 [package]
 name = "cmtrace-open"
 version = "1.5.2"
+default-run = "cmtrace-open"
 description = "Free, open-source CMTrace replacement: Windows log viewer with ConfigMgr/SCCM, Intune, and Autopilot ESP diagnostics, DSRegCmd triage, and real-time tailing."
 authors = ["Adam Gell"]
 license = "MIT"
@@ -18,6 +19,16 @@ categories = ["gui", "development-tools::debugging", "os::windows-apis"]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "event-log-export"
+path = "src/bin/event-log-export.rs"
+required-features = ["event-log"]
+
+[[test]]
+name = "event_log_export_cli"
+path = "tests/event_log_export_cli.rs"
+required-features = ["event-log"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -31,6 +42,8 @@ event-log = [
     "dep:serde_norway",
     "dep:rusqlite",
     "dep:flate2",
+    "dep:tempfile",
+    "dep:zip",
 ]
 collector = []
 deployment = []
@@ -53,6 +66,7 @@ tauri-plugin-process = "2"
 tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+percent-encoding = "2"
 base64 = "0.23"
 regex = "1"
 chrono = { version = "0.4.35", features = ["serde"] }

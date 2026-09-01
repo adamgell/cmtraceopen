@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import { useEvtxStore } from "./evtx-store";
 import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
-import { summarizeCoverageGaps } from "./evtx-coverage";
-
+import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
+const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
+const MAX_DISPLAYED_COVERAGE_GAPS = 256;
 /**
  * Shows what is missing from the loaded events.
  *
@@ -17,19 +18,48 @@ import { summarizeCoverageGaps } from "./evtx-coverage";
  * on screen, and letting it be dismissed would make the view claim completeness it does not have.
  */
 export function EvtxCoverageBanner() {
-  const gaps = useEvtxStore((s) => s.coverageGaps);
+  const legacyGaps = useEvtxStore((s) => s.coverageGaps);
+  const structuredGaps = useEvtxStore((s) => s.coverageDetails);
+  const tailGaps = useEvtxStore((s) => s.tailCoverageGaps);
+  const archiveMembers = useEvtxStore((s) => s.archiveMembers);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const [collapsed, setCollapsed] = useState(false);
 
+  const gaps = useMemo(
+    () => [...new Set([...legacyGaps, ...tailGaps, ...structuredGaps.map(formatCoverageGap)])],
+    [legacyGaps, tailGaps, structuredGaps]
+  );
+  const displayedGaps = useMemo(
+    () => gaps.slice(0, MAX_DISPLAYED_COVERAGE_GAPS),
+    [gaps],
+  );
+  const omittedGaps = gaps.length - displayedGaps.length;
+  const displayedArchiveMembers = useMemo(
+    () => archiveMembers.slice(0, MAX_DISPLAYED_ARCHIVE_MEMBERS),
+    [archiveMembers]
+  );
+  const omittedArchiveMembers = archiveMembers.length - displayedArchiveMembers.length;
+  const archiveMemberMessages = useMemo(
+    () => [
+      ...displayedArchiveMembers.map(
+        ({ path, kind, outcome, sha256 }) =>
+          `${path}: ${kind} ${outcome}${sha256 ? ` (sha256:${sha256})` : ""}`
+      ),
+      ...(omittedArchiveMembers > 0
+        ? [`<archive member metadata: ${omittedArchiveMembers} omitted by display limit>`]
+        : []),
+    ],
+    [displayedArchiveMembers, omittedArchiveMembers]
+  );
   const { fontSize, rowLineHeight } = getLogListMetrics(logListFontSize);
-  const summary = summarizeCoverageGaps(gaps);
+  const summary =
+    gaps.length > 0
+      ? summarizeCoverageGaps(gaps)
+      : `${archiveMembers.length} archive member${archiveMembers.length === 1 ? "" : "s"} in this view`;
 
-  // The live region is always rendered, and the banner content appears inside it. A screen reader
-  // announces changes within a region it was already tracking, so a region that arrives already
-  // populated is read as ordinary page content and the first gaps go unannounced. It must also
-  // stay in the accessibility tree while empty, which display:none would prevent, so an empty
-  // region is simply an unstyled element with no children.
-  const empty = gaps.length === 0;
+  // The live region remains mounted so screen readers announce newly loaded gaps and member
+  // provenance. An empty region stays unstyled and carries no children.
+  const empty = gaps.length === 0 && archiveMemberMessages.length === 0;
 
   return (
     <div
@@ -55,28 +85,46 @@ export function EvtxCoverageBanner() {
     >
       {empty ? null : (
         <>
-      <div
-        style={{ display: "flex", alignItems: "center", gap: "8px" }}
-      >
-        <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
-        <Button
-          size="small"
-          appearance="transparent"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed((value) => !value)}
-        >
-          {collapsed ? "Show" : "Hide"}
-        </Button>
-      </div>
-      {!collapsed && (
-        <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-          {gaps.map((gap) => (
-            <li key={gap} style={{ wordBreak: "break-word" }}>
-              {gap}
-            </li>
-          ))}
-        </ul>
-      )}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontWeight: tokens.fontWeightSemibold }}>{summary}</span>
+            <Button
+              size="small"
+              appearance="transparent"
+              aria-expanded={!collapsed}
+              onClick={() => setCollapsed((value) => !value)}
+            >
+              {collapsed ? "Show" : "Hide"}
+            </Button>
+          </div>
+          {!collapsed && (
+            <>
+              <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                {displayedGaps.map((gap, index) => (
+                  <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
+                    {gap}
+                  </li>
+                ))}
+              </ul>
+              {omittedGaps > 0 && (
+                <div>{`<coverage gaps: ${omittedGaps} omitted by display limit>`}</div>
+              )}
+              {archiveMemberMessages.length > 0 && (
+                <details>
+                  <summary>Archive member provenance ({archiveMembers.length})</summary>
+                  <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                    {archiveMemberMessages.map((member, index) => (
+                      <li
+                        key={`archive-member-${index}:${member}`}
+                        style={{ wordBreak: "break-word" }}
+                      >
+                        {member}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
         </>
       )}
     </div>

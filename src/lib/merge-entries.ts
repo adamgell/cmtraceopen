@@ -43,29 +43,26 @@ export function buildMergeCacheKey(
 export function mergeEntries(
   entriesByFile: Record<string, LogEntry[]>
 ): LogEntry[] {
-  const allTimestamped: LogEntry[] = [];
+  const allEntries = Object.values(entriesByFile).flat();
 
-  for (const entries of Object.values(entriesByFile)) {
-    for (const entry of entries) {
-      if (entry.timestamp != null) {
-        allTimestamped.push(entry);
-      }
+  allEntries.sort((a, b) => {
+    if (a.timestamp == null || b.timestamp == null) {
+      if (a.timestamp != null) return -1;
+      if (b.timestamp != null) return 1;
+    } else if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
     }
-  }
-
-  allTimestamped.sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp! - b.timestamp!;
     const fileCmp = a.filePath.localeCompare(b.filePath);
     if (fileCmp !== 0) return fileCmp;
     return a.lineNumber - b.lineNumber;
   });
 
   // Reassign IDs to be globally unique across merged files
-  for (let i = 0; i < allTimestamped.length; i++) {
-    allTimestamped[i] = { ...allTimestamped[i], id: i };
+  for (let i = 0; i < allEntries.length; i++) {
+    allEntries[i] = { ...allEntries[i], id: i };
   }
 
-  return allTimestamped;
+  return allEntries;
 }
 
 export function filterByVisibility(
@@ -96,28 +93,45 @@ export function findCorrelatedEntries(
   const targetTs = targetEntry.timestamp;
   const results: CorrelatedEntry[] = [];
 
-  // Binary search for window start
+  // Null-timestamp entries sort after timestamped entries. Keep the binary
+  // search and scan inside the timestamped prefix.
+  let prefixLo = 0;
+  let prefixHi = entries.length;
+  while (prefixLo < prefixHi) {
+    const mid = (prefixLo + prefixHi) >>> 1;
+    if (entries[mid].timestamp == null) {
+      prefixHi = mid;
+    } else {
+      prefixLo = mid + 1;
+    }
+  }
+  const timestampedEnd = prefixLo;
   const windowStart = targetTs - windowMs;
   const windowEnd = targetTs + windowMs;
   let lo = 0;
-  let hi = entries.length;
+  let hi = timestampedEnd;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if ((entries[mid].timestamp ?? 0) < windowStart) lo = mid + 1;
-    else hi = mid;
+    const timestamp = entries[mid].timestamp;
+    if (timestamp == null || timestamp >= windowStart) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
   }
 
   // Scan from window start to window end
-  for (let i = lo; i < entries.length; i++) {
+  for (let i = lo; i < timestampedEnd; i++) {
     const entry = entries[i];
-    if (entry.timestamp == null) continue;
-    if (entry.timestamp > windowEnd) break;
+    const timestamp = entry.timestamp;
+    if (timestamp == null) break;
+    if (timestamp > windowEnd) break;
     if (entry.filePath === targetEntry.filePath) continue;
     if (entry.id === targetEntry.id) continue;
 
     results.push({
       entry,
-      deltaMs: entry.timestamp - targetTs,
+      deltaMs: timestamp - targetTs,
       fileColor: colorAssignments[entry.filePath] ?? "#888",
     });
   }

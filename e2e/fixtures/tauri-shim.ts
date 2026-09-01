@@ -43,6 +43,12 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
   get_app_version: "0.0.0-e2e",
   // Startup commands — must return valid values so the app fully renders
   get_initial_file_paths: [],
+  get_initial_workspace: null,
+  get_initial_elevation_restore: null,
+  get_app_elevation_state: {
+    platformSupported: false,
+    isElevated: false,
+  },
   get_available_workspaces: [
     "log",
     "intune",
@@ -58,8 +64,22 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
   get_file_association_prompt_status: {
     supported: false,
     shouldPrompt: false,
-    isAssociated: false,
+    isRegistered: false,
   },
+  get_system_date_time_preferences: {
+    datePattern: "M/d/yyyy",
+    timePattern: "h:mm:ss tt",
+    amDesignator: "AM",
+    pmDesignator: "PM",
+  },
+  get_update_policy: {
+    updateChecksDisabledByPolicy: false,
+  },
+  sync_app_menu_state: null,
+  "plugin:app|name": "CMTrace Open",
+  "plugin:app|version": "0.0.0-e2e",
+  "plugin:app|tauri_version": "2.0.0-e2e",
+  "plugin:app|identifier": "com.cmtrace.open.e2e",
   get_esp_elevation_state: {
     isElevated: false,
     restartSupported: true,
@@ -73,6 +93,12 @@ const REJECTED_COMMANDS = [
   "graph_cancel_esp_diagnostics",
 ];
 
+/** Native-only operations that a browser run must never report as successful. */
+const BROWSER_UNAVAILABLE_COMMANDS = [
+  "register_log_file_handler",
+  "open_windows_default_apps",
+];
+
 /** Script string injected into the browser page before React loads. */
 export const TAURI_SHIM_SCRIPT = `
 (function () {
@@ -82,6 +108,7 @@ export const TAURI_SHIM_SCRIPT = `
 
   const defaults = ${JSON.stringify(DEFAULT_RESPONSES)};
   const rejectedCommands = new Set(${JSON.stringify(REJECTED_COMMANDS)});
+  const browserUnavailableCommands = new Set(${JSON.stringify(BROWSER_UNAVAILABLE_COMMANDS)});
 
   // IPC bridge URL — set to a live value when the bridge probe succeeds.
   // Commands dispatched before the probe resolves fall back to defaults.
@@ -170,7 +197,11 @@ export const TAURI_SHIM_SCRIPT = `
       signal: AbortSignal.timeout(30000),
     });
     const data = await res.json();
-    if (data.error) throw new Error('[IPC bridge] ' + data.error);
+    if (data.error) {
+      const error = new Error('[IPC bridge] ' + data.error);
+      error.isBridgeCommandError = true;
+      throw error;
+    }
     return data.result;
   }
 
@@ -183,6 +214,13 @@ export const TAURI_SHIM_SCRIPT = `
       const override = window.__e2e_ipc_overrides__[cmd];
       if (override) return override(args);
 
+      // These operations mutate or open native Windows state. A browser run
+      // can override them explicitly per test, but it must never simulate a
+      // successful native call merely because an unknown command returned null.
+      if (browserUnavailableCommands.has(cmd)) {
+        throw new Error('[tauri-shim] ' + cmd + ' is unavailable in browser mode');
+      }
+
       // Full ESP Graph calls are never allowed to escape deterministic fixtures.
       if (rejectedCommands.has(cmd)) {
         throw new Error('[tauri-shim] rejected live ESP Graph command: ' + cmd);
@@ -193,12 +231,16 @@ export const TAURI_SHIM_SCRIPT = `
         try {
           return await callBridge(cmd, args);
         } catch (e) {
+          if (e && e.isBridgeCommandError) throw e;
           console.warn('[tauri-shim] bridge call failed for', cmd, '—', e.message, '— falling back to default');
         }
       }
 
       // 3. Static defaults (bridge not running or call failed)
-      return defaults[cmd] !== undefined ? defaults[cmd] : null;
+      if (Object.prototype.hasOwnProperty.call(defaults, cmd)) {
+        return defaults[cmd];
+      }
+      throw new Error('[tauri-shim] no static response for command: ' + cmd);
     },
     transformCallback: registerCallback,
     unregisterCallback: unregisterCallback,

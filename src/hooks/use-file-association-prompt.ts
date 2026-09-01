@@ -1,12 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { getFileAssociationPromptStatus } from "../lib/commands";
 import { useUiStore } from "../stores/ui-store";
 
 /**
- * Shows the classic startup prompt for standalone Windows use when the app is
- * not already associated with .log, .log_, .lo_, and .cmtlog files.
+ * Shows the per-user Windows registration prompt when this edition has not yet
+ * registered as an available handler for its supported log file types.
  */
 export function useFileAssociationPrompt() {
+  const [isEligible, setIsEligible] = useState(false);
   const setShowFileAssociationPrompt = useUiStore(
     (state) => state.setShowFileAssociationPrompt
   );
@@ -20,7 +21,7 @@ export function useFileAssociationPrompt() {
             return;
           }
 
-          setShowFileAssociationPrompt(true);
+          setIsEligible(true);
         })
         .catch((error) => {
           console.error("[file-association-prompt] failed to load prompt status", {
@@ -33,5 +34,14 @@ export function useFileAssociationPrompt() {
       isDisposed = true;
       window.clearTimeout(startupDelayHandle);
     };
-  }, [setShowFileAssociationPrompt]);
+  }, []);
+
+  useEffect(() => {
+    if (isEligible) {
+      setShowFileAssociationPrompt(true);
+      if (useUiStore.getState().showFileAssociationPrompt) {
+        setIsEligible(false);
+      }
+    }
+  }, [isEligible, setShowFileAssociationPrompt]);
 }

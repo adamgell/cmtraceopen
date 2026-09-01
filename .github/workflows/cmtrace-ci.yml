@@ -232,6 +232,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Test MSI file-association cleanup
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./src-tauri/installer/remove-file-associations.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Installer cleanup tests ended with result $($result.Result)."
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
@@ -259,6 +273,30 @@ jobs:
 
       - name: Test Graph ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test graph_esp_diagnostics
+
+      - name: Build full Windows application workspace
+        run: cargo test --locked -p cmtrace-open --all-features --no-run
+
+      - name: Verify Windows test manifest
+        shell: pwsh
+        run: |
+          $testBinary = Get-ChildItem "src-tauri/target/debug/deps/app_lib-*.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $testBinary) {
+            throw "The full application test binary was not produced."
+          }
+
+          $mtPath = & ./scripts/resolve-windows-sdk-mt.ps1
+          Write-Host "Using Windows SDK manifest tool: $mtPath"
+
+          $manifestPath = Join-Path $env:RUNNER_TEMP "cmtrace-open-test.manifest.xml"
+          & $mtPath "-inputresource:$($testBinary.FullName);#1" "-out:$manifestPath"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "The full application test binary has no readable embedded manifest."
+          }
+          Get-Content $manifestPath
 
       - name: Test full Windows application workspace
         run: cargo test --locked -p cmtrace-open --all-features

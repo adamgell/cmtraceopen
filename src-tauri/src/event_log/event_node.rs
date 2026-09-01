@@ -34,17 +34,22 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
 
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(XmlEvent::Start(start)) => stack.push(element_from(&start)?),
+            Ok(XmlEvent::Start(start)) => {
+                if root.is_some() && stack.is_empty() {
+                    return Err("event XML contained multiple root elements".to_string());
+                }
+                stack.push(element_from(&start)?);
+            }
             Ok(XmlEvent::Empty(empty)) => {
                 let node = element_from(&empty)?;
-                close(&mut stack, &mut root, node);
+                close(&mut stack, &mut root, node)?;
             }
             Ok(XmlEvent::Text(text)) => {
                 let value = text
                     .xml10_content()
                     .map_err(|error| format!("undecodable text: {error}"))?
                     .into_owned();
-                push_text(&mut stack, &value);
+                push_text(&mut stack, &value)?;
             }
             Ok(XmlEvent::GeneralRef(reference)) => {
                 // Entity references are their own event in quick-xml 0.41. Ignoring them would
@@ -58,15 +63,24 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
                 let resolved = quick_xml::escape::unescape(&raw)
                     .map(|value| value.into_owned())
                     .unwrap_or(raw);
-                push_text(&mut stack, &resolved);
+                push_text(&mut stack, &resolved)?;
             }
             Ok(XmlEvent::CData(data)) => {
                 let value = String::from_utf8_lossy(&data).into_owned();
-                push_text(&mut stack, &value);
+                push_text(&mut stack, &value)?;
             }
-            Ok(XmlEvent::End(_)) => {
-                let Some(node) = stack.pop() else { continue };
-                close(&mut stack, &mut root, node);
+            Ok(XmlEvent::End(end)) => {
+                let Some(node) = stack.pop() else {
+                    return Err("event XML contained a stray end element".to_string());
+                };
+                let end_name = local_name(end.name().as_ref());
+                if node.name != end_name {
+                    return Err(format!(
+                        "event XML closed '{}' with '{}'",
+                        node.name, end_name
+                    ));
+                }
+                close(&mut stack, &mut root, node)?;
             }
             Ok(XmlEvent::Eof) => break,
             Ok(_) => {}
@@ -75,21 +89,34 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
         buffer.clear();
     }
 
+    if !stack.is_empty() {
+        return Err("event XML ended before all elements were closed".to_string());
+    }
     root.ok_or_else(|| "event XML contained no elements".to_string())
 }
 
-fn push_text(stack: &mut [EventNode], value: &str) {
+fn push_text(stack: &mut [EventNode], value: &str) -> Result<(), String> {
     if let Some(current) = stack.last_mut() {
         match current.text.as_mut() {
             Some(existing) => existing.push_str(value),
             None => current.text = Some(value.to_string()),
         }
+        Ok(())
+    } else if value.trim().is_empty() {
+        Ok(())
+    } else {
+        Err("event XML contained non-whitespace text outside the root element".to_string())
     }
 }
 
-fn close(stack: &mut [EventNode], root: &mut Option<EventNode>, mut node: EventNode) {
+fn close(
+    stack: &mut [EventNode],
+    root: &mut Option<EventNode>,
+    mut node: EventNode,
+) -> Result<(), String> {
     // Pretty-printed XML puts newlines and indentation inside container elements. That is layout,
-    // not content, so it is dropped once we know the element has children.
+    // not content, so it is dropped once the element closes instead, which removes pretty-printing
+    // without touching real content.
     if !node.children.is_empty()
         && node
             .text
@@ -101,14 +128,16 @@ fn close(stack: &mut [EventNode], root: &mut Option<EventNode>, mut node: EventN
 
     match stack.last_mut() {
         Some(parent) => parent.children.push(node),
-        // The outermost element is the root. Later siblings at depth zero are ignored rather than
-        // replacing it, so a stray trailing element cannot discard the event.
+        // The outermost element is the root. A second depth-zero element is not part of the event
+        // and must not be silently discarded.
         None => {
-            if root.is_none() {
-                *root = Some(node);
+            if root.is_some() {
+                return Err("event XML contained multiple root elements".to_string());
             }
+            *root = Some(node);
         }
     }
+    Ok(())
 }
 
 fn element_from(start: &quick_xml::events::BytesStart<'_>) -> Result<EventNode, String> {
@@ -141,6 +170,7 @@ fn local_name(raw: &[u8]) -> String {
 pub struct SystemFields {
     pub provider: Option<String>,
     pub event_id: Option<u32>,
+    pub version: Option<u32>,
     pub level: Option<u8>,
     pub channel: Option<String>,
     pub computer: Option<String>,
@@ -152,6 +182,8 @@ pub struct SystemFields {
     pub thread_id: Option<u32>,
     pub user_sid: Option<String>,
     pub keywords: Option<String>,
+    pub activity_id: Option<String>,
+    pub related_activity_id: Option<String>,
 }
 
 /// Reads the `System` block of a parsed event.
@@ -186,15 +218,11 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
     };
 
     SystemFields {
-        // Manifest providers write Name; classic sources write only EventSourceName, for example
-        // <Provider EventSourceName="Application Error" />. Reading just Name left every classic
-        // event with provider "Unknown", which meant no map could match it and no description
-        // could be rendered for it.
+        // Manifest providers write Name; classic sources write only EventSourceName.
         provider: attribute_of("Provider", "Name")
             .or_else(|| attribute_of("Provider", "EventSourceName")),
-        // Classic providers write `<EventID Qualifiers="49152">1000</EventID>`. The id is the
-        // element text in both shapes; the qualifier is separate and not part of the id.
         event_id: text_of("EventID").and_then(|value| value.parse().ok()),
+        version: text_of("Version").and_then(|value| value.parse().ok()),
         level: text_of("Level").and_then(|value| value.parse().ok()),
         channel: text_of("Channel").map(str::to_string),
         computer: text_of("Computer").map(str::to_string),
@@ -206,6 +234,22 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
         thread_id: attribute_of("Execution", "ThreadID").and_then(|v| v.parse().ok()),
         user_sid: attribute_of("Security", "UserID"),
         keywords: text_of("Keywords").map(str::to_string),
+        activity_id: system
+            .children
+            .iter()
+            .find(|child| child.name == "Correlation")
+            .and_then(|child| child.attribute("ActivityID"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        related_activity_id: system
+            .children
+            .iter()
+            .find(|child| child.name == "Correlation")
+            .and_then(|child| child.attribute("RelatedActivityID"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -290,6 +334,104 @@ pub fn extract_event_data(root: &EventNode) -> EventFields {
     EventFields { fields, insertions }
 }
 
+/// Explicit identity values promoted from provider event data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventIdentityFields {
+    pub activity_id: Option<String>,
+    pub related_activity_id: Option<String>,
+    pub session_id: Option<String>,
+    pub device_id: Option<String>,
+    pub user_id: Option<String>,
+    pub process_start_time: Option<String>,
+    pub conflicts: Vec<String>,
+}
+
+fn normalized_field_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn unique_named_value(
+    fields: &[EvtxField],
+    names: &[&str],
+    label: &str,
+    conflicts: &mut Vec<String>,
+) -> Option<String> {
+    let matches = fields
+        .iter()
+        .filter(|field| {
+            let name = normalized_field_name(&field.name);
+            names
+                .iter()
+                .any(|candidate| name == normalized_field_name(candidate))
+        })
+        .collect::<Vec<_>>();
+    let first = matches.first()?;
+    let canonical = first.value.trim().to_ascii_lowercase();
+    if matches
+        .iter()
+        .skip(1)
+        .any(|field| field.value.trim().to_ascii_lowercase() != canonical)
+    {
+        conflicts.push(label.to_string());
+        return None;
+    }
+    Some(first.value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+/// Extracts only explicit identity fields; display text and timestamps are never promoted.
+pub fn extract_event_identity(fields: &[EvtxField]) -> EventIdentityFields {
+    let mut conflicts = Vec::new();
+    EventIdentityFields {
+        activity_id: unique_named_value(
+            fields,
+            &[
+                "ActivityId",
+                "ActivityID",
+                "CorrelationId",
+                "CorrelationID",
+                "TransactionId",
+            ],
+            "activityId",
+            &mut conflicts,
+        ),
+        related_activity_id: unique_named_value(
+            fields,
+            &["RelatedActivityId", "RelatedActivityID", "ParentActivityId"],
+            "relatedActivityId",
+            &mut conflicts,
+        ),
+        session_id: unique_named_value(
+            fields,
+            &["SessionId", "SessionID", "Session"],
+            "sessionId",
+            &mut conflicts,
+        ),
+        device_id: unique_named_value(
+            fields,
+            &["DeviceId", "DeviceID", "AADDeviceId", "ManagedDeviceId"],
+            "deviceId",
+            &mut conflicts,
+        ),
+        user_id: unique_named_value(
+            fields,
+            &["UserId", "UserID", "UserSid", "UserSID", "AccountSid"],
+            "userId",
+            &mut conflicts,
+        ),
+        process_start_time: unique_named_value(
+            fields,
+            &["ProcessStartTime", "ProcessStartedAt", "StartTime"],
+            "processStartTime",
+            &mut conflicts,
+        ),
+        conflicts,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +454,13 @@ mod tests {
     <Data Name="Empty"></Data>
   </EventData>
 </Event>"#;
+
+    #[test]
+    fn system_version_is_extracted_for_provider_lookup() {
+        let root = parse_event_xml("<Event><System><Version>7</Version></System></Event>")
+            .expect("parses");
+        assert_eq!(extract_system_fields(&root).version, Some(7));
+    }
 
     fn resolve(xml: &str, path: &str) -> Option<String> {
         let root = parse_event_xml(xml).expect("parses");
@@ -478,6 +627,22 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_event_followed_by_an_unclosed_element_is_rejected() {
+        assert!(
+            parse_event_xml("<Event></Event><Broken>").is_err(),
+            "content after the root must not become a partial event"
+        );
+    }
+
+    #[test]
+    fn multiple_root_elements_are_rejected() {
+        assert!(
+            parse_event_xml("<Event></Event><Other />").is_err(),
+            "a document must contain exactly one root element"
+        );
+    }
+
+    #[test]
     fn a_classic_source_is_named_from_event_source_name() {
         // <Provider EventSourceName="..."/> with no Name is what classic sources emit. Reading
         // only Name left these as "Unknown", so no map matched and no description rendered.
@@ -500,5 +665,21 @@ mod tests {
             fields.provider.as_deref(),
             Some("Microsoft-Windows-Kernel-General")
         );
+    }
+
+    #[test]
+    fn conflicting_identity_aliases_are_not_order_dependent() {
+        let root = parse_event_xml(
+            r#"<Event><EventData>
+                <Data Name="ActivityId">activity-a</Data>
+                <Data Name="CorrelationID">activity-b</Data>
+            </EventData></Event>"#,
+        )
+        .expect("parses");
+        let fields = extract_event_data(&root);
+        let identity = extract_event_identity(&fields.fields);
+
+        assert_eq!(identity.activity_id, None);
+        assert_eq!(identity.conflicts, vec!["activityId"]);
     }
 }

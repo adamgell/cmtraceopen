@@ -96,6 +96,7 @@ export function AppShell() {
   const showFileAssociationPrompt = useUiStore(
     (s) => s.showFileAssociationPrompt
   );
+  const modalOwner = useUiStore((s) => s.modalOwner);
   const setShowFindBar = useUiStore((s) => s.setShowFindBar);
   const setShowFilterDialog = useUiStore((s) => s.setShowFilterDialog);
   const setShowErrorLookupDialog = useUiStore(
@@ -591,58 +592,62 @@ export function AppShell() {
       )}
 
       <FilterDialog
-        isOpen={showFilterDialog}
+        isOpen={showFilterDialog && modalOwner === "filter"}
         onClose={() => setShowFilterDialog(false)}
         onApply={handleApplyFilter}
         currentClauses={filterClauses}
       />
       <ErrorLookupDialog
-        isOpen={showErrorLookupDialog}
+        isOpen={showErrorLookupDialog && modalOwner === "errorLookup"}
         onClose={() => setShowErrorLookupDialog(false)}
       />
       <AboutDialog
-        isOpen={showAboutDialog}
+        isOpen={showAboutDialog && modalOwner === "about"}
         onClose={() => setShowAboutDialog(false)}
       />
       <SettingsDialog
-        isOpen={showSettingsDialog}
+        isOpen={showSettingsDialog && modalOwner === "settings"}
         onClose={() => setShowSettingsDialog(false)}
       />
       <GuidRegistryDialog
-        isOpen={showGuidRegistryDialog}
+        isOpen={showGuidRegistryDialog && modalOwner === "guidRegistry"}
         onClose={() => setShowGuidRegistryDialog(false)}
       />
       <EvidenceBundleDialog
-        isOpen={showEvidenceBundleDialog}
+        isOpen={showEvidenceBundleDialog && modalOwner === "evidenceBundle"}
         onClose={() => setShowEvidenceBundleDialog(false)}
       />
       <FileAssociationPromptDialog
-        isOpen={showFileAssociationPrompt}
+        isOpen={
+          showFileAssociationPrompt && modalOwner === "fileAssociationPrompt"
+        }
         onClose={() => setShowFileAssociationPrompt(false)}
       />
       {/* Reads its own open state from the store: it is opened from the native
           menu and from source-load failures, not from AppShell. */}
       <RestartAsAdministratorDialog />
       <CollectDiagnosticsDialog
-        isOpen={showCollectDiagnosticsDialog}
+        isOpen={
+          showCollectDiagnosticsDialog && modalOwner === "collectDiagnostics"
+        }
         onClose={() => setShowCollectDiagnosticsDialog(false)}
       />
       <CollectionCompleteDialog
-        result={collectionResult}
+        result={modalOwner === "collectionResult" ? collectionResult : null}
         onClose={() => setCollectionResult(null)}
       />
       <MergeTabsDialog
-        isOpen={showMergeTabsDialog}
+        isOpen={showMergeTabsDialog && modalOwner === "mergeTabs"}
         onClose={() => setShowMergeTabsDialog(false)}
         onMerge={(filePaths) => createMergedTab(filePaths)}
       />
       <DiffConfigDialog
-        isOpen={showDiffConfigDialog}
+        isOpen={showDiffConfigDialog && modalOwner === "diffConfig"}
         onClose={() => setShowDiffConfigDialog(false)}
         onCompare={(sourceA, sourceB) => createDiff(sourceA, sourceB)}
       />
       <UpdateDialog
-        isOpen={showUpdateDialog}
+        isOpen={showUpdateDialog && modalOwner === "update"}
         onClose={() => {
           dismissUpdate();
           setShowUpdateDialog(false);

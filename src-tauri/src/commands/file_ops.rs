@@ -7,17 +7,21 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use super::bundle_ops::{
+    collect_files_recursive, detect_evidence_bundle_metadata, unsafe_ancestor_reason,
+    unsafe_entry_reason,
+};
+use super::known_sources::KnownSourcePathKind;
 use crate::intune::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
-    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult,
+    AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
 use crate::watcher::tail::InitialLogicalRecord;
-
-use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
-use super::known_sources::KnownSourcePathKind;
-
+const MAX_FOLDER_LISTING_ENTRIES: usize = 4_096;
+const MAX_FOLDER_LISTING_WORK: usize = 16_384;
+const MAX_FOLDER_LISTING_ERRORS: usize = 4_096;
 // ── Types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +75,8 @@ pub struct FolderListingResult {
     pub source_kind: LogSourceKind,
     pub source: LogSource,
     pub entries: Vec<FolderEntry>,
+    #[serde(default)]
+    pub child_errors: Vec<PathDiagnostic>,
     #[serde(default)]
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
@@ -365,10 +371,10 @@ fn open_log_folder_aggregate_impl(
 
     let mut aggregate_entries: Vec<LogEntry> = Vec::new();
     let mut aggregate_files = Vec::with_capacity(file_entries.len());
+    let mut parse_child_errors = Vec::new();
     let mut open_file_states = Vec::with_capacity(file_entries.len());
     let mut total_lines = 0u32;
     let mut parse_errors = 0u32;
-
     for entry in file_entries {
         // Skip files we can't read (permission denied, missing, etc.) so a
         // single inaccessible file doesn't abort the whole folder load.
@@ -379,6 +385,11 @@ fn open_log_folder_aggregate_impl(
                     "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
                     entry.path
                 );
+                parse_child_errors.push(PathDiagnostic {
+                    path: entry.path.clone(),
+                    reason: error.to_string(),
+                });
+                parse_errors = parse_errors.saturating_add(1);
                 continue;
             }
         };
@@ -409,6 +420,9 @@ fn open_log_folder_aggregate_impl(
         .enumerate()
         .map(|(index, file)| (file.file_path.clone(), index))
         .collect();
+
+    let aggregate_child_errors =
+        merge_folder_diagnostics(listing.child_errors, parse_child_errors, Path::new(&path));
 
     aggregate_entries.sort_by(|left, right| compare_aggregate_entries(left, right, &file_order));
 
@@ -464,6 +478,7 @@ fn open_log_folder_aggregate_impl(
         parse_errors,
         folder_path: path,
         files: aggregate_files,
+        child_errors: aggregate_child_errors,
     })
 }
 
@@ -535,9 +550,26 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
 
     let requested_path = PathBuf::from(&path);
 
-    // `Path::exists` collapses every failure to false, so a folder the user
-    // cannot read would be reported as missing and never offer elevation. Stat
-    // it directly and keep the OS error kind.
+    match unsafe_ancestor_reason(&requested_path) {
+        Ok(Some(reason)) => {
+            return Err(crate::error::AppError::InvalidInput(format!(
+                "{reason}: {}",
+                requested_path.display()
+            )));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(crate::error::AppError::from_source_io(
+                error,
+                crate::error::SourceOperation::ListFolder,
+                Some(&path),
+            ));
+        }
+    }
+
+    // The no-follow ancestor check above must happen before this metadata call:
+    // `metadata` follows a root symlink and would otherwise move the selection
+    // outside the user's requested tree.
     let metadata = match fs::metadata(&requested_path) {
         Ok(value) => value,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -554,7 +586,6 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             ));
         }
     };
-
     if !metadata.is_dir() {
         return Err(crate::error::AppError::InvalidInput(format!(
             "path is not a folder: {}",
@@ -569,35 +600,77 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             Some(&path),
         )
     })?;
-
     let mut entries: Vec<FolderEntry> = Vec::new();
-
+    let mut child_errors: Vec<PathDiagnostic> = Vec::new();
+    let mut candidates = Vec::new();
+    let mut listing_work = 0usize;
+    let mut entry_limit_reached = false;
+    let mut work_limit_reached = false;
+    let mut diagnostic_limit_reached = false;
     for entry_result in read_dir {
-        let entry = match entry_result {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!(
-                    "event=list_log_folder_skip reason=read_dir_entry_error path=\"{}\" error=\"{}\"",
-                    requested_path.display(),
-                    error
-                );
-                continue;
-            }
-        };
-
+        listing_work += 1;
+        if listing_work > MAX_FOLDER_LISTING_WORK {
+            work_limit_reached = true;
+            break;
+        }
+        match entry_result {
+            Ok(entry) => candidates.push(entry),
+            Err(error) => push_folder_error(
+                &mut child_errors,
+                &mut diagnostic_limit_reached,
+                &requested_path,
+                &format!("child directory entry could not be read: {error}"),
+            ),
+        }
+    }
+    candidates.sort_by(|left, right| {
+        let left_name = left.file_name().to_string_lossy().to_string();
+        let right_name = right.file_name().to_string_lossy().to_string();
+        left_name
+            .to_ascii_lowercase()
+            .cmp(&right_name.to_ascii_lowercase())
+            .then_with(|| left_name.cmp(&right_name))
+            .then_with(|| left.path().cmp(&right.path()))
+    });
+    if candidates.len() > MAX_FOLDER_LISTING_ENTRIES {
+        candidates.truncate(MAX_FOLDER_LISTING_ENTRIES);
+        entry_limit_reached = true;
+    }
+    for entry in candidates {
         let entry_path = entry.path();
-        let metadata = match entry.metadata() {
+        let unsafe_reason = match unsafe_entry_reason(&entry_path) {
             Ok(value) => value,
             Err(error) => {
-                log::warn!(
-                    "event=list_log_folder_skip reason=metadata_error entry_path=\"{}\" error=\"{}\"",
-                    entry_path.display(),
-                    error
+                push_folder_error(
+                    &mut child_errors,
+                    &mut diagnostic_limit_reached,
+                    &entry_path,
+                    &error.to_string(),
                 );
                 continue;
             }
         };
-
+        if let Some(reason) = unsafe_reason {
+            push_folder_error(
+                &mut child_errors,
+                &mut diagnostic_limit_reached,
+                &entry_path,
+                reason,
+            );
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(&entry_path) {
+            Ok(value) => value,
+            Err(error) => {
+                push_folder_error(
+                    &mut child_errors,
+                    &mut diagnostic_limit_reached,
+                    &entry_path,
+                    &format!("child metadata could not be read: {error}"),
+                );
+                continue;
+            }
+        };
         entries.push(FolderEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: normalize_path_string(&entry_path),
@@ -610,17 +683,43 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             modified_unix_ms: metadata_modified_unix_ms(&metadata),
         });
     }
-
+    if entry_limit_reached || work_limit_reached || diagnostic_limit_reached {
+        if child_errors.len() >= MAX_FOLDER_LISTING_ERRORS {
+            child_errors.truncate(MAX_FOLDER_LISTING_ERRORS - 1);
+        }
+        let mut causes = Vec::new();
+        if entry_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_ENTRIES}-entry limit"
+            ));
+        }
+        if work_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_WORK}-entry work limit"
+            ));
+        }
+        if diagnostic_limit_reached {
+            causes.push(format!(
+                "folder listing reached the {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit"
+            ));
+        }
+        child_errors.push(PathDiagnostic {
+            path: normalize_path_string(&requested_path),
+            reason: causes.join("; "),
+        });
+    }
     let bundle_metadata = detect_evidence_bundle_metadata(&requested_path);
     if bundle_metadata.is_some() {
         // For evidence bundles, recursively collect all files from the entire
         // directory tree so that every nested artifact is loaded.
-        entries = collect_files_recursive(&requested_path);
+        let collected = collect_files_recursive(&requested_path);
+        entries = collected.entries;
+        child_errors =
+            merge_folder_diagnostics(child_errors, collected.child_errors, &requested_path);
         entries.sort_by(compare_folder_entries);
     } else {
         entries.sort_by(compare_folder_entries);
     }
-
     log::info!(
         "event=list_log_folder_complete path=\"{}\" entry_count={} is_bundle={}",
         requested_path.display(),
@@ -633,6 +732,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         source: LogSource::Folder {
             path: normalize_path_string(&requested_path),
         },
+        child_errors,
         entries,
         bundle_metadata,
     })
@@ -651,9 +751,72 @@ pub(crate) fn metadata_modified_unix_ms(metadata: &fs::Metadata) -> Option<u64> 
 
 // ── Private helpers ─────────────────────────────────────────────────────
 
+fn push_folder_error(
+    errors: &mut Vec<PathDiagnostic>,
+    diagnostic_limit_reached: &mut bool,
+    path: &Path,
+    reason: &str,
+) {
+    if errors.len() < MAX_FOLDER_LISTING_ERRORS {
+        errors.push(PathDiagnostic {
+            path: normalize_path_string(path),
+            reason: reason.to_string(),
+        });
+    } else {
+        *diagnostic_limit_reached = true;
+    }
+}
+
+fn merge_folder_diagnostics(
+    first_pass: Vec<PathDiagnostic>,
+    recursive_pass: Vec<PathDiagnostic>,
+    root: &Path,
+) -> Vec<PathDiagnostic> {
+    let total = first_pass.len().saturating_add(recursive_pass.len());
+    if total <= MAX_FOLDER_LISTING_ERRORS {
+        let mut merged = first_pass;
+        merged.extend(recursive_pass);
+        return merged;
+    }
+
+    let retained_diagnostics = MAX_FOLDER_LISTING_ERRORS - 1;
+    let mut retained_limits = first_pass
+        .iter()
+        .chain(&recursive_pass)
+        .filter(|diagnostic| folder_diagnostic_reports_coverage_limit(diagnostic))
+        .count()
+        .min(retained_diagnostics);
+    let mut retained_ordinary = retained_diagnostics - retained_limits;
+    let mut merged = Vec::with_capacity(MAX_FOLDER_LISTING_ERRORS);
+    // Identical path/reason pairs from both inputs remain distinct: the duplicate carries
+    // provenance that each operation observed the child and must not be silently discarded.
+    for diagnostic in first_pass.into_iter().chain(recursive_pass) {
+        if folder_diagnostic_reports_coverage_limit(&diagnostic) && retained_limits > 0 {
+            retained_limits -= 1;
+            merged.push(diagnostic);
+        } else if !folder_diagnostic_reports_coverage_limit(&diagnostic) && retained_ordinary > 0 {
+            retained_ordinary -= 1;
+            merged.push(diagnostic);
+        }
+    }
+    merged.push(PathDiagnostic {
+        path: normalize_path_string(root),
+        reason: format!(
+            "combined folder diagnostics exceeded the \
+             {MAX_FOLDER_LISTING_ERRORS}-diagnostic limit; later diagnostics were omitted"
+        ),
+    });
+    merged
+}
+
+fn folder_diagnostic_reports_coverage_limit(diagnostic: &PathDiagnostic) -> bool {
+    diagnostic.reason.contains("limit") || diagnostic.reason.contains("truncated")
+}
+
 fn compare_folder_entries(left: &FolderEntry, right: &FolderEntry) -> Ordering {
     match (left.is_dir, right.is_dir) {
         (true, false) => Ordering::Less,
+
         (false, true) => Ordering::Greater,
         _ => {
             let left_lower = left.name.to_lowercase();
@@ -749,7 +912,10 @@ fn index_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate_impl};
+    use super::{
+        index_aggregate_entries, list_log_folder, merge_folder_diagnostics,
+        open_log_folder_aggregate_impl, PathDiagnostic, MAX_FOLDER_LISTING_ERRORS,
+    };
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
@@ -910,6 +1076,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn aggregate_folder_diagnostics_preserve_coverage_limits_within_the_bound() {
+        let mut listing = (0..MAX_FOLDER_LISTING_ERRORS - 1)
+            .map(|index| PathDiagnostic {
+                path: format!("listing-{index}.log"),
+                reason: "listing failure".into(),
+            })
+            .collect::<Vec<_>>();
+        listing.push(PathDiagnostic {
+            path: "aggregate-root".into(),
+            reason: "folder listing reached the 4096-entry limit".into(),
+        });
+        let parse = vec![
+            PathDiagnostic {
+                path: "parse-failure.log".into(),
+                reason: "parse failure".into(),
+            },
+            PathDiagnostic {
+                path: "aggregate-root".into(),
+                reason: "recursive listing truncated after inspecting 16384 entries".into(),
+            },
+        ];
+
+        let merged =
+            merge_folder_diagnostics(listing, parse, std::path::Path::new("aggregate-root"));
+
+        assert_eq!(merged.len(), MAX_FOLDER_LISTING_ERRORS);
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason == "folder listing reached the 4096-entry limit"
+        }));
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason == "recursive listing truncated after inspecting 16384 entries"
+        }));
+        assert!(merged.iter().any(|diagnostic| {
+            diagnostic.path == "aggregate-root"
+                && diagnostic.reason.contains("later diagnostics were omitted")
+        }));
+    }
+
     /// A folder reaching the file lane must be classified by its kind, never by
     /// whatever the failed open happened to report.
     ///
@@ -940,6 +1147,23 @@ mod tests {
         }
 
         fs::remove_dir_all(&dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn ordinary_manifest_folder_keeps_evtx_children_and_is_not_bundle() {
+        let dir = create_temp_dir("file-ops-ordinary-manifest");
+        fs::write(dir.join("manifest.json"), r#"{"notes":"ordinary folder"}"#)
+            .expect("write ordinary manifest");
+        fs::write(dir.join("Application.evtx"), b"evtx").expect("write evtx");
+
+        let result = list_log_folder(dir.to_string_lossy().to_string()).expect("list folder");
+        assert!(result.bundle_metadata.is_none());
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.name == "Application.evtx"));
+
+        fs::remove_dir_all(&dir).expect("remove ordinary folder");
     }
 
     #[test]
@@ -1008,6 +1232,94 @@ mod tests {
 
         fs::remove_dir_all(&bundle_dir).expect("remove temp bundle dir");
     }
+    #[test]
+    fn bundle_listing_includes_nested_evtx_and_bounds_recursive_entries() {
+        let bundle_dir = create_temp_dir("file-ops-bundle-eventlog-cap");
+        let nested = bundle_dir.join("evidence").join("logs").join("nested");
+        fs::create_dir_all(&nested).expect("create nested logs");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        let evtx = nested.join("Application.evtx");
+        fs::write(&evtx, b"evtx").expect("write event log");
+        for index in 0..4100 {
+            fs::write(nested.join(format!("artifact-{index}.log")), b"log")
+                .expect("write artifact");
+        }
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result.entries.len() <= 4096);
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.path == evtx.to_string_lossy()));
+        fs::remove_dir_all(&bundle_dir).expect("remove temp bundle");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bundle_listing_rejects_symlinked_directories_with_child_coverage() {
+        use std::os::unix::fs::symlink;
+
+        let bundle_dir = create_temp_dir("file-ops-bundle-symlink");
+        let outside = create_temp_dir("file-ops-bundle-symlink-target");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        fs::create_dir_all(bundle_dir.join("evidence")).expect("create evidence");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        symlink(&outside, bundle_dir.join("evidence").join("linked"))
+            .expect("create directory symlink");
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        assert!(result
+            .child_errors
+            .iter()
+            .any(|error| error.reason.contains("symbolic link")));
+        assert!(!result
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("outside.log")));
+
+        fs::remove_dir_all(&bundle_dir).expect("remove bundle");
+        fs::remove_dir_all(&outside).expect("remove target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_listing_preserves_first_pass_child_diagnostics() {
+        use std::os::unix::fs::symlink;
+
+        let bundle_dir = create_temp_dir("file-ops-bundle-preserve-diagnostics");
+        let outside = create_temp_dir("file-ops-bundle-preserve-target");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        fs::write(bundle_dir.join("manifest.json"), sample_bundle_manifest())
+            .expect("write manifest");
+        let linked = bundle_dir.join("linked.log");
+        symlink(outside.join("outside.log"), &linked).expect("create file symlink");
+
+        let result =
+            list_log_folder(bundle_dir.to_string_lossy().to_string()).expect("list bundle");
+        let linked_path = linked.to_string_lossy();
+        let expected_reason = "symbolic link or reparse point is not followed";
+        assert!(result
+            .child_errors
+            .iter()
+            .any(|error| { error.path == linked_path && error.reason == expected_reason }));
+        let linked_reasons: Vec<&str> = result
+            .child_errors
+            .iter()
+            .filter(|error| error.path == linked_path)
+            .map(|error| error.reason.as_str())
+            .collect();
+        assert_eq!(
+            linked_reasons,
+            vec![expected_reason, expected_reason],
+            "the first-pass and recursive traversal diagnostics must both survive"
+        );
+
+        fs::remove_dir_all(&bundle_dir).expect("remove bundle");
+        fs::remove_dir_all(&outside).expect("remove target");
+    }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1028,11 +1340,11 @@ mod tests {
         "caseReference": "case-123",
         "summary": "Curated endpoint evidence bundle.",
         "device": {
-            "deviceName": "GELL-VM-5879648",
-            "primaryUser": "AzureAD\\AdamGell",
+            "deviceName": "SYNTHETIC-DEVICE-001",
+            "primaryUser": "AzureAD\\synthetic.user@example.invalid",
             "platform": "Windows",
             "osVersion": "Windows 11",
-            "tenant": "CDWWorkspaceLab"
+            "tenant": "synthetic-tenant.example.invalid"
         }
     },
     "collection": {
@@ -1124,7 +1436,7 @@ mod tests {
         "bundleLabel": "intune-endpoint-evidence",
         "createdUtc": "2026-03-12T16:00:54Z",
         "device": {
-            "deviceName": "GELL-VM-5879648",
+            "deviceName": "SYNTHETIC-DEVICE-002",
             "platform": "Windows"
         }
     },

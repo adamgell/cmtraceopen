@@ -16,6 +16,8 @@ import {
   type EvtxSavedFilter,
 } from "./evtx-saved-filters";
 
+const SAVED_FILTER_STORAGE_KEY = "cmtraceopen-evtx-saved-filters";
+
 interface SavedFilterState {
   savedFilters: EvtxSavedFilter[];
   /** Returns the stored filter, or null when the name is empty once trimmed. */
@@ -26,6 +28,25 @@ interface SavedFilterState {
   importFilters: (imported: EvtxSavedFilter[]) => void;
   ordered: () => EvtxSavedFilter[];
 }
+export function migratePersistedSavedFilters(
+  persisted: unknown,
+  version: number | undefined
+): { savedFilters: EvtxSavedFilter[] } {
+  if (version == null || version < 2) return { savedFilters: [] };
+  if (version > 2) {
+    throw new Error(`Unsupported saved-filter schema version ${version}`);
+  }
+  const raw = persisted as { savedFilters?: unknown } | undefined;
+  if (!raw || !Array.isArray(raw.savedFilters)) {
+    throw new Error("Malformed saved-filter storage envelope");
+  }
+  const list = raw.savedFilters;
+  const savedFilters = list
+    .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
+    .filter((filter): filter is EvtxSavedFilter => filter !== null);
+  return { savedFilters };
+}
+
 
 function newId(): string {
   // crypto.randomUUID is unavailable in some webviews, so fall back rather than throwing.
@@ -86,17 +107,25 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       ordered: () => orderFilters(get().savedFilters),
     }),
     {
-      name: "cmtraceopen-evtx-saved-filters",
-      // Persisted data outlives the build that wrote it, so it is revalidated on load rather than
-      // trusted. A filter that no longer validates is dropped, not repaired into something the
-      // operator never chose.
-      merge: (persisted, current) => {
-        const raw = persisted as { savedFilters?: unknown } | undefined;
-        const list = Array.isArray(raw?.savedFilters) ? raw.savedFilters : [];
-        const savedFilters = list
-          .map((entry, index) => sanitizeSavedFilter(entry, `restored-${index}`))
-          .filter((filter): filter is EvtxSavedFilter => filter !== null);
-        return { ...current, savedFilters };
+      name: SAVED_FILTER_STORAGE_KEY,
+      version: 2,
+      migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
+      // Zustand only calls migrate when the stored version differs. Current-version data still
+      // crosses an untrusted localStorage boundary, so validate it before merging state too.
+      merge: (persisted, current) => ({
+        ...current,
+        ...migratePersistedSavedFilters(persisted, 2),
+      }),
+      onRehydrateStorage: () => (_state, error) => {
+        if (!error) return;
+        try {
+          localStorage.removeItem(SAVED_FILTER_STORAGE_KEY);
+        } catch (cleanupError) {
+          console.error("[event-log] failed to discard invalid saved-filter storage", {
+            error,
+            cleanupError,
+          });
+        }
       },
     }
   )

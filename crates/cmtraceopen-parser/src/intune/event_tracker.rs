@@ -34,18 +34,16 @@ fn win32_result_re() -> &'static Regex {
 fn win32_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(&format!(
-        r"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+({GUID_PATTERN})"
-    ))
-    .unwrap()
-})
+        Regex::new(&format!(
+            r"(?i)(?:app|application)\s+(?:id|with\s+id)[:\s]+({GUID_PATTERN})"
+        ))
+        .unwrap()
+    })
 }
 /// Matches "for app <GUID>" — common in StatusReport lines where a user GUID precedes the app GUID.
 fn for_app_guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(&format!(r"(?i)for\s+app\s+({GUID_PATTERN})")).unwrap()
-    })
+    CELL.get_or_init(|| Regex::new(&format!(r"(?i)for\s+app\s+({GUID_PATTERN})")).unwrap())
 }
 fn winget_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();

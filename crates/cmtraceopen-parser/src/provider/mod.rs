@@ -13,9 +13,9 @@
 //! The format was reverse engineered from a real database built on Windows 11; the full spec is in
 //! issue #539.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use serde::ser::SerializeSeq;
+use serde::ser::{Error as _, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Reinterprets a signed integer as unsigned, preserving the bit pattern.
@@ -54,15 +54,25 @@ fn u64_vec_as_signed<S: Serializer>(values: &[u64], serializer: S) -> Result<S::
     sequence.end()
 }
 
-fn u32_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_i64(*value as i32 as i64)
+/// EventLogExpert stores the low message identifier as a signed Int16 even though the in-memory
+/// model keeps the complete low-word value as `u32`.
+fn short_id_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    if *value > u16::MAX as u32 {
+        return Err(S::Error::custom(
+            "ShortId must fit an unsigned 16-bit low word",
+        ));
+    }
+    serializer.serialize_i64((*value as u16 as i16) as i64)
 }
 
-/// Reinterprets a signed integer as an unsigned 32-bit value.
-///
-/// Message identifiers above `0x7FFFFFFF` are written negative for the same reason.
-fn signed_as_u32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    Ok(i64::deserialize(deserializer)? as u32)
+fn signed_as_short_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = i64::deserialize(deserializer)?;
+    if !(-32768..=32767).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "ShortId must be a signed Int16 value",
+        ));
+    }
+    Ok((value as i16 as u16) as u32)
 }
 
 /// One event definition from a provider's manifest.
@@ -115,10 +125,22 @@ pub struct ProviderMessage {
     /// Low bits of `raw_id`, which is what most references use.
     #[serde(
         default,
-        deserialize_with = "signed_as_u32",
-        serialize_with = "u32_as_signed"
+        deserialize_with = "signed_as_short_id",
+        serialize_with = "short_id_as_signed"
     )]
     pub short_id: u32,
+    /// Provider name owning this message row, when persisted by EventLogExpert.
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    /// Manifest template associated with this message, when present.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// EventLogExpert message tag, when present.
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// EventLogExpert log-link metadata, when present.
+    #[serde(default)]
+    pub log_link: Option<String>,
     /// The message text.
     #[serde(default)]
     pub text: Option<String>,
@@ -137,6 +159,9 @@ pub struct ProviderMetadata {
     /// Message table.
     #[serde(default)]
     pub messages: Vec<ProviderMessage>,
+    /// Level value to name.
+    #[serde(default)]
+    pub levels: BTreeMap<String, String>,
     /// Task value to name.
     #[serde(default)]
     pub tasks: BTreeMap<String, String>,
@@ -146,26 +171,91 @@ pub struct ProviderMetadata {
     /// Opcode value to name.
     #[serde(default)]
     pub opcodes: BTreeMap<String, String>,
+    /// Categories that were unavailable in the source publisher metadata.
+    ///
+    /// An absent category is distinct from a present category with zero entries.
+    #[serde(default)]
+    pub unavailable_categories: BTreeSet<String>,
     /// Windows build the metadata was captured from, so a mismatch is visible rather than assumed.
     #[serde(default)]
     pub source_os_build: Option<u32>,
 }
 
+fn compare_event_stable(left: &ProviderEvent, right: &ProviderEvent) -> std::cmp::Ordering {
+    left.description
+        .as_deref()
+        .cmp(&right.description.as_deref())
+        .then_with(|| left.log_name.as_deref().cmp(&right.log_name.as_deref()))
+        .then_with(|| left.template.as_deref().cmp(&right.template.as_deref()))
+        .then_with(|| left.level.cmp(&right.level))
+        .then_with(|| left.task.cmp(&right.task))
+        .then_with(|| left.opcode.cmp(&right.opcode))
+        .then_with(|| left.keywords.cmp(&right.keywords))
+}
+
 impl ProviderMetadata {
-    /// Finds the definition for `event_id`, preferring an exact `version` match.
+    /// Finds the definition for `event_id`, preferring an exact `version` match and channel match.
     ///
-    /// Providers legitimately define several versions of one ID. Picking the wrong one renders a
-    /// description whose insertion points do not line up with the event's fields, which reads as
-    /// plausible but wrong text, so the exact version wins and the highest known version is only a
+    /// Providers legitimately define several versions of one ID and can reuse that ID on
+    /// different channels. Picking a definition from a sibling channel renders a description whose
+    /// insertion points do not line up with the event's fields, which reads as plausible but wrong
+    /// text, so channel and exact version matches win and the highest known version is only a
     /// fallback.
-    pub fn event(&self, event_id: u32, version: Option<u32>) -> Option<&ProviderEvent> {
-        let candidates = self.events.iter().filter(|event| event.id == event_id);
+    pub fn event(
+        &self,
+        event_id: u32,
+        version: Option<u32>,
+        log_name: Option<&str>,
+    ) -> Option<&ProviderEvent> {
+        let exact_channel_available = log_name.is_some_and(|actual| {
+            self.events.iter().any(|event| {
+                event.id == event_id
+                    && event
+                        .log_name
+                        .as_deref()
+                        .is_some_and(|expected| expected.eq_ignore_ascii_case(actual))
+            })
+        });
+        let candidates = self.events.iter().filter(|event| {
+            event.id == event_id
+                && match (event.log_name.as_deref(), log_name, exact_channel_available) {
+                    (Some(expected), Some(actual), true) => expected.eq_ignore_ascii_case(actual),
+                    (None, Some(_), false) => true,
+                    (None, None, _) => true,
+                    _ => false,
+                }
+        });
         if let Some(version) = version {
-            if let Some(exact) = candidates.clone().find(|event| event.version == version) {
+            if let Some(exact) = candidates
+                .clone()
+                .filter(|event| event.version == version)
+                .max_by(|left, right| compare_event_stable(left, right))
+            {
                 return Some(exact);
             }
         }
-        candidates.max_by_key(|event| event.version)
+        candidates.max_by(|left, right| {
+            left.version
+                .cmp(&right.version)
+                .then_with(|| compare_event_stable(left, right))
+        })
+    }
+    /// Renders the selected event definition without consulting a Windows registry.
+    ///
+    /// Captured provider metadata is portable; callers can use this on macOS, Linux, and wasm
+    /// builds exactly as on Windows.
+    pub fn render_event_description(
+        &self,
+        event_id: u32,
+        version: Option<u32>,
+        log_name: Option<&str>,
+        insertions: &[String],
+    ) -> Option<RenderedDescription> {
+        let template = self
+            .event(event_id, version, log_name)?
+            .description
+            .as_deref()?;
+        Some(render_description(template, insertions))
     }
 
     /// Resolves a task value to its name.
@@ -376,12 +466,20 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn captured_metadata_renders_the_requested_event_version_without_registry() {
+        let rendered = metadata()
+            .render_event_description(100, Some(0), None, &insertions(&["portable"]))
+            .expect("event description");
+        assert_eq!(rendered.text, "v0 portable");
+        assert!(rendered.is_complete());
+    }
 
     #[test]
     fn an_exact_version_match_wins() {
         let meta = metadata();
         assert_eq!(
-            meta.event(100, Some(0))
+            meta.event(100, Some(0), None)
                 .and_then(|e| e.description.as_deref()),
             Some("v0 %1")
         );
@@ -393,19 +491,114 @@ mod tests {
         // the exact version is available.
         let meta = metadata();
         assert_eq!(
-            meta.event(100, Some(7))
+            meta.event(100, Some(7), None)
                 .and_then(|e| e.description.as_deref()),
             Some("v1 %1")
         );
         assert_eq!(
-            meta.event(100, None).and_then(|e| e.description.as_deref()),
+            meta.event(100, None, None)
+                .and_then(|e| e.description.as_deref()),
             Some("v1 %1")
         );
     }
 
     #[test]
     fn an_unknown_event_id_resolves_to_nothing() {
-        assert!(metadata().event(999, None).is_none());
+        assert!(metadata().event(999, None, None).is_none());
+    }
+
+    #[test]
+    fn exact_channel_match_beats_wildcard_at_the_same_version() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 42,
+                    version: 3,
+                    description: Some("wildcard".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 42,
+                    version: 3,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(42, Some(3), Some("provider/admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn channel_tier_precedes_version_fallback() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 43,
+                    version: 9,
+                    description: Some("wildcard-newer".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 43,
+                    version: 2,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin-older".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(43, Some(7), Some("Provider/Admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin-older")
+        );
+    }
+
+    #[test]
+    fn event_lookup_requires_the_captured_channel() {
+        let metadata = ProviderMetadata {
+            events: vec![
+                ProviderEvent {
+                    id: 42,
+                    version: 0,
+                    log_name: Some("Provider/Admin".into()),
+                    description: Some("admin".into()),
+                    ..Default::default()
+                },
+                ProviderEvent {
+                    id: 42,
+                    version: 0,
+                    log_name: Some("Provider/Operational".into()),
+                    description: Some("operational".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .event(42, Some(0), Some("Provider/Admin"))
+                .and_then(|event| event.description.as_deref()),
+            Some("admin")
+        );
+        assert_eq!(
+            metadata
+                .event(42, Some(0), Some("Provider/Operational"))
+                .and_then(|event| event.description.as_deref()),
+            Some("operational")
+        );
+        assert!(metadata
+            .event(42, Some(0), Some("Provider/Debug"))
+            .is_none());
     }
 
     #[test]
@@ -442,11 +635,53 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_message_id_is_reinterpreted_rather_than_rejected() {
-        let json = r#"{"RawId":-2147221478,"ShortId":-2147221478,"Text":"x"}"#;
+    fn short_message_ids_use_signed_int16_wire_values() {
+        let json = r#"{"RawId":-2147221478,"ShortId":-32768,"Text":"x"}"#;
         let message: ProviderMessage = serde_json::from_str(json).expect("deserializes");
         assert_eq!(message.raw_id, (-2_147_221_478_i64) as u64);
-        assert_eq!(message.short_id, (-2_147_221_478_i64) as u32);
+        assert_eq!(message.short_id, 0x8000);
+        let encoded = serde_json::to_string(&message).expect("serializes");
+        assert!(encoded.contains(r#""ShortId":-32768"#));
+
+        let all_bits = ProviderMessage {
+            short_id: 0xffff,
+            ..ProviderMessage::default()
+        };
+        let encoded = serde_json::to_string(&all_bits).expect("serializes");
+        assert!(encoded.contains(r#""ShortId":-1"#));
+        let decoded: ProviderMessage = serde_json::from_str(&encoded).expect("round-trips");
+        assert_eq!(decoded.short_id, 0xffff);
+    }
+    #[test]
+    fn short_message_ids_accept_signed_int16_boundaries() {
+        for (wire_value, expected_short_id) in [(-32768, 0x8000), (32767, 0x7fff)] {
+            let json = format!(r#"{{"RawId":1,"ShortId":{wire_value},"Text":"x"}}"#);
+            let message: ProviderMessage = serde_json::from_str(&json).expect("deserializes");
+            assert_eq!(message.short_id, expected_short_id);
+        }
+    }
+
+    #[test]
+    fn short_message_ids_reject_values_outside_signed_int16() {
+        for wire_value in [32768, -32769] {
+            let json = format!(r#"{{"RawId":1,"ShortId":{wire_value},"Text":"x"}}"#);
+            assert!(
+                serde_json::from_str::<ProviderMessage>(&json).is_err(),
+                "out-of-range ShortId should be rejected: {wire_value}"
+            );
+        }
+    }
+
+    #[test]
+    fn short_message_ids_reject_in_memory_values_wider_than_a_low_word() {
+        let message = ProviderMessage {
+            short_id: u16::MAX as u32 + 1,
+            ..ProviderMessage::default()
+        };
+
+        let error = serde_json::to_string(&message)
+            .expect_err("serializing a ShortId wider than 16 bits must fail");
+        assert!(error.to_string().contains("ShortId"));
     }
 
     #[test]

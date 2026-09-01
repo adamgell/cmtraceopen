@@ -20,14 +20,17 @@ describe("MSI DISABLEUPDATECHECKS policy (#576)", () => {
     assert.equal(secure?.value, "DISABLEUPDATECHECKS");
   });
 
-  it("schedules a failing-hard PowerShell CA only when DISABLEUPDATECHECKS=1", async () => {
+  it("schedules exactly one failing-hard update-policy CA only when DISABLEUPDATECHECKS=1", async () => {
     const pkg = JSON.parse(
       await readFile(path.join(repoRoot, "src-tauri/installer/package.signed.json"), "utf8")
     );
     const actions = pkg.msi.customActions?.powershell ?? [];
-    assert.equal(actions.length, 1);
+    const policyActions = actions.filter((action) =>
+      /set-disable-update-checks-policy\.ps1$/.test(action.filePath)
+    );
+    assert.equal(policyActions.length, 1);
 
-    const action = actions[0];
+    const [action] = policyActions;
     assert.match(action.filePath, /set-disable-update-checks-policy\.ps1$/);
     assert.equal(action.condition, 'DISABLEUPDATECHECKS="1" AND REMOVE<>"ALL"');
     assert.equal(action.sequence, "EndOfExecution");

@@ -1,36 +1,58 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
-  getLogListMetrics,
+  clampLogDetailsFontSize,
+  getLogDetailsLineHeight,
 } from "../../lib/log-accessibility";
+import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
+import {
+  evtxMarkerKey,
+  getEvtxMarker,
+  isEvtxMarkerAddressable,
+  loadEvtxMarkers,
+  toggleEvtxBookmark,
+  toggleEvtxTag,
+} from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
+import { EvtxMarkerControls } from "./EvtxTimelineRow";
 
 export function EvtxDetailPane() {
+  const markersByFile = useMarkerStore((s) => s.markersByFile);
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const [showRawXml, setShowRawXml] = useState(false);
 
-  const logListFontSize = useUiStore((s) => s.logListFontSize);
-  const metrics = useMemo(
-    () => getLogListMetrics(logListFontSize),
-    [logListFontSize]
-  );
+  const logDetailsFontSize = useUiStore((s) => s.logDetailsFontSize);
+  const fontSize = clampLogDetailsFontSize(logDetailsFontSize);
+  const detailLineHeight = getLogDetailsLineHeight(logDetailsFontSize);
+  const monoFontSize = Math.max(10, fontSize - 1);
+  const labelFontSize = Math.max(10, fontSize - 2);
 
   const record = useMemo(() => {
     if (selectedRecordId == null) return null;
     return records.find((r) => r.id === selectedRecordId) ?? null;
   }, [records, selectedRecordId]);
+  const marker = useMemo(
+    () => (record ? getEvtxMarker(record, markersByFile) : null),
+    [record, markersByFile]
+  );
+
+  useEffect(() => {
+    if (record) loadEvtxMarkers([record.sourceLabel]);
+  }, [record?.sourceLabel]);
 
   if (!record) {
     return (
       <div
+        role="region"
+        aria-label="Event log details"
         style={{
           padding: "16px",
           color: tokens.colorNeutralForeground4,
-          fontSize: `${metrics.fontSize}px`,
+          fontSize: `${fontSize}px`,
           fontFamily: LOG_UI_FONT_FAMILY,
           textAlign: "center",
         }}
@@ -40,11 +62,12 @@ export function EvtxDetailPane() {
     );
   }
 
-  const fontSize = metrics.fontSize;
-  const monoFontSize = Math.max(10, fontSize - 1);
+  const markerAddressable = isEvtxMarkerAddressable(record);
 
   return (
     <div
+      role="region"
+      aria-label="Event log details"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -53,11 +76,13 @@ export function EvtxDetailPane() {
         padding: "12px",
         fontFamily: LOG_UI_FONT_FAMILY,
         fontSize: `${fontSize}px`,
+        lineHeight: `${detailLineHeight}px`,
         gap: "12px",
       }}
     >
       {/* Header */}
       <div
+        data-evtx-marker-key={evtxMarkerKey(record)}
         style={{
           display: "flex",
           alignItems: "center",
@@ -90,6 +115,15 @@ export function EvtxDetailPane() {
         >
           {record.level}
         </span>
+        <EvtxMarkerControls
+          record={record}
+          marker={marker}
+          markerAddressable={markerAddressable}
+          fontSize={fontSize}
+          variant="detail"
+          onTag={toggleEvtxTag}
+          onBookmark={toggleEvtxBookmark}
+        />
       </div>
 
       {/* Message */}
@@ -115,12 +149,67 @@ export function EvtxDetailPane() {
         </div>
       )}
 
+      {(record.activityId ||
+        record.relatedActivityId ||
+        record.sessionId ||
+        record.deviceId ||
+        record.userId ||
+        record.processStartTime) && (
+        <div
+          style={{
+            border: `1px solid ${tokens.colorNeutralStroke2}`,
+            padding: "8px",
+            borderRadius: "4px",
+            backgroundColor: tokens.colorNeutralBackground2,
+          }}
+        >
+          <div
+            style={{
+              fontSize: `${labelFontSize}px`,
+              fontWeight: 600,
+              color: tokens.colorNeutralForeground3,
+              textTransform: "uppercase",
+              marginBottom: "4px",
+            }}
+          >
+            Correlation identity
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "max-content 1fr",
+              gap: "2px 12px",
+              fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+              fontSize: `${monoFontSize}px`,
+            }}
+          >
+            {[
+              ["Activity ID", record.activityId],
+              ["Related activity ID", record.relatedActivityId],
+              ["Session ID", record.sessionId],
+              ["Device ID", record.deviceId],
+              ["User ID", record.userId],
+              ["Process start", record.processStartTime],
+            ]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <div key={label} style={{ display: "contents" }}>
+                  <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>
+                  <span style={{ color: tokens.colorNeutralForeground1, wordBreak: "break-all" }}>
+                    {value}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Event Data key-value table */}
       {record.eventData.length > 0 && (
         <div>
           <div
             style={{
-              fontSize: "11px",
+              fontSize: `${labelFontSize}px`,
               fontWeight: 600,
               color: tokens.colorNeutralForeground3,
               textTransform: "uppercase",
@@ -193,7 +282,7 @@ export function EvtxDetailPane() {
           <strong>Computer:</strong> {record.computer}
         </span>
         <span>
-          <strong>Record ID:</strong> {record.eventRecordId}
+          <strong>Record ID:</strong> {record.eventRecordIdText ?? record.eventRecordId}
         </span>
         <span>
           <strong>Source:</strong> {record.sourceLabel}
@@ -289,6 +378,7 @@ export function EvtxDetailPane() {
           size="small"
           appearance="subtle"
           onClick={() => setShowRawXml(!showRawXml)}
+          style={{ fontSize: `${fontSize}px` }}
         >
           {showRawXml ? "Hide Raw XML" : "Show Raw XML"}
         </Button>

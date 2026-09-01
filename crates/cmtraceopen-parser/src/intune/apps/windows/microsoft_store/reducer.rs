@@ -452,7 +452,9 @@ fn groups_may_merge(left: &Group, right: &Group) -> bool {
     if !left
         .execution_context
         .is_compatible_with(right.execution_context)
-        || !left.installer_family.is_compatible_with(right.installer_family)
+        || !left
+            .installer_family
+            .is_compatible_with(right.installer_family)
     {
         return false;
     }
@@ -777,10 +779,7 @@ fn resolve_state(
     });
 
     let state = surviving[0].state;
-    if surviving
-        .iter()
-        .any(|candidate| candidate.state != state)
-    {
+    if surviving.iter().any(|candidate| candidate.state != state) {
         return (StoreTransactionState::InsufficientEvidence, None);
     }
     let error = surviving

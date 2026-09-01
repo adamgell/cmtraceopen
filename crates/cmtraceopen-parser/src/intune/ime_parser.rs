@@ -95,11 +95,7 @@ pub fn parse_ime_content(content: &str) -> Vec<ImeLine> {
 /// single linear pass.
 pub fn parse_ime_content_bounded(content: &str, limit: usize) -> (Vec<ImeLine>, bool) {
     let parsed = parse_ime_records(content, limit.saturating_add(1));
-    let mut lines: Vec<ImeLine> = parsed
-        .entries
-        .into_iter()
-        .map(|entry| entry.line)
-        .collect();
+    let mut lines: Vec<ImeLine> = parsed.entries.into_iter().map(|entry| entry.line).collect();
     let truncated = lines.len() > limit;
     lines.truncate(limit);
     (lines, truncated)
@@ -769,11 +765,17 @@ mod tests {
 
         let (bounded, truncated) = parse_ime_content_bounded(&content, 3);
         assert_eq!(bounded.len(), 3);
-        assert!(truncated, "records past the bound existed and were not read");
+        assert!(
+            truncated,
+            "records past the bound existed and were not read"
+        );
 
         let (all, truncated) = parse_ime_content_bounded(&content, 5);
         assert_eq!(all.len(), 5);
-        assert!(!truncated, "an exactly-at-the-limit artifact is not truncated");
+        assert!(
+            !truncated,
+            "an exactly-at-the-limit artifact is not truncated"
+        );
 
         // The bounded prefix is the same records the unbounded parse yields.
         let unbounded = parse_ime_content(&content);
