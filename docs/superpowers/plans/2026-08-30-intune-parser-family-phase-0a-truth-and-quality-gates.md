@@ -804,7 +804,7 @@ Run:
 set -euo pipefail
 receipt_path=.superpowers/sdd/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates/phase0a-gate-receipt.json
 receipt_tmp="${receipt_path}.tmp"
-trap 'rm -f -- "$receipt_tmp"' EXIT
+trap 'rm -f -- "$receipt_tmp" "$receipt_path"' EXIT
 mkdir -p "$(dirname "$receipt_path")"
 rm -f -- "$receipt_path" "$receipt_tmp"
 head_sha="$(git rev-parse HEAD)"
@@ -843,37 +843,39 @@ jq -n -S \
       diff_check: true
     }}' > "$receipt_tmp"
 mv "$receipt_tmp" "$receipt_path"
-trap - EXIT
 test "$(git check-ignore "$receipt_path")" = "$receipt_path"
 cmp -s "$receipt_path" <(jq -S . "$receipt_path")
 printf 'Gate receipt SHA-256: '
 shasum -a 256 "$receipt_path" | awk '{print $1}'
+trap - EXIT
 )
 ```
 
 Expected: `set -euo pipefail` stops on the first failed gate; the fixed ignored
 receipt and its exact temporary file are removed before execution, so neither
 exists after a failed gate or receipt-finalization failure. The EXIT trap removes
-only that exact temporary file on failure. Only after every gate and the
-clean-status assertion pass does the command atomically publish the ignored,
-local-only `phase0a-gate-receipt.json`, disable the trap, and retain canonical
-sorted JSON with schema/version, exact `head`/`base`, and `true` for every named
-gate used in the Issue #356 PASS sentence. The command also prints the digest
-that Task 6 publishes with the exact receipt bytes without modifying the
-candidate commit.
+only the exact temporary and local receipt files on failure. Only after every
+gate, the clean-status assertion, ignored-path check, canonical-byte check, and
+digest calculation pass does the command disable the trap and retain canonical
+sorted `phase0a-gate-receipt.json` with schema/version, exact `head`/`base`, and
+`true` for every named gate used in the Issue #356 PASS sentence. The command
+prints the digest that Task 6 publishes with the exact receipt bytes without
+modifying the candidate commit.
 
 Run this local, non-mutating receipt proof:
 
 ```bash
 receipt_dir="$(mktemp -d)"
 failed_receipt="${receipt_dir}/failed.json"
+publication_failed_receipt="${receipt_dir}/publication-failed.json"
+validation_failed_receipt="${receipt_dir}/validation-failed.json"
 successful_receipt="${receipt_dir}/successful.json"
 
 bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
-  trap "rm -f -- \"$tmp\"" EXIT
+  trap "rm -f -- \"$tmp\" \"$receipt\"" EXIT
   rm -f -- "$receipt" "$tmp"
   false
   jq -n "{schema: \"phase0a-gate-receipt\"}" > "$tmp"
@@ -882,12 +884,11 @@ bash -c '
 test ! -e "$failed_receipt"
 test ! -e "${failed_receipt}.tmp"
 
-publication_failed_receipt="${receipt_dir}/publication-failed.json"
 if bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
-  trap "rm -f -- \"$tmp\"" EXIT
+  trap "rm -f -- \"$tmp\" \"$receipt\"" EXIT
   rm -f -- "$receipt" "$tmp"
   mv() {
     test -e "$1"
@@ -902,11 +903,30 @@ fi
 test ! -e "$publication_failed_receipt"
 test ! -e "${publication_failed_receipt}.tmp"
 
+if bash -c '
+  set -euo pipefail
+  receipt="$1"
+  tmp="${receipt}.tmp"
+  trap "rm -f -- \"$tmp\" \"$receipt\"" EXIT
+  rm -f -- "$receipt" "$tmp"
+  jq -n -S "{schema: \"wrong-schema\"}" > "$tmp"
+  mv "$tmp" "$receipt"
+  cmp -s "$receipt" <(jq -S . "$receipt")
+  jq -e ".schema == \"phase0a-gate-receipt\"" "$receipt" >/dev/null
+  trap - EXIT
+' bash "$validation_failed_receipt" 2>/dev/null; then
+  echo "expected post-publication receipt validation to fail" >&2
+  exit 1
+fi
+test ! -e "$validation_failed_receipt"
+test ! -e "${validation_failed_receipt}.tmp"
+
 bash -c '
   set -euo pipefail
   receipt="$1"
   tmp="${receipt}.tmp"
-  trap "rm -f -- \"$tmp\"" EXIT
+  trap "rm -f -- \"$tmp\" \"$receipt\"" EXIT
+  rm -f -- "$receipt" "$tmp"
   jq -n -S --arg head test-head --arg base test-base \
     "{schema: \"phase0a-gate-receipt\", version: 1, head: \$head, base: \$base,
       gates: {rustfmt: true, parser_tests: true, app_all_features_tests: true,
@@ -915,22 +935,23 @@ bash -c '
       typescript_noemit: true, workflow_contract: true, actionlint: true,
       diff_check: true}}" > "$tmp"
   mv "$tmp" "$receipt"
+  cmp -s "$receipt" <(jq -S . "$receipt")
+  jq -e "
+    .schema == \"phase0a-gate-receipt\" and .version == 1 and
+    .head == \"test-head\" and .base == \"test-base\" and
+    ([.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
+     .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
+     .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
+     .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
+     .gates.diff_check] | all(. == true))" "$receipt" >/dev/null
   trap - EXIT
 ' bash "$successful_receipt"
-cmp -s "$successful_receipt" <(jq -S . "$successful_receipt")
-jq -e '
-  .schema == "phase0a-gate-receipt" and .version == 1 and
-  .head == "test-head" and .base == "test-base" and
-  ([.gates.rustfmt, .gates.parser_tests, .gates.app_all_features_tests,
-   .gates.parser_strict_clippy, .gates.workspace_all_targets_all_features_clippy,
-   .gates.parser_wasm, .gates.workspace_all_features_check, .gates.frontend_tests,
-   .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
-   .gates.diff_check] | all(. == true))' "$successful_receipt" >/dev/null
 ```
 
-Expected: the injected early-gate failure and actual `mv` publication failure
-leave no receipt or temp file; the successful path atomically creates a
-complete, all-true receipt and disables its cleanup trap after `mv`.
+Expected: the injected early-gate failure, actual `mv` publication failure, and
+post-publication validation failure leave no receipt or temp file. The
+successful path atomically creates and validates a complete, canonical,
+all-true receipt, then disables its cleanup trap only after validation.
 
 Run this local, non-mutating receipt-predicate matrix:
 
