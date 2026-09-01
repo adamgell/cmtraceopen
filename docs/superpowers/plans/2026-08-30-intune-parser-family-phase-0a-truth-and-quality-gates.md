@@ -783,9 +783,22 @@ Run:
 node --test .github/scripts/source-quality-workflow.test.mjs
 ```
 
-Expected: FAIL with `source-quality job missing`.
+Expected: FAIL first with `root workflow environment is not allowed`. This
+pins the inherited root `CARGO_TERM_COLOR` block as part of the RED state; the
+next step removes that root control before adding the required job.
 
 - [ ] **Step 3: Add the source-quality job**
+
+Delete this inherited root-level block from `.github/workflows/cmtrace-ci.yml`:
+
+```yaml
+env:
+  CARGO_TERM_COLOR: always
+```
+
+Do not relocate it to another root workflow control. The source-quality job
+pins only the environment needed for its fail-closed shell contract, and the
+other jobs do not require colored Cargo output for correctness.
 
 Insert this job immediately after `jobs:` in `.github/workflows/cmtrace-ci.yml`:
 
