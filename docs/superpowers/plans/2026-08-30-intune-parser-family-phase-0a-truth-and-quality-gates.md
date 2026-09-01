@@ -72,6 +72,7 @@ planning_commits="$(git rev-list --reverse 59679c06b5dd1f5d59849a14d527f4b262b30
 test -n "$planning_commits"
 planning_paths="$(
   while IFS= read -r commit; do
+    test "$(git rev-list --parents -n 1 "$commit" | awk '{print NF}')" = 2
     git diff-tree --no-commit-id --name-only -r -m "$commit" || exit 1
   done <<< "$planning_commits"
 )"
@@ -86,8 +87,9 @@ diff -u \
 
 Expected: local and remote `main` are identical; the planning branch resolves once
 to accepted immutable SHA `1b2d06b6b57b88b5cab29e03fc7858cbe6dcc2ae`; that
-literal is a commit descending from the audited baseline; and every commit in
-that exact range touches only the spec, ADR, and this plan.
+literal is a commit descending from the audited baseline; every commit in that
+exact range has one parent; and the linear range touches only the spec, ADR,
+and this plan.
 
 - [ ] **Step 2: Import only the approved documentation history**
 
