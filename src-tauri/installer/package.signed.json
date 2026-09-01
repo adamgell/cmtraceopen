@@ -37,6 +37,10 @@
       {
         "name": "DISABLEUPDATECHECKS",
         "value": "0"
+      },
+      {
+        "name": "SecureCustomProperties",
+        "value": "DISABLEUPDATECHECKS"
       }
     ],
     "customActions": {

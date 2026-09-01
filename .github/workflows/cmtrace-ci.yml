@@ -85,7 +85,7 @@ jobs:
         run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
 
       - name: Install cargo-deny and cargo-audit
-        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: cargo-deny,cargo-audit
 
@@ -166,7 +166,7 @@ jobs:
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
       - name: Release script tests
-        run: node --test .github/scripts/updater-manifest.test.mjs .github/scripts/nightly-channel.test.mjs
+        run: node --test .github/scripts/updater-manifest.test.mjs .github/scripts/nightly-channel.test.mjs .github/scripts/installer-policy.test.mjs
 
       - name: npm security audit
         run: npm audit --audit-level=high
