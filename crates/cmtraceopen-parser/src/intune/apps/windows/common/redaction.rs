@@ -192,9 +192,7 @@ fn tenant_field_re() -> &'static Regex {
 /// masked was an inconsistency nothing in the code or the docs intended.
 fn sid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"(?i)\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"(?i)\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile"))
 }
 
 /// Every Windows SID in `text`, as `(byte offset, matched text)`.
@@ -304,7 +302,11 @@ pub fn redact_text(value: &str) -> String {
     });
 
     let masked = tenant_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        format!("{}{}", &caps["field"], stable_token("tenant", &caps["value"]))
+        format!(
+            "{}{}",
+            &caps["field"],
+            stable_token("tenant", &caps["value"])
+        )
     });
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
@@ -330,7 +332,10 @@ pub fn redact_text(value: &str) -> String {
             return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
         }
         if let Some(projected) = preserve_token_mask_tail(value, "account") {
-            return format!("{}{}{}{}", &caps["pre"], &caps["field"], projected, trailing);
+            return format!(
+                "{}{}{}{}",
+                &caps["pre"], &caps["field"], projected, trailing
+            );
         }
         format!(
             "{}{}{}{}",
@@ -425,7 +430,10 @@ mod tests {
             let redacted = redact_text(text);
             assert!(!redacted.contains("hunter2"), "{text} -> {redacted}");
             assert!(!redacted.contains("ABCD-1234"), "{text} -> {redacted}");
-            assert!(!redacted.contains("multi word secret"), "{text} -> {redacted}");
+            assert!(
+                !redacted.contains("multi word secret"),
+                "{text} -> {redacted}"
+            );
         }
         // An ordinary property is not credential-shaped and stays visible.
         let benign = redact_text("msiexec /i app.msi INSTALLDIR=C:\\App /qn");
@@ -512,8 +520,7 @@ mod tests {
 
         // The JSON-escaped form arrives with doubled separators, exactly like
         // the Users root.
-        let escaped =
-            redact_text(r#"{"Path":"C:\\Documents and Settings\\John Doe\\AppData"}"#);
+        let escaped = redact_text(r#"{"Path":"C:\\Documents and Settings\\John Doe\\AppData"}"#);
         assert!(!escaped.contains("John"), "got {escaped:?}");
         assert!(!escaped.contains("Doe"), "got {escaped:?}");
         assert!(escaped.contains("AppData"), "got {escaped:?}");
@@ -559,7 +566,8 @@ mod tests {
 
     #[test]
     fn a_windows_sid_is_masked_anywhere() {
-        let redacted = redact_text("Granting access to S-1-5-21-397955417-626881126-188441444-1010 done");
+        let redacted =
+            redact_text("Granting access to S-1-5-21-397955417-626881126-188441444-1010 done");
         assert!(!redacted.contains("397955417"), "got {redacted:?}");
         assert!(redacted.contains("done"));
         // Well-known machine SIDs with fewer sub-authorities identify nobody
@@ -590,9 +598,7 @@ mod tests {
     fn a_tenant_id_field_is_masked_but_bare_guids_survive() {
         let app = "11111111-2222-4333-8444-555555555555";
         let tenant = "99999999-8888-4777-8666-555555555555";
-        let redacted = redact_text(&format!(
-            "TenantId: {tenant} processing app with id: {app}"
-        ));
+        let redacted = redact_text(&format!("TenantId: {tenant} processing app with id: {app}"));
         assert!(!redacted.contains(tenant), "got {redacted:?}");
         assert!(
             redacted.contains(app),

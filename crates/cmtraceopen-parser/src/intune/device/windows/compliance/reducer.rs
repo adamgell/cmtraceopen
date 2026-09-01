@@ -142,11 +142,14 @@ fn reduce_local(
                 policy_id,
                 state,
                 scope,
-            }) => policies.entry(policy_id).or_default().push(PolicyStatement {
-                state,
-                scope,
-                evidence: reference,
-            }),
+            }) => policies
+                .entry(policy_id)
+                .or_default()
+                .push(PolicyStatement {
+                    state,
+                    scope,
+                    evidence: reference,
+                }),
             // Reporting signals belong to phase 3.
             Some(ComplianceSignal::ReportSubmission { .. }) => {}
             // The record was supplied as compliance evidence but names no
@@ -238,7 +241,10 @@ fn reduce_local(
 /// there is no third fact to break the tie. Reporting `Unknown` says that
 /// outright, where naming a winner would have made the export a function of the
 /// caller's vector (ADR-003).
-fn merge_policy(policy_id: String, statements: Vec<PolicyStatement>) -> CompliancePolicyObservation {
+fn merge_policy(
+    policy_id: String,
+    statements: Vec<PolicyStatement>,
+) -> CompliancePolicyObservation {
     CompliancePolicyObservation {
         policy_id,
         state: agreed(
@@ -359,7 +365,9 @@ fn merge_setting(
     });
 
     let key = ComplianceSettingKey {
-        policy_id: smallest_stated(&observations, |observation| observation.key.policy_id.as_ref()),
+        policy_id: smallest_stated(&observations, |observation| {
+            observation.key.policy_id.as_ref()
+        }),
         setting_id: smallest_stated(&observations, |observation| {
             observation.key.setting_id.as_ref()
         }),
@@ -2007,11 +2015,19 @@ mod tests {
     /// resolved by vector position.
     #[test]
     fn two_records_disagreeing_about_scope_do_not_follow_caller_order() {
-        let mut as_device =
-            setting_event("e-device", "./Device/X", "notevaluated", "2026-07-31T10:00:00Z");
+        let mut as_device = setting_event(
+            "e-device",
+            "./Device/X",
+            "notevaluated",
+            "2026-07-31T10:00:00Z",
+        );
         as_device.named_data.push(named("Scope", "device"));
-        let mut as_user =
-            setting_event("e-user", "./Device/X", "notevaluated", "2026-07-31T10:05:00Z");
+        let mut as_user = setting_event(
+            "e-user",
+            "./Device/X",
+            "notevaluated",
+            "2026-07-31T10:05:00Z",
+        );
         as_user.named_data.push(named("Scope", "user"));
 
         let forward = analyze_events(vec![as_device.clone(), as_user.clone()]);
