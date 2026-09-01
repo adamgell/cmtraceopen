@@ -156,7 +156,7 @@ sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #
   "$original_body_file" > "$updated_body_file"
 test "$(rg -c -- '- \[x\] #357([^0-9]|$)' "$updated_body_file")" = 1
 test "$(rg -c -- '- \[x\] #363([^0-9]|$)' "$updated_body_file")" = 1
-diff -u --label issue-356/current --label issue-356/proposed \
+diff -U0 --label issue-356/current --label issue-356/proposed \
   "$original_body_file" "$updated_body_file" > "$delta_file" || test "$?" = 1
 test "$(rg -c '^@@ ' "$delta_file")" = 2
 test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | rg -c ' #((357)|(363))([^0-9]|$)')" = 4
@@ -271,7 +271,7 @@ delta_file="$(mktemp)"
 printf '%s\n' '- [ ] #357 Win32 app deployment transactions' filler-1 filler-2 filler-3 filler-4 filler-5 filler-6 filler-7 '- [ ] #363 Windows configuration policy evidence' > "$original_body_file"
 sed -E 's/- \[ \] #357([^0-9]|$)/- [x] #357\1/; s/- \[ \] #363([^0-9]|$)/- [x] #363\1/' \
   "$original_body_file" > "$updated_body_file"
-diff -u --label issue-356/current --label issue-356/proposed \
+diff -U0 --label issue-356/current --label issue-356/proposed \
   "$original_body_file" "$updated_body_file" > "$delta_file" || test "$?" = 1
 test "$(rg -c '^@@ ' "$delta_file")" = 2
 test "$(rg '^[+-]' "$delta_file" | rg -v '^(---|\+\+\+)' | wc -l | tr -d ' ')" = 4
@@ -524,12 +524,67 @@ const expectedSourceQualityJob = `  source-quality:
           fi
 `;
 
+function workflowEventBlock(workflow, eventName) {
+  const jobsStart = workflow.indexOf("\njobs:\n");
+  assert.notEqual(jobsStart, -1, "workflow jobs missing");
+
+  const preamble = workflow.slice(0, jobsStart);
+  const on = preamble.match(/^on:\s*$/m);
+  assert.ok(on, "workflow triggers missing");
+
+  const triggers = preamble.slice(on.index + on[0].length);
+  const event = triggers.match(new RegExp(`^  ${eventName}:\\s*(?:#.*)?$`, "m"));
+  assert.ok(event, `${eventName} trigger missing`);
+
+  const lines = triggers.slice(event.index + event[0].length).split("\n");
+  const block = [];
+  for (const line of lines) {
+    if (line === "" || /^ {4}/.test(line)) {
+      block.push(line);
+    } else {
+      break;
+    }
+  }
+
+  return block;
+}
+
+function eventBranches(workflow, eventName) {
+  const block = workflowEventBlock(workflow, eventName);
+  const inline = block.find((line) => /^    branches:\s*\[.*\]\s*(?:#.*)?$/.test(line));
+  if (inline) {
+    const values = inline.match(/^    branches:\s*\[(.*)\]\s*(?:#.*)?$/)[1];
+    return values.split(",").map((value) => value.trim().replace(/^['"]|['"]$/g, ""));
+  }
+
+  const branchesStart = block.findIndex((line) => /^    branches:\s*(?:#.*)?$/.test(line));
+  assert.notEqual(branchesStart, -1, `${eventName} branches missing`);
+
+  const branches = [];
+  for (const line of block.slice(branchesStart + 1)) {
+    if (line === "" || /^ {6}#/.test(line)) {
+      continue;
+    }
+    const item = line.match(/^      -\s*(.+?)\s*(?:#.*)?$/);
+    if (!item) {
+      break;
+    }
+    branches.push(item[1].trim().replace(/^['"]|['"]$/g, ""));
+  }
+  return branches;
+}
+
 function assertRequiredTriggers(workflow) {
-  assert.match(
-    workflow,
-    /^on:\n  push:\n    branches: \[main, codex\/parser-family-skeleton\]\n  pull_request:\n(?:    #.*\n)*    branches: \[main, codex\/parser-family-skeleton\]$/m,
-    "required push and pull-request branch triggers missing"
-  );
+  const requiredBranches = ["main", "codex/parser-family-skeleton"];
+  for (const eventName of ["push", "pull_request"]) {
+    const configuredBranches = new Set(eventBranches(workflow, eventName));
+    for (const requiredBranch of requiredBranches) {
+      assert.ok(
+        configuredBranches.has(requiredBranch),
+        `${eventName} trigger missing required branch ${requiredBranch}`
+      );
+    }
+  }
 }
 
 function sourceQualityJob(workflow) {
@@ -571,6 +626,32 @@ test("source-quality gates formatting, wasm portability, and the changed range",
 
   assertRequiredTriggers(workflow);
   assertSourceQualityRequirements(workflow);
+});
+
+test("required triggers accept block branch lists and additional events", () => {
+  const workflow = `name: test
+on:
+  push:
+    branches:
+      - main
+      - codex/parser-family-skeleton
+  pull_request:
+    branches:
+      - main
+      - codex/parser-family-skeleton
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+`;
+
+  assert.doesNotThrow(() => assertRequiredTriggers(workflow));
+  assert.throws(() =>
+    assertRequiredTriggers(workflow.replace("      - codex/parser-family-skeleton\n", ""))
+  );
 });
 
 test("source-quality requirements reject bypasses", async () => {
@@ -770,7 +851,7 @@ diff -u \
   "$documented_job"
 ```
 
-Expected: the Node test passes `2/2`, actionlint emits no finding, formatting
+Expected: the Node test passes `3/3`, actionlint emits no finding, formatting
 and wasm checks pass, Git reports no whitespace error, and both documented
 snippets are byte-for-byte equal to their checked-in executable contracts.
 

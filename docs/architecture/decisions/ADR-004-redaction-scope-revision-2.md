@@ -282,8 +282,9 @@ against every Intune lane and proves:
   versions produce no partial replay state and only closed public diagnostics;
 - the same admitted input, schema/profile version, and context produces
   byte-identical canonical projected JSON;
-- `cargo check --locked -p cmtraceopen-parser --target
-  wasm32-unknown-unknown` passes.
+- The current runnable portability baseline, `cargo check --locked -p
+  cmtraceopen-parser --target wasm32-unknown-unknown`, passes now and must
+  continue to pass when the future direct dependencies are added.
 
 Negative known-answer tests pin the exact HMAC frame and token encoding so a
 separator, normalization, truncation, or prefix change cannot silently redefine
@@ -300,8 +301,11 @@ source-code construction style.
 
 ## Consequences
 
-- A new direct dependency on `hmac` and `zeroize` is accepted; `sha2`, `base64`,
-  and native `getrandom` are already project dependencies.
+- Direct `hmac` and `zeroize` dependencies are accepted for the future
+  implementation slice. They are not declared by this ADR-only slice; the
+  first implementation slice adds them and updates the existing root
+  `Cargo.lock`. `sha2`, `base64`, and native `getrandom` are already project
+  dependencies.
 - Tokens intentionally change and existing token equality is not preserved.
   There is no reader, writer, or migration for old token shapes.
 - ESP replay deliberately rekeys imported Sensitive text and supports only the
