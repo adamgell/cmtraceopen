@@ -374,10 +374,15 @@ diff -u \
     crates/cmtraceopen-parser/tests/support/mod.rs \
     src-tauri/src/commands/intune.rs \
     src-tauri/src/event_log/mod.rs | sort) \
-  <(git diff --name-only | sort)
+  <({
+    git diff --name-only HEAD
+    git ls-files --others --exclude-standard
+  } | sort -u)
 ```
 
-Expected: no output and exit `0`. Any additional path blocks this commit.
+Expected: no output and exit `0`. Both tracked changes relative to `HEAD` and
+untracked, non-ignored files participate in the comparison; any additional path
+blocks this commit.
 
 - [ ] **Step 5: Inspect the mechanical diff and turn the gate green**
 

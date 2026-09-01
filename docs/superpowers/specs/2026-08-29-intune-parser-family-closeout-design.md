@@ -1030,14 +1030,24 @@ printf '%s\n' "$normalized_protocol" | rg -F -- 'Native artifact resolution rema
 planned_rows="$(rg '^\| #(361|365|369|371) \|' "$design")"
 test "$(printf '%s\n' "$planned_rows" | wc -l | tr -d ' ')" = 4
 for doc in "${accepted_docs[@]}"; do
-  test -z "$(rg -F "$em_dash" "$doc" || true)"
-  test -z "$(rg -F "$en_dash" "$doc" || true)"
+  test -f "$doc"
+  for prohibited_dash in "$em_dash" "$en_dash"; do
+    if rg -F "$prohibited_dash" "$doc" >/dev/null; then
+      echo "prohibited dash found in $doc" >&2
+      exit 1
+    else
+      rg_status="$?"
+      test "$rg_status" = 1
+    fi
+  done
 done
 ```
 
 Expected: every assertion exits `0`; the four planned-target rows contain no em
-dash, and the protocol continues to require deliberate ignored-only native
-execution rather than ordinary-suite execution.
+dash, every accepted document exists and is readable, and the protocol
+continues to require deliberate ignored-only native execution rather than
+ordinary-suite execution. A match or any `rg` status other than the expected
+no-match status `1` fails the check.
 
 Because ESP publication/replay is a shared foundation rather than one child
 row, the aggregate record has a required `espPublication` object bound to `C`.
