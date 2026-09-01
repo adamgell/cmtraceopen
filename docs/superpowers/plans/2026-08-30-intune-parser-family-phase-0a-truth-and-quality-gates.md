@@ -217,8 +217,8 @@ assert_tracker_sets "$server_body_file"
 
 Expected: the duplicate/missing-ID adversarial fixture fails, while this
 read-only server-body verification confirms exactly the complete tracker sets:
-checked #357, #358, #359, #360, #362, #363, #364, #366, #367, #368, #370, and
-#372; unchecked #354, #361, #365, #369, and #371; and no duplicate or
+checked #357, #358, #359, #360, #362, #363, #364, #366, #367, #368, #370,
+and #372; unchecked #354, #361, #365, #369, and #371; and no duplicate or
 unexpected tracker ID.
 
 - [ ] **Step 4: Record approval and the acceptance distinction on the epic**
@@ -819,7 +819,7 @@ actionlint .github/workflows/cmtrace-ci.yml
 git diff --check origin/main...HEAD
 test -z "$(git status --porcelain)"
 
-jq -n \
+jq -n -S \
   --arg head "$head_sha" \
   --arg base "$base_sha" \
   '{schema: "phase0a-gate-receipt", version: 1, head: $head, base: $base,
@@ -839,6 +839,10 @@ jq -n \
     }}' > "$receipt_tmp"
 mv "$receipt_tmp" "$receipt_path"
 trap - EXIT
+test "$(git check-ignore "$receipt_path")" = "$receipt_path"
+cmp -s "$receipt_path" <(jq -S . "$receipt_path")
+printf 'Gate receipt SHA-256: '
+shasum -a 256 "$receipt_path" | awk '{print $1}'
 )
 ```
 
@@ -846,10 +850,12 @@ Expected: `set -euo pipefail` stops on the first failed gate; the fixed ignored
 receipt and its exact temporary file are removed before execution, so neither
 exists after a failed gate or receipt-finalization failure. The EXIT trap removes
 only that exact temporary file on failure. Only after every gate and the
-clean-status assertion pass does the command atomically publish
-`phase0a-gate-receipt.json`, disable the trap, and retain the receipt with
-schema/version, exact `head`/`base`, and `true` for every named gate used in the
-Issue #356 PASS sentence.
+clean-status assertion pass does the command atomically publish the ignored,
+local-only `phase0a-gate-receipt.json`, disable the trap, and retain canonical
+sorted JSON with schema/version, exact `head`/`base`, and `true` for every named
+gate used in the Issue #356 PASS sentence. The command also prints the digest
+that Task 6 publishes with the exact receipt bytes without modifying the
+candidate commit.
 
 Run this local, non-mutating receipt proof:
 
@@ -896,7 +902,7 @@ bash -c '
   receipt="$1"
   tmp="${receipt}.tmp"
   trap "rm -f -- \"$tmp\"" EXIT
-  jq -n --arg head test-head --arg base test-base \
+  jq -n -S --arg head test-head --arg base test-base \
     "{schema: \"phase0a-gate-receipt\", version: 1, head: \$head, base: \$base,
       gates: {rustfmt: true, parser_tests: true, app_all_features_tests: true,
       parser_strict_clippy: true, workspace_all_targets_all_features_clippy: true,
@@ -906,6 +912,7 @@ bash -c '
   mv "$tmp" "$receipt"
   trap - EXIT
 ' bash "$successful_receipt"
+cmp -s "$successful_receipt" <(jq -S . "$successful_receipt")
 jq -e '
   .schema == "phase0a-gate-receipt" and .version == 1 and
   .head == "test-head" and .base == "test-base" and
@@ -1080,7 +1087,9 @@ Expected: the independent decision binds the same head/base as CodeRabbit and re
 
 **Interfaces:**
 - Consumes: exact remote SHA, local gate results, draft PR URL, CodeRabbit state, and independent review state.
-- Produces: a precise program update that distinguishes committed, pushed, reviewed, CI-observed, merged, and native-validated states.
+- Produces: a precise program update that publishes the canonical gate receipt
+  and its digest while distinguishing committed, pushed, reviewed, CI-observed,
+  merged, and native-validated states.
 
 - [ ] **Step 1: Verify the final remote and PR identity**
 
@@ -1109,10 +1118,17 @@ base_sha="$(git rev-parse origin/main)"
 pr_head="$(gh pr view --repo adamgell/cmtraceopen --json headRefOid --jq .headRefOid)"
 pr_base="$(gh pr view --repo adamgell/cmtraceopen --json baseRefOid --jq .baseRefOid)"
 pr_url="$(gh pr view --repo adamgell/cmtraceopen --json url --jq .url)"
+comment_id=5471366184
 receipt_path=.superpowers/sdd/2026-08-30-intune-parser-family-phase-0a-truth-and-quality-gates/phase0a-gate-receipt.json
+comment_body="$(mktemp)"
+published_body="$(mktemp)"
+published_receipt="$(mktemp)"
+trap 'rm -f -- "$comment_body" "$published_body" "$published_receipt"' EXIT
 test -f "$receipt_path"
 test "$head_sha" = "$pr_head"
 test "$base_sha" = "$pr_base"
+test "$(git check-ignore "$receipt_path")" = "$receipt_path"
+cmp -s "$receipt_path" <(jq -S . "$receipt_path")
 jq -e --arg head "$head_sha" --arg base "$base_sha" '
   .schema == "phase0a-gate-receipt" and .version == 1 and
   .head == $head and .base == $base and
@@ -1122,24 +1138,57 @@ jq -e --arg head "$head_sha" --arg base "$base_sha" '
    .gates.typescript_noemit, .gates.workflow_contract, .gates.actionlint,
    .gates.diff_check] | all(. == true))
 ' "$receipt_path" >/dev/null
+receipt_sha256="$(shasum -a 256 "$receipt_path" | awk '{print $1}')"
+receipt_json="$(< "$receipt_path")"
 
-printf '%s\n' \
-  'Phase 0A: program truth and source-quality gates' \
-  '' \
-  "Base: ${base_sha}" \
-  "Head: ${head_sha}" \
-  "Draft PR: ${pr_url}" \
-  '' \
-  'Local gates: rustfmt PASS; parser tests PASS; app all-features tests PASS; parser strict Clippy PASS; workspace all-targets all-features Clippy PASS; parser wasm PASS; workspace all-features check PASS; frontend tests PASS; TypeScript noEmit PASS; workflow contract PASS; actionlint PASS; diff check PASS.' \
-  'Review gates: record the exact-head CodeRabbit and independent-review decisions from the PR before changing readiness.' \
-  'State boundary: committed and pushed; not merged; no native Intune acceptance performed or claimed; no child acceptance row completed by this foundation slice.' \
-  | gh issue comment 356 --repo adamgell/cmtraceopen --body-file -
+{
+  printf '%s\n' \
+    'Phase 0A: program truth and source-quality gates' \
+    '' \
+    "Base: ${base_sha}" \
+    "Head: ${head_sha}" \
+    "Draft PR: ${pr_url}" \
+    '' \
+    'Local gates: rustfmt PASS; parser tests PASS; app all-features tests PASS; parser strict Clippy PASS; workspace all-targets all-features Clippy PASS; parser wasm PASS; workspace all-features check PASS; frontend tests PASS; TypeScript noEmit PASS; workflow contract PASS; actionlint PASS; diff check PASS.' \
+    "Gate receipt SHA-256: ${receipt_sha256}" \
+    'Gate receipt (canonical JSON; digest covers these JSON bytes plus the final LF):' \
+    '```json'
+  printf '%s\n' "$receipt_json"
+  printf '%s\n' \
+    '```' \
+    'Review gates: record the exact-head CodeRabbit and independent-review decisions from the PR before changing readiness.' \
+    'State boundary: committed and pushed; not merged; no native Intune acceptance performed or claimed; no child acceptance row completed by this foundation slice.'
+} > "$comment_body"
+
+matching_ids="$(
+  gh api --paginate repos/adamgell/cmtraceopen/issues/356/comments \
+    --jq '.[] | select(.body | startswith("Phase 0A: program truth and source-quality gates")) | .id'
+)"
+test "$(printf '%s\n' "$matching_ids" | wc -l | tr -d ' ')" = 1
+test "$matching_ids" = "$comment_id"
+jq -n --rawfile body "$comment_body" '{body: $body}' \
+  | gh api --method PATCH \
+      "repos/adamgell/cmtraceopen/issues/comments/${comment_id}" \
+      --input - >/dev/null
+gh api "repos/adamgell/cmtraceopen/issues/comments/${comment_id}" \
+  | jq -jr .body > "$published_body"
+cmp -s "$comment_body" "$published_body"
+awk '
+  /^```json$/ { inside=1; next }
+  inside && /^```$/ { exit }
+  inside { print }
+' "$published_body" > "$published_receipt"
+cmp -s "$receipt_path" "$published_receipt"
+test "$(shasum -a 256 "$published_receipt" | awk '{print $1}')" = "$receipt_sha256"
 ```
 
-Expected: the fixed readable PASS labels are emitted only after the receipt
-exists, binds the exact local/PR head and base, and has all 12 named gates set
-to `true`; the issue receives one exact-SHA update with no claim of merge,
-native validation, child completion, or epic closure.
+Expected: the fixed readable PASS labels are emitted only after the ignored
+local receipt exists, is canonical, binds the exact local/PR head and base, and
+has all 12 named gates set to literal `true`. The one existing evidence comment
+is updated in place with the exact receipt JSON and its SHA-256 digest; the
+published bytes are extracted and verified against the local receipt. The
+update makes no claim of merge, native validation, child completion, or epic
+closure.
 
 - [ ] **Step 3: Stop at owner integration authority**
 
