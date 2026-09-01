@@ -229,17 +229,35 @@ Run:
 (
 set -euo pipefail
 main_sha="$(git rev-parse origin/main)"
+marker='Repository-owner approval recorded on 2026-08-30.'
+expected_body_file="$(mktemp)"
+comments_file="$(mktemp)"
+server_body_file="$(mktemp)"
 printf '%s\n' \
-  'Repository-owner approval recorded on 2026-08-30.' \
+  "$marker" \
   '' \
   "Approved closeout contract: codex/issue356-epic-closeout-20260829, verified against origin/main ${main_sha}." \
   '' \
   'The tracker now matches live issue state at 12 closed / 5 open. A checked box records child-issue closure history only; it is not final native, provenance, redaction, exact-head, or aggregate acceptance evidence. The approved closeout design remains the authority for every child row.' \
-  | gh issue comment 356 --repo adamgell/cmtraceopen --body-file -
+  > "$expected_body_file"
+gh api repos/adamgell/cmtraceopen/issues/356/comments --paginate --slurp > "$comments_file"
+match_count="$(jq --arg marker "$marker" '[.[][] | select((.body | split("\n")[0]) == $marker)] | length' "$comments_file")"
+case "$match_count" in
+  0) gh issue comment 356 --repo adamgell/cmtraceopen --body-file "$expected_body_file" >/dev/null ;;
+  1) ;;
+  *) printf 'expected at most one approval marker; found %s\n' "$match_count" >&2; exit 1 ;;
+esac
+gh api repos/adamgell/cmtraceopen/issues/356/comments --paginate --slurp > "$comments_file"
+test "$(jq --arg marker "$marker" '[.[][] | select((.body | split("\n")[0]) == $marker)] | length' "$comments_file")" = 1
+jq -jr --arg marker "$marker" '.[][] | select((.body | split("\n")[0]) == $marker) | .body' "$comments_file" > "$server_body_file"
+cmp -s "$expected_body_file" "$server_body_file"
 )
 ```
 
-Expected: one new issue #356 comment records approval, the exact current-main SHA, and the evidence limitation.
+Expected: the first run creates one issue #356 approval comment; every rerun
+finds exactly that stable first-line marker and byte-verifies its current-main
+SHA and evidence limitation without creating a duplicate. Duplicate markers or
+body drift fail closed.
 
 - [ ] **Step 5: Annotate every closed child without reopening it prematurely**
 
@@ -249,16 +267,35 @@ Run:
 (
 set -euo pipefail
 for issue in 357 358 359 360 362 363 364 366 367 368 370 372; do
+  marker='Issue #356 closeout audit note (2026-08-30): this issue remains closed as implementation history, but closure is not final epic acceptance evidence.'
+  expected_body_file="$(mktemp)"
+  comments_file="$(mktemp)"
+  server_body_file="$(mktemp)"
   printf '%s\n' \
-    'Issue #356 closeout audit note (2026-08-30): this issue remains closed as implementation history, but closure is not final epic acceptance evidence.' \
+    "$marker" \
     '' \
     "The approved closeout contract for #${issue} is the matching row in docs/superpowers/specs/2026-08-29-intune-parser-family-closeout-design.md. Its issue-scoped plan must reproduce each remaining provenance, application/native, redaction, and exact-head criterion against current main before the epic can use this row as accepted evidence." \
-    | gh issue comment "$issue" --repo adamgell/cmtraceopen --body-file -
+    > "$expected_body_file"
+  gh api "repos/adamgell/cmtraceopen/issues/${issue}/comments" --paginate --slurp > "$comments_file"
+  match_count="$(jq --arg marker "$marker" '[.[][] | select((.body | split("\n")[0]) == $marker)] | length' "$comments_file")"
+  case "$match_count" in
+    0) gh issue comment "$issue" --repo adamgell/cmtraceopen --body-file "$expected_body_file" >/dev/null ;;
+    1) ;;
+    *) printf 'issue #%s: expected at most one audit marker; found %s\n' "$issue" "$match_count" >&2; exit 1 ;;
+  esac
+  gh api "repos/adamgell/cmtraceopen/issues/${issue}/comments" --paginate --slurp > "$comments_file"
+  test "$(jq --arg marker "$marker" '[.[][] | select((.body | split("\n")[0]) == $marker)] | length' "$comments_file")" = 1
+  jq -jr --arg marker "$marker" '.[][] | select((.body | split("\n")[0]) == $marker) | .body' "$comments_file" > "$server_body_file"
+  cmp -s "$expected_body_file" "$server_body_file"
 done
 )
 ```
 
-Expected: each closed child receives one policy annotation with its own issue number. No issue is reopened by this task; a lane plan may reopen its original issue only after reproducing a missing acceptance criterion.
+Expected: each closed child has exactly one policy annotation with its own issue
+number. A rerun byte-verifies the stable marker and body without adding another
+comment; duplicate markers or body drift fail closed. No issue is reopened by
+this task; a lane plan may reopen its original issue only after reproducing a
+missing acceptance criterion.
 
 - [ ] **Step 6: Prove the proposed owner delta has exactly two tokens**
 
