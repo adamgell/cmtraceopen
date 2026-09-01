@@ -388,40 +388,45 @@ Expected: rustfmt exits `0` and changes tracked Rust source/tests only.
 Run:
 
 ```bash
-diff -u \
-  <(printf '%s\n' \
-    crates/cmtraceopen-parser/src/collector/profile.rs \
-    crates/cmtraceopen-parser/src/esp/redaction.rs \
-    crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs \
-    crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/reducer.rs \
-    crates/cmtraceopen-parser/src/intune/apps/windows/win32/findings.rs \
-    crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs \
-    crates/cmtraceopen-parser/src/intune/device/windows/compliance/reducer.rs \
-    crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/redaction.rs \
-    crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs \
-    crates/cmtraceopen-parser/src/intune/event_tracker.rs \
-    crates/cmtraceopen-parser/src/intune/ime_parser.rs \
-    crates/cmtraceopen-parser/src/intune/normalized.rs \
-    crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/logs/document.rs \
-    crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/package_state/mod.rs \
-    crates/cmtraceopen-parser/tests/esp_export_boundary.rs \
-    crates/cmtraceopen-parser/tests/intune_skeleton_contract.rs \
-    crates/cmtraceopen-parser/tests/intune_windows_autopilot.rs \
-    crates/cmtraceopen-parser/tests/intune_windows_compliance.rs \
-    crates/cmtraceopen-parser/tests/intune_windows_configuration.rs \
-    crates/cmtraceopen-parser/tests/intune_windows_microsoft_store_semantics.rs \
-    crates/cmtraceopen-parser/tests/support/mod.rs \
-    src-tauri/src/commands/intune.rs \
-    src-tauri/src/event_log/mod.rs | sort) \
-  <({
-    git diff --name-only HEAD
-    git ls-files --others --exclude-standard
-  } | sort -u)
+set -euo pipefail
+expected_paths="$(mktemp)"
+observed_paths="$(mktemp)"
+sorted_observed_paths="$(mktemp)"
+printf '%s\n' \
+  crates/cmtraceopen-parser/src/collector/profile.rs \
+  crates/cmtraceopen-parser/src/esp/redaction.rs \
+  crates/cmtraceopen-parser/src/intune/apps/windows/common/redaction.rs \
+  crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/reducer.rs \
+  crates/cmtraceopen-parser/src/intune/apps/windows/win32/findings.rs \
+  crates/cmtraceopen-parser/src/intune/apps/windows/win32/reducer.rs \
+  crates/cmtraceopen-parser/src/intune/device/windows/compliance/reducer.rs \
+  crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/redaction.rs \
+  crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/reducer.rs \
+  crates/cmtraceopen-parser/src/intune/event_tracker.rs \
+  crates/cmtraceopen-parser/src/intune/ime_parser.rs \
+  crates/cmtraceopen-parser/src/intune/normalized.rs \
+  crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/logs/document.rs \
+  crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/package_state/mod.rs \
+  crates/cmtraceopen-parser/tests/esp_export_boundary.rs \
+  crates/cmtraceopen-parser/tests/intune_skeleton_contract.rs \
+  crates/cmtraceopen-parser/tests/intune_windows_autopilot.rs \
+  crates/cmtraceopen-parser/tests/intune_windows_compliance.rs \
+  crates/cmtraceopen-parser/tests/intune_windows_configuration.rs \
+  crates/cmtraceopen-parser/tests/intune_windows_microsoft_store_semantics.rs \
+  crates/cmtraceopen-parser/tests/support/mod.rs \
+  src-tauri/src/commands/intune.rs \
+  src-tauri/src/event_log/mod.rs \
+  | sort > "$expected_paths"
+git diff --name-only HEAD > "$observed_paths"
+git ls-files --others --exclude-standard >> "$observed_paths"
+sort -u "$observed_paths" > "$sorted_observed_paths"
+diff -u "$expected_paths" "$sorted_observed_paths"
 ```
 
 Expected: no output and exit `0`. Both tracked changes relative to `HEAD` and
-untracked, non-ignored files participate in the comparison; any additional path
-blocks this commit.
+untracked, non-ignored files participate in the comparison. Each Git command
+runs directly under strict error handling before the observed list is sorted;
+any command failure or additional path blocks this commit.
 
 - [ ] **Step 5: Inspect the mechanical diff and turn the gate green**
 
@@ -452,6 +457,7 @@ Expected: both commands exit `0`. Test counts are recorded in the issue/PR evide
 Run:
 
 ```bash
+set -euo pipefail
 formatter_files=(
   crates/cmtraceopen-parser/src/collector/profile.rs
   crates/cmtraceopen-parser/src/esp/redaction.rs
@@ -478,13 +484,19 @@ formatter_files=(
   src-tauri/src/event_log/mod.rs
 )
 git add -- "${formatter_files[@]}"
-diff -u \
-  <(printf '%s\n' "${formatter_files[@]}" | sort) \
-  <(git diff --cached --name-only | sort)
+expected_paths="$(mktemp)"
+staged_paths="$(mktemp)"
+sorted_staged_paths="$(mktemp)"
+printf '%s\n' "${formatter_files[@]}" | sort > "$expected_paths"
+git diff --cached --name-only > "$staged_paths"
+sort -u "$staged_paths" > "$sorted_staged_paths"
+diff -u "$expected_paths" "$sorted_staged_paths"
 git commit -m "style(rust): establish formatter baseline"
 ```
 
-Expected: one commit containing exactly the 23 allowlisted Rust files and no documentation or workflow changes.
+Expected: the staged-path command succeeds before comparison, then one commit
+contains exactly the 23 allowlisted Rust files and no documentation or workflow
+changes.
 
 ### Task 4: Add Executable Source-Quality CI Coverage
 
