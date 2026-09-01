@@ -282,9 +282,10 @@ against every Intune lane and proves:
   versions produce no partial replay state and only closed public diagnostics;
 - the same admitted input, schema/profile version, and context produces
   byte-identical canonical projected JSON;
-- The current runnable portability baseline, `cargo check --locked -p
-  cmtraceopen-parser --target wasm32-unknown-unknown`, passes now and must
-  continue to pass when the future direct dependencies are added.
+- The current runnable portability gate is `cargo check --locked -p
+  cmtraceopen-parser --target wasm32-unknown-unknown`. Every implementation
+  slice must keep it passing, including the slice that adds the future direct
+  dependencies.
 
 Negative known-answer tests pin the exact HMAC frame and token encoding so a
 separator, normalization, truncation, or prefix change cannot silently redefine
