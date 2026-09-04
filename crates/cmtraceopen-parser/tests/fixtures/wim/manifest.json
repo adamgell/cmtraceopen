@@ -1,0 +1,23 @@
+{
+  "wimlib_version": "1.14.5",
+  "provenance": "Captured on macOS arm64 with wimlib 1.14.5 (Homebrew) from a synthetic sample directory (3 files, 2 dirs, 39 bytes payload). No tenant data, user names, SIDs, or serials.",
+  "capture_commands": [
+    "wimlib-imagex capture --compress=none sample_dir test-uncompressed.wim",
+    "wimlib-imagex capture --compress=xpress sample_dir test-xpress.wim"
+  ],
+  "fixtures": [
+    {
+      "file": "sample-uncompressed.wim",
+      "compression": "none",
+      "size_bytes": 1863,
+      "sha256": "079935aef3ab55bbe0de5fcd35a36438b933c3143baf97d6f0695e0eabf8ed29"
+    },
+    {
+      "file": "sample-xpress.wim",
+      "compression": "xpress",
+      "size_bytes": 1610,
+      "sha256": "4fe72afffea9b21656fee9eefc14d129c365e1e153cece85d96880f1e03c8871"
+    }
+  ],
+  "notes": "In both fixtures the XML data resource is stored uncompressed (reshdr flags 0x02, size == original size). Image name 'sample_dir', dir_count 2, file_count 3, total_bytes 39."
+}

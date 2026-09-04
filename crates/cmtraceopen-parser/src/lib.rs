@@ -20,4 +20,5 @@ pub mod parser;
 pub mod provider;
 pub mod sccm;
 pub mod unified_timeline;
+pub mod wim;
 pub(crate) mod wire;
