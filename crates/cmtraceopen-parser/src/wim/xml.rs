@@ -76,10 +76,15 @@ pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
     };
     let before_root = trimmed[..root_start].trim();
     if !before_root.is_empty() {
-        let Some(prolog_end) = before_root.strip_prefix("<?xml") else {
+        let Some(after_xml) = before_root.strip_prefix("<?xml") else {
             return Err(WimError::MalformedXml { reason: "root" });
         };
-        if !prolog_end.trim_start().ends_with("?>") {
+        // Exactly one complete declaration; nothing but whitespace may
+        // follow it before the root.
+        let Some(prolog_end) = after_xml.find("?>") else {
+            return Err(WimError::MalformedXml { reason: "root" });
+        };
+        if !after_xml[prolog_end + 2..].trim().is_empty() {
             return Err(WimError::MalformedXml { reason: "root" });
         }
     }
