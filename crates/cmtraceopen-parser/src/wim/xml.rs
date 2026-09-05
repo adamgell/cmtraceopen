@@ -60,19 +60,28 @@ fn decode_entities(text: &str) -> String {
 /// Extracts image metadata from decoded WIM XML.
 ///
 /// Expects the decoded XML text of a WIM's XML data resource. The document
-/// root must be a `<WIM>` element; only its body is scanned for `<IMAGE>`
-/// entries. Returns [`WimError::MalformedXml`] when the root is missing,
-/// an image tag is unclosed, or a required image field is absent/invalid.
+/// root must be a `<WIM>` element; only a complete XML prolog
+/// (`<?xml ...?>`) and whitespace may precede it, and only the root
+/// element's body is scanned for `<IMAGE>` entries. Each entry must carry
+/// `INDEX` (attribute), `NAME`, `DIRCOUNT`, `FILECOUNT`, and `TOTALBYTES`
+/// elements. Returns [`WimError::MalformedXml`] when the root is missing
+/// or preceded by other content, an image tag is unclosed, or a required
+/// image field is absent or invalid.
 pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
     let trimmed = xml.trim_start_matches('\u{feff}');
-    // The document root must be <WIM>. Allow an optional XML prolog
-    // (<?xml ...?>) and whitespace, but no other text or element before it.
+    // The document root must be <WIM>. Only a complete XML prolog
+    // (`<?xml ...?>`) and whitespace may precede it.
     let Some(root_start) = trimmed.find("<WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
     };
-    let before_root = &trimmed[..root_start];
-    if !before_root.trim_start().is_empty() && !before_root.trim_start().starts_with("<?xml") {
-        return Err(WimError::MalformedXml { reason: "root" });
+    let before_root = trimmed[..root_start].trim();
+    if !before_root.is_empty() {
+        let Some(prolog_end) = before_root.strip_prefix("<?xml") else {
+            return Err(WimError::MalformedXml { reason: "root" });
+        };
+        if !prolog_end.trim_start().ends_with("?>") {
+            return Err(WimError::MalformedXml { reason: "root" });
+        }
     }
     // Search for the root close only after the root open — an input like
     // "</WIM><WIM>" must not produce an inverted (panicking) range.

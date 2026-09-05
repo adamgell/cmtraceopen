@@ -275,6 +275,16 @@ fn nested_wim_element_is_not_a_document_root() {
         parse_images("<OTHER><WIM></WIM></OTHER>"),
         Err(WimError::MalformedXml { reason: "root" })
     );
+    // A prolog followed by a foreign element before <WIM> is also rejected.
+    assert_eq!(
+        parse_images("<?xml version=\"1.0\"?><OTHER><WIM></WIM></OTHER>"),
+        Err(WimError::MalformedXml { reason: "root" })
+    );
+    // A complete prolog directly before <WIM> is accepted.
+    assert_eq!(
+        parse_images("<?xml version=\"1.0\"?><WIM></WIM>"),
+        Ok(Vec::new())
+    );
 }
 
 #[test]
