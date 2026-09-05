@@ -93,6 +93,14 @@ fn compressed_xml_resource_is_unsupported_not_success() {
     let mut bytes = UNCOMPRESSED.to_vec();
     bytes[72 + 7] |= 0x04;
     assert_eq!(parse_wim(&bytes), Err(WimError::UnsupportedCompression));
+
+    // A genuinely compressed resource — stored size < original size — must also
+    // name the coverage gap, not misroute to BadHeader.
+    let mut bytes = UNCOMPRESSED.to_vec();
+    bytes[72 + 7] |= 0x04; // compressed flag
+    let packed = 200u64 | (0x06u64 << 56); // stored 200 < original 776
+    bytes[72..80].copy_from_slice(&packed.to_le_bytes());
+    assert_eq!(parse_wim(&bytes), Err(WimError::UnsupportedCompression));
 }
 
 #[test]

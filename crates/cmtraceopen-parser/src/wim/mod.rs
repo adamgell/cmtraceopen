@@ -117,6 +117,12 @@ pub fn parse_wim(bytes: &[u8]) -> Result<WimInfo, WimError> {
     if hdr.total_parts > 1 || hdr.flags & WIM_HDR_FLAG_SPANNED != 0 {
         return Err(WimError::SpannedUnsupported);
     }
+    // Compression must be named before the size-consistency check: a genuinely
+    // compressed XML resource (stored size < original) is an unsupported-capability
+    // gap, not a malformed header.
+    if hdr.xml_data.flags & RESHDR_FLAG_COMPRESSED != 0 {
+        return Err(WimError::UnsupportedCompression);
+    }
     if hdr.xml_data.size != hdr.xml_data.original_size {
         return Err(WimError::BadHeader);
     }
@@ -133,10 +139,6 @@ pub fn parse_wim(bytes: &[u8]) -> Result<WimInfo, WimError> {
     let xml_bytes = bytes
         .get(xml_start..xml_end)
         .ok_or(WimError::ResourceOutOfBounds)?;
-
-    if hdr.xml_data.flags & RESHDR_FLAG_COMPRESSED != 0 {
-        return Err(WimError::UnsupportedCompression);
-    }
 
     let xml_text = xml::decode_xml(xml_bytes)?;
     let images = xml::parse_images(&xml_text)?;
