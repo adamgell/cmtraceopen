@@ -18,6 +18,7 @@ pub use header::{
     WIM_HDR_FLAG_COMPRESS_XPRESS, WIM_HDR_FLAG_SPANNED,
 };
 pub use resource::{ResourceEntry, RESHDR_FLAG_COMPRESSED};
+pub use xml::parse_images;
 
 /// WIM signature: `MSWIM\x00\x00\x00`.
 pub const WIM_MAGIC: [u8; 8] = *b"MSWIM\x00\x00\x00";

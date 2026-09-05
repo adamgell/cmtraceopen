@@ -47,6 +47,8 @@ fn decode_entities(text: &str) -> String {
             "gt" => out.push('>'),
             "quot" => out.push('"'),
             "apos" => out.push('\''),
+            // The entity is unterminated (`None` branch above) — already kept.
+            "" => {}
             _ => out.push_str(&format!("&{entity};")),
         }
         rest = remainder;
@@ -58,29 +60,32 @@ fn decode_entities(text: &str) -> String {
 /// Extracts image metadata from decoded WIM XML.
 pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
     let trimmed = xml.trim_start_matches('\u{feff}');
-    if !trimmed.starts_with("<WIM>") {
+    let Some(root_start) = trimmed.find("<WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
-    }
-    if !trimmed.contains("</WIM>") {
+    };
+    let Some(root_end) = trimmed.find("</WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
-    }
+    };
+    // Only the root element's body is scanned — anything after </WIM> is
+    // trailing junk and must never contribute image metadata.
+    let root = &trimmed[root_start..root_end];
     let mut images = Vec::new();
     let mut cursor = 0usize;
-    while let Some(tag_start) = trimmed[cursor..].find("<IMAGE") {
+    while let Some(tag_start) = root[cursor..].find("<IMAGE") {
         let tag_start = cursor + tag_start;
-        let Some(tag_end_rel) = trimmed[tag_start..].find('>') else {
+        let Some(tag_end_rel) = root[tag_start..].find('>') else {
             return Err(WimError::MalformedXml {
                 reason: "image_tag",
             });
         };
         let tag_end = tag_start + tag_end_rel;
-        let open_tag = &trimmed[tag_start..tag_end];
-        let Some(body_end_rel) = trimmed[tag_end..].find("</IMAGE>") else {
+        let open_tag = &root[tag_start..tag_end];
+        let Some(body_end_rel) = root[tag_end..].find("</IMAGE>") else {
             return Err(WimError::MalformedXml {
                 reason: "image_tag",
             });
         };
-        let body = &trimmed[tag_end + 1..tag_end + body_end_rel];
+        let body = &root[tag_end + 1..tag_end + body_end_rel];
         cursor = tag_end + body_end_rel + "</IMAGE>".len();
 
         let index = extract_attr(open_tag, "INDEX")

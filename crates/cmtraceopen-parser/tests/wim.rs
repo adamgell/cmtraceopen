@@ -216,6 +216,40 @@ fn xml_entities_in_image_name_are_decoded() {
 }
 
 #[test]
+fn image_element_after_root_close_is_ignored() {
+    // Regression: an <IMAGE> after </WIM> is trailing junk and must never
+    // contribute an image, even when the count would otherwise line up.
+    let mut bytes = UNCOMPRESSED.to_vec();
+    // The fixture XML ends with "</WIM>". Append a forged <IMAGE> element
+    // and raise the header image count to 2 so only the root-body scan
+    // rejects it.
+    let forged: Vec<u8> = "<IMAGE INDEX=\"2\"><NAME>x</NAME><DIRCOUNT>0</DIRCOUNT><FILECOUNT>0</FILECOUNT><TOTALBYTES>0</TOTALBYTES></IMAGE>"
+        .chars()
+        .flat_map(|c| (c as u16).to_le_bytes())
+        .collect();
+    // Grow the XML resource: extend stored size and original size by the
+    // forged element's length, then append after the existing </WIM>.
+    let old_size = u64::from_le_bytes(bytes[72 + 16..72 + 24].try_into().unwrap());
+    let new_size = old_size + forged.len() as u64;
+    bytes[72..80].copy_from_slice(&(new_size | (0x02u64 << 56)).to_le_bytes());
+    bytes[88..96].copy_from_slice(&new_size.to_le_bytes());
+    bytes.extend_from_slice(&forged);
+    bytes[44..48].copy_from_slice(&2u32.to_le_bytes()); // header: 2 images
+                                                        // The forged element sits after </WIM>: the root-body scan must not see
+                                                        // it, so only 1 image is extracted and the count mismatches.
+    assert_eq!(parse_wim(&bytes), Err(WimError::ImageCountMismatch));
+}
+
+#[test]
+fn unterminated_entity_is_preserved_verbatim() {
+    // Regression: "A&B" (no semicolon) must stay "A&B", not become "A&;B".
+    use cmtraceopen_parser::wim::parse_images;
+    let xml = "<WIM><IMAGE INDEX=\"1\"><NAME>A&amp;B</NAME><DIRCOUNT>1</DIRCOUNT><FILECOUNT>1</FILECOUNT><TOTALBYTES>1</TOTALBYTES></IMAGE></WIM>";
+    let images = parse_images(xml).expect("well-formed");
+    assert_eq!(images[0].name, "A&B");
+}
+
+#[test]
 fn missing_xml_resource_is_malformed_xml() {
     let mut bytes = UNCOMPRESSED.to_vec();
     // Zero out the XML resource entry (offset + size): no XML to decode.
