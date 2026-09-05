@@ -9,10 +9,10 @@ pub fn decode_xml(bytes: &[u8]) -> Result<String, WimError> {
     if !bytes.len().is_multiple_of(2) {
         return Err(WimError::InvalidUtf16);
     }
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
+    let mut units = Vec::with_capacity(bytes.len() / 2);
+    for i in (0..bytes.len()).step_by(2) {
+        units.push(u16::from_le_bytes([bytes[i], bytes[i + 1]]));
+    }
     let body = match units.first() {
         Some(&0xFEFF) => &units[1..],
         _ => &units[..],
