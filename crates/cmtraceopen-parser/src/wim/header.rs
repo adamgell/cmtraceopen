@@ -34,17 +34,29 @@ pub const WIM_HDR_FLAG_COMPRESS_LZMS: u32 = 0x8_0000;
 /// The decoded fixed part of a WIM header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WimHeader {
+    /// Format version (`0x10D00` for the "e" family).
     pub version: u32,
+    /// Raw header flags.
     pub flags: u32,
+    /// Compressed chunk size in bytes (0 when uncompressed).
     pub chunk_size: u32,
+    /// WIM GUID, byte-for-byte as stored.
     pub guid: [u8; 16],
+    /// Segment number within a spanned set.
     pub part_number: u16,
+    /// Total segments in a spanned set.
     pub total_parts: u16,
+    /// Image count declared by the header.
     pub image_count: u32,
+    /// 1-based index of the bootable image, 0 if none.
     pub boot_index: u32,
+    /// Offset (blob lookup) table resource entry.
     pub offset_table: ResourceEntry,
+    /// XML data resource entry.
     pub xml_data: ResourceEntry,
+    /// Boot metadata resource entry.
     pub boot_metadata: ResourceEntry,
+    /// Integrity table resource entry.
     pub integrity: ResourceEntry,
 }
 

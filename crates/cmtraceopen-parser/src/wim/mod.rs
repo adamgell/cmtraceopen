@@ -23,13 +23,19 @@ pub use resource::{ResourceEntry, RESHDR_FLAG_COMPRESSED};
 pub const WIM_MAGIC: [u8; 8] = *b"MSWIM\x00\x00\x00";
 /// Size of the WIM file header in bytes.
 pub const WIM_HEADER_SIZE: usize = 208;
+/// The WIM format version (`0x10D00`, "e") this reader is verified against.
+pub const SUPPORTED_WIM_VERSION: u32 = 0x10D00;
 
 /// Compression algorithm declared by the WIM header flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WimCompression {
+    /// No compression; resources are stored verbatim.
     None,
+    /// XPRESS (LZ77+Huffman) compression.
     Xpress,
+    /// LZX compression.
     Lzx,
+    /// LZMS compression (solid, used by WIMBoot/EsdD).
     Lzms,
     /// Compression bits set but the combination is not recognized.
     Unknown,
@@ -38,28 +44,42 @@ pub enum WimCompression {
 /// One image entry parsed from the WIM XML data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WimImage {
+    /// 1-based image index as declared in the XML `INDEX` attribute.
     pub index: u32,
+    /// Human-readable image name (`<NAME>` element).
     pub name: String,
+    /// Number of directories in the image (`<DIRCOUNT>`).
     pub dir_count: u64,
+    /// Number of files in the image (`<FILECOUNT>`).
     pub file_count: u64,
+    /// Uncompressed total payload size in bytes (`<TOTALBYTES>`).
     pub total_bytes: u64,
 }
 
 /// Everything Layer 1 can state about a WIM file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WimInfo {
+    /// Format version from the header (verified: `0x10D00`).
     pub version: u32,
     /// Raw header flags, preserved verbatim.
     pub flags: u32,
+    /// Compression algorithm the header declares for its resources.
     pub compression: WimCompression,
+    /// Compressed chunk size in bytes (0 when uncompressed).
     pub chunk_size: u32,
+    /// WIM GUID, byte-for-byte as stored.
     pub guid: [u8; 16],
+    /// Segment number within a spanned set (always 1 here).
     pub part_number: u16,
+    /// Total segments in a spanned set (always 1 here).
     pub total_parts: u16,
+    /// Image count declared by the header; cross-checked against the XML.
     pub image_count: u32,
+    /// 1-based index of the bootable image, 0 if none.
     pub boot_index: u32,
     /// Decoded XML data (UTF-16LE resource), kept raw.
     pub xml: String,
+    /// Image entries extracted from the XML data.
     pub images: Vec<WimImage>,
 }
 
@@ -85,6 +105,8 @@ pub enum WimError {
     ImageCountMismatch,
     /// Spanned (`.swm`) sets are not supported.
     SpannedUnsupported,
+    /// Header declares a format version this reader does not support.
+    UnsupportedVersion,
 }
 
 fn compression_from_flags(flags: u32) -> WimCompression {
@@ -113,8 +135,19 @@ pub fn parse_wim(bytes: &[u8]) -> Result<WimInfo, WimError> {
     let Some(hdr) = WimHeader::read(bytes) else {
         return Err(WimError::TooSmall);
     };
+    // The header declares its own size (bytes 8..12). Anything else means the
+    // layout this decoder anchors to does not apply.
+    let declared_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    if declared_size as usize != WIM_HEADER_SIZE {
+        return Err(WimError::BadHeader);
+    }
+    // Layer 1 supports the "e" (0x10D00) version family this parser was
+    // verified against. Unknown versions are a coverage gap, not a failure.
+    if hdr.version != SUPPORTED_WIM_VERSION {
+        return Err(WimError::UnsupportedVersion);
+    }
 
-    if hdr.total_parts > 1 || hdr.flags & WIM_HDR_FLAG_SPANNED != 0 {
+    if hdr.part_number != 1 || hdr.total_parts != 1 || hdr.flags & WIM_HDR_FLAG_SPANNED != 0 {
         return Err(WimError::SpannedUnsupported);
     }
     // Compression must be named before the size-consistency check: a genuinely

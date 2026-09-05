@@ -132,6 +132,31 @@ fn spanned_wim_is_reported_unsupported() {
 }
 
 #[test]
+fn spanned_part_number_without_flag_is_reported_unsupported() {
+    // Regression: a header claiming part_number 2 without the spanned flag
+    // must still be named SpannedUnsupported, not silently parsed.
+    let mut bytes = UNCOMPRESSED.to_vec();
+    bytes[40..42].copy_from_slice(&2u16.to_le_bytes()); // part number = 2
+    assert_eq!(parse_wim(&bytes), Err(WimError::SpannedUnsupported));
+}
+
+#[test]
+fn declared_header_size_mismatch_is_bad_header() {
+    let mut bytes = UNCOMPRESSED.to_vec();
+    // cbSize at bytes 8..12; declare a size the decoder does not anchor to.
+    bytes[8..12].copy_from_slice(&104u32.to_le_bytes());
+    assert_eq!(parse_wim(&bytes), Err(WimError::BadHeader));
+}
+
+#[test]
+fn unsupported_wim_version_is_a_coverage_state() {
+    let mut bytes = UNCOMPRESSED.to_vec();
+    // Version at bytes 12..16; claim an unknown version.
+    bytes[12..16].copy_from_slice(&0x20E00u32.to_le_bytes());
+    assert_eq!(parse_wim(&bytes), Err(WimError::UnsupportedVersion));
+}
+
+#[test]
 fn image_count_mismatch_between_header_and_xml_is_malformed() {
     let mut bytes = UNCOMPRESSED.to_vec();
     // Header claims 2 images; XML contains 1.

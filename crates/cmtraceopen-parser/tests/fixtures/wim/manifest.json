@@ -2,8 +2,8 @@
   "wimlib_version": "1.14.5",
   "provenance": "Captured on macOS arm64 with wimlib 1.14.5 (Homebrew) from a synthetic sample directory (3 files, 2 dirs, 39 bytes payload). No tenant data, user names, SIDs, or serials.",
   "capture_commands": [
-    "wimlib-imagex capture --compress=none sample_dir test-uncompressed.wim",
-    "wimlib-imagex capture --compress=xpress sample_dir test-xpress.wim"
+    "wimlib-imagex capture --compress=none sample_dir sample-uncompressed.wim",
+    "wimlib-imagex capture --compress=xpress sample_dir sample-xpress.wim"
   ],
   "fixtures": [
     {

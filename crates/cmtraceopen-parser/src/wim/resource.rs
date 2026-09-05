@@ -8,6 +8,9 @@
 /// Set on a resource entry when the resource data is compressed.
 pub const RESHDR_FLAG_COMPRESSED: u8 = 0x04;
 
+/// Size of a resource entry on disk, in bytes.
+pub const RESOURCE_ENTRY_SIZE: usize = 24;
+
 /// A decoded WIM resource entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceEntry {
@@ -22,12 +25,14 @@ pub struct ResourceEntry {
 }
 
 impl ResourceEntry {
-    /// Reads a resource entry at byte offset `at`. `None` if it does not fit.
+    /// Reads a resource entry at byte offset `at`. `None` if it does not fit
+    /// (including offsets near `usize::MAX`, which cannot overflow here).
     pub fn read(bytes: &[u8], at: usize) -> Option<Self> {
-        let packed = u64::from_le_bytes(bytes.get(at..at.checked_add(8)?)?.try_into().ok()?);
-        let offset = u64::from_le_bytes(bytes.get(at + 8..at.checked_add(16)?)?.try_into().ok()?);
-        let original_size =
-            u64::from_le_bytes(bytes.get(at + 16..at.checked_add(24)?)?.try_into().ok()?);
+        let end = at.checked_add(RESOURCE_ENTRY_SIZE)?;
+        let window = bytes.get(at..end)?;
+        let packed = u64::from_le_bytes(window[0..8].try_into().ok()?);
+        let offset = u64::from_le_bytes(window[8..16].try_into().ok()?);
+        let original_size = u64::from_le_bytes(window[16..24].try_into().ok()?);
         Some(Self {
             size: packed & 0x00ff_ffff_ffff_ffff,
             flags: (packed >> 56) as u8,
