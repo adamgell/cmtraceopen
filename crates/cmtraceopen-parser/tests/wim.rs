@@ -290,6 +290,11 @@ fn nested_wim_element_is_not_a_document_root() {
         parse_images("<?xml version=\"1.0\"?><?extra?><WIM></WIM>"),
         Err(WimError::MalformedXml { reason: "root" })
     );
+    // A malformed declaration body (nested '<?') is rejected.
+    assert_eq!(
+        parse_images("<?xml version=\"1.0\" <?extra?><WIM></WIM>"),
+        Err(WimError::MalformedXml { reason: "root" })
+    );
 }
 
 #[test]

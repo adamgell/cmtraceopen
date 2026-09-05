@@ -84,6 +84,12 @@ pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
         let Some(prolog_end) = after_xml.find("?>") else {
             return Err(WimError::MalformedXml { reason: "root" });
         };
+        // A nested '<?' means the declaration body is malformed (e.g. a
+        // truncated `<?xml version="1.0" <?extra?>`); reject it rather
+        // than treating the inner '?>' as the terminator.
+        if after_xml[..prolog_end].contains("<?") {
+            return Err(WimError::MalformedXml { reason: "root" });
+        }
         if !after_xml[prolog_end + 2..].trim().is_empty() {
             return Err(WimError::MalformedXml { reason: "root" });
         }
