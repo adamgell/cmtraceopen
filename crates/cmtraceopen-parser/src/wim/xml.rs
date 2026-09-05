@@ -58,14 +58,22 @@ fn decode_entities(text: &str) -> String {
 }
 
 /// Extracts image metadata from decoded WIM XML.
+///
+/// Expects the decoded XML text of a WIM's XML data resource. The document
+/// root must be a `<WIM>` element; only its body is scanned for `<IMAGE>`
+/// entries. Returns [`WimError::MalformedXml`] when the root is missing,
+/// an image tag is unclosed, or a required image field is absent/invalid.
 pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
     let trimmed = xml.trim_start_matches('\u{feff}');
     let Some(root_start) = trimmed.find("<WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
     };
-    let Some(root_end) = trimmed.find("</WIM>") else {
+    // Search for the root close only after the root open — an input like
+    // "</WIM><WIM>" must not produce an inverted (panicking) range.
+    let Some(root_end) = trimmed[root_start..].find("</WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
     };
+    let root_end = root_start + root_end;
     // Only the root element's body is scanned — anything after </WIM> is
     // trailing junk and must never contribute image metadata.
     let root = &trimmed[root_start..root_end];

@@ -244,9 +244,26 @@ fn image_element_after_root_close_is_ignored() {
 fn unterminated_entity_is_preserved_verbatim() {
     // Regression: "A&B" (no semicolon) must stay "A&B", not become "A&;B".
     use cmtraceopen_parser::wim::parse_images;
-    let xml = "<WIM><IMAGE INDEX=\"1\"><NAME>A&amp;B</NAME><DIRCOUNT>1</DIRCOUNT><FILECOUNT>1</FILECOUNT><TOTALBYTES>1</TOTALBYTES></IMAGE></WIM>";
-    let images = parse_images(xml).expect("well-formed");
+    let xml = "<WIM><IMAGE INDEX=\"1\"><NAME>A&B</NAME><DIRCOUNT>1</DIRCOUNT><FILECOUNT>1</FILECOUNT><TOTALBYTES>1</TOTALBYTES></IMAGE></WIM>";
+    let images = parse_images(xml).expect("scanner tolerates a bare ampersand");
     assert_eq!(images[0].name, "A&B");
+}
+
+#[test]
+fn inverted_root_order_does_not_panic() {
+    // Regression: the pre-fix code searched for </WIM> across the whole
+    // input; an input where the close precedes the open produced an
+    // inverted, panicking slice range. The close is now searched only
+    // after the root open, so this input yields an empty root body —
+    // never a panic.
+    use cmtraceopen_parser::wim::parse_images;
+    let result = parse_images("</WIM><WIM></WIM>");
+    assert_eq!(result, Ok(Vec::new()));
+    // And trailing content after the root close remains ignored.
+    assert_eq!(
+        parse_images("<WIM></WIM>trailing <IMAGE INDEX=\"1\">junk"),
+        Ok(Vec::new())
+    );
 }
 
 #[test]
