@@ -1,6 +1,8 @@
 //! WIM XML data decoding: UTF-16LE + BOM strip, then extraction of `<IMAGE>`
 //! entries. Hand-rolled scanning — the WIM XML schema is fixed and tiny, so a
-//! full XML dependency is not warranted.
+//! full XML dependency is not warranted. The scanner validates the document
+//! root (`<WIM>`) and decodes the five predefined XML entities in element
+//! text and attribute values.
 
 use super::{WimError, WimImage};
 
@@ -20,34 +22,74 @@ pub fn decode_xml(bytes: &[u8]) -> Result<String, WimError> {
     String::from_utf16(body).map_err(|_| WimError::InvalidUtf16)
 }
 
+/// Decodes the five predefined XML entities in `text`. Numeric character
+/// references are not decoded — real WIM XML data uses named entities.
+fn decode_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + 1..];
+        let (entity, remainder) = match after.find(';') {
+            Some(end) => (&after[..end], &after[end + 1..]),
+            None => {
+                // A bare '&' with no ';' is kept verbatim.
+                out.push('&');
+                ("", after)
+            }
+        };
+        match entity {
+            "amp" => out.push('&'),
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "quot" => out.push('"'),
+            "apos" => out.push('\''),
+            _ => out.push_str(&format!("&{entity};")),
+        }
+        rest = remainder;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Extracts image metadata from decoded WIM XML.
 pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
+    let trimmed = xml.trim_start_matches('\u{feff}');
+    if !trimmed.starts_with("<WIM>") {
+        return Err(WimError::MalformedXml { reason: "root" });
+    }
+    if !trimmed.contains("</WIM>") {
+        return Err(WimError::MalformedXml { reason: "root" });
+    }
     let mut images = Vec::new();
     let mut cursor = 0usize;
-    while let Some(tag_start) = xml[cursor..].find("<IMAGE") {
+    while let Some(tag_start) = trimmed[cursor..].find("<IMAGE") {
         let tag_start = cursor + tag_start;
-        let Some(tag_end_rel) = xml[tag_start..].find('>') else {
+        let Some(tag_end_rel) = trimmed[tag_start..].find('>') else {
             return Err(WimError::MalformedXml {
                 reason: "image_tag",
             });
         };
         let tag_end = tag_start + tag_end_rel;
-        let open_tag = &xml[tag_start..tag_end];
-        let Some(body_end_rel) = xml[tag_end..].find("</IMAGE>") else {
+        let open_tag = &trimmed[tag_start..tag_end];
+        let Some(body_end_rel) = trimmed[tag_end..].find("</IMAGE>") else {
             return Err(WimError::MalformedXml {
                 reason: "image_tag",
             });
         };
-        let body = &xml[tag_end + 1..tag_end + body_end_rel];
+        let body = &trimmed[tag_end + 1..tag_end + body_end_rel];
         cursor = tag_end + body_end_rel + "</IMAGE>".len();
 
         let index = extract_attr(open_tag, "INDEX")
             .ok_or(WimError::MalformedXml { reason: "index" })?
             .parse::<u32>()
             .map_err(|_| WimError::MalformedXml { reason: "index" })?;
-        let name = extract_element(body, "NAME")
-            .ok_or(WimError::MalformedXml { reason: "name" })?
-            .to_owned();
+        let name = decode_entities(
+            extract_element(body, "NAME").ok_or(WimError::MalformedXml { reason: "name" })?,
+        );
         let dir_count = parse_element(body, "DIRCOUNT")?;
         let file_count = parse_element(body, "FILECOUNT")?;
         let total_bytes = parse_element(body, "TOTALBYTES")?;

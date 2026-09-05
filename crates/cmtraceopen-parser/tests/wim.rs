@@ -165,6 +165,57 @@ fn image_count_mismatch_between_header_and_xml_is_malformed() {
 }
 
 #[test]
+fn non_xml_document_root_is_malformed_xml() {
+    // Regression: text that is not a WIM XML document must be rejected, not
+    // parsed as an empty image list.
+    let mut bytes = UNCOMPRESSED.to_vec();
+    // Overwrite the XML resource with plain ASCII "not XML" (UTF-16LE), keep
+    // the header's image_count at 1 so the root check is what fires.
+    let text = "not XML";
+    let mut xml_bytes = Vec::new();
+    for ch in text.chars() {
+        xml_bytes.extend_from_slice(&(ch as u16).to_le_bytes());
+    }
+    let start = 1087usize;
+    bytes[start..start + xml_bytes.len()].copy_from_slice(&xml_bytes);
+    assert_eq!(
+        parse_wim(&bytes),
+        Err(WimError::MalformedXml { reason: "root" })
+    );
+}
+
+#[test]
+fn xml_entities_in_image_name_are_decoded() {
+    // Regression: `<NAME>A&amp;B</NAME>` must decode to "A&B".
+    let mut bytes = UNCOMPRESSED.to_vec();
+    // "sample_dir" is 10 UTF-16 units at XML offset; replace with
+    // "A&amp;B" (7 units). Locate "sample_dir" in the raw XML bytes.
+    let needle: Vec<u8> = "sample_dir"
+        .chars()
+        .flat_map(|c| (c as u16).to_le_bytes())
+        .collect();
+    let pos = bytes
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("sample_dir present in fixture XML");
+    let repl: Vec<u8> = "A&amp;B"
+        .chars()
+        .flat_map(|c| (c as u16).to_le_bytes())
+        .collect();
+    // Pad with spaces so lengths match (keeps the rest of the XML aligned).
+    let mut padded = repl.clone();
+    while padded.len() < needle.len() {
+        padded.push(0x20);
+        padded.push(0x00);
+    }
+    bytes[pos..pos + needle.len()].copy_from_slice(&padded);
+    let info = parse_wim(&bytes).expect("fixture with entity name must parse");
+    // The name element contains the entity decode plus padding spaces that
+    // keep the XML length aligned; the entity itself must have decoded.
+    assert_eq!(info.images[0].name, "A&B   ");
+}
+
+#[test]
 fn missing_xml_resource_is_malformed_xml() {
     let mut bytes = UNCOMPRESSED.to_vec();
     // Zero out the XML resource entry (offset + size): no XML to decode.
