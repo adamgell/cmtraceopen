@@ -65,9 +65,15 @@ fn decode_entities(text: &str) -> String {
 /// an image tag is unclosed, or a required image field is absent/invalid.
 pub fn parse_images(xml: &str) -> Result<Vec<WimImage>, WimError> {
     let trimmed = xml.trim_start_matches('\u{feff}');
+    // The document root must be <WIM>. Allow an optional XML prolog
+    // (<?xml ...?>) and whitespace, but no other text or element before it.
     let Some(root_start) = trimmed.find("<WIM>") else {
         return Err(WimError::MalformedXml { reason: "root" });
     };
+    let before_root = &trimmed[..root_start];
+    if !before_root.trim_start().is_empty() && !before_root.trim_start().starts_with("<?xml") {
+        return Err(WimError::MalformedXml { reason: "root" });
+    }
     // Search for the root close only after the root open — an input like
     // "</WIM><WIM>" must not produce an inverted (panicking) range.
     let Some(root_end) = trimmed[root_start..].find("</WIM>") else {

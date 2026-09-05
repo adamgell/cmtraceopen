@@ -258,11 +258,22 @@ fn inverted_root_order_does_not_panic() {
     // never a panic.
     use cmtraceopen_parser::wim::parse_images;
     let result = parse_images("</WIM><WIM></WIM>");
-    assert_eq!(result, Ok(Vec::new()));
+    assert_eq!(result, Err(WimError::MalformedXml { reason: "root" }));
     // And trailing content after the root close remains ignored.
     assert_eq!(
         parse_images("<WIM></WIM>trailing <IMAGE INDEX=\"1\">junk"),
         Ok(Vec::new())
+    );
+}
+
+#[test]
+fn nested_wim_element_is_not_a_document_root() {
+    // Regression: <WIM> must be the document root. A <WIM> nested inside
+    // another element must be rejected, not scanned.
+    use cmtraceopen_parser::wim::parse_images;
+    assert_eq!(
+        parse_images("<OTHER><WIM></WIM></OTHER>"),
+        Err(WimError::MalformedXml { reason: "root" })
     );
 }
 
