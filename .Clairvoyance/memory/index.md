@@ -6,4 +6,4 @@ Shared knowledge about this workspace. All staff read and contribute here.
 
 WikiLinks in this index resolve within `.clairvoyance/memory/`. Scan the IF lines, follow exactly one matching note, and skip everything else.
 
-- No shared memory routes yet. When you create a memory note, add `- IF <condition> → read [[note-name]]` here in the same turn.
+- IF resuming the Event Viewer preview badge, Windows validation on labz1-cm01, or the next release after v1.5.2 → read [[2026-09-10-event-viewer-preview-handoff]]
