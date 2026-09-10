@@ -456,4 +456,59 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.loadError).toContain("Application");
     expect(state.coverageGaps.some((g) => g.includes("Application"))).toBe(true);
   });
+
+  it("assembles the channel auto-load from batches the reply did not carry", async () => {
+    // enumerateChannels is the path the workspace opens with, and it merged only the reply's
+    // records. The backend streams every record as a batch and takes those records out of the
+    // reply, so a channel read in full still arrived as an empty view.
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 3, sourceType: "live" }];
+      }
+      emitBatch("Application", 0, [record("Application", 1), record("Application", 2)]);
+      emitBatch("Application", 1, [record("Application", 3)]);
+      return streamedReply("Application", 3);
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.records).toHaveLength(3);
+    expect(state.coverageGaps).toEqual([]);
+  });
+
+  it("assembles a refresh from batches the reply did not carry", async () => {
+    useEvtxStore.setState({
+      channels: [{ name: "Application", eventCount: 2, sourceType: "live" }],
+      loadedChannels: new Set(["Application"]),
+      selectedChannels: new Set(["Application"]),
+    });
+    invoke.mockImplementationOnce(async () => {
+      emitBatch("Application", 0, [record("Application", 1), record("Application", 2)]);
+      return streamedReply("Application", 2);
+    });
+
+    await useEvtxStore.getState().refreshLoadedChannels();
+
+    expect(useEvtxStore.getState().records).toHaveLength(2);
+  });
+
+  it("reports a shortfall the auto-load's reply declared but did not deliver", async () => {
+    // The reply says how many events it sent. On a path that only reads the reply, a shortfall is
+    // silent, and events that never arrived look exactly like events that never happened.
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 4, sourceType: "live" }];
+      }
+      emitBatch("Application", 0, [record("Application", 1)]);
+      return streamedReply("Application", 4);
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    expect(
+      gaps.some((g) => g.includes("Application") && g.includes("did not reach the view"))
+    ).toBe(true);
+  });
 });

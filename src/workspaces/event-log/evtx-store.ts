@@ -196,9 +196,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       });
 
       // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
-      const mergeResult = (ch: string, result: EvtxParseResult, gaps: string[]) => {
+      const mergeResult = (
+        ch: string,
+        result: EvtxParseResult,
+        records: EvtxRecord[],
+        gaps: string[]
+      ) => {
         const state = get();
-        const merged = [...state.records, ...result.records];
+        const merged = [...state.records, ...records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -222,6 +227,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         });
       };
 
+      // A previous attempt's batches must not count towards this one.
+      resetStreamedRecords(availableCore);
+
       const promises = availableCore.map(async (ch) => {
         try {
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
@@ -229,8 +237,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             maxEvents: null,
             filter: buildServerFilter(get().timeWindow),
           });
-          const checked = assertParseResultShape(result);
-          mergeResult(ch, result, checked.errorMessages);
+          const { records, gaps } = takeChannelRecords(ch, result);
+          mergeResult(ch, result, records, gaps);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
@@ -301,28 +309,9 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           continue;
         }
 
-        const checked = assertParseResultShape(result);
-
         // The records travel as batches while the query runs; the reply carries only whatever the
         // backend did not stream. Both are taken, so this works whether or not streaming happened.
-        const streamed = drainStreamedRecords(channel);
-        const arrived = [...streamed.records, ...result.records];
-
-        // The reply says how many records were sent. Silence is not agreement: if fewer arrived, or a
-        // batch number is missing from the run, those events are absent from the view and must be
-        // said so rather than left to look like events that never happened.
-        const gapsFound: string[] = [];
-        if (streamed.missingSequences.length > 0) {
-          gapsFound.push(
-            `${channel}: ${streamed.missingSequences.length} batches of events were not received`
-          );
-        }
-        const expected = checked.totalRecords;
-        if (typeof expected === "number" && arrived.length < expected) {
-          gapsFound.push(
-            `${channel}: ${expected - arrived.length} of ${expected} events did not reach the view`
-          );
-        }
+        const { records: arrived, gaps: gapsFound } = takeChannelRecords(channel, result);
 
         const state = get();
         const existingChannelNames = new Set(state.records.map((r) => r.channel));
@@ -349,10 +338,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           loadedChannels: newLoaded,
           // Accumulated, not dropped. This path loads channels incrementally, so discarding what the
           // backend reported here would show a complete view of a partly unreadable set.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
-            ...checked.errorMessages,
-            ...gapsFound,
-          ]),
+          coverageGaps: mergeCoverageGaps(state.coverageGaps, gapsFound),
         });
       } catch (processingError) {
         // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
@@ -383,6 +369,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     const state = get();
     const loaded = [...state.loadedChannels];
     if (loaded.length === 0) return;
+    // A previous attempt's batches must not count towards this one.
+    resetStreamedRecords(loaded);
     const startTime = performance.now();
     set({
       records: [],
@@ -408,10 +396,10 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // outside the window the toolbar was still showing as selected.
           filter: buildServerFilter(get().timeWindow),
         });
-        const checked = assertParseResultShape(result);
+        const { records, gaps } = takeChannelRecords(ch, result);
 
         const s = get();
-        const merged = [...s.records, ...result.records];
+        const merged = [...s.records, ...records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
         for (let i = 0; i < merged.length; i++) merged[i].id = i;
 
@@ -428,7 +416,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, checked.errorMessages),
+          coverageGaps: mergeCoverageGaps(s.coverageGaps, gaps),
         });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -612,5 +600,38 @@ export function drainStreamedRecords(channel: string): {
 /** Discards anything buffered for channels a query is about to start, so a retry cannot double up. */
 export function resetStreamedRecords(channels: string[]) {
   for (const channel of channels) pendingBatches.delete(channel);
+}
+
+/**
+ * A channel's reply after taking whatever it streamed.
+ *
+ * Every live query delivers its records as batches while it runs and takes those records out of the
+ * reply, so a path that merges only `reply.records` shows an empty view for a channel that was read
+ * in full. Both sources are taken here. The reply also says how many events it sent: a shortfall, or
+ * a batch number missing from the run, is reported as a gap rather than left to look like events
+ * that never happened.
+ */
+function takeChannelRecords(
+  channel: string,
+  reply: EvtxParseResult
+): { records: EvtxRecord[]; gaps: string[] } {
+  const checked = assertParseResultShape(reply);
+  const streamed = drainStreamedRecords(channel);
+  const records = [...streamed.records, ...reply.records];
+  const gaps = [...checked.errorMessages];
+
+  if (streamed.missingSequences.length > 0) {
+    gaps.push(
+      `${channel}: ${streamed.missingSequences.length} batches of events were not received`
+    );
+  }
+  const expected = checked.totalRecords;
+  if (typeof expected === "number" && records.length < expected) {
+    gaps.push(
+      `${channel}: ${expected - records.length} of ${expected} events did not reach the view`
+    );
+  }
+
+  return { records, gaps };
 }
 
