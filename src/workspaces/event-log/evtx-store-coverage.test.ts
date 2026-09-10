@@ -8,6 +8,7 @@
  * The Tauri bridge is mocked because the store imports it at module scope.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred } from "../../test-utils/deferred";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -37,6 +38,53 @@ function result(channel: string, gaps: string[]) {
     parseErrors: gaps.length,
     errorMessages: gaps,
   };
+}
+
+function record(channel: string, epoch: number) {
+  return {
+    id: 0,
+    eventRecordId: epoch,
+    timestamp: "2026-08-12T12:00:00.000Z",
+    timestampEpoch: epoch,
+    provider: "P",
+    channel,
+    eventId: 1,
+    level: "information",
+    computer: "C",
+    message: "m",
+    eventData: [],
+    rawXml: "<Event/>",
+    sourceLabel: "Live",
+    mapped: null,
+  };
+}
+
+/** A reply that streamed everything: it carries the count but none of the records. */
+function streamedReply(channel: string, totalRecords: number) {
+  return {
+    records: [],
+    channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" }],
+    totalRecords,
+    parseErrors: 0,
+    errorMessages: [],
+  };
+}
+
+/** The bound the auto-load is expected to ask for: newest two thousand events per channel. */
+const EXPECTED_AUTO_LOAD_MAX_EVENTS = 2_000;
+
+/** The number of channel reads expected to be in flight at once during a bulk selection. */
+const EXPECTED_MAX_CONCURRENCY = 4;
+
+/** The channel a mocked query call asked for, narrowed from the mock's untyped arguments. */
+function queriedChannel(args: unknown): string {
+  if (typeof args === "object" && args !== null && "channels" in args) {
+    const { channels } = args;
+    if (Array.isArray(channels) && typeof channels[0] === "string") {
+      return channels[0];
+    }
+  }
+  throw new Error("query call without a channel name");
 }
 
 describe("coverage gaps through the store", () => {
@@ -305,36 +353,6 @@ describe("records that arrive in batches while the query runs", () => {
     });
   });
 
-  function record(channel: string, epoch: number) {
-    return {
-      id: 0,
-      eventRecordId: epoch,
-      timestamp: "2026-08-12T12:00:00.000Z",
-      timestampEpoch: epoch,
-      provider: "P",
-      channel,
-      eventId: 1,
-      level: "information",
-      computer: "C",
-      message: "m",
-      eventData: [],
-      rawXml: "<Event/>",
-      sourceLabel: "Live",
-      mapped: null,
-    };
-  }
-
-  /** A reply that streamed everything: it carries the count but none of the records. */
-  function streamedReply(channel: string, totalRecords: number) {
-    return {
-      records: [],
-      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" }],
-      totalRecords,
-      parseErrors: 0,
-      errorMessages: [],
-    };
-  }
-
   it("assembles the view from batches the reply did not carry", async () => {
     invoke.mockImplementationOnce(async () => {
       emitBatch("System", 0, [record("System", 1), record("System", 2)]);
@@ -510,5 +528,161 @@ describe("records that arrive in batches while the query runs", () => {
     expect(
       gaps.some((g) => g.includes("Application") && g.includes("did not reach the view"))
     ).toBe(true);
+  });
+});
+
+describe("bounded loading", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+    });
+  });
+
+  it("asks for a bounded slice per channel on the automatic load", async () => {
+    // The window alone does not bound a channel: Security carried 239,704 events in twenty-four
+    // hours on a measured machine and took 318 seconds to read, which left the whole workspace
+    // waiting behind it.
+    const requested: (number | null)[] = [];
+    invoke.mockImplementation(async (cmd: string, args) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Security", eventCount: 0, sourceType: "live" }];
+      }
+      requested.push(args?.maxEvents ?? null);
+      return streamedReply("Security", 0);
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    // The bound is the policy: two thousand newest events per channel on the automatic load.
+    expect(requested).toEqual([EXPECTED_AUTO_LOAD_MAX_EVENTS]);
+  });
+
+  it("says a channel is capped instead of presenting the slice as the whole channel", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Security", eventCount: EXPECTED_AUTO_LOAD_MAX_EVENTS, sourceType: "live" }];
+      }
+      emitBatch(
+        "Security",
+        0,
+        Array.from({ length: EXPECTED_AUTO_LOAD_MAX_EVENTS }, (_, index) =>
+          record("Security", index + 1)
+        )
+      );
+      return streamedReply("Security", EXPECTED_AUTO_LOAD_MAX_EVENTS);
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const gaps = useEvtxStore.getState().coverageGaps;
+    // The note has to be honest about what this side knows: the read stopped at the bound, so the
+    // channel may hold more. Claiming it certainly does would be an unearned assertion.
+    const capped = gaps.find((g) => g.includes("Security") && g.includes("newest"));
+    expect(capped).toBeDefined();
+    expect(capped).toContain("may hold more");
+  });
+
+  it("leaves an explicit load unbounded so the whole channel stays reachable", async () => {
+    const requested: (number | null)[] = [];
+    invoke.mockImplementation(async (_cmd: string, args) => {
+      requested.push(args?.maxEvents ?? null);
+      return streamedReply("Security", 0);
+    });
+
+    await useEvtxStore.getState().queryChannels(["Security"]);
+
+    expect(requested).toEqual([null]);
+  });
+
+  it("runs one automatic load when the workspace mounts twice at once", async () => {
+    // A remount used to start a second scan of every channel while the first was still reading,
+    // which is what stacked three concurrent Security scans on the measuring machine.
+    const gate = deferred<void>();
+    const requested: (number | null)[] = [];
+    invoke.mockImplementation(async (cmd: string, args) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 0, sourceType: "live" }];
+      }
+      requested.push(args?.maxEvents ?? null);
+      await gate.promise;
+      return streamedReply("Application", 0);
+    });
+
+    const first = useEvtxStore.getState().enumerateChannels();
+    const second = useEvtxStore.getState().enumerateChannels();
+    gate.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(requested).toHaveLength(1);
+  });
+
+  it("reads a bulk selection with bounded concurrency rather than all at once", async () => {
+    // Select all names every channel on the machine, and one request per channel used to be issued
+    // for all of them at once. The service serializes much of that work, so the requests queue in
+    // the backend while every one of them is already in flight here.
+    const channels = Array.from({ length: 12 }, (_, index) => `Channel-${index}`);
+    const gate = deferred<void>();
+    let started = 0;
+    invoke.mockImplementation(async (cmd: string, args) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 0, sourceType: "live" }];
+      }
+      started += 1;
+      await gate.promise;
+      return streamedReply(queriedChannel(args), 0);
+    });
+
+    const load = useEvtxStore.getState().queryChannels(channels);
+    // No wall clock: a fixed number of microtask turns is enough for the pool to start whatever it
+    // is ever going to start, whether that is a bounded batch or every channel at once.
+    for (let turn = 0; turn < 100; turn += 1) {
+      await Promise.resolve();
+    }
+
+    // Enough concurrency to keep the service busy, bounded enough that a selection of every channel
+    // on the machine does not queue hundreds of reads at the service at once.
+    expect(started).toBe(EXPECTED_MAX_CONCURRENCY);
+
+    gate.resolve(undefined);
+    await load;
+
+    expect(useEvtxStore.getState().loadedChannels.size).toBe(channels.length);
+  });
+
+  it("shows a channel as soon as it arrives instead of waiting for the slowest one", async () => {
+    // Every channel used to be collected before any of them was merged, so a bulk selection showed
+    // nothing until the slowest channel finished. Security alone is minutes on a busy machine, and
+    // the operator cannot tell that anything is happening.
+    const slow = deferred<void>();
+    invoke.mockImplementation(async (cmd: string, args) => {
+      if (cmd === "evtx_enumerate_channels") {
+        return [{ name: "Application", eventCount: 0, sourceType: "live" }];
+      }
+      const channel = queriedChannel(args);
+      if (channel === "Slow") {
+        await slow.promise;
+      }
+      emitBatch(channel, 0, [record(channel, 1)]);
+      return streamedReply(channel, 1);
+    });
+
+    const load = useEvtxStore.getState().queryChannels(["Fast", "Slow"]);
+    for (let turn = 0; turn < 100; turn += 1) {
+      await Promise.resolve();
+    }
+
+    const midway = useEvtxStore.getState().records;
+    expect(midway.some((r) => r.channel === "Fast")).toBe(true);
+    expect(midway.some((r) => r.channel === "Slow")).toBe(false);
+
+    slow.resolve(undefined);
+    await load;
+
+    expect(useEvtxStore.getState().records).toHaveLength(2);
   });
 });

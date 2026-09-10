@@ -125,6 +125,46 @@ function applyParseResult(
   };
 }
 
+/**
+ * How many events the automatic load takes per channel.
+ *
+ * The time window alone does not bound a channel. Security carried 239,704 events in twenty-four
+ * hours on a measured machine and took 318 seconds to read, so the workspace sat waiting behind one
+ * channel before the operator had asked for anything. The newest slice arrives in seconds, and the
+ * explicit Load remains the way to fetch a channel in full.
+ */
+const AUTO_LOAD_MAX_EVENTS = 2_000;
+
+/** How many channel reads are in flight at once during a bulk selection. */
+const MAX_CONCURRENT_CHANNEL_QUERIES = 4;
+
+/** The automatic load currently running, if any. */
+let autoloadInFlight: Promise<void> | null = null;
+
+/**
+ * Runs `run` for every item, keeping at most `limit` of them in flight.
+ *
+ * A bulk selection names every channel on the machine. Issuing one request per channel at once
+ * queues hundreds of reads at a service that serializes much of that work, so the work is bounded
+ * and each result is applied as it lands rather than after the slowest one answers.
+ */
+async function runBounded<T>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      await run(items[index]);
+    }
+  });
+  await Promise.all(workers);
+}
+
 export const useEvtxStore = create<EvtxState>()((set, get) => ({
   records: [],
   channels: [],
@@ -164,101 +204,115 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   enumerateChannels: async () => {
-    set({ isLoading: true, loadError: null });
-    try {
-      // Step 1: Enumerate all channels
-      const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
+    // One automatic load at a time. A remount used to start a second scan of every channel while
+    // the first was still reading, which stacked three concurrent Security scans on a measured
+    // machine. A second caller joins the load already running instead of starting another.
+    if (autoloadInFlight) return autoloadInFlight;
 
-      // Step 2: Auto-query the core Windows Logs channels immediately
-      const coreChannels = ["Application", "System", "Security", "Setup"];
-      const availableCore = coreChannels.filter((c) =>
-        channels.some((ch) => ch.name === c)
-      );
+    const run = (async () => {
+      set({ isLoading: true, loadError: null });
+      try {
+        // Step 1: Enumerate all channels
+        const channels = await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
 
-      let updatedChannels = channels;
-      let loadError: string | null = null;
+        // Step 2: Auto-query the core Windows Logs channels immediately
+        const coreChannels = ["Application", "System", "Security", "Setup"];
+        const availableCore = coreChannels.filter((c) =>
+          channels.some((ch) => ch.name === c)
+        );
 
-      // Show channels immediately, then load events in parallel
-      const selectedNames = new Set(availableCore);
-      const startTime = performance.now();
-      set({
-        channels: updatedChannels,
-        sourceMode: "live",
-        isLoading: true,
-        loadError: null,
-        coverageGaps: [],
-        loadStartTime: startTime,
-        loadElapsedMs: null,
-        selectedChannels: selectedNames,
-        loadedChannels: new Set<string>(),
-        records: [],
-        selectedRecordId: null,
-      });
+        let updatedChannels = channels;
+        let loadError: string | null = null;
 
-      // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
-      const mergeResult = (
-        ch: string,
-        result: EvtxParseResult,
-        records: EvtxRecord[],
-        gaps: string[]
-      ) => {
-        const state = get();
-        const merged = [...state.records, ...records];
-        merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
-        for (let i = 0; i < merged.length; i++) merged[i].id = i;
+        // Show channels immediately, then load events in parallel
+        const selectedNames = new Set(availableCore);
+        const startTime = performance.now();
+        set({
+          channels: updatedChannels,
+          sourceMode: "live",
+          isLoading: true,
+          loadError: null,
+          coverageGaps: [],
+          loadStartTime: startTime,
+          loadElapsedMs: null,
+          selectedChannels: selectedNames,
+          loadedChannels: new Set<string>(),
+          records: [],
+          selectedRecordId: null,
+        });
 
-        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-        const newChannels = state.channels.map((c) => ({
-          ...c,
-          eventCount: countMap.get(c.name) ?? c.eventCount,
-        }));
-        const newLoaded = new Set(state.loadedChannels);
-        newLoaded.add(ch);
+        // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
+        const mergeResult = (
+          ch: string,
+          result: EvtxParseResult,
+          records: EvtxRecord[],
+          gaps: string[]
+        ) => {
+          const state = get();
+          const merged = [...state.records, ...records];
+          merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
+          for (let i = 0; i < merged.length; i++) merged[i].id = i;
+
+          const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+          const newChannels = state.channels.map((c) => ({
+            ...c,
+            eventCount: countMap.get(c.name) ?? c.eventCount,
+          }));
+          const newLoaded = new Set(state.loadedChannels);
+          newLoaded.add(ch);
+
+          set({
+            records: merged,
+            channels: newChannels,
+            loadedChannels: newLoaded,
+            loadElapsedMs: performance.now() - startTime,
+            // Channels load one at a time and each may report its own gaps, so they accumulate
+            // rather than replace. Deduplicated because re-querying a channel would otherwise
+            // repeat the same line.
+            coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
+          });
+        };
+
+        // A previous attempt's batches must not count towards this one.
+        resetStreamedRecords(availableCore);
+
+        const promises = availableCore.map(async (ch) => {
+          try {
+            const result = await invoke<EvtxParseResult>("evtx_query_channels", {
+              channels: [ch],
+              maxEvents: AUTO_LOAD_MAX_EVENTS,
+              filter: buildServerFilter(get().timeWindow),
+            });
+            const { records, gaps } = takeChannelRecords(ch, result, AUTO_LOAD_MAX_EVENTS);
+            mergeResult(ch, result, records, gaps);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
+            if (!loadError) loadError = `${ch}: ${msg}`;
+          }
+        });
+
+        await Promise.all(promises);
 
         set({
-          records: merged,
-          channels: newChannels,
-          loadedChannels: newLoaded,
+          isLoading: false,
+          loadingChannel: null,
+          loadingProgress: null,
           loadElapsedMs: performance.now() - startTime,
-          // Channels load one at a time and each may report its own gaps, so they accumulate
-          // rather than replace. Deduplicated because re-querying a channel would otherwise
-          // repeat the same line.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
+          loadError,
         });
-      };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        set({ isLoading: false, loadError: message });
+      }
+    })();
 
-      // A previous attempt's batches must not count towards this one.
-      resetStreamedRecords(availableCore);
-
-      const promises = availableCore.map(async (ch) => {
-        try {
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: null,
-            filter: buildServerFilter(get().timeWindow),
-          });
-          const { records, gaps } = takeChannelRecords(ch, result);
-          mergeResult(ch, result, records, gaps);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${msg}`);
-          if (!loadError) loadError = `${ch}: ${msg}`;
-        }
-      });
-
-      await Promise.all(promises);
-
-      set({
-        isLoading: false,
-        loadingChannel: null,
-        loadingProgress: null,
-        loadElapsedMs: performance.now() - startTime,
-        loadError,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      set({ isLoading: false, loadError: message });
-    }
+    // Cleared however the load ends, including an unexpected throw, so one bad load cannot leave
+    // every later mount waiting on a load that is no longer running.
+    autoloadInFlight = run.finally(() => {
+      autoloadInFlight = null;
+    });
+    return autoloadInFlight;
   },
 
   queryChannels: async (channels, maxEvents) => {
@@ -277,37 +331,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     // count a previous run's batches towards this one.
     resetStreamedRecords(channels);
 
-    const results = await Promise.all(
-      channels.map(async (ch) => {
-        try {
-          const result = await invoke<EvtxParseResult>("evtx_query_channels", {
-            channels: [ch],
-            maxEvents: maxEvents ?? null,
-            filter: buildServerFilter(get().timeWindow),
-          });
-          return { channel: ch, result, error: null as string | null };
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.warn(`[evtx] Failed to query ${ch}: ${message}`);
-          if (!loadError) loadError = `${ch}: ${message}`;
-          return { channel: ch, result: null, error: message };
-        }
-      })
-    );
-
-    for (const { channel, result, error } of results) {
+    await runBounded(channels, MAX_CONCURRENT_CHANNEL_QUERIES, async (channel) => {
       try {
-        if (!result) {
-          // A channel that could not be read is recorded as a gap, not merely as an error banner
-          // that the next successful load replaces. The events it would have contributed are absent
-          // from the view for as long as the view is on screen.
-          set((s) => ({
-            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-              `${channel}: not read (${error ?? "unknown error"})`,
-            ]),
-          }));
-          continue;
-        }
+        const result = await invoke<EvtxParseResult>("evtx_query_channels", {
+          channels: [channel],
+          maxEvents: maxEvents ?? null,
+          filter: buildServerFilter(get().timeWindow),
+        });
 
         // The records travel as batches while the query runs; the reply carries only whatever the
         // backend did not stream. Both are taken, so this works whether or not streaming happened.
@@ -340,18 +370,20 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // backend reported here would show a complete view of a partly unreadable set.
           coverageGaps: mergeCoverageGaps(state.coverageGaps, gapsFound),
         });
-      } catch (processingError) {
-        // assertParseResultShape throws by design on a reply this build cannot read, and a malformed
-        // reply is not a reason to leave the workspace stuck on a spinner with no message.
-        const message =
-          processingError instanceof Error ? processingError.message : String(processingError);
-        console.warn(`[evtx] Failed to process ${channel}: ${message}`);
+      } catch (error) {
+        // An unreadable reply, or a channel the service refused, is recorded as a gap rather than
+        // merely as an error banner that the next successful load replaces. The events it would
+        // have contributed are absent from the view for as long as the view is on screen.
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[evtx] Failed to load ${channel}: ${message}`);
         if (!loadError) loadError = `${channel}: ${message}`;
-        set((s) => ({
-          coverageGaps: mergeCoverageGaps(s.coverageGaps, [`${channel}: not read (${message})`]),
+        set((state) => ({
+          coverageGaps: mergeCoverageGaps(state.coverageGaps, [
+            `${channel}: not read (${message})`,
+          ]),
         }));
       }
-    }
+    });
 
     set({ isLoading: false, loadError });
   },
@@ -389,14 +421,14 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       try {
         const result = await invoke<EvtxParseResult>("evtx_query_channels", {
           channels: [ch],
-          maxEvents: null,
+          maxEvents: AUTO_LOAD_MAX_EVENTS,
           // The window is a server-side predicate and a refetch is the only thing that applies it.
           // Omitting it here made the time-window control a no-op: selecting 1h triggered this
           // refresh, which then fetched the channel unbounded and replaced the view with events
           // outside the window the toolbar was still showing as selected.
           filter: buildServerFilter(get().timeWindow),
         });
-        const { records, gaps } = takeChannelRecords(ch, result);
+        const { records, gaps } = takeChannelRecords(ch, result, AUTO_LOAD_MAX_EVENTS);
 
         const s = get();
         const merged = [...s.records, ...records];
@@ -610,10 +642,14 @@ export function resetStreamedRecords(channels: string[]) {
  * in full. Both sources are taken here. The reply also says how many events it sent: a shortfall, or
  * a batch number missing from the run, is reported as a gap rather than left to look like events
  * that never happened.
+ *
+ * `cappedAt` is the bound the caller asked for. A channel that came back at that bound is showing a
+ * slice, and saying so is the difference between a partial view and a view that claims to be whole.
  */
 function takeChannelRecords(
   channel: string,
-  reply: EvtxParseResult
+  reply: EvtxParseResult,
+  cappedAt?: number
 ): { records: EvtxRecord[]; gaps: string[] } {
   const checked = assertParseResultShape(reply);
   const streamed = drainStreamedRecords(channel);
@@ -630,6 +666,12 @@ function takeChannelRecords(
     gaps.push(
       `${channel}: ${expected - records.length} of ${expected} events did not reach the view`
     );
+  }
+  if (cappedAt !== undefined && records.length >= cappedAt) {
+    // A channel that came back at the bound may hold more, and this side cannot tell: the read
+    // stopped at the bound rather than counting the channel. Saying so is the difference between a
+    // partial view and a view that claims to be whole.
+    gaps.push(`${channel}: newest ${cappedAt} events shown — the channel may hold more`);
   }
 
   return { records, gaps };
