@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
+import { Badge, Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
@@ -208,6 +208,10 @@ export function EvtxFilterBar() {
         flexShrink: 0,
       }}
     >
+      <Badge appearance="ghost" size="small" style={{ flexShrink: 0 }}>
+        Preview
+      </Badge>
+
       {sourceMode === "live" && (
         <>
           <Dropdown
