@@ -22,6 +22,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 const { EventLogWorkspace } = await import("./EventLogWorkspace");
 const { useEvtxStore } = await import("./evtx-store");
 const { defaultColumnConfig } = await import("./evtx-columns");
+const { eventLogWorkspace } = await import("./index");
 
 function record(): EvtxRecord {
   return {
@@ -139,5 +140,18 @@ describe("EventLogWorkspace fixtures", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show Raw XML" }));
     expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
     expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
+  });
+});
+
+describe("Event Log Viewer preview badge", () => {
+  it("registry labels the workspace as preview", () => {
+    expect(eventLogWorkspace.label).toBe("Event Log Viewer (Preview)");
+    expect(eventLogWorkspace.statusLabel).toBe("Event Log (Preview)");
+  });
+  it("shows a Preview badge in the filter bar with events loaded", () => {
+    seedEvents();
+    render(<EventLogWorkspace />);
+
+    expect(screen.getByText("Preview")).toBeInTheDocument();
   });
 });
