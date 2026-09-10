@@ -146,8 +146,8 @@ describe("EventLogWorkspace fixtures", () => {
 describe("Event Log Viewer preview badge", () => {
   it("registry labels the workspace as preview", () => {
     expect(eventLogWorkspace.label).toBe("Event Log Viewer (Preview)");
+    expect(eventLogWorkspace.statusLabel).toBe("Event Log (Preview)");
   });
-
   it("shows a Preview badge in the filter bar with events loaded", () => {
     seedEvents();
     render(<EventLogWorkspace />);

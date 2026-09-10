@@ -6,6 +6,7 @@ import type { WorkspaceDefinition } from "../types";
 export const eventLogWorkspace: WorkspaceDefinition = {
   id: "event-log",
   label: "Event Log Viewer (Preview)",
+  statusLabel: "Event Log (Preview)",
   platforms: "all",
   capabilities: {
     sidebar: false,
