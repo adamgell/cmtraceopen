@@ -46,6 +46,14 @@ export interface EvtxChannelInfo {
   name: string;
   eventCount: number;
   sourceType: "live" | { file: { path: string } };
+  /**
+   * Whether the channel is recording on this machine.
+   *
+   * A disabled channel holds no events and the service refuses to read it, which is not a hole in
+   * the view: there is nothing in it to read. File-backed entries are always true — the file
+   * exists and was read.
+   */
+  enabled: boolean;
 }
 
 export interface EvtxParseResult {

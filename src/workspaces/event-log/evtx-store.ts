@@ -473,8 +473,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   },
 
   selectAllChannels: () => {
-    const channelNames = new Set(get().channels.map((c) => c.name));
-    set({ selectedChannels: channelNames });
+    // Only the channels that can hold events. A measured machine carried 85 disabled channels with
+    // no log file: the service refuses them, and every refusal was reported as a gap even though
+    // there was nothing in the channel to read. Selecting them was the reason the banner filled
+    // with hundreds of lines. The rest stay in the tree, where being disabled is a property of the
+    // machine rather than a hole in the view.
+    const names = get()
+      .channels.filter((channel) => channel.enabled)
+      .map((channel) => channel.name);
+    set({ selectedChannels: new Set(names) });
   },
 
   deselectAllChannels: () => {

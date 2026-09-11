@@ -162,6 +162,9 @@ pub async fn evtx_query_channels(
                             name: channel.clone(),
                             event_count: scan.delivered as u64,
                             source_type: super::models::ChannelSourceType::Live,
+                            // It was read, so it exists and is recording. The disabled flag comes
+                            // from enumeration, which is where a channel's configuration is known.
+                            enabled: true,
                         });
                         streamed += scan.delivered;
                         // A channel can be read partly. Those gaps travel with the records so a
@@ -186,6 +189,9 @@ pub async fn evtx_query_channels(
                             name: channel.clone(),
                             event_count: 0,
                             source_type: super::models::ChannelSourceType::Live,
+                            // A failure says nothing about whether the channel is recording, so it
+                            // is not reported as disabled: unknown counts as readable.
+                            enabled: true,
                         });
                         parse_errors += 1;
                     }

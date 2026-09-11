@@ -62,6 +62,8 @@ pub fn parse_evtx_files(
                         source_type: ChannelSourceType::File {
                             path: path_str.clone(),
                         },
+                        // File entries exist because the file was read.
+                        enabled: true,
                     });
                 } else {
                     for (channel_name, count) in channel_counts {
@@ -71,6 +73,7 @@ pub fn parse_evtx_files(
                             source_type: ChannelSourceType::File {
                                 path: path_str.clone(),
                             },
+                            enabled: true,
                         });
                     }
                 }

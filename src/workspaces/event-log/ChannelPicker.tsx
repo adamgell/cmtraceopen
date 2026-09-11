@@ -433,6 +433,14 @@ const ChannelLeaf = memo(function ChannelLeaf({
         style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
       />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+      {!channel.enabled && (
+        // Listed and marked rather than hidden: the channel exists, it is simply not recording, and
+        // that is why Select all leaves it out. A channel that cannot be read is not a hole in the
+        // view — there is nothing in it to read.
+        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+          disabled
+        </span>
+      )}
       {loaded && channel.eventCount > 0 && (
         <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})

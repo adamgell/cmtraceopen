@@ -45,12 +45,13 @@ function seedEvents() {
   useEvtxStore.setState({
     records: [record()],
     channels: [
-      { name: "Application", eventCount: 1, sourceType: "live" },
-      { name: "System", eventCount: 0, sourceType: "live" },
+      { name: "Application", eventCount: 1, sourceType: "live", enabled: true },
+      { name: "System", eventCount: 0, sourceType: "live", enabled: true },
       {
         name: "Microsoft-Windows-AAD/Operational",
         eventCount: 0,
         sourceType: "live",
+        enabled: true,
       },
     ],
     sourceMode: "files",

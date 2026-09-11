@@ -10,10 +10,43 @@ use cmtraceopen_parser::eventmap::MapRegistry;
 use windows::core::{Error, HSTRING, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
-    EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata, EvtQuery,
+    EvtChannelConfigEnabled, EvtClose, EvtFormatMessage, EvtFormatMessageEvent,
+    EvtGetChannelConfigProperty, EvtNext, EvtOpenChannelConfig, EvtOpenPublisherMetadata, EvtQuery,
     EvtQueryChannelPath, EvtQueryReverseDirection, EvtQueryTolerateQueryErrors, EvtRender,
-    EvtRenderEventXml, EVT_HANDLE,
+    EvtRenderEventXml, EVT_HANDLE, EVT_VARIANT,
 };
+
+/// Whether a channel is recording on this machine.
+///
+/// A disabled channel holds no events and the service refuses to read it, so asking for one adds a
+/// coverage gap that describes the machine's configuration rather than anything missing from the
+/// view. Anything that cannot be determined counts as enabled: a readable channel is worth
+/// attempting, and skipping a live one would hide real events.
+#[cfg(target_os = "windows")]
+fn channel_is_enabled(channel: &str) -> bool {
+    let Ok(config) = (unsafe { EvtOpenChannelConfig(None, &HSTRING::from(channel), 0) }) else {
+        return true;
+    };
+    let config = OwnedEvtHandle::new(config);
+
+    let mut variant: EVT_VARIANT = unsafe { std::mem::zeroed() };
+    let mut used = 0u32;
+    let read = unsafe {
+        EvtGetChannelConfigProperty(
+            config.raw(),
+            EvtChannelConfigEnabled,
+            0,
+            std::mem::size_of::<EVT_VARIANT>() as u32,
+            Some(&mut variant),
+            &mut used,
+        )
+    };
+    if read.is_err() {
+        return true;
+    }
+
+    unsafe { variant.Anonymous.BooleanVal.as_bool() }
+}
 
 /// Event handles fetched per `EvtNext` call.
 ///
@@ -116,10 +149,12 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
         if ok != 0 {
             let len = used.saturating_sub(1) as usize;
             let name = String::from_utf16_lossy(&buffer[..len]);
+            let enabled = channel_is_enabled(&name);
             channels.push(EvtxChannelInfo {
                 name,
                 event_count: 0,
                 source_type: ChannelSourceType::Live,
+                enabled,
             });
         } else {
             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
@@ -633,6 +668,30 @@ mod tests {
             println!("  Message: {}", &r.message[..r.message.len().min(100)]);
             println!("  XML prefix: {}", &r.raw_xml[..r.raw_xml.len().min(300)]);
         }
+    }
+
+    #[test]
+    fn a_channel_whose_configuration_cannot_be_read_counts_as_enabled() {
+        // The rule fails open. A configuration read that fails must never drop a live channel from
+        // the view: reporting an unreadable channel as disabled would hide its events, which is the
+        // failure this workspace exists to prevent, one level up.
+        assert!(channel_is_enabled("Application"));
+        assert!(channel_is_enabled("NoSuchChannelOnThisMachine/Debug"));
+    }
+
+    #[test]
+    fn disabled_channels_are_identified_among_the_enumerated_ones() {
+        // Analytic and Debug channels ship disabled and hold no log file, so the service refuses
+        // them. Asking anyway produced a coverage gap per disabled channel, which read as though the
+        // view were missing events that exist.
+        let channels = enumerate_channels().expect("enumerate should work");
+        let disabled = channels.iter().filter(|channel| !channel.enabled).count();
+        assert!(!channels.is_empty(), "no channels enumerated");
+        assert!(
+            disabled < channels.len(),
+            "every channel was reported disabled, so the flag is not reflecting the service"
+        );
+        println!("{disabled} of {} channels are disabled", channels.len());
     }
 }
 

@@ -32,7 +32,7 @@ function emitBatch(channel: string, sequence: number, records: unknown[]) {
 function result(channel: string, gaps: string[]) {
   return {
     records: [],
-    channels: [{ name: channel, eventCount: 0, sourceType: "live" }],
+    channels: [{ name: channel, eventCount: 0, sourceType: "live", enabled: true }],
     totalRecords: 0,
     parseErrors: gaps.length,
     errorMessages: gaps,
@@ -328,7 +328,7 @@ describe("records that arrive in batches while the query runs", () => {
   function streamedReply(channel: string, totalRecords: number) {
     return {
       records: [],
-      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live" }],
+      channels: [{ name: channel, eventCount: totalRecords, sourceType: "live", enabled: true }],
       totalRecords,
       parseErrors: 0,
       errorMessages: [],
@@ -455,5 +455,34 @@ describe("records that arrive in batches while the query runs", () => {
     expect(state.isLoading).toBe(false);
     expect(state.loadError).toContain("Application");
     expect(state.coverageGaps.some((g) => g.includes("Application"))).toBe(true);
+  });
+});
+
+describe("channel selection", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+    });
+  });
+
+  it("leaves out channels that cannot hold events", () => {
+    // A measured machine carried 85 disabled channels with no log file. Asking the service for them
+    // fails, and every refusal became a line in the coverage banner. There is nothing in a disabled
+    // channel to read, so it is not a gap: Select all simply does not ask for it.
+    useEvtxStore.setState({
+      channels: [
+        { name: "Application", eventCount: 152, sourceType: "live", enabled: true },
+        { name: "AirSpaceChannel", eventCount: 0, sourceType: "live", enabled: false },
+      ],
+    });
+
+    useEvtxStore.getState().selectAllChannels();
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["Application"]);
   });
 });

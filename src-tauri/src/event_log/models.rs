@@ -83,6 +83,12 @@ pub struct EvtxChannelInfo {
     pub name: String,
     pub event_count: u64,
     pub source_type: ChannelSourceType,
+    /// Whether the channel is recording on this machine.
+    ///
+    /// A disabled channel holds no events and the service refuses to read it. Asking anyway
+    /// produced a coverage gap per disabled channel, which read as though the view were missing
+    /// events that exist. File-backed entries are always true: the file exists and was read.
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
