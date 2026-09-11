@@ -69,7 +69,18 @@ export function EvtxCoverageBanner() {
         </Button>
       </div>
       {!collapsed && (
-        <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+        // Bounded and scrollable. A bulk selection can name every channel on the machine, and each
+        // channel that cannot be read contributes a line here: a measured selection produced 204 of
+        // them. The banner does not shrink, so an unbounded list grew to thousands of pixels and
+        // pushed the event list out of the window entirely — the gaps became the whole view.
+        <ul
+          style={{
+            margin: 0,
+            paddingInlineStart: "20px",
+            maxHeight: `${rowLineHeight * 10}px`,
+            overflowY: "auto",
+          }}
+        >
           {gaps.map((gap) => (
             <li key={gap} style={{ wordBreak: "break-word" }}>
               {gap}
