@@ -30,10 +30,18 @@
 //! a single token kind, so the same identifier masks identically no matter
 //! which field or which casing it arrived in.
 //!
+//! Free narrative is not left out of that. A bare serial, a bare DNS domain,
+//! and a bare host name carry no shape any pattern could recognize, so the
+//! projection collects the literal values it is about to mask and scrubs them
+//! out of every free-text field, leaving the very token the typed field
+//! carries in their place. Two records naming one device therefore still read
+//! as one device after the export.
+//!
 //! The hash is deliberately non-cryptographic and unsalted. It exists to make
 //! equal values look equal across an export, not to resist an attacker who
 //! already knows the serial number they are looking for.
 
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -68,6 +76,15 @@ const SENSITIVE_VALUE_KEYS: [&str; 12] = [
 /// field name already says what the value was, so a per-field kind bought
 /// nothing and cost cross-field equality.
 const VALUE_KIND: &str = "redacted";
+
+/// Shortest masked value that is scrubbed out of free text.
+///
+/// Firmware routinely reports junk serials ("0", "N/A", "None"). A value that
+/// short cannot be told apart from an ordinary word or number once it sits
+/// unlabelled in narrative, so scrubbing it would mangle readable evidence
+/// without protecting anything. The floor stays below the seven characters of
+/// a Dell service tag, so real serials are still covered.
+const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
 /// FNV-1a, stable across runs, platforms, and process restarts, which
 /// `DefaultHasher` explicitly is not.
@@ -169,41 +186,209 @@ fn is_token(value: &str) -> bool {
     hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Whether a named-data or report-value key holds a whole value the export
+/// masks rather than free text it redacts.
+///
+/// One predicate, read by both the masking pass and the literal collector, so a
+/// value cannot be masked as a typed field without its literal also being
+/// scrubbed out of free text.
+fn sensitive_value_key(name: &str) -> bool {
+    SENSITIVE_VALUE_KEYS
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(name))
+}
+
+/// The values the export masks, each paired with the token it masks to.
+///
+/// A bare serial has no distinctive shape and a bare DNS domain has no label,
+/// so no free-text rule can recognize one. What the projection does have is the
+/// value itself, read from the field it is about to mask; scrubbing that exact
+/// string out of every free-text field closes the gap by construction rather
+/// than by pattern.
+///
+/// Every entry carries the mask token of its own value rather than a generic
+/// marker, so a literal found in narrative is replaced by exactly what its
+/// typed field shows: an export that names one device in two records still
+/// reads as one device.
+#[derive(Default)]
+struct MaskedLiterals {
+    /// `(ascii-lowercased literal, its mask token)`, longest literal first.
+    entries: Vec<(String, String)>,
+}
+
+impl MaskedLiterals {
+    fn new(values: BTreeSet<String>) -> Self {
+        let mut entries: Vec<(String, String)> = values
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            // A mask is not identity, and skipping it is half of what keeps the
+            // projection idempotent: on the second pass the typed fields
+            // already hold tokens, so there is nothing left to scrub.
+            .filter(|value| !is_token(value))
+            .map(|value| value.to_ascii_lowercase())
+            .filter(|literal| literal.len() >= MIN_SCRUBBED_LITERAL_BYTES)
+            .map(|literal| {
+                let token = stable_token(VALUE_KIND, &literal);
+                (literal, token)
+            })
+            .collect();
+        entries.sort_by(|left, right| {
+            right.0.len().cmp(&left.0.len()).then_with(|| left.0.cmp(&right.0))
+        });
+        entries.dedup();
+        Self { entries }
+    }
+
+    /// Replace every occurrence of a masked literal with that literal's token.
+    ///
+    /// Runs last in each free-text pipeline. The shaped rules go first so a
+    /// tenant domain scrubbed on its own cannot break the mail-address match on
+    /// a UPN that contains it, which would leak the local part.
+    fn scrub(&self, value: &str) -> String {
+        if self.entries.is_empty() {
+            return value.to_owned();
+        }
+
+        // ASCII folding only. Case is the only way a serial, GUID, or DNS name
+        // varies between log lines, and unlike `to_lowercase` it cannot shift a
+        // byte offset out from under the slicing below.
+        let haystack = value.to_ascii_lowercase();
+        let mut scrubbed = String::with_capacity(value.len());
+        let mut cursor = 0;
+
+        while let Some((start, end, token)) = self.leftmost_longest_match(&haystack, cursor) {
+            scrubbed.push_str(&value[cursor..start]);
+            scrubbed.push_str(token);
+            cursor = end;
+        }
+        scrubbed.push_str(&value[cursor..]);
+        scrubbed
+    }
+
+    /// Leftmost match, longest at that position, so a literal that sits inside
+    /// a longer one can never cut the longer one in half.
+    fn leftmost_longest_match<'a>(
+        &'a self,
+        haystack: &str,
+        cursor: usize,
+    ) -> Option<(usize, usize, &'a str)> {
+        let mut best: Option<(usize, usize, &'a str)> = None;
+        for (literal, token) in &self.entries {
+            let Some(offset) = haystack[cursor..].find(literal.as_str()) else {
+                continue;
+            };
+            let start = cursor + offset;
+            let end = start + literal.len();
+            let replaces = best.is_none_or(|(best_start, best_end, _)| {
+                start < best_start || (start == best_start && end > best_end)
+            });
+            if replaces {
+                best = Some((start, end, token.as_str()));
+            }
+        }
+        best
+    }
+}
+
+/// Mask the sensitive spans inside a free-text value, then scrub the literals
+/// the export masks as typed fields out of it.
+fn redact_export_text(value: &str, literals: &MaskedLiterals) -> String {
+    literals.scrub(&redact_text(value))
+}
+
+/// Visit every whole value the export masks in place.
+///
+/// One walk, read by both [`collect_masked_literals`] and
+/// [`redacted_export_projection`], so a value cannot be masked as a typed field
+/// without its literal also being scrubbed out of free text.
+///
+/// Named-data and conflict values are not on this walk because which of them is
+/// masked is decided by a key rather than by the field they sit in;
+/// [`sensitive_value_key`] and [`masked_conflict_literal`] are the shared
+/// decisions for those two.
+fn for_each_masked_value_mut(
+    snapshot: &mut AutopilotSnapshot,
+    mut visit: impl FnMut(&mut String),
+) {
+    let identity = &mut snapshot.identity;
+    let fields = [
+        &mut identity.serial_number,
+        &mut identity.hardware_hash,
+        &mut identity.product_key_id,
+        &mut identity.ztd_registration_id,
+        &mut identity.entra_device_id,
+        &mut identity.managed_device_id,
+        &mut identity.tenant_id,
+        &mut identity.tenant_domain,
+        &mut identity.device_name,
+    ];
+    for value in fields.into_iter().flatten() {
+        visit(value);
+    }
+
+    // `profile_id` survives: it is a tenant object identifier and the only way
+    // to line an export up against the Intune profile it describes. The
+    // admin-authored display name does not survive.
+    if let Some(name) = &mut snapshot.profile.profile_name {
+        visit(name);
+    }
+
+    for key in &mut snapshot.esp_linkage.matched_keys {
+        visit(&mut key.value);
+    }
+}
+
+/// Read the literal value out of every field the export masks.
+///
+/// Takes `&mut` only to share one walk with the masking pass in
+/// [`for_each_masked_value_mut`]; it changes nothing.
+fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
+    let mut values = BTreeSet::new();
+    for_each_masked_value_mut(snapshot, |value| {
+        values.insert(value.clone());
+    });
+    for observation in &snapshot.observations {
+        for named in &observation.named_data {
+            if sensitive_value_key(&named.name) {
+                values.insert(named.value.clone());
+            }
+        }
+    }
+    for conflict in &snapshot.conflicts {
+        for value in &conflict.values {
+            values.insert(masked_conflict_literal(value).to_owned());
+        }
+    }
+    MaskedLiterals::new(values)
+}
+
 /// Return a copy of `snapshot` safe to export by default.
 ///
 /// Idempotent: `redacted_export_projection(&redacted_export_projection(&s))`
 /// serializes identically to `redacted_export_projection(&s)`.
 pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnapshot {
     let mut projected = snapshot.clone();
+    // Read before anything is masked: once a typed field holds a token there is
+    // no literal left to remember.
+    let literals = collect_masked_literals(&mut projected);
 
-    projected.identity = AutopilotDeviceIdentity {
-        serial_number: redact_opt(&snapshot.identity.serial_number),
-        hardware_hash: redact_opt(&snapshot.identity.hardware_hash),
-        product_key_id: redact_opt(&snapshot.identity.product_key_id),
-        ztd_registration_id: redact_opt(&snapshot.identity.ztd_registration_id),
-        entra_device_id: redact_opt(&snapshot.identity.entra_device_id),
-        managed_device_id: redact_opt(&snapshot.identity.managed_device_id),
-        tenant_id: redact_opt(&snapshot.identity.tenant_id),
-        tenant_domain: redact_opt(&snapshot.identity.tenant_domain),
-        device_name: redact_opt(&snapshot.identity.device_name),
-        registration_state: snapshot.identity.registration_state,
-        evidence: snapshot.identity.evidence.clone(),
-    };
-
-    // `profile_id` survives: it is a tenant object identifier and the only way
-    // to line an export up against the Intune profile it describes. The
-    // admin-authored display name does not survive.
-    projected.profile.profile_name = redact_opt(&snapshot.profile.profile_name);
+    // `mask_value` everywhere a whole value is masked: it performs the
+    // trim/lowercase normalization the module contract promises, so the same
+    // identifier masks identically whatever field or casing it arrived in.
+    for_each_masked_value_mut(&mut projected, |value| *value = mask_value(value));
 
     for observation in &mut projected.observations {
-        observation.message = observation.message.as_deref().map(redact_text);
+        observation.message = observation
+            .message
+            .as_deref()
+            .map(|message| redact_export_text(message, &literals));
         observation.context.provenance.file_path =
             redact_opt(&observation.context.provenance.file_path);
-        redact_named_values(&mut observation.named_data);
+        redact_named_values(&mut observation.named_data, &literals);
     }
 
     for conflict in &mut projected.conflicts {
-        conflict.detail = redact_text(&conflict.detail);
+        conflict.detail = redact_export_text(&conflict.detail, &literals);
         conflict.values = conflict
             .values
             .iter()
@@ -211,65 +396,63 @@ pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnap
             .collect();
     }
 
-    // `mask_value` everywhere a whole value is masked: it performs the
-    // trim/lowercase normalization the module contract promises, so the same
-    // identifier masks identically whatever field or casing it arrived in.
-    for key in &mut projected.esp_linkage.matched_keys {
-        key.value = mask_value(&key.value);
-    }
-
     for entry in &mut projected.coverage {
-        entry.detail = entry.detail.as_deref().map(redact_text);
+        entry.detail = entry
+            .detail
+            .as_deref()
+            .map(|detail| redact_export_text(detail, &literals));
     }
 
     projected.next_evidence_requests = projected
         .next_evidence_requests
         .iter()
-        .map(|request| redact_text(request))
+        .map(|request| redact_export_text(request, &literals))
         .collect();
 
     for finding in &mut projected.findings {
-        redact_finding(finding);
+        redact_finding(finding, &literals);
     }
 
     projected
 }
 
-fn redact_named_values(values: &mut [IntuneNamedValue]) {
+fn redact_named_values(values: &mut [IntuneNamedValue], literals: &MaskedLiterals) {
     for value in values {
-        if SENSITIVE_VALUE_KEYS
-            .iter()
-            .any(|key| key.eq_ignore_ascii_case(&value.name))
-        {
+        if sensitive_value_key(&value.name) {
             value.value = mask_value(&value.value);
         } else {
-            value.value = redact_text(&value.value);
+            value.value = redact_export_text(&value.value, literals);
         }
     }
 }
 
+/// The portion of a conflict value the export masks as one whole value.
+///
 /// Conflict values are written as `name=value` by the reducer for report
-/// sections and as bare values for named-key conflicts, so both shapes are
-/// handled rather than assuming one.
-fn redact_conflict_value(value: &str) -> String {
+/// sections and as bare values for named-key conflicts, so the masked portion
+/// is a slice of the raw string. The masking pass and the literal collector
+/// both read it here, so the two cannot disagree about what was masked.
+fn masked_conflict_literal(value: &str) -> &str {
     match value.split_once('=') {
-        Some((name, raw))
-            if SENSITIVE_VALUE_KEYS
-                .iter()
-                .any(|key| key.eq_ignore_ascii_case(name)) =>
-        {
-            format!("{name}={}", mask_value(raw))
-        }
-        _ => mask_value(value),
+        Some((name, raw)) if sensitive_value_key(name) => raw,
+        _ => value,
     }
 }
 
-fn redact_finding(finding: &mut IntuneFinding) {
-    finding.summary = redact_text(&finding.summary);
+fn redact_conflict_value(value: &str) -> String {
+    let literal = masked_conflict_literal(value);
+    // The masked portion is always a suffix, so what precedes it is the
+    // `name=` prefix or nothing at all.
+    let prefix = &value[..value.len() - literal.len()];
+    format!("{prefix}{}", mask_value(literal))
+}
+
+fn redact_finding(finding: &mut IntuneFinding, literals: &MaskedLiterals) {
+    finding.summary = redact_export_text(&finding.summary, literals);
     finding.recommended_checks = finding
         .recommended_checks
         .iter()
-        .map(|check| redact_text(check))
+        .map(|check| redact_export_text(check, literals))
         .collect();
 }
 
@@ -372,7 +555,7 @@ mod tests {
             name: "entraDeviceId".to_owned(),
             value: "  ABCDABCD-1234-5678-9012-ABCDABCDABCD  ".to_owned(),
         }];
-        redact_named_values(&mut values);
+        redact_named_values(&mut values, &MaskedLiterals::default());
         assert_eq!(values[0].value, canonical);
 
         // Conflict values, both shapes.
