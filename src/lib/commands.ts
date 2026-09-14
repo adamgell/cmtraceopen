@@ -2276,6 +2276,19 @@ export async function loadDsregcmdSource(
   });
 }
 
+/**
+ * Project raw `dsregcmd /status` text.
+ *
+ * The workspace has to hold the capture text to display it and to hand it back
+ * for analysis, so this one egress path has no projected value upstream to
+ * route through; it asks the backend for the projection of the text rather than
+ * masking at the copy call site (issue #556). Every other thing the workspace
+ * copies is already projected by the parser crate before it arrives.
+ */
+export async function redactDsregcmdStatusText(input: string): Promise<string> {
+  return invokeCommand("redact_dsregcmd_status_text", { input });
+}
+
 export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand("get_initial_file_paths");
 }
@@ -3032,6 +3045,7 @@ const COMMAND_DECODERS = {
     }),
   inspect_path_kind: decodePathKindResponse,
   write_text_output_file: decodeUnitResponse,
+  redact_dsregcmd_status_text: decodeStringResponse,
   load_dsregcmd_source: (value, commandName) =>
     decodeRecordResponse<DsregcmdResolvedSource>(value, commandName, {
       input: (field) => typeof field === "string",

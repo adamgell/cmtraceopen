@@ -651,6 +651,28 @@ fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
     }
 }
 
+/// Mask a value that is sensitive because of *which field it is*, not because of
+/// any shape the value has.
+///
+/// [`redact_text`] can only mask what it recognizes from shape, and some of the
+/// strongest identifiers have none: a device id, a certificate thumbprint or a
+/// bare tenant domain is indistinguishable from any other opaque word. A lane
+/// that knows a field holds one of those has nothing to match on, so this is
+/// the entry point for the typed case — it keeps the derivation here, where the
+/// one minter and (when they land) the keying and the analysis scope live,
+/// rather than letting each lane mint its own. `kind` is the caller's own
+/// vocabulary and is the domain separator between one kind of identifier and
+/// another.
+///
+/// A value that is already a replacement token is returned unchanged, so
+/// projecting an already-projected value is a no-op.
+pub fn redact_field_value(kind: &str, value: &str) -> String {
+    if already_masked(value) {
+        return value.to_string();
+    }
+    stable_token(kind, value)
+}
+
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
     if value.len() > MAX_REDACTION_INPUT_BYTES {
@@ -915,7 +937,30 @@ pub fn redact_text(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{decode_entity_value, preserve_token_mask_tail, redact_text, sid_occurrences};
+    use super::{
+        decode_entity_value, preserve_token_mask_tail, redact_field_value, redact_text,
+        sid_occurrences,
+    };
+
+    #[test]
+    fn a_typed_value_reaches_one_token_and_a_second_pass_leaves_it_alone() {
+        let device_id = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+        let masked = redact_field_value("device", device_id);
+
+        assert_eq!(masked, redact_field_value("device", device_id));
+        assert_eq!(masked, redact_field_value("device", &masked));
+        assert_ne!(masked, device_id);
+    }
+
+    #[test]
+    fn one_kind_cannot_reach_another_kinds_token_for_the_same_value() {
+        let value = "contoso.onmicrosoft.com";
+
+        assert_ne!(
+            redact_field_value("tenant", value),
+            redact_field_value("host", value)
+        );
+    }
 
     #[test]
     fn numeric_entities_decode_only_within_a_bounded_prefix() {
