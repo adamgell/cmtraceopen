@@ -13,6 +13,7 @@ import {
   loadPathAsLogSource,
 } from "../lib/log-source";
 import { useUiStore } from "../stores/ui-store";
+import { deferred } from "../test-utils/deferred";
 import type { RestoreTicket } from "../types/elevation";
 import type { WorkspaceId } from "../types/log";
 import { useFileAssociation } from "./use-file-association";
@@ -553,6 +554,61 @@ describe("useFileAssociation launch intent routing", () => {
     // The second launch is a second open, not a replacement: both files open,
     // in arrival order, one at a time.
     expect(order).toEqual(["C:\\Logs\\first.log", "C:\\Logs\\second.log"]);
+    expect(peakInFlight).toBe(1);
+  });
+
+  it("holds a forwarded launch behind a startup open that is still in flight", async () => {
+    const order: string[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const startupOpen = deferred<void>();
+
+    getInitialFilePathsMock.mockResolvedValue(["C:\\Logs\\startup.log"]);
+    loadPathAsLogSourceMock.mockImplementation(async (path: string) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await startupOpen.promise;
+      order.push(path);
+      inFlight -= 1;
+      return {
+        source: { kind: "file", path },
+        entries: [],
+        selectedFilePath: null,
+        parseResult: null,
+      };
+    });
+    openPathForActiveWorkspaceMock.mockImplementation(async (path: string) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await Promise.resolve();
+      order.push(path);
+      inFlight -= 1;
+    });
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() =>
+      expect(loadPathAsLogSourceMock).toHaveBeenCalledOnce(),
+    );
+    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    // The startup launch's file is still parsing when the second launch lands.
+    deliverSecondLaunch({ paths: ["C:\\Logs\\forwarded.log"] });
+    // Drain everything already scheduled, so an open started alongside the
+    // startup open would have to show up here.
+    const drained = deferred<void>();
+    setTimeout(() => drained.resolve(), 0);
+    await drained.promise;
+
+    expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
+
+    startupOpen.resolve();
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledOnce(),
+    );
+    // Both files are opened, the startup one first: the forwarded launch waits
+    // for the open already in flight instead of superseding it.
+    expect(order).toEqual(["C:\\Logs\\startup.log", "C:\\Logs\\forwarded.log"]);
     expect(peakInFlight).toBe(1);
   });
 
