@@ -299,9 +299,236 @@ mod tests {
 
     #[test]
     fn test_lookup_includes_category() {
-        let result = lookup_error_code("0x87D00215");
+        let result = lookup_error_code("0x87D13B64");
         assert!(result.found);
         assert_eq!(result.category, "Intune");
+    }
+
+    /// Codes published with `Error source: Configuration Manager` in
+    /// "Application installation common error codes reference":
+    /// https://learn.microsoft.com/en-us/intune/configmgr/tenant-attach/app-install-error-reference#configuration-manager-errors
+    const CONFIGURATION_MANAGER_SOURCE_CODES: &[(&str, &str)] = &[
+        ("0x87D00202", "Configuration Manager - Service is shutting down"),
+        ("0x87D00207", "Configuration Manager - Parsing error"),
+        ("0x87D00213", "Configuration Manager - Timeout occurred"),
+        ("0x87D00215", "Configuration Manager - Item not found"),
+        (
+            "0x87D00235",
+            "Configuration Manager - Syntax error occurred while parsing",
+        ),
+        (
+            "0x87D00244",
+            "Configuration Manager - The object or subsystem has not been initialized",
+        ),
+        (
+            "0x87D0027C",
+            "Configuration Manager - CI documents download timed out",
+        ),
+        (
+            "0x87D00289",
+            "Configuration Manager - Failed to decompress CI documents",
+        ),
+        ("0x87D00314", "Configuration Manager - CI Version Info timed out"),
+        (
+            "0x87D00321",
+            "Configuration Manager - The script execution has timed out",
+        ),
+        (
+            "0x87D00324",
+            "Configuration Manager - The application was not detected after installation completed",
+        ),
+        (
+            "0x87D00325",
+            "Configuration Manager - Application was still detected after uninstall completed",
+        ),
+        ("0x87D00327", "Configuration Manager - Script is not signed"),
+        (
+            "0x87D00329",
+            "Configuration Manager - Application requirement evaluation or detection failed",
+        ),
+        ("0x87D00607", "Configuration Manager - Content not found"),
+        (
+            "0x87D00667",
+            "Configuration Manager - No current or future service window exists to install software updates",
+        ),
+        (
+            "0x87D01106",
+            "Configuration Manager - Failed to verify the executable file is valid or to construct the associated command line",
+        ),
+        (
+            "0x87D01107",
+            "Configuration Manager - Failed to access all the provided program locations. This program may retry if the maximum retry count has not been reached",
+        ),
+        (
+            "0x87D01201",
+            "Configuration Manager - The content download cannot be performed because there is not enough available space in cache or the disk is full",
+        ),
+        (
+            "0x87D01202",
+            "Configuration Manager - The content download cannot be performed because the total size of the client cache is smaller than the size of the requested content",
+        ),
+        (
+            "0x87D01281",
+            "Configuration Manager - A supported App-V client is not installed",
+        ),
+        (
+            "0x87D0128F",
+            "Configuration Manager - The App-V sftmime command returned failure",
+        ),
+        (
+            "0x87D01290",
+            "Configuration Manager - An error occurred when querying the App-V WMI provider",
+        ),
+        ("0x87D103E8", "Configuration Manager - Error Unknown"),
+        (
+            "0x87D1076C",
+            "Configuration Manager - Application was successfully installed",
+        ),
+    ];
+
+    #[test]
+    fn test_configuration_manager_source_codes_resolve() {
+        for (hex, description) in CONFIGURATION_MANAGER_SOURCE_CODES {
+            let result = lookup_error_code(hex);
+            assert!(result.found, "{hex} must resolve");
+            assert_eq!(
+                result.description, *description,
+                "{hex} must carry its published Configuration Manager message"
+            );
+            assert_eq!(
+                result.category, "ConfigMgr",
+                "{hex} must be attributed to the Configuration Manager source"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unlisted_configuration_manager_code_fails_closed() {
+        // 0x87D01282 sits inside the published range but is not a published code.
+        let result = lookup_error_code("0x87D01282");
+        assert!(!result.found);
+        assert_eq!(result.code_hex, "0x87D01282");
+        assert_eq!(result.description, "Unknown error code");
+        assert!(detect_error_code_spans("Error 0x87D01282 during install").is_empty());
+    }
+
+    #[test]
+    fn test_detect_configuration_manager_source_code_span() {
+        // The reported log shape: a 0x87D… code attributed to the Configuration Manager source.
+        let message = "App install failed, error 0x87D00607 (Source: Microsoft Configuration Manager)";
+        let spans = detect_error_code_spans(message);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].code_hex, "0x87D00607");
+        assert_eq!(
+            spans[0].description,
+            "Configuration Manager - Content not found"
+        );
+        assert_eq!(spans[0].category, "ConfigMgr");
+        assert_eq!(js_slice(message, spans[0].start, spans[0].end), "0x87D00607");
+    }
+
+    /// Codes published in the "Intune app installation error reference"
+    /// (Android, iOS/iPadOS, and other installation errors):
+    /// https://learn.microsoft.com/en-us/troubleshoot/mem/intune/app-management/app-install-error-codes
+    const INTUNE_SOURCE_CODES: &[(&str, &str)] = &[
+        (
+            "0x87D1041C",
+            "Intune - The application was not detected after installation completed successfully.",
+        ),
+        ("0x87D11388", "Intune - iOS/iPadOS device is currently busy."),
+        (
+            "0x87D12906",
+            "Intune - Apple MDM Agent error: App installation command failed with no error reason specified. Retry app installation.",
+        ),
+        (
+            "0x87D1313C",
+            "Intune - Network connection on the client was lost or interrupted. Later attempts should succeed in a better network environment.",
+        ),
+        (
+            "0x87D1313D",
+            "Intune - Could not retrieve license for the app with iTunes Store ID",
+        ),
+        (
+            "0x87D13B60",
+            "Intune - The app is scheduled for installation, but needs a redemption code to complete the transaction.",
+        ),
+        (
+            "0x87D13B62",
+            "Intune - The user rejected the offer to install the app.",
+        ),
+        (
+            "0x87D13B63",
+            "Intune - The user rejected the offer to update the app.",
+        ),
+        ("0x87D13B64", "Intune - The app installation has failed."),
+        (
+            "0x87D13B66",
+            "Intune - The app is managed, but has expired or been removed by the user.",
+        ),
+        ("0x87D13B6F", "Intune - Your connection to Intune timed out."),
+        ("0x87D13B70", "Intune - You lost connection to the Internet."),
+        ("0x87D13B72", "Intune - You lost connection to the Internet."),
+        ("0x87D13B73", "Intune - You lost connection to the Internet."),
+        ("0x87D13B77", "Intune - The secure connection failed."),
+        ("0x87D13B7D", "Intune - Unknown error."),
+        ("0x87D13B80", "Intune - CannotConnectToITunesStoreError"),
+        ("0x87D13B93", "Intune - Can only install VPP apps on Shared iPad."),
+        (
+            "0x87D13B94",
+            "Intune - Can't install apps when App Store is disabled.",
+        ),
+        ("0x87D13B95", "Intune - Can't find VPP license for app."),
+        (
+            "0x87D13B96",
+            "Intune - Can't install system apps with your MDM provider.",
+        ),
+        (
+            "0x87D13B97",
+            "Intune - Can't install apps when device is in Lost Mode.",
+        ),
+        (
+            "0x87D13B98",
+            "Intune - Can't install apps when device is in kiosk mode.",
+        ),
+        ("0x87D13B99", "Intune - User must sign in to the App Store."),
+        ("0x87D13B9A", "Intune - Unknown problem. Please try again."),
+        (
+            "0x87D13B9B",
+            "Intune - The app installation failed. Intune will try again the next time the device syncs.",
+        ),
+        (
+            "0x87D13B9C",
+            "Intune - Can't install 32-bit apps on this device.",
+        ),
+        (
+            "0x87D13B9D",
+            "Intune - The latest version of the app failed to update from an earlier version.",
+        ),
+        (
+            "0x87D13B9E",
+            "Intune - Can't enforce app uninstall setting. Retry installing the app.",
+        ),
+        ("0x87D13B9F", "Intune - The VPP App has an update available"),
+        (
+            "0x87D13BA9",
+            "Intune - The app installation has failed. (ErrorUserEnrollmentUnsupported)",
+        ),
+    ];
+
+    #[test]
+    fn test_intune_source_codes_resolve() {
+        for (hex, description) in INTUNE_SOURCE_CODES {
+            let result = lookup_error_code(hex);
+            assert!(result.found, "{hex} must resolve");
+            assert_eq!(
+                result.description, *description,
+                "{hex} must carry its published Intune message"
+            );
+            assert_eq!(
+                result.category, "Intune",
+                "{hex} must be attributed to the Intune source"
+            );
+        }
     }
 
     #[test]
