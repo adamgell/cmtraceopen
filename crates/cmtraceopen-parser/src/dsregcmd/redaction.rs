@@ -52,11 +52,23 @@
 //! Masking here preserves equality within one analysis: equal values produce
 //! equal tokens, and a value masked as a typed field and mentioned in narrative
 //! text reaches the same token, so an export still shows that two records name
-//! one tenant, one device, one user. Ruling 2 requires that derivation to be
-//! keyed per analysis and Ruling 4 forbids a scope the caller did not supply;
-//! neither is implemented for any lane yet, and this lane adopts the one shared
-//! derivation rather than minting a fifth (Ruling 5). A lane that forked the
-//! derivation would keep the unkeyed one, and the fix would not reach it.
+//! one tenant, one device, one user. Identity values are canonicalized (trimmed
+//! and folded, Unicode-aware) before a token is minted, so two spellings of one
+//! identity cannot reach two tokens.
+//!
+//! One case escapes that, and it belongs to the shared grammar rather than to
+//! this lane: the grammar's own principal-name rule hashes the spelling it sees
+//! (`stable_token("upn", &caps[0])`), so a narrative mention spelled in a
+//! different case than the classified field keeps the grammar's token. Masking
+//! runs after the grammar deliberately — the shaped rules must see the original
+//! text — and changing that derivation would change every lane's tokens, so it
+//! is the grammar owner's call rather than something to fork here.
+//!
+//! Ruling 2 requires the derivation to be keyed per analysis and Ruling 4
+//! forbids a scope the caller did not supply; neither is implemented for any
+//! lane yet, and this lane adopts the one shared derivation rather than minting
+//! a fifth (Ruling 5). A lane that forked the derivation would keep the unkeyed
+//! one, and the fix would not reach it.
 
 use std::collections::BTreeSet;
 
@@ -126,12 +138,15 @@ impl IdentityLiterals {
             return;
         }
 
-        if !self.seen.insert(literal.to_lowercase()) {
+        // The table is keyed by, holds, and mints from the canonical form, so a
+        // second spelling of an identity already classified cannot reach a
+        // second token.
+        let canonical = canonical_identity(literal);
+        if !self.seen.insert(canonical.clone()) {
             return;
         }
 
-        self.values
-            .push((literal.to_string(), identity_token(literal, kind)));
+        self.values.push((canonical, identity_token(literal, kind)));
         self.values.sort_by(|left, right| {
             right
                 .0
@@ -227,16 +242,36 @@ fn equal_ignoring_case(left: char, right: char) -> bool {
     }
 }
 
+/// The canonical form every classification keys on and mints from: trimmed and
+/// case-folded.
+///
+/// Every identifier this lane masks is case-insensitive *as an identity*: a
+/// tenant id and a device id are GUIDs, a certificate thumbprint is hex, a
+/// tenant, on-premises and computer name is a DNS or NetBIOS name, a SID is
+/// case-insensitive by definition, and a user principal name is matched
+/// case-insensitively by Entra. None of them is case-significant, so folding
+/// cannot conflate two distinct identities, and it is what keeps one identity
+/// from reaching two tokens when two fields or a line of prose spell it
+/// differently.
+///
+/// The fold is Unicode-aware (`to_lowercase`, not `to_ascii_lowercase`), because
+/// a non-ASCII letter has to fold the same way here as it does in the scrub.
+fn canonical_identity(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
 /// The token an identity value reaches, wherever it is projected.
 ///
-/// A value the shared grammar recognizes by shape keeps the grammar's token, so
-/// a principal name masked as a typed field and the same principal name inside
-/// a server message reach one token. Anything else — a device id, a thumbprint,
-/// a bare domain — is minted through the shared minter.
+/// The value is canonicalized first, so a typed field and a narrative mention of
+/// one identity reach one token. A canonical value the shared grammar recognizes
+/// by shape keeps the grammar's token, which is already case-independent where
+/// the grammar intends it to be (the SID rule hashes the uppercase form); a
+/// value with no distinctive shape is minted through the shared minter.
 fn identity_token(value: &str, kind: &str) -> String {
-    let shaped = redact_text(value);
-    if shaped == value {
-        redact_field_value(kind, value)
+    let canonical = canonical_identity(value);
+    let shaped = redact_text(&canonical);
+    if shaped == canonical {
+        redact_field_value(kind, &canonical)
     } else {
         shaped
     }
@@ -265,9 +300,7 @@ impl Projection {
     /// An identity field: masked whole, because the field's meaning is what
     /// makes the value an identifier rather than anything in the value.
     fn identity(&self, value: &Option<String>, kind: &str) -> Option<String> {
-        value
-            .as_deref()
-            .map(|value| identity_token(value.trim(), kind))
+        value.as_deref().map(|value| identity_token(value, kind))
     }
 }
 
@@ -967,6 +1000,38 @@ mod tests {
             projected.contains("discovery failed for"),
             "over-masking: the narrative around the identity was lost: {projected:?}"
         );
+    }
+
+    /// One canonical identity reaches exactly one token, whichever spelling the
+    /// capture used and wherever it appears. Two typed fields that spell the same
+    /// identity differently, plus a narrative mention, must all carry the same
+    /// token — otherwise the export shows one tenant as two.
+    #[test]
+    fn one_identity_reaches_one_token_whatever_its_case() {
+        let capture = " TenantName : ÉLODIE.Example\n \
+                       DomainName : élodie.example\n \
+                       Server Message : retry against ÉLODIE.Example failed\n";
+        let published = json(&analyze_text(capture).expect("parses"));
+
+        let tokens = tenant_tokens(&published);
+        assert_eq!(
+            tokens.len(),
+            3,
+            "expected both typed fields and the narrative to be masked: {published}"
+        );
+        assert!(
+            tokens.iter().all(|token| *token == tokens[0]),
+            "one identity reached more than one token: {tokens:?}"
+        );
+    }
+
+    /// Every `[tenant:…]` token in a serialized analysis, in order.
+    fn tenant_tokens(published: &str) -> Vec<&str> {
+        published
+            .split("[tenant:")
+            .skip(1)
+            .filter_map(|rest| rest.split(']').next())
+            .collect()
     }
 
     fn diagnostic_ids(result: &DsregcmdAnalysisResult) -> Vec<&str> {
