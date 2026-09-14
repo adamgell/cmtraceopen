@@ -11,7 +11,16 @@ fn field_line_re() -> &'static Regex {
     })
 }
 
-pub fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, String> {
+/// Parse `dsregcmd /status` text into its typed facts.
+///
+/// **Preserving, crate-internal.** The facts carry the tenant id, domains,
+/// device id, thumbprint, user principal name and user SID exactly as the
+/// capture printed them, so this is one of the two ways to get an unprojected
+/// view out of a capture. It is not `pub`: the published way to read a capture
+/// is [`analyze_text`](super::analyze_text) or
+/// [`analyze_text_with_evidence`](super::analyze_text_with_evidence), which
+/// project before returning (ADR-004 revision 1, Ruling 1).
+pub(crate) fn parse_dsregcmd(input: &str) -> Result<DsregcmdFacts, String> {
     if input.trim().is_empty() {
         return Err("dsregcmd input was empty".to_string());
     }
