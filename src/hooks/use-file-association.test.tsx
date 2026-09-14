@@ -17,8 +17,24 @@ import type { RestoreTicket } from "../types/elevation";
 import type { WorkspaceId } from "../types/log";
 import { useFileAssociation } from "./use-file-association";
 
-const { workspaceOpenSourceMock } = vi.hoisted(() => ({
+const {
+  workspaceOpenSourceMock,
+  openPathForActiveWorkspaceMock,
+  eventListenMock,
+} = vi.hoisted(() => ({
   workspaceOpenSourceMock: vi.fn(),
+  openPathForActiveWorkspaceMock: vi.fn(),
+  eventListenMock: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: eventListenMock,
+}));
+
+vi.mock("./use-app-actions", () => ({
+  useAppActions: () => ({
+    openPathForActiveWorkspace: openPathForActiveWorkspaceMock,
+  }),
 }));
 
 vi.mock("../lib/commands", () => ({
@@ -60,6 +76,10 @@ const loadFilesAsLogSourceMock = vi.mocked(loadFilesAsLogSource);
 const loadLogSourceMock = vi.mocked(loadLogSource);
 const loadPathAsLogSourceMock = vi.mocked(loadPathAsLogSource);
 
+/** Handler the second-launch event registered, if one was registered at all. */
+type BackendEventHandler = (event: { payload: unknown }) => void;
+let secondLaunchHandler: BackendEventHandler | null = null;
+
 function ticket(overrides: Partial<RestoreTicket> = {}): RestoreTicket {
   return {
     schemaVersion: 1,
@@ -74,9 +94,19 @@ function ticket(overrides: Partial<RestoreTicket> = {}): RestoreTicket {
   };
 }
 
-describe("useFileAssociation startup routing", () => {
+describe("useFileAssociation launch intent routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    secondLaunchHandler = null;
+    eventListenMock.mockImplementation(
+      (eventName: string, handler: BackendEventHandler) => {
+        if (eventName === "second-launch-open") {
+          secondLaunchHandler = handler;
+        }
+        return Promise.resolve(() => {});
+      },
+    );
+    openPathForActiveWorkspaceMock.mockResolvedValue(undefined);
     useUiStore.setState({
       activeWorkspace: "log",
       activeView: "log",
@@ -422,5 +452,86 @@ describe("useFileAssociation startup routing", () => {
     expect(markElevationRetryAttemptedMock).not.toHaveBeenCalled();
     expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
     expect(loadLogSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("opens the path a second launch forwards into the running window", async () => {
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    // The forwarded paths arrive on this event and nowhere else, so a second
+    // launch cannot be opened twice.
+    expect(eventListenMock).toHaveBeenCalledWith(
+      "second-launch-open",
+      expect.any(Function),
+    );
+
+    secondLaunchHandler!({
+      payload: { paths: ["C:\\Windows\\CCM\\Logs\\ccmexec.log"] },
+    });
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledWith(
+        "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+        "second-launch.path-open",
+      ),
+    );
+    // Startup retrieval is untouched by a forwarded launch.
+    expect(getInitialFilePathsMock).toHaveBeenCalledOnce();
+  });
+
+  it("opens forwarded paths one at a time so none is superseded", async () => {
+    const order: string[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    openPathForActiveWorkspaceMock.mockImplementation(async (path: string) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      // A real open awaits IPC, and a superseded open is dropped rather than
+      // queued, so the second path must not start before the first finishes.
+      await Promise.resolve();
+      order.push(path);
+      inFlight -= 1;
+    });
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    secondLaunchHandler!({
+      payload: {
+        paths: [
+          "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+          "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
+        ],
+      },
+    });
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2),
+    );
+    expect(peakInFlight).toBe(1);
+    expect(order).toEqual([
+      "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+      "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
+    ]);
+  });
+
+  it("ignores a forwarded payload it cannot read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    try {
+      secondLaunchHandler!({ payload: { paths: [7] } });
+      secondLaunchHandler!({ payload: null });
+      secondLaunchHandler!({ payload: "second-launch-open" });
+
+      expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "[file-association] ignored an unreadable second-launch payload",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

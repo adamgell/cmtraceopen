@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   getInitialElevationRestore,
   getInitialFilePaths,
@@ -15,12 +16,50 @@ import { useFilterStore } from "../stores/filter-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RestoreTicket } from "../types/elevation";
 import type { LogSource } from "../types/log";
+import { useAppActions } from "./use-app-actions";
 
 /**
- * Hook that handles validated launch intent at app startup.
+ * Event the backend emits when a second launch forwards its file paths.
  *
- * Launch intents can arrive together and they never blend into each other.
- * Precedence, highest first, ending in the ordinary no-intent case:
+ * A second launch — a file-association double-click, or a path on the command
+ * line — opens in the window that is already running instead of starting a
+ * second one. Those paths arrive here, and here only, so a forwarded launch
+ * cannot be opened twice.
+ */
+const SECOND_LAUNCH_OPEN_EVENT = "second-launch-open";
+
+/** Why a forwarded path is being opened, for diagnostics. */
+const SECOND_LAUNCH_TRIGGER = "second-launch.path-open";
+
+/**
+ * Reads the paths out of a forwarded launch payload.
+ *
+ * The payload crosses the IPC boundary, so its shape is checked rather than
+ * trusted: an unreadable delivery is ignored instead of throwing inside launch
+ * handling. A readable payload with no paths is not an error — a launch with
+ * nothing to open only asked for the window.
+ */
+function parseForwardedPaths(payload: unknown): string[] | null {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+
+  const { paths } = payload as { paths?: unknown };
+  if (
+    !Array.isArray(paths) ||
+    !paths.every((path) => typeof path === "string")
+  ) {
+    return null;
+  }
+
+  return paths;
+}
+
+/**
+ * Hook that handles validated launch intent.
+ *
+ * At startup, launch intents can arrive together and they never blend into each
+ * other. Precedence, highest first, ending in the ordinary no-intent case:
  *
  *   1. positional file paths from an OS file association;
  *   2. a valid, unconsumed elevation restore ticket;
@@ -29,9 +68,14 @@ import type { LogSource } from "../types/log";
  *
  * A restore ticket reopens exactly one workspace and at most one source. Other
  * tabs, filters, searches, and selected rows are deliberately not restored.
+ *
+ * Once the window is running, a second launch delivers its file paths here
+ * rather than opening a second window, and they are opened in the window that
+ * already exists.
  */
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
+  const { openPathForActiveWorkspace } = useAppActions();
 
   useEffect(() => {
     Promise.all([
@@ -92,6 +136,40 @@ export function useFileAssociation() {
         console.error("[startup] failed to handle launch intent", { error });
       });
   }, [clearFilter]);
+
+  // A second launch opens its files in this window. Each path goes through the
+  // same flow a path handed to the running window already uses, so it lands in
+  // a tab and in Recent like any other open. They are opened in turn rather than
+  // together: an open supersedes one that is still in flight, so starting them
+  // at once would drop all but the last file.
+  useEffect(() => {
+    const unlisten = listen<unknown>(SECOND_LAUNCH_OPEN_EVENT, (event) => {
+      const paths = parseForwardedPaths(event.payload);
+      if (paths === null) {
+        console.warn(
+          "[file-association] ignored an unreadable second-launch payload",
+        );
+        return;
+      }
+
+      void (async () => {
+        for (const path of paths) {
+          try {
+            await openPathForActiveWorkspace(path, SECOND_LAUNCH_TRIGGER);
+          } catch (error) {
+            console.error(
+              "[file-association] failed to open a forwarded path",
+              { path, error },
+            );
+          }
+        }
+      })();
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [openPathForActiveWorkspace]);
 }
 
 /**

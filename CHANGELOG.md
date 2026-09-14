@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Second launch opens in the running window (#565)**: A second launch — a file-association double-click or a path on the command line — hands its files to the window that is already open, which raises itself and opens them like any other path, instead of leaving a second window behind. An elevated restart is a replacement rather than a second launch, so it never routes itself.
+
 ## [1.6.0] - 2026-09-14
 
 ### Added
