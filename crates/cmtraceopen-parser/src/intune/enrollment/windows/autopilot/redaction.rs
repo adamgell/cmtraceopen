@@ -26,9 +26,10 @@
 //! `entraDeviceId` is both device identity and a correlation key, which is
 //! exactly why masking is deterministic rather than destructive.
 //!
-//! Every whole-value mask is computed over the trimmed, lowercased value under
-//! a single token kind, so the same identifier masks identically no matter
-//! which field or which casing it arrived in.
+//! Every whole-value mask is computed over one canonical form of the value --
+//! trimmed and case-folded, Unicode-aware -- under a single token kind, so the
+//! same identifier masks identically no matter which field, which casing, or
+//! which non-ASCII spelling it arrived in.
 //!
 //! Free narrative is not left out of that. A bare serial, a bare DNS domain,
 //! and a bare host name carry no shape any pattern could recognize, so the
@@ -102,11 +103,17 @@ fn stable_token(kind: &str, value: &str) -> String {
 
 /// Mask one whole value, normalizing case and surrounding space first so the
 /// same identifier always produces the same token.
+///
+/// Case folding is `to_lowercase`, not `to_ascii_lowercase`: an identity can
+/// carry a non-ASCII letter (a display name, an IDN-style domain), and a log
+/// line is free to spell it in another case. This is the one canonical form for
+/// one identity -- the literal table keys on exactly the same fold -- so a
+/// typed value and its differently-cased variant cannot end up with two tokens.
 fn mask_value(value: &str) -> String {
     if is_token(value) {
         return value.to_owned();
     }
-    stable_token(VALUE_KIND, &value.trim().to_ascii_lowercase())
+    stable_token(VALUE_KIND, &value.trim().to_lowercase())
 }
 
 fn upn_re() -> &'static Regex {
@@ -266,17 +273,12 @@ impl MaskedLiterals {
             if value.len() < MIN_SCRUBBED_LITERAL_BYTES {
                 continue;
             }
-            // The key is the Unicode-aware fold, so a log line spelling the
-            // same name in another case still finds it. The token is the one
-            // `mask_value` gives this value, so the scrub and the typed field
-            // always agree.
+            // The key is the same canonical form `mask_value` hashes, so the
+            // table and the typed fields cannot disagree about the token: one
+            // identity folds to one spelling, which mints one token.
             let literal = value.to_lowercase();
-            let token = mask_value(value);
-            // Two values that differ only in the case of a non-ASCII letter
-            // fold to one key. The first in byte order keeps its token, so the
-            // choice is deterministic; `mask_value` itself treats those two
-            // spellings as distinct, which is why only one of them can win.
-            tokens.entry(literal).or_insert(token);
+            let token = stable_token(VALUE_KIND, &literal);
+            tokens.insert(literal, token);
         }
         Self { tokens }
     }
