@@ -303,10 +303,12 @@ impl MaskedLiterals {
             return value.to_owned();
         }
 
+        // One folded view of the text, shared by every literal.
+        let folded = fold_with_offsets(value);
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) = self.leftmost_longest_match(value, cursor) {
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, &folded, cursor) {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -320,11 +322,12 @@ impl MaskedLiterals {
     fn leftmost_longest_match<'a>(
         &'a self,
         haystack: &str,
+        folded: &[FoldedChar],
         cursor: usize,
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
         for (literal, token) in &self.tokens {
-            let Some((start, end)) = find_ignore_case(haystack, literal, cursor) else {
+            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
@@ -338,58 +341,94 @@ impl MaskedLiterals {
     }
 }
 
-/// The next case-insensitive occurrence of `literal` in `haystack`, at or after
-/// `from`, as the byte range it occupies.
+/// One character of the case-folded text, and the byte range of the source
+/// character it came from.
 ///
-/// Compared character by character rather than by folding a copy of the
-/// haystack: lowercasing can change a string's length, and a folded copy's byte
-/// offsets cannot index the original. Every offset returned here is a real byte
-/// offset into `haystack`, so the caller can slice with it.
+/// Folding can turn one character into several (`İ` lowercases to `i` plus
+/// U+0307), so the folded text is not a string that can be sliced: every folded
+/// character carries the source range it came from, and a match reports the
+/// range its first and last characters cover.
+struct FoldedChar {
+    folded: char,
+    source_start: usize,
+    source_end: usize,
+}
+
+/// Case-fold `value` for matching, keeping every character tied to its source.
+fn fold_with_offsets(value: &str) -> Vec<FoldedChar> {
+    let mut folded = Vec::with_capacity(value.len());
+    for (source_start, source) in value.char_indices() {
+        let source_end = source_start + source.len_utf8();
+        for folded_char in source.to_lowercase() {
+            folded.push(FoldedChar {
+                folded: folded_char,
+                source_start,
+                source_end,
+            });
+        }
+    }
+    folded
+}
+
+/// The next occurrence of `literal` in the folded view of `haystack`, at or
+/// after the source offset `from`, as the source byte range it covers.
 ///
-/// Per-character lowercase equality reaches the one-to-one mappings that make a
-/// name look different in a log line (`É`/`é`, `Ä`/`ä`). It deliberately does
-/// not reach the handful of mappings that change a character's count (`İ` to
-/// `i` plus a combining dot): those are different text, not the same name in
-/// another case.
-fn find_ignore_case(haystack: &str, literal: &str, from: usize) -> Option<(usize, usize)> {
+/// Both sides are compared as sequences of case-folded characters, one folded
+/// character per side per step, so a character that folds to several still
+/// lines up: a typed `İSTANBUL-PC` folds to `i`, U+0307, `stanbul-pc`, and the
+/// narrative spelling `İstanbul-PC` folds to exactly that same sequence.
+/// `literal` is a literal table key, so it arrives already folded.
+///
+/// Two folded characters also count as caseless-equal when their `to_uppercase`
+/// expansions are equal, which is what reaches the final sigma: `Σ` and `ς`
+/// both uppercase to `Σ` while their lowercase forms differ.
+///
+/// Out of reach, and deliberately so: a pair whose spellings differ by a
+/// character the fold does not add back. The Turkic dotless `i` never equals
+/// `İ` (default folding yields `i` plus U+0307; only Unicode's Turkic mapping
+/// drops the dot), and one-to-many spellings such as `ß` against `SS` cannot
+/// line up at all, because each step consumes one folded character per side.
+fn find_ignore_case(
+    haystack: &str,
+    literal: &str,
+    folded: &[FoldedChar],
+    from: usize,
+) -> Option<(usize, usize)> {
     let expected: Vec<char> = literal.chars().collect();
     if expected.is_empty() {
         return None;
     }
-    for (offset, _) in haystack[from..].char_indices() {
-        let start = from + offset;
-        // The common case is the value spelled exactly as it was typed; taking
-        // it directly keeps the scan proportional to a memchr when nothing
-        // differs in case at all.
+    for (index, folded_char) in folded.iter().enumerate() {
+        let start = folded_char.source_start;
+        if start < from {
+            continue;
+        }
+        // The value spelled exactly as it was typed, which needs no folding and
+        // keeps the scan proportional to a memchr when nothing differs in case.
         if haystack[start..].starts_with(literal) {
             return Some((start, start + literal.len()));
         }
-        let mut end = start;
-        let mut matched = 0;
-        for (index, actual) in haystack[start..].char_indices() {
-            if matched == expected.len() {
-                break;
-            }
-            if !eq_ignore_case(actual, expected[matched]) {
-                matched = 0;
-                break;
-            }
-            matched += 1;
-            end = start + index + actual.len_utf8();
-        }
-        if matched == expected.len() {
-            return Some((start, end));
+        let Some(window) = folded.get(index..index + expected.len()) else {
+            break;
+        };
+        let matched = window
+            .iter()
+            .zip(&expected)
+            .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
+        if matched {
+            return Some((start, window[window.len() - 1].source_end));
         }
     }
     None
 }
 
-/// Whether two characters are the same letter in another case.
+/// Whether two folded characters are the same letter in another case.
 ///
-/// `eq_ignore_ascii_case` is not enough: an identity can carry a non-ASCII
-/// letter, and a log line is free to spell it in another case.
-fn eq_ignore_case(left: char, right: char) -> bool {
-    left == right || left.to_lowercase().eq(right.to_lowercase())
+/// Comparing only lowercase forms misses the final sigma: `Σ` folds to `σ`,
+/// while `ς` keeps its own shape. Both uppercase to `Σ`, so the uppercase
+/// expansions settle it.
+fn folded_chars_equal(left: char, right: char) -> bool {
+    left == right || left.to_uppercase().eq(right.to_uppercase())
 }
 
 /// Mask the sensitive spans inside a free-text value, then scrub the literals
