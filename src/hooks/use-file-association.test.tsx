@@ -80,6 +80,23 @@ const loadPathAsLogSourceMock = vi.mocked(loadPathAsLogSource);
 type BackendEventHandler = (event: { payload: unknown }) => void;
 let secondLaunchHandler: BackendEventHandler | null = null;
 
+/**
+ * Delivers a payload to the handler the hook registered for a second launch.
+ *
+ * Registration is asynchronous, so a test must wait for the handler before it
+ * delivers. This fails with that contract instead of tripping over a null
+ * handler at the delivery site.
+ */
+function deliverSecondLaunch(payload: unknown): void {
+  if (secondLaunchHandler === null) {
+    throw new Error(
+      "nothing is registered for the second-launch event, so the payload was not delivered",
+    );
+  }
+
+  secondLaunchHandler({ payload });
+}
+
 function ticket(overrides: Partial<RestoreTicket> = {}): RestoreTicket {
   return {
     schemaVersion: 1,
@@ -465,9 +482,7 @@ describe("useFileAssociation launch intent routing", () => {
       expect.any(Function),
     );
 
-    secondLaunchHandler!({
-      payload: { paths: ["C:\\Windows\\CCM\\Logs\\ccmexec.log"] },
-    });
+    deliverSecondLaunch({ paths: ["C:\\Windows\\CCM\\Logs\\ccmexec.log"] });
 
     await waitFor(() =>
       expect(openPathForActiveWorkspaceMock).toHaveBeenCalledWith(
@@ -496,13 +511,11 @@ describe("useFileAssociation launch intent routing", () => {
     renderHook(() => useFileAssociation());
     await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
 
-    secondLaunchHandler!({
-      payload: {
-        paths: [
-          "C:\\Windows\\CCM\\Logs\\ccmexec.log",
-          "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
-        ],
-      },
+    deliverSecondLaunch({
+      paths: [
+        "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+        "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
+      ],
     });
 
     await waitFor(() =>
@@ -515,6 +528,34 @@ describe("useFileAssociation launch intent routing", () => {
     ]);
   });
 
+  it("opens both paths when two launches arrive back to back", async () => {
+    const order: string[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    openPathForActiveWorkspaceMock.mockImplementation(async (path: string) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      // A real open awaits IPC, so overlapping launches would overlap here.
+      await Promise.resolve();
+      order.push(path);
+      inFlight -= 1;
+    });
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    deliverSecondLaunch({ paths: ["C:\\Logs\\first.log"] });
+    deliverSecondLaunch({ paths: ["C:\\Logs\\second.log"] });
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2),
+    );
+    // The second launch is a second open, not a replacement: both files open,
+    // in arrival order, one at a time.
+    expect(order).toEqual(["C:\\Logs\\first.log", "C:\\Logs\\second.log"]);
+    expect(peakInFlight).toBe(1);
+  });
+
   it("ignores a forwarded payload it cannot read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
@@ -522,9 +563,9 @@ describe("useFileAssociation launch intent routing", () => {
     await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
 
     try {
-      secondLaunchHandler!({ payload: { paths: [7] } });
-      secondLaunchHandler!({ payload: null });
-      secondLaunchHandler!({ payload: "second-launch-open" });
+      deliverSecondLaunch({ paths: [7] });
+      deliverSecondLaunch(null);
+      deliverSecondLaunch("second-launch-open");
 
       expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(

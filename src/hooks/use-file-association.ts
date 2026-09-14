@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   getInitialElevationRestore,
@@ -56,6 +56,29 @@ function parseForwardedPaths(payload: unknown): string[] | null {
 }
 
 /**
+ * Opens the paths one forwarded launch asked for, in turn.
+ *
+ * A path open supersedes one that is still in flight, so a launch carrying
+ * several files must await each open before starting the next: starting them
+ * together would drop all but the last.
+ */
+async function openForwardedPaths(
+  paths: string[],
+  openPath: (path: string, trigger: string) => Promise<void>,
+): Promise<void> {
+  for (const path of paths) {
+    try {
+      await openPath(path, SECOND_LAUNCH_TRIGGER);
+    } catch (error) {
+      console.error("[file-association] failed to open a forwarded path", {
+        path,
+        error,
+      });
+    }
+  }
+}
+
+/**
  * Hook that handles validated launch intent.
  *
  * At startup, launch intents can arrive together and they never blend into each
@@ -76,6 +99,10 @@ function parseForwardedPaths(payload: unknown): string[] | null {
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
   const { openPathForActiveWorkspace } = useAppActions();
+  // Forwarded opens run through one queue. A path open supersedes one that is
+  // still in flight, so two launches arriving back to back have to wait for
+  // each other rather than race.
+  const forwardedOpens = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     Promise.all([
@@ -139,9 +166,9 @@ export function useFileAssociation() {
 
   // A second launch opens its files in this window. Each path goes through the
   // same flow a path handed to the running window already uses, so it lands in
-  // a tab and in Recent like any other open. They are opened in turn rather than
-  // together: an open supersedes one that is still in flight, so starting them
-  // at once would drop all but the last file.
+  // a tab and in Recent like any other open. Launches are queued rather than run
+  // as they arrive: two launches close together must open both files, and an
+  // open that started second would supersede the one before it.
   useEffect(() => {
     const unlisten = listen<unknown>(SECOND_LAUNCH_OPEN_EVENT, (event) => {
       const paths = parseForwardedPaths(event.payload);
@@ -152,18 +179,11 @@ export function useFileAssociation() {
         return;
       }
 
-      void (async () => {
-        for (const path of paths) {
-          try {
-            await openPathForActiveWorkspace(path, SECOND_LAUNCH_TRIGGER);
-          } catch (error) {
-            console.error(
-              "[file-association] failed to open a forwarded path",
-              { path, error },
-            );
-          }
-        }
-      })();
+      // Recover first, so an unexpected failure cannot stall every launch that
+      // follows it.
+      forwardedOpens.current = forwardedOpens.current
+        .catch(() => undefined)
+        .then(() => openForwardedPaths(paths, openPathForActiveWorkspace));
     });
 
     return () => {
