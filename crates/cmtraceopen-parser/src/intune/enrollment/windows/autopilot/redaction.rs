@@ -34,14 +34,17 @@
 //! and a bare host name carry no shape any pattern could recognize, so the
 //! projection collects the literal values it is about to mask and scrubs them
 //! out of every free-text field, leaving the very token the typed field
-//! carries in their place. Two records naming one device therefore still read
+//! carries in their place. A value that *does* have a shape -- a UPN, a long
+//! opaque blob -- is consumed by a shaped rule before the scrub ever runs, so
+//! that rule resolves a value the export masks to that same typed token instead
+//! of minting a second one. Two records naming one device therefore still read
 //! as one device after the export.
 //!
 //! The hash is deliberately non-cryptographic and unsalted. It exists to make
 //! equal values look equal across an export, not to resist an attacker who
 //! already knows the serial number they are looking for.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -149,20 +152,44 @@ fn opaque_blob_re() -> &'static Regex {
 }
 
 /// Mask the sensitive spans inside a free-text value.
+///
+/// Shaped rules only, so this is also the entry point for a caller with no
+/// snapshot to read masked literals from. Inside an export,
+/// [`redact_export_text`] is the entry point that additionally scrubs those
+/// literals -- and that hands this pass the table it needs to resolve a match
+/// to the token its typed field carries.
 pub fn redact_text(value: &str) -> String {
+    redact_shaped_text(value, &MaskedLiterals::default())
+}
+
+/// The token for one shaped match.
+///
+/// A value that has a shape of its own is consumed here, before the literal
+/// scrub runs, so this is where a value the export masks as a typed field must
+/// resolve to that field's token. Leaving the rule's own kind in place instead
+/// would give one identity two tokens -- `[upn:…]` in narrative and
+/// `[redacted:…]` in the field -- and an export that named one user in two
+/// records would read as two users.
+fn shaped_token(literals: &MaskedLiterals, kind: &str, matched: &str) -> String {
+    literals
+        .masked_token(matched)
+        .unwrap_or_else(|| stable_token(kind, matched))
+}
+
+fn redact_shaped_text(value: &str, literals: &MaskedLiterals) -> String {
     let masked = upn_re().replace_all(value, |captures: &regex::Captures<'_>| {
-        stable_token("upn", &captures[0])
+        shaped_token(literals, "upn", &captures[0])
     });
     let masked = user_path_re().replace_all(&masked, |captures: &regex::Captures<'_>| {
         format!(
             "{}{}",
             &captures["prefix"],
-            stable_token("user", &captures["user"])
+            shaped_token(literals, "user", &captures["user"])
         )
     });
     opaque_blob_re()
         .replace_all(&masked, |captures: &regex::Captures<'_>| {
-            stable_token("blob", &captures[0])
+            shaped_token(literals, "blob", &captures[0])
         })
         .into_owned()
 }
@@ -209,34 +236,46 @@ fn sensitive_value_key(name: &str) -> bool {
 /// Every entry carries the mask token of its own value rather than a generic
 /// marker, so a literal found in narrative is replaced by exactly what its
 /// typed field shows: an export that names one device in two records still
-/// reads as one device.
+/// reads as one device. The shaped rules consult the same table, so a value
+/// that is both shaped and masked correlates as well.
 #[derive(Default)]
 struct MaskedLiterals {
-    /// `(ascii-lowercased literal, its mask token)`, longest literal first.
-    entries: Vec<(String, String)>,
+    /// ASCII-lowercased literal to the token its typed field carries.
+    tokens: BTreeMap<String, String>,
 }
 
 impl MaskedLiterals {
     fn new(values: BTreeSet<String>) -> Self {
-        let mut entries: Vec<(String, String)> = values
-            .into_iter()
-            .map(|value| value.trim().to_owned())
+        let mut tokens = BTreeMap::new();
+        for value in values {
+            let value = value.trim();
             // A mask is not identity, and skipping it is half of what keeps the
             // projection idempotent: on the second pass the typed fields
             // already hold tokens, so there is nothing left to scrub.
-            .filter(|value| !is_token(value))
-            .map(|value| value.to_ascii_lowercase())
-            .filter(|literal| literal.len() >= MIN_SCRUBBED_LITERAL_BYTES)
-            .map(|literal| {
-                let token = stable_token(VALUE_KIND, &literal);
-                (literal, token)
-            })
-            .collect();
-        entries.sort_by(|left, right| {
-            right.0.len().cmp(&left.0.len()).then_with(|| left.0.cmp(&right.0))
-        });
-        entries.dedup();
-        Self { entries }
+            if is_token(value) {
+                continue;
+            }
+            let literal = value.to_ascii_lowercase();
+            // Firmware routinely reports junk serials ("0", "N/A", "None"). A
+            // value that short cannot be told apart from an ordinary word once
+            // it sits unlabelled in narrative, so scrubbing it would mangle
+            // readable evidence without protecting anything. The floor stays
+            // below the seven characters of a Dell service tag, so real serials
+            // are still covered.
+            if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+                continue;
+            }
+            let token = stable_token(VALUE_KIND, &literal);
+            tokens.insert(literal, token);
+        }
+        Self { tokens }
+    }
+
+    /// The token this value carries as a typed field, if the export masks it.
+    fn masked_token(&self, value: &str) -> Option<String> {
+        self.tokens
+            .get(&value.trim().to_ascii_lowercase())
+            .cloned()
     }
 
     /// Replace every occurrence of a masked literal with that literal's token.
@@ -245,7 +284,7 @@ impl MaskedLiterals {
     /// tenant domain scrubbed on its own cannot break the mail-address match on
     /// a UPN that contains it, which would leak the local part.
     fn scrub(&self, value: &str) -> String {
-        if self.entries.is_empty() {
+        if self.tokens.is_empty() {
             return value.to_owned();
         }
 
@@ -273,7 +312,7 @@ impl MaskedLiterals {
         cursor: usize,
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
-        for (literal, token) in &self.entries {
+        for (literal, token) in &self.tokens {
             let Some(offset) = haystack[cursor..].find(literal.as_str()) else {
                 continue;
             };
@@ -293,7 +332,7 @@ impl MaskedLiterals {
 /// Mask the sensitive spans inside a free-text value, then scrub the literals
 /// the export masks as typed fields out of it.
 fn redact_export_text(value: &str, literals: &MaskedLiterals) -> String {
-    literals.scrub(&redact_text(value))
+    literals.scrub(&redact_shaped_text(value, literals))
 }
 
 /// Visit every whole value the export masks in place.
