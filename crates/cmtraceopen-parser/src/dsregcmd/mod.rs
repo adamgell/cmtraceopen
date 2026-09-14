@@ -21,9 +21,9 @@ pub use redaction::{redacted_analysis, redacted_status_text};
 /// thumbprint, the user principal name and the user SID have been masked by
 /// [`redaction`] before it is returned, so no caller holds an unprojected
 /// analysis to copy to a clipboard or write to a file
-/// (ADR-004 revision 1, Ruling 1). Use
-/// [`analyze_text_preserving_local_values`] when the unprojected analysis is
-/// genuinely needed for local rendering.
+/// (ADR-004 revision 1, Ruling 1). The unprojected analysis is not reachable
+/// from outside this crate at all: it exists only for the rules that read an
+/// identifier's shape and for the crate's own tests.
 ///
 /// Returns `Err(String)` with a human-readable parse failure; callers wrap
 /// into their own error type as needed.
@@ -59,14 +59,16 @@ pub fn analyze_text_with_evidence(
 
 /// Parse and evaluate without projecting anything.
 ///
-/// **Local-only.** The result still carries the device's tenant id, domains,
-/// device id, thumbprint, user principal name and user SID as the capture
-/// printed them, so it must not be exported, uploaded, attached to a support
-/// case, or handed to a renderer that can copy it. It exists so the crate can
-/// evaluate its own rules against unprojected values and so local rendering can
-/// be tested against the values a capture actually contains; everything that
+/// **Local-only, crate-internal.** The result still carries the device's tenant
+/// id, domains, device id, thumbprint, user principal name and user SID as the
+/// capture printed them, so it must not be exported, uploaded, attached to a
+/// support case, or handed to a renderer that can copy it. It is not `pub`: the
+/// only callers that may see it are the rules that read an identifier's shape
+/// while the value is still real, and the crate's own tests. Everything that
 /// publishes calls [`analyze_text`] or [`analyze_text_with_evidence`].
-pub fn analyze_text_preserving_local_values(input: &str) -> Result<DsregcmdAnalysisResult, String> {
+pub(crate) fn analyze_text_preserving_local_values(
+    input: &str,
+) -> Result<DsregcmdAnalysisResult, String> {
     let facts = parser::parse_dsregcmd(input)?;
     Ok(rules::analyze_facts(facts, input))
 }

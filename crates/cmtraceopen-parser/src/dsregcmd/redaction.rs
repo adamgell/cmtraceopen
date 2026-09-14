@@ -12,13 +12,11 @@
 //! boundary, and the published analysis value reaching callers is projected.
 //! [`analyze_text`](super::analyze_text) and
 //! [`analyze_text_with_evidence`](super::analyze_text_with_evidence) therefore
-//! apply [`redacted_analysis`] before returning; the unprojected analysis is
-//! reachable only through
-//! [`analyze_text_preserving_local_values`](super::analyze_text_preserving_local_values),
-//! which is named for what it is. A caller that receives an analysis from this
-//! crate has no unprojected value in hand to copy to a clipboard or a file, and
-//! a workspace that finds itself holding one has found a defect here rather
-//! than something to fix at the clipboard call site.
+//! apply [`redacted_analysis`] before returning, and the unprojected analysis
+//! stays crate-internal (`dsregcmd::analyze_text_preserving_local_values`), so
+//! a consumer of this crate has no unprojected value in hand to copy to a
+//! clipboard or a file, and a workspace that finds itself holding one has found
+//! a defect here rather than something to fix at the clipboard call site.
 //!
 //! # What is shared and what is local
 //!
@@ -279,7 +277,7 @@ pub fn redacted_analysis(result: &DsregcmdAnalysisResult) -> DsregcmdAnalysisRes
 /// they conclude rather than what they publish.
 pub fn redacted_status_text(input: &str) -> String {
     Projection {
-        literals: collect_literals(input, |_| {}),
+        literals: capture_literals(input),
     }
     .text(input)
 }
@@ -731,20 +729,15 @@ fn collect_identity_literals(result: &DsregcmdAnalysisResult) -> IdentityLiteral
     literals
 }
 
-/// The identity literals of one capture: what the parser reads out of the
-/// command output, plus whatever the evidence captured alongside it carries.
+/// The identity literals one capture's command output contributes.
 ///
-/// Output that does not parse is not an error here — the classification simply
-/// falls back to the evidence alone.
-fn collect_literals(
-    capture_output: &str,
-    evidence: impl FnOnce(&mut IdentityLiterals),
-) -> IdentityLiterals {
+/// Output that does not parse is not an error here; the classification simply
+/// has nothing to read.
+fn capture_literals(capture_output: &str) -> IdentityLiterals {
     let mut literals = IdentityLiterals::default();
     if let Ok(facts) = super::parser::parse_dsregcmd(capture_output) {
         collect_fact_literals(&facts, &mut literals);
     }
-    evidence(&mut literals);
     literals
 }
 
@@ -782,5 +775,138 @@ fn collect_event_log_into(analysis: &EventLogAnalysis, literals: &mut IdentityLi
         if let Some(computer) = entry.computer.as_deref() {
             literals.push(computer, KIND_HOST);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        super::{analyze_text, analyze_text_preserving_local_values, models::DsregcmdAnalysisResult},
+        redacted_status_text,
+    };
+
+    /// A capture carrying one identifier of every class this projection masks.
+    const IDENTITY_CAPTURE: &str = r#"
+ AzureAdJoined : YES
+ DomainJoined : YES
+ TenantId : 8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90
+ TenantName : contoso.onmicrosoft.com
+ DomainName : corp.contoso.com
+ DeviceId : 4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b
+ Thumbprint : 8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D
+ User Identity : adele.vance@contoso.onmicrosoft.com
+ User Context : SYSTEM
+"#;
+
+    /// The same, with the identity shape the built-in-Administrator rule reads.
+    const SID_CAPTURE: &str = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ TenantId : 8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90
+ DeviceId : 4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b
+ User Identity : S-1-5-21-3623811015-3361044348-30300820-500
+"#;
+
+    const USER_SID: &str = "S-1-5-21-3623811015-3361044348-30300820-500";
+
+    const PLANTED_IDENTIFIERS: &[(&str, &str)] = &[
+        ("tenant id", "8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90"),
+        ("tenant domain", "contoso.onmicrosoft.com"),
+        ("on-premises domain", "corp.contoso.com"),
+        ("device id", "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b"),
+        ("certificate thumbprint", "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D"),
+        ("user principal name", "adele.vance@contoso.onmicrosoft.com"),
+    ];
+
+    /// The canary: the unprojected analysis is crate-internal, so proving that
+    /// each planted value really does reach the analysis as that identifier —
+    /// rather than the export assertion passing because the fixture stopped
+    /// carrying it — can only be asserted from inside.
+    #[test]
+    fn the_unprojected_analysis_carries_every_identity_the_projection_masks() {
+        let local = json(&analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses"));
+        let published = json(&analyze_text(IDENTITY_CAPTURE).expect("parses"));
+
+        for (label, marker) in PLANTED_IDENTIFIERS {
+            assert!(
+                local.contains(marker),
+                "the fixture no longer reaches the analysis as the {label}, so this assertion is vacuous"
+            );
+            assert!(
+                !published.contains(marker),
+                "the published analysis leaks the {label} ({marker})"
+            );
+        }
+    }
+
+    /// Rules that read an identifier's shape rather than its presence run on the
+    /// unprojected values, so masking a value must not cost the diagnosis it
+    /// produced. This is why the assembly lives here instead of in a caller.
+    #[test]
+    fn a_sid_user_identity_is_masked_without_losing_the_diagnosis_it_produced() {
+        let local = analyze_text_preserving_local_values(SID_CAPTURE).expect("parses");
+        let published = analyze_text(SID_CAPTURE).expect("parses");
+
+        assert!(
+            local
+                .diagnostics
+                .iter()
+                .any(|issue| issue.id == "builtin-admin-cannot-join"),
+            "the SID no longer reaches the built-in-Administrator rule"
+        );
+        assert!(
+            !json(&published).contains(USER_SID),
+            "the published analysis leaks the user SID ({USER_SID})"
+        );
+        assert!(
+            published
+                .diagnostics
+                .iter()
+                .any(|issue| issue.id == "builtin-admin-cannot-join"),
+            "the diagnosis the raw SID produced was lost when the value was masked"
+        );
+    }
+
+    #[test]
+    fn projecting_does_not_drop_or_rename_a_diagnostic() {
+        let local = analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses");
+        let published = analyze_text(IDENTITY_CAPTURE).expect("parses");
+
+        let local_ids = diagnostic_ids(&local);
+        let published_ids = diagnostic_ids(&published);
+
+        assert!(!local_ids.is_empty(), "the fixture produced no diagnostics");
+        assert_eq!(local_ids, published_ids);
+    }
+
+    /// The capture text is the analyzer's input and keeps its values, so the
+    /// projection of it is a separate entry point with the same classification.
+    #[test]
+    fn the_projected_status_text_keeps_the_capture_and_loses_the_identities() {
+        let projected = redacted_status_text(IDENTITY_CAPTURE);
+
+        for (label, marker) in PLANTED_IDENTIFIERS {
+            assert!(
+                !projected.contains(marker),
+                "the projected status text leaks the {label} ({marker})"
+            );
+        }
+        assert!(
+            projected.contains("AzureAdJoined : YES")
+                && projected.contains("User Context : SYSTEM"),
+            "over-masking: the capture's own content was lost: {projected}"
+        );
+    }
+
+    fn diagnostic_ids(result: &DsregcmdAnalysisResult) -> Vec<&str> {
+        result
+            .diagnostics
+            .iter()
+            .map(|issue| issue.id.as_str())
+            .collect()
+    }
+
+    fn json(result: &DsregcmdAnalysisResult) -> String {
+        serde_json::to_string(result).expect("a dsregcmd analysis serializes")
     }
 }

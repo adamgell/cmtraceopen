@@ -386,7 +386,14 @@ pub struct DsregcmdBundleEvidence {
 
 impl DsregcmdBundleEvidence {
     /// Attach this evidence to the analysis it belongs to, moving it in.
-    pub fn apply_to(self, result: &mut DsregcmdAnalysisResult) {
+    ///
+    /// Crate-internal on purpose: attaching is a step *inside* the analysis, so
+    /// exposing it would let a caller overwrite a projected result's evidence
+    /// with unprojected values after [`analyze_text`](super::analyze_text)
+    /// returned it. The only caller is
+    /// [`analyze_text_with_evidence`](super::analyze_text_with_evidence), which
+    /// projects afterwards.
+    pub(crate) fn apply_to(self, result: &mut DsregcmdAnalysisResult) {
         let Self {
             policy_evidence,
             os_version,

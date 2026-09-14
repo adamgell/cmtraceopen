@@ -9,12 +9,17 @@
 //! `esp_export_boundary.rs`:
 //!
 //! 1. Named markers. Every identity value planted in the capture is asserted
-//!    absent, and a canary asserts the same markers ARE present in the
-//!    unprojected analysis of the same capture, so the test can never pass
-//!    vacuously.
+//!    absent, and a canary asserts the capture really plants it, so the test
+//!    cannot pass because the fixture stopped carrying the value.
 //! 2. Shape scan. Every string in the published JSON is matched against
 //!    identifier shapes (mail address, SID). A field that starts carrying an
 //!    identifier fails here even if no named marker was updated.
+//!
+//! The stronger canary — that each planted value reaches the analysis as that
+//! identifier, not merely that the capture text contains it — needs the
+//! unprojected analysis, which is crate-internal by design (Ruling 1). It lives
+//! in `src/dsregcmd/redaction.rs`'s own tests, which also pin that projecting
+//! does not drop or rename a diagnostic.
 //!
 //! A bare tenant domain, device id and thumbprint have no distinctive shape, so
 //! the projection scrubs the literal values it masks as typed fields out of
@@ -22,9 +27,8 @@
 //! narrative so guard 1 proves both paths.
 
 use cmtraceopen_parser::dsregcmd::{
-    analyze_text, analyze_text_preserving_local_values, analyze_text_with_evidence,
-    redacted_status_text, DsregcmdActiveEvidence, DsregcmdBundleEvidence,
-    DsregcmdConnectivityResult, DsregcmdScpQueryResult,
+    analyze_text, analyze_text_with_evidence, redacted_status_text, DsregcmdActiveEvidence,
+    DsregcmdBundleEvidence, DsregcmdConnectivityResult, DsregcmdScpQueryResult,
 };
 use cmtraceopen_parser::intune::models::{
     EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
@@ -118,19 +122,15 @@ fn published_analysis_json(capture: &str) -> String {
 
 #[test]
 fn the_published_analysis_carries_no_planted_identity() {
-    let local = {
-        let analysis = analyze_text_preserving_local_values(STATUS_CAPTURE)
-            .expect("the dsregcmd capture parses");
-        serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
-    };
     let published = published_analysis_json(STATUS_CAPTURE);
 
     for (label, marker) in PLANTED_IDENTIFIERS {
-        // Canary: the marker really is reachable from the unprojected analysis
-        // of this capture, so a passing assertion below means the projection
-        // removed it rather than the fixture never carrying it.
+        // Canary: the capture really plants this value, so a passing assertion
+        // below means the projection removed it rather than the fixture never
+        // carrying it. Whether it reaches the analysis as that identifier is
+        // asserted from inside the crate, where the unprojected view lives.
         assert!(
-            local.contains(marker),
+            STATUS_CAPTURE.contains(marker),
             "test fixture no longer plants the {label}; the export assertion below would be vacuous"
         );
         assert!(
@@ -140,33 +140,21 @@ fn the_published_analysis_carries_no_planted_identity() {
     }
 }
 
+/// The rule that reads a SID's shape runs before the value is masked, and the
+/// diagnosis it produced survives into the published analysis. That diagnostic
+/// is itself the canary: if the analyzer stopped reading the raw identity, the
+/// rule would not fire and this would fail.
 #[test]
 fn a_sid_user_identity_is_masked_without_losing_the_diagnosis_it_produced() {
-    let local = analyze_text_preserving_local_values(SID_CAPTURE).expect("capture parses");
     let published = published_analysis_json(SID_CAPTURE);
 
-    // Canary: the SID really is carried, and it really does drive a rule whose
-    // input is the value's shape rather than its presence.
     assert!(
-        local.facts.diagnostics.user_identity.as_deref() == Some(USER_SID),
-        "got {:?}",
-        local.facts.diagnostics.user_identity
+        published.contains("builtin-admin-cannot-join"),
+        "the built-in-Administrator rule did not fire; the assertions below are vacuous"
     );
-    assert!(
-        local
-            .diagnostics
-            .iter()
-            .any(|issue| issue.id == "builtin-admin-cannot-join"),
-        "the built-in-Administrator rule no longer sees the SID; the assertions below are vacuous"
-    );
-
     assert!(
         !published.contains(USER_SID),
         "the published analysis leaks the user SID ({USER_SID})"
-    );
-    assert!(
-        published.contains("builtin-admin-cannot-join"),
-        "the diagnosis the raw SID produced was lost when the value was masked"
     );
 }
 
@@ -221,28 +209,6 @@ fn a_narrative_mention_of_a_planted_identity_is_scrubbed() {
     assert!(
         !published.contains(UPN) && !published.contains(TENANT_ID),
         "a narrative mention of a planted identity survived: {published}"
-    );
-}
-
-/// The projection masks values, not the analysis: every diagnostic the local
-/// analysis produced is still present in the published one.
-#[test]
-fn projecting_does_not_drop_or_rename_a_diagnostic() {
-    let local = analyze_text_preserving_local_values(STATUS_CAPTURE).expect("capture parses");
-    let published = analyze_text(STATUS_CAPTURE).expect("capture parses");
-
-    let local_ids: Vec<&str> = local.diagnostics.iter().map(|issue| issue.id.as_str()).collect();
-    let published_ids: Vec<&str> = published
-        .diagnostics
-        .iter()
-        .map(|issue| issue.id.as_str())
-        .collect();
-
-    assert!(!local_ids.is_empty(), "the fixture produced no diagnostics");
-    assert_eq!(local_ids, published_ids);
-    assert_eq!(
-        local.derived.join_type_label,
-        published.derived.join_type_label
     );
 }
 
