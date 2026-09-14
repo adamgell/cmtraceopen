@@ -58,7 +58,7 @@
 //! derivation rather than minting a fifth (Ruling 5). A lane that forked the
 //! derivation would keep the unkeyed one, and the fix would not reach it.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::intune::apps::windows::common::{redact_field_value, redact_text};
 use crate::intune::models::{
@@ -101,17 +101,20 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// replaces it.
 ///
 /// Built from the unprojected analysis and then applied to it, so a literal is
-/// known before any free-text field is scrubbed. Keyed by the ASCII-lowercased
-/// literal: case is the only way an identifier varies between two lines of one
-/// capture, and unlike `to_lowercase` it cannot shift a byte offset out from
-/// under the slicing in [`IdentityLiterals::scrub`].
+/// known before any free-text field is scrubbed. The literal is kept exactly as
+/// the field carried it, and matching is case-insensitive over the original
+/// string: folding first and matching on the folded copy would be wrong for two
+/// reasons — ASCII-only folding misses a literal whose letters are not ASCII
+/// entirely, and full folding changes byte length for some characters (`İ`
+/// lowers to two code points), so an offset into the folded copy would not
+/// address the same text as the original.
 #[derive(Default)]
 struct IdentityLiterals {
-    /// Literal (ASCII-lowercased) to token, longest literal first.
-    tokens: BTreeMap<String, String>,
-    /// Longest literal first, so a literal that sits inside a longer one can
-    /// never cut the longer one in half.
-    order: Vec<String>,
+    /// Literal as classified, paired with its token, longest literal first so a
+    /// literal that sits inside a longer one cannot cut the longer one in half.
+    values: Vec<(String, String)>,
+    /// Folded literals already classified, so one value is classified once.
+    seen: BTreeSet<String>,
 }
 
 impl IdentityLiterals {
@@ -123,15 +126,19 @@ impl IdentityLiterals {
             return;
         }
 
-        let key = literal.to_ascii_lowercase();
-        if self.tokens.contains_key(&key) {
+        if !self.seen.insert(literal.to_lowercase()) {
             return;
         }
 
-        self.tokens.insert(key.clone(), identity_token(literal, kind));
-        self.order.push(key);
-        self.order
-            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+        self.values
+            .push((literal.to_string(), identity_token(literal, kind)));
+        self.values.sort_by(|left, right| {
+            right
+                .0
+                .len()
+                .cmp(&left.0.len())
+                .then_with(|| left.0.cmp(&right.0))
+        });
     }
 
     /// Replace every occurrence of a classified literal, whatever its case.
@@ -141,16 +148,14 @@ impl IdentityLiterals {
     /// own would break the mail-address match on a principal name that contains
     /// it and leak the local part.
     fn scrub(&self, value: &str) -> String {
-        if self.order.is_empty() {
+        if self.values.is_empty() {
             return value.to_string();
         }
 
-        // ASCII folding only, so byte offsets match the haystack's.
-        let haystack = value.to_ascii_lowercase();
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) = self.leftmost_longest_match(&haystack, cursor) {
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, cursor) {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -159,24 +164,66 @@ impl IdentityLiterals {
         scrubbed
     }
 
+    /// The leftmost match, longest at that position, as `(start, end, token)`
+    /// with byte offsets into `haystack` itself.
+    ///
+    /// Scans in increasing character order, so the first position that matches
+    /// anything is the leftmost one, and takes the first literal that matches
+    /// there, which [`IdentityLiterals::values`] orders longest-first.
     fn leftmost_longest_match(
         &self,
         haystack: &str,
         cursor: usize,
     ) -> Option<(usize, usize, &str)> {
-        self.order
-            .iter()
-            .filter_map(|literal| {
-                haystack[cursor..]
-                    .find(literal.as_str())
-                    .map(|offset| (cursor + offset, cursor + offset + literal.len(), literal))
-            })
-            .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
-            .and_then(|(start, end, literal)| {
-                self.tokens
-                    .get(literal)
-                    .map(|token| (start, end, token.as_str()))
-            })
+        for (offset, _) in haystack[cursor..].char_indices() {
+            let start = cursor + offset;
+            for (literal, token) in &self.values {
+                if let Some(end) = match_end_ignoring_case(haystack, start, literal) {
+                    return Some((start, end, token.as_str()));
+                }
+            }
+        }
+        None
+    }
+}
+
+/// The byte offset in `haystack` just past `literal`, when the text at `start`
+/// begins with that literal in any case.
+fn match_end_ignoring_case(haystack: &str, start: usize, literal: &str) -> Option<usize> {
+    let mut end = start;
+    let mut haystack_chars = haystack[start..].chars();
+
+    for literal_char in literal.chars() {
+        let haystack_char = haystack_chars.next()?;
+        if !equal_ignoring_case(haystack_char, literal_char) {
+            return None;
+        }
+        end += haystack_char.len_utf8();
+    }
+
+    Some(end)
+}
+
+/// Whether two characters are the same letter in either case, for any script.
+fn equal_ignoring_case(left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+
+    if left.is_ascii() && right.is_ascii() {
+        return left.eq_ignore_ascii_case(&right);
+    }
+
+    // Full Unicode without allocating: compare the lowercase expansions, which
+    // can be more than one character (`İ` lowers to `i` plus a combining dot).
+    let mut left_lower = left.to_lowercase();
+    let mut right_lower = right.to_lowercase();
+    loop {
+        match (left_lower.next(), right_lower.next()) {
+            (None, None) => return true,
+            (Some(left_char), Some(right_char)) if left_char == right_char => {}
+            _ => return false,
+        }
     }
 }
 
@@ -830,7 +877,7 @@ mod tests {
         for (label, marker) in PLANTED_IDENTIFIERS {
             assert!(
                 local.contains(marker),
-                "the fixture no longer reaches the analysis as the {label}, so this assertion is vacuous"
+                "the fixture no longer reaches the analysis as the {label}; the export check is vacuous"
             );
             assert!(
                 !published.contains(marker),
@@ -895,6 +942,30 @@ mod tests {
             projected.contains("AzureAdJoined : YES")
                 && projected.contains("User Context : SYSTEM"),
             "over-masking: the capture's own content was lost: {projected}"
+        );
+    }
+
+    /// A classified literal whose letters are not all ASCII must still match the
+    /// narrative spelling of it that differs only in case, or the export carries
+    /// the identifier after all — the shared grammar masks only shapes it
+    /// recognizes, and a bare display name is not one.
+    #[test]
+    fn a_non_ascii_identity_is_scrubbed_whatever_its_case_in_the_narrative() {
+        let capture = " TenantName : Ünïcode.Example\n \
+                       Server Message : discovery failed for ünïcode.example\n";
+        let projected = redacted_status_text(capture);
+
+        assert!(
+            !projected.contains("Ünïcode") && !projected.contains("ünïcode"),
+            "a differently-cased spelling of a non-ASCII identity survived: {projected:?}"
+        );
+        assert!(
+            projected.matches("[tenant:").count() == 2,
+            "expected both spellings at the typed token: {projected:?}"
+        );
+        assert!(
+            projected.contains("discovery failed for"),
+            "over-masking: the narrative around the identity was lost: {projected:?}"
         );
     }
 
