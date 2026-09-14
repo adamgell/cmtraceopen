@@ -436,6 +436,7 @@ mod tests {
             "Intune - The application was not detected after installation completed successfully.",
         ),
         ("0x87D11388", "Intune - iOS/iPadOS device is currently busy."),
+        ("0x87D1279D", "Intune - Unknown error."),
         (
             "0x87D12906",
             "Intune - Apple MDM Agent error: App installation command failed with no error reason specified. Retry app installation.",
@@ -465,13 +466,34 @@ mod tests {
             "0x87D13B66",
             "Intune - The app is managed, but has expired or been removed by the user.",
         ),
+        (
+            "0x87D13B68",
+            "Intune - User declined app management",
+        ),
+        (
+            "0x87D13B69",
+            "Intune - Device VPP licensing is only applicable for iOS/iPadOS 9.0+ devices.",
+        ),
+        (
+            "0x87D13B6E",
+            "Intune - App Install Failure 12024: Unknown cause.",
+        ),
         ("0x87D13B6F", "Intune - Your connection to Intune timed out."),
         ("0x87D13B70", "Intune - You lost connection to the Internet."),
         ("0x87D13B72", "Intune - You lost connection to the Internet."),
         ("0x87D13B73", "Intune - You lost connection to the Internet."),
         ("0x87D13B77", "Intune - The secure connection failed."),
         ("0x87D13B7D", "Intune - Unknown error."),
+        (
+            "0x87D13B7E",
+            "Intune - License Assignment failed with Apple error 'No VPP licenses remaining'",
+        ),
+        (
+            "0x87D13B7F",
+            "Intune - Needed app configuration policy not present, ensure policy is targeted to same groups.",
+        ),
         ("0x87D13B80", "Intune - CannotConnectToITunesStoreError"),
+        ("0x87D13B8F", "Intune - The application is installed on the device but is unmanaged."),
         ("0x87D13B93", "Intune - Can only install VPP apps on Shared iPad."),
         (
             "0x87D13B94",

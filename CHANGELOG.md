@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference — 47 new codes, plus published wording replacing paraphrased text on 9 existing entries (785 codes total).
+- **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference — 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ## [1.6.0] - 2026-09-14
 
