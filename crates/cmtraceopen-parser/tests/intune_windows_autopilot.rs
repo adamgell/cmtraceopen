@@ -2122,6 +2122,116 @@ fn the_literal_scrub_is_idempotent() {
     );
 }
 
+/// A value with a shape of its own must correlate too. A UPN in narrative is
+/// consumed by the mail-address rule long before the literal scrub looks for
+/// it, so that rule has to resolve a value the export masks to the token the
+/// typed field carries. Otherwise one identity exports under two tokens and the
+/// export reads as two different users.
+#[test]
+fn a_narrative_upn_masks_to_the_token_its_typed_field_carries() {
+    let address = "synthetic.user@contoso.example";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "upn-e1", "upn-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "userPrincipalName", "value": address }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn.",
+            ),
+            synthetic_event(
+                "upn-e2", "upn-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager retrieve settings succeeded for {address}."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "upn-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted.observations[0]
+        .named("userPrincipalName")
+        .expect("the fixture declares a user principal name")
+        .to_owned();
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative UPN must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(
+        !text.contains(address),
+        "the address must not survive: {text}"
+    );
+    assert!(
+        !text.contains("[upn:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
+/// The same holds for a hardware hash: it is long enough for the opaque-blob
+/// rule to take it, so that rule must hand back the token the typed field
+/// carries rather than a token of its own kind.
+#[test]
+fn a_narrative_hardware_hash_masks_to_the_token_its_typed_field_carries() {
+    let hash = "U1lOVEhFVElDSEFSRFdBUkVIQVNIRk9SRklYVFVSRVVTRU9OTFlaWloK";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "hash-e1", "hash-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "hardwareHash", "value": hash }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedDeviceHardwareHash.",
+            ),
+            synthetic_event(
+                "hash-e2", "hash-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported hardware hash {hash} for this device."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "hash-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .hardware_hash
+        .clone()
+        .expect("the fixture declares a hardware hash");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative hash must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(!text.contains(hash), "the hash must not survive: {text}");
+    assert!(
+        !text.contains("[blob:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
 /// The literal scrub runs last in every free-text pipeline, behind the shaped
 /// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
 /// inside the address, the mail-address rule would no longer match it, and the
