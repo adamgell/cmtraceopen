@@ -2369,6 +2369,81 @@ fn one_identity_mints_one_token_whatever_case_a_non_ascii_letter_arrives_in() {
     }
 }
 
+/// A character whose lowercase form is several characters must still line up.
+/// `İ` lowercases to `i` plus U+0307, so a value spelling it one way and a log
+/// line spelling it another used to be compared as one character against a
+/// two-character expansion and never matched at all.
+#[test]
+fn a_literal_that_folds_to_several_characters_matches_its_other_casing() {
+    let folded_spelling = "i\u{307}stanbul-pc";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "dotted-e1", "dotted-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "İSTANBUL-PC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The named device, in the other casing and with a lowercase ASCII
+            // tail: the `İ` is the only character whose fold expands.
+            synthetic_event(
+                "dotted-e2", "dotted-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device İstanbul-PC.",
+            ),
+            // And the same value spelled with the expansion written out.
+            synthetic_event(
+                "dotted-e3", "dotted-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &format!(
+                    "AutopilotManager reported the state changed from ProfileState_Unknown \
+                     to ProfileState_Available for {folded_spelling}."
+                ),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "dotted-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    for index in [1, 2] {
+        let message = once.observations[index]
+            .message
+            .as_deref()
+            .expect("the narrative record carries a message");
+        assert!(
+            message.contains(&typed),
+            "narrative record {index} must carry the typed field's token {typed}, got {message}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in ["İSTANBUL-PC", "İstanbul-PC", folded_spelling] {
+        assert!(
+            !text.contains(survivor),
+            "the literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a literal that folds to several characters must not be re-matched"
+    );
+}
+
 /// The literal scrub runs last in every free-text pipeline, behind the shaped
 /// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
 /// inside the address, the mail-address rule would no longer match it, and the
