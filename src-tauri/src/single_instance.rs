@@ -11,16 +11,19 @@ use std::path::Path;
 
 use tauri::{plugin::TauriPlugin, AppHandle, Emitter, Manager, Runtime};
 
+use crate::state::app_state::AppState;
 use crate::{parse_initial_launch_arguments, InitialLaunchArguments};
 
-/// Event the running window receives the forwarded file paths on.
+/// Event that wakes the running window: a second launch handed paths over.
 ///
-/// One event is the whole contract: a forwarded launch reaches the frontend
-/// through no other channel, so its paths cannot be opened twice.
+/// The event carries no payload. The paths are claimed from
+/// [`AppState::take_second_launch_paths`], which takes and clears them, so a
+/// handed-over path cannot be opened twice and one announced before the window
+/// was listening is still waiting to be claimed.
 const OPEN_EVENT: &str = "second-launch-open";
 
 /// The file paths a second launch asks the running window to open.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ForwardedOpenRequest {
     paths: Vec<String>,
 }
@@ -105,9 +108,15 @@ pub(crate) fn plugin<R: Runtime>() -> TauriPlugin<R> {
 ///
 /// The window is raised for every forwarded launch, including one that carries
 /// no paths at all: launching the app again is a request for the window that
-/// already exists. The paths travel to the frontend as one event, which opens
-/// them through the flow it uses for a file passed to the running window, so a
-/// forwarded file lands in a tab and in Recent like any other open.
+/// already exists.
+///
+/// The paths are handed over before the window is told about them, so a launch
+/// detected while the window is still loading is not announced into an empty
+/// room: the window claims whatever is waiting when it mounts, and the
+/// announcement only wakes a window that is already listening. The frontend then
+/// opens what it claimed through the flow it uses for a file passed to the
+/// running window, so a forwarded file lands in a tab and in Recent like any
+/// other open.
 fn handle<R: Runtime>(app: &AppHandle<R>, request: ForwardedOpenRequest) {
     if let Some(window) = app.get_webview_window("main") {
         // The window is where the file opens, so a window the user minimized or
@@ -121,8 +130,18 @@ fn handle<R: Runtime>(app: &AppHandle<R>, request: ForwardedOpenRequest) {
         return;
     }
 
-    if let Err(error) = app.emit(OPEN_EVENT, request) {
-        log::error!("failed to hand forwarded file paths to the running window: {error}");
+    match app.state::<AppState>().second_launch_paths.lock() {
+        Ok(mut pending) => pending.extend(request.paths),
+        Err(error) => {
+            // Reporting the failure is all that is left: the paths have nowhere
+            // else to wait, and opening them from here would bypass the window.
+            log::error!("failed to hand forwarded file paths to the running window: {error}");
+            return;
+        }
+    }
+
+    if let Err(error) = app.emit(OPEN_EVENT, ()) {
+        log::error!("failed to announce forwarded file paths to the running window: {error}");
     }
 }
 
@@ -138,7 +157,7 @@ mod tests {
     /// The plugin sends an empty directory when the second process cannot read
     /// its own, and those cases keep the path exactly as it arrived — which is
     /// also what lets a host that is not the launch platform assert the parsed
-    /// payload without resolving anything.
+    /// paths without resolving anything.
     const NO_WORKING_DIRECTORY: &str = "";
 
     #[test]
@@ -149,10 +168,6 @@ mod tests {
         );
 
         assert_eq!(request.paths, [r"C:\Windows\CCM\Logs\ccmexec.log"]);
-        assert_eq!(
-            serde_json::to_value(&request).expect("payload serializes"),
-            serde_json::json!({ "paths": [r"C:\Windows\CCM\Logs\ccmexec.log"] }),
-        );
     }
 
     #[test]
@@ -169,14 +184,6 @@ mod tests {
         assert_eq!(
             request.paths,
             [r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log"],
-        );
-        assert_eq!(
-            serde_json::to_value(&request).expect("payload serializes"),
-            serde_json::json!({
-                "paths": [
-                    r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log",
-                ],
-            }),
         );
     }
 
@@ -200,16 +207,6 @@ mod tests {
                 r"C:\Windows\CCM\Logs\InventoryAgent.log",
                 r"C:\Windows\CCM\Logs\PolicyAgent.log",
             ],
-        );
-        assert_eq!(
-            serde_json::to_value(&request).expect("payload serializes"),
-            serde_json::json!({
-                "paths": [
-                    r"C:\Windows\CCM\Logs\ccmexec.log",
-                    r"C:\Windows\CCM\Logs\InventoryAgent.log",
-                    r"C:\Windows\CCM\Logs\PolicyAgent.log",
-                ],
-            }),
         );
     }
 
@@ -262,10 +259,6 @@ mod tests {
             parse_forwarded_open_request([EXECUTABLE].map(String::from), NO_WORKING_DIRECTORY);
 
         assert!(bare_relaunch.paths.is_empty());
-        assert_eq!(
-            serde_json::to_value(&bare_relaunch).expect("payload serializes"),
-            serde_json::json!({ "paths": [] }),
-        );
 
         let no_arguments =
             parse_forwarded_open_request(Vec::<String>::new(), NO_WORKING_DIRECTORY);
@@ -288,10 +281,57 @@ mod tests {
         );
 
         assert!(request.paths.is_empty());
-        assert_eq!(
-            serde_json::to_value(&request).expect("payload serializes"),
-            serde_json::json!({ "paths": [] }),
+    }
+
+    /// The mock runtime has no `main` window, which is the case this handoff
+    /// exists for: the launch is detected while the window is still being
+    /// created. Skipped on Windows, where a mock app statically anchors
+    /// comctl32 v6 into the test binary, which has no v6 manifest.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_forwarded_launch_hands_its_paths_over_once_before_any_window_exists() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let app_handle = app.handle();
+
+        handle(
+            app_handle,
+            parse_forwarded_open_request(
+                [EXECUTABLE.to_string(), r"C:\Logs\ime.log".to_string()],
+                NO_WORKING_DIRECTORY,
+            ),
         );
+
+        let state = app.state::<AppState>();
+        assert_eq!(
+            state.take_second_launch_paths().expect("claim"),
+            [r"C:\Logs\ime.log"],
+        );
+        // The announcement wakes the window; a second claim finds nothing, so
+        // the handoff itself cannot open the same file twice.
+        assert!(state.take_second_launch_paths().expect("claim").is_empty());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_forwarded_launch_without_paths_hands_nothing_over() {
+        let app = tauri::test::mock_builder()
+            .manage(AppState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+
+        handle(
+            app.handle(),
+            parse_forwarded_open_request([EXECUTABLE].map(String::from), NO_WORKING_DIRECTORY),
+        );
+
+        assert!(app
+            .state::<AppState>()
+            .take_second_launch_paths()
+            .expect("claim")
+            .is_empty());
     }
 
     #[test]

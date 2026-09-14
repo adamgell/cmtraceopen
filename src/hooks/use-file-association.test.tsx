@@ -4,6 +4,7 @@ import {
   getInitialElevationRestore,
   getInitialFilePaths,
   getInitialWorkspace,
+  takeSecondLaunchPaths,
 } from "../lib/commands";
 import { markElevationRetryAttempted } from "../lib/elevation";
 import {
@@ -42,6 +43,7 @@ vi.mock("../lib/commands", () => ({
   getInitialElevationRestore: vi.fn(),
   getInitialFilePaths: vi.fn(),
   getInitialWorkspace: vi.fn(),
+  takeSecondLaunchPaths: vi.fn(),
 }));
 
 vi.mock("../lib/elevation", () => ({
@@ -71,6 +73,7 @@ vi.mock("../workspaces/registry", async (importOriginal) => {
 const getInitialElevationRestoreMock = vi.mocked(getInitialElevationRestore);
 const getInitialFilePathsMock = vi.mocked(getInitialFilePaths);
 const getInitialWorkspaceMock = vi.mocked(getInitialWorkspace);
+const takeSecondLaunchPathsMock = vi.mocked(takeSecondLaunchPaths);
 const markElevationRetryAttemptedMock = vi.mocked(markElevationRetryAttempted);
 const getKnownSourceMetadataByIdMock = vi.mocked(getKnownSourceMetadataById);
 const loadFilesAsLogSourceMock = vi.mocked(loadFilesAsLogSource);
@@ -82,20 +85,21 @@ type BackendEventHandler = (event: { payload: unknown }) => void;
 let secondLaunchHandler: BackendEventHandler | null = null;
 
 /**
- * Delivers a payload to the handler the hook registered for a second launch.
+ * Wakes the hook the way the backend does after a second launch.
  *
- * Registration is asynchronous, so a test must wait for the handler before it
- * delivers. This fails with that contract instead of tripping over a null
+ * The announcement carries no paths: it says that a launch handed paths over,
+ * and the window claims them. Registration is asynchronous, so a test must wait
+ * for the handler; this fails with that contract instead of tripping over a null
  * handler at the delivery site.
  */
-function deliverSecondLaunch(payload: unknown): void {
+function announceSecondLaunch(): void {
   if (secondLaunchHandler === null) {
     throw new Error(
-      "nothing is registered for the second-launch event, so the payload was not delivered",
+      "nothing is registered for the second-launch event, so the announcement was not delivered",
     );
   }
 
-  secondLaunchHandler({ payload });
+  secondLaunchHandler({ payload: null });
 }
 
 function ticket(overrides: Partial<RestoreTicket> = {}): RestoreTicket {
@@ -133,6 +137,7 @@ describe("useFileAssociation launch intent routing", () => {
     getInitialFilePathsMock.mockResolvedValue([]);
     getInitialWorkspaceMock.mockResolvedValue(null);
     getInitialElevationRestoreMock.mockResolvedValue(null);
+    takeSecondLaunchPathsMock.mockResolvedValue([]);
     loadPathAsLogSourceMock.mockImplementation(async (path) => ({
       source: { kind: "file", path },
       entries: [],
@@ -472,27 +477,73 @@ describe("useFileAssociation launch intent routing", () => {
     expect(loadLogSourceMock).not.toHaveBeenCalled();
   });
 
-  it("opens the path a second launch forwards into the running window", async () => {
-    renderHook(() => useFileAssociation());
-    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+  it("opens the path a second launch handed over when the window is woken", async () => {
+    const forwarded = "C:\\Windows\\CCM\\Logs\\ccmexec.log";
+    takeSecondLaunchPathsMock
+      .mockResolvedValueOnce([]) // what is waiting when the window mounts
+      .mockResolvedValueOnce([forwarded]); // what the announcement wakes
 
-    // The forwarded paths arrive on this event and nowhere else, so a second
-    // launch cannot be opened twice.
+    renderHook(() => useFileAssociation());
+    await waitFor(() =>
+      expect(takeSecondLaunchPathsMock).toHaveBeenCalledOnce(),
+    );
+
+    // The announcement carries no paths; it is what makes the window claim them.
     expect(eventListenMock).toHaveBeenCalledWith(
       "second-launch-open",
       expect.any(Function),
     );
-
-    deliverSecondLaunch({ paths: ["C:\\Windows\\CCM\\Logs\\ccmexec.log"] });
+    announceSecondLaunch();
 
     await waitFor(() =>
       expect(openPathForActiveWorkspaceMock).toHaveBeenCalledWith(
-        "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+        forwarded,
         "second-launch.path-open",
       ),
     );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenCalledOnce();
     // Startup retrieval is untouched by a forwarded launch.
     expect(getInitialFilePathsMock).toHaveBeenCalledOnce();
+  });
+
+  it("opens a path handed over before the window was listening, and only once", async () => {
+    const forwarded = "C:\\Windows\\CCM\\Logs\\ime.log";
+    const registration = deferred<() => void>();
+    eventListenMock.mockImplementation(
+      (eventName: string, handler: BackendEventHandler) => {
+        if (eventName === "second-launch-open") {
+          secondLaunchHandler = handler;
+        }
+        return registration.promise;
+      },
+    );
+    takeSecondLaunchPathsMock
+      .mockResolvedValueOnce([forwarded]) // handed over before the window listened
+      .mockResolvedValue([]);
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(eventListenMock).toHaveBeenCalledOnce());
+
+    // The claim waits for registration to land, so nothing is opened into a
+    // window that is not listening yet...
+    expect(takeSecondLaunchPathsMock).not.toHaveBeenCalled();
+
+    registration.resolve(() => {});
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledOnce(),
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenCalledWith(
+      forwarded,
+      "second-launch.path-open",
+    );
+
+    // ...and the announcement that follows does not replay what was claimed.
+    announceSecondLaunch();
+    await waitFor(() =>
+      expect(takeSecondLaunchPathsMock).toHaveBeenCalledTimes(2),
+    );
+    expect(openPathForActiveWorkspaceMock).toHaveBeenCalledOnce();
   });
 
   it("opens forwarded paths one at a time so none is superseded", async () => {
@@ -508,16 +559,12 @@ describe("useFileAssociation launch intent routing", () => {
       order.push(path);
       inFlight -= 1;
     });
+    takeSecondLaunchPathsMock.mockResolvedValueOnce([
+      "C:\\Windows\\CCM\\Logs\\ccmexec.log",
+      "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
+    ]);
 
     renderHook(() => useFileAssociation());
-    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
-
-    deliverSecondLaunch({
-      paths: [
-        "C:\\Windows\\CCM\\Logs\\ccmexec.log",
-        "C:\\Windows\\CCM\\Logs\\InventoryAgent.log",
-      ],
-    });
 
     await waitFor(() =>
       expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2),
@@ -541,12 +588,18 @@ describe("useFileAssociation launch intent routing", () => {
       order.push(path);
       inFlight -= 1;
     });
+    takeSecondLaunchPathsMock
+      .mockResolvedValueOnce([]) // the mount claim
+      .mockResolvedValueOnce(["C:\\Logs\\first.log"])
+      .mockResolvedValueOnce(["C:\\Logs\\second.log"]);
 
     renderHook(() => useFileAssociation());
-    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+    await waitFor(() =>
+      expect(takeSecondLaunchPathsMock).toHaveBeenCalledOnce(),
+    );
 
-    deliverSecondLaunch({ paths: ["C:\\Logs\\first.log"] });
-    deliverSecondLaunch({ paths: ["C:\\Logs\\second.log"] });
+    announceSecondLaunch();
+    announceSecondLaunch();
 
     await waitFor(() =>
       expect(openPathForActiveWorkspaceMock).toHaveBeenCalledTimes(2),
@@ -584,17 +637,22 @@ describe("useFileAssociation launch intent routing", () => {
       order.push(path);
       inFlight -= 1;
     });
+    takeSecondLaunchPathsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(["C:\\Logs\\forwarded.log"]);
 
     renderHook(() => useFileAssociation());
     await waitFor(() =>
       expect(loadPathAsLogSourceMock).toHaveBeenCalledOnce(),
     );
-    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+    await waitFor(() =>
+      expect(takeSecondLaunchPathsMock).toHaveBeenCalledOnce(),
+    );
 
     // The startup launch's file is still parsing when the second launch lands.
-    deliverSecondLaunch({ paths: ["C:\\Logs\\forwarded.log"] });
-    // Drain everything already scheduled, so an open started alongside the
-    // startup open would have to show up here.
+    announceSecondLaunch();
+    // Drain everything already scheduled, so work started alongside the startup
+    // open would have to show up here.
     const drained = deferred<void>();
     setTimeout(() => drained.resolve(), 0);
     await drained.promise;
@@ -612,23 +670,34 @@ describe("useFileAssociation launch intent routing", () => {
     expect(peakInFlight).toBe(1);
   });
 
-  it("ignores a forwarded payload it cannot read", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("still opens the next launch when a claim fails", async () => {
+    const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    takeSecondLaunchPathsMock
+      .mockRejectedValueOnce(new Error("ipc unavailable"))
+      .mockResolvedValueOnce(["C:\\Logs\\later.log"]);
 
     renderHook(() => useFileAssociation());
-    await waitFor(() => expect(secondLaunchHandler).not.toBeNull());
+
+    await waitFor(() =>
+      expect(failed).toHaveBeenCalledWith(
+        "[file-association] failed to claim a forwarded launch",
+        { error: expect.any(Error) },
+      ),
+    );
 
     try {
-      deliverSecondLaunch({ paths: [7] });
-      deliverSecondLaunch(null);
-      deliverSecondLaunch("second-launch-open");
+      // The paths are still waiting in the handoff, so the next announcement
+      // opens them rather than the failure stalling the window.
+      announceSecondLaunch();
 
-      expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(
-        "[file-association] ignored an unreadable second-launch payload",
+      await waitFor(() =>
+        expect(openPathForActiveWorkspaceMock).toHaveBeenCalledWith(
+          "C:\\Logs\\later.log",
+          "second-launch.path-open",
+        ),
       );
     } finally {
-      warn.mockRestore();
+      failed.mockRestore();
     }
   });
 });

@@ -4,6 +4,7 @@ import {
   getInitialElevationRestore,
   getInitialFilePaths,
   getInitialWorkspace,
+  takeSecondLaunchPaths,
 } from "../lib/commands";
 import { markElevationRetryAttempted } from "../lib/elevation";
 import {
@@ -19,41 +20,18 @@ import type { LogSource } from "../types/log";
 import { useAppActions } from "./use-app-actions";
 
 /**
- * Event the backend emits when a second launch forwards its file paths.
+ * Event the backend emits when a second launch has handed paths to this window.
  *
  * A second launch — a file-association double-click, or a path on the command
  * line — opens in the window that is already running instead of starting a
- * second one. Those paths arrive here, and here only, so a forwarded launch
- * cannot be opened twice.
+ * second one. The announcement carries no paths: the window claims them, so a
+ * launch detected before this window was listening is not announced into an
+ * empty room, and a claim cannot hand the same path over twice.
  */
 const SECOND_LAUNCH_OPEN_EVENT = "second-launch-open";
 
 /** Why a forwarded path is being opened, for diagnostics. */
 const SECOND_LAUNCH_TRIGGER = "second-launch.path-open";
-
-/**
- * Reads the paths out of a forwarded launch payload.
- *
- * The payload crosses the IPC boundary, so its shape is checked rather than
- * trusted: an unreadable delivery is ignored instead of throwing inside launch
- * handling. A readable payload with no paths is not an error — a launch with
- * nothing to open only asked for the window.
- */
-function parseForwardedPaths(payload: unknown): string[] | null {
-  if (typeof payload !== "object" || payload === null) {
-    return null;
-  }
-
-  const { paths } = payload as { paths?: unknown };
-  if (
-    !Array.isArray(paths) ||
-    !paths.every((path) => typeof path === "string")
-  ) {
-    return null;
-  }
-
-  return paths;
-}
 
 /**
  * Opens the paths one forwarded launch asked for, in turn.
@@ -114,9 +92,9 @@ async function openLaunchPaths(
  * A restore ticket reopens exactly one workspace and at most one source. Other
  * tabs, filters, searches, and selected rows are deliberately not restored.
  *
- * Once the window is running, a second launch delivers its file paths here
- * rather than opening a second window, and they are opened in the window that
- * already exists.
+ * Once the window is running, a second launch hands its file paths over instead
+ * of opening a second window, and the window that is already open claims and
+ * opens them.
  */
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
@@ -142,6 +120,20 @@ export function useFileAssociation() {
     },
     [],
   );
+
+  /**
+   * Claims the paths a second launch handed over and opens them.
+   *
+   * Claiming is what moves a path out of the handoff, so this runs through the
+   * launch queue: the paths wait in the backend until the window can open them,
+   * which is also why an announcement that arrives early loses nothing.
+   */
+  const claimForwardedPaths = useCallback((): Promise<void> => {
+    return enqueueLaunchOpens(async () => {
+      const paths = await takeSecondLaunchPaths();
+      await openForwardedPaths(paths, openPathForActiveWorkspace);
+    });
+  }, [enqueueLaunchOpens, openPathForActiveWorkspace]);
 
   useEffect(() => {
     Promise.all([
@@ -195,32 +187,34 @@ export function useFileAssociation() {
       });
   }, [clearFilter, enqueueLaunchOpens]);
 
-  // A second launch opens its files in this window. Each path goes through the
-  // same flow a path handed to the running window already uses, so it lands in
-  // a tab and in Recent like any other open — and through the same queue as the
-  // first launch, so a second launch waits for a startup open still in flight
-  // instead of superseding it.
+  // A second launch opens its files in this window. The paths go through the
+  // same flow a path handed to the running window already uses, so they land in
+  // a tab and in Recent like any other open.
+  //
+  // Registering before the claim below is what closes the startup race: a launch
+  // detected after this point is announced, and one detected before it is still
+  // waiting in the handoff for the claim. Either way it is claimed once.
   useEffect(() => {
-    const unlisten = listen<unknown>(SECOND_LAUNCH_OPEN_EVENT, (event) => {
-      const paths = parseForwardedPaths(event.payload);
-      if (paths === null) {
-        console.warn(
-          "[file-association] ignored an unreadable second-launch payload",
-        );
-        return;
-      }
-
-      void enqueueLaunchOpens(() =>
-        openForwardedPaths(paths, openPathForActiveWorkspace),
-      ).catch((error) => {
-        console.error("[file-association] forwarded launch failed", { error });
+    const registered = listen(SECOND_LAUNCH_OPEN_EVENT, () => {
+      void claimForwardedPaths().catch((error) => {
+        console.error("[file-association] failed to claim a forwarded launch", {
+          error,
+        });
       });
     });
 
+    registered
+      .then(() => claimForwardedPaths())
+      .catch((error) => {
+        console.error("[file-association] failed to claim a forwarded launch", {
+          error,
+        });
+      });
+
     return () => {
-      unlisten.then((fn) => fn());
+      registered.then((fn) => fn());
     };
-  }, [enqueueLaunchOpens, openPathForActiveWorkspace]);
+  }, [claimForwardedPaths]);
 }
 
 /**

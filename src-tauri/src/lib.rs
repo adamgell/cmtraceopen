@@ -299,6 +299,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::take_second_launch_paths,
             commands::file_ops::get_initial_workspace,
             commands::elevation::get_app_elevation_state,
             commands::elevation::restart_as_administrator,
