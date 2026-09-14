@@ -1944,6 +1944,218 @@ fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
     }
 }
 
+// ── Literals masked as typed fields must not survive in free text ───────────
+//
+// Issue #564: `redacted_export_projection` masks serial numbers, tenant
+// domains, device names, hardware hashes, and UPNs where they are typed fields,
+// but the same literals used to ride out untouched inside narrative. A bare
+// serial, a bare DNS domain, and a bare host name carry no distinctive shape,
+// so no free-text pattern can recognize one; the projection has to scrub the
+// exact values it is about to mask.
+
+/// A snapshot whose typed identity fields are also planted, unlabelled, in the
+/// narrative: the shape issue #564 is about.
+///
+/// The values are the corpus's own synthetic identity material
+/// (`deterministic-identity-redaction`), not invented text. The second event's
+/// narrative names the device the way a real record does -- "Device X
+/// (serial) ... tenant" -- with no field label anywhere in sight.
+fn literal_carrying_export_snapshot() -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The typed fields: every one of these values is masked.
+            synthetic_event(
+                "literal-e1", "literal-channel", 1, 161, "available", "parsed",
+                json!([
+                    { "name": "serialNumber", "value": "SYNTH-SERIAL-0001" },
+                    { "name": "tenantDomain", "value": "contoso.example" },
+                    { "name": "deviceName", "value": "SYNTH-DEV-01" }
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same three literals, unlabelled, in free narrative.
+            synthetic_event(
+                "literal-e2", "literal-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download. Device SYNTH-DEV-01 \
+                 (SYNTH-SERIAL-0001) last checked in to contoso.example.",
+            ),
+        ]
+    });
+    reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "literal-channel",
+        "autopilotEvents",
+        &events,
+    )]))
+}
+
+#[test]
+fn bare_identity_literals_in_narrative_do_not_survive_the_export() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    // The typed fields really do carry these values, so the assertions below
+    // are about the narrative and not about a fixture that declared nothing.
+    for (field, typed) in [
+        ("serialNumber", &redacted.identity.serial_number),
+        ("tenantDomain", &redacted.identity.tenant_domain),
+        ("deviceName", &redacted.identity.device_name),
+    ] {
+        let typed = typed
+            .as_deref()
+            .unwrap_or_else(|| panic!("the fixture declares {field}"));
+        assert!(
+            typed.starts_with("[redacted:"),
+            "{field} must be masked as a typed field, got {typed}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for needle in ["SYNTH-SERIAL-0001", "contoso.example", "SYNTH-DEV-01"] {
+        assert!(
+            !text.contains(needle),
+            "the bare literal {needle:?} survived the exported projection: {text}"
+        );
+    }
+}
+
+/// The scrub must not merely delete identity from narrative: it must put the
+/// same token there that the typed field carries. Otherwise an export that
+/// named one device in two records would read as two different devices.
+#[test]
+fn a_free_text_literal_masks_to_the_same_token_as_its_typed_field() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    let serial_token = redacted
+        .identity
+        .serial_number
+        .clone()
+        .expect("the fixture declares a serial number");
+    assert!(serial_token.starts_with("[redacted:"), "got {serial_token}");
+
+    let messages = |snapshot: &AutopilotSnapshot| -> Vec<Option<String>> {
+        snapshot
+            .observations
+            .iter()
+            .map(|observation| observation.message.clone())
+            .collect()
+    };
+    let before = messages(&snapshot);
+    let after = messages(&redacted);
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "the projection must not add or drop observations"
+    );
+
+    let mut rewritten = 0;
+    for (before, after) in before.iter().zip(&after) {
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        if !before.contains("SYNTH-SERIAL-0001") {
+            continue;
+        }
+        rewritten += 1;
+        assert!(
+            after.contains(&serial_token),
+            "the free-text mention must carry the typed field's token {serial_token}, got {after}"
+        );
+    }
+    assert_eq!(
+        rewritten, 1,
+        "the fixture plants exactly one free-text mention of the serial"
+    );
+}
+
+/// Firmware routinely reports junk serials. A value too short to be told apart
+/// from an ordinary word must not be scrubbed, or readable evidence is mangled
+/// without anything being protected.
+#[test]
+fn a_degenerate_short_serial_does_not_scrub_unrelated_narrative() {
+    let message = "AutopilotManager reported serial N/A to the service.";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "junk-e1", "junk-channel", 1, 161, "available", "parsed",
+            json!([{ "name": "serialNumber", "value": "N/A" }]),
+            message,
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "junk-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    assert!(
+        matches!(
+            redacted.identity.serial_number.as_deref(),
+            Some(serial) if serial.starts_with("[redacted:")
+        ),
+        "the fixture's junk serial must still be masked as a typed field, got {:?}",
+        redacted.identity.serial_number
+    );
+    assert_eq!(
+        redacted.observations[0].message.as_deref(),
+        Some(message),
+        "a three-byte junk serial must not scrub ordinary narrative"
+    );
+}
+
+/// The scrub reads its own output back on the second pass, so a token must
+/// never be treated as a literal to scrub again.
+#[test]
+fn the_literal_scrub_is_idempotent() {
+    let snapshot = literal_carrying_export_snapshot();
+    let once = redacted_export_projection(&snapshot);
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a projection of a projection must serialize identically"
+    );
+}
+
+/// The literal scrub runs last in every free-text pipeline, behind the shaped
+/// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
+/// inside the address, the mail-address rule would no longer match it, and the
+/// local part would ride out in the clear.
+#[test]
+fn a_tenant_domain_literal_does_not_break_the_upn_match_that_precedes_it() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "suffix-e1", "suffix-channel", 1, 103, "available", "parsed",
+            json!([{ "name": "tenantDomain", "value": "contoso.example" }]),
+            "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn; \
+             policy value = synthetic.user@contoso.example.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "suffix-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    assert!(
+        !text.contains("synthetic.user"),
+        "the local part of a masked UPN must not survive: {text}"
+    );
+    assert!(
+        !text.contains("contoso.example"),
+        "the tenant domain must not survive: {text}"
+    );
+}
+
 // ── Golden maintenance ──────────────────────────────────────────────────────
 
 /// Rewrite every scenario's `findings` golden from the current reducer output.
