@@ -17,17 +17,21 @@ pub mod connectivity;
 pub mod event_logs;
 
 pub use cmtraceopen_parser::dsregcmd::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult, DsregcmdDerived,
-    DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
-    DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType, DsregcmdOsVersionEvidence,
-    DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence,
-    DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    redacted_status_text, DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
+    DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
+    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
+    DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
 };
 
 pub mod registry;
 
 /// Desktop entry point — same contract as the crate's `analyze_text` but
 /// wraps the parse error into the Tauri-facing `AppError`.
-pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
-    cmtraceopen_parser::dsregcmd::analyze_text(input).map_err(crate::error::AppError::InvalidInput)
+pub fn analyze_text_with_evidence(
+    input: &str,
+    evidence: DsregcmdBundleEvidence,
+) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
+    cmtraceopen_parser::dsregcmd::analyze_text_with_evidence(input, evidence)
+        .map_err(crate::error::AppError::InvalidInput)
 }

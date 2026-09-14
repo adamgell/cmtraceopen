@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **DsRegCmd export boundary (#556)**: The analysis the workspace receives is now a redacted projection, so the JSON summary, the rendered summary and the raw status text copied from the workspace no longer carry the tenant id, tenant domain, device id, thumbprint, user principal name or user SID. The unprojected form is reachable only from `analyze_text_preserving_local_values`, which the rules evaluate against inside the crate.
+
 ## [1.6.0] - 2026-09-14
 
 ### Added
