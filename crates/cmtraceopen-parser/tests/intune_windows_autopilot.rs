@@ -2268,6 +2268,76 @@ fn a_non_ascii_literal_masks_its_differently_cased_occurrence_to_the_same_token(
     );
 }
 
+/// One identity must mint one token, whatever case a non-ASCII letter arrives
+/// in. `mask_value` canonicalizes the value before hashing it and the literal
+/// table keys on that same canonical form, so a typed value and its
+/// differently-cased variant cannot disagree. Were they to, the table would
+/// hold one of the two tokens and put it in every narrative occurrence, while
+/// the other typed field went on showing a token its own free-text mentions do
+/// not match.
+#[test]
+fn one_identity_mints_one_token_whatever_case_a_non_ascii_letter_arrives_in() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The same device name, reported twice in two casings.
+            synthetic_event(
+                "case-e1", "case-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "case-e2", "case-channel", 2, 164, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "pc-élodie" }]),
+                "Network is available to attempt policy download.",
+            ),
+            // And both spellings, unlabelled, in one narrative record.
+            synthetic_event(
+                "case-e3", "case-channel", 3, 153, "available", "parsed",
+                json!([]),
+                "Device PC-ÉLODIE is the same record as device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "case-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let reported: Vec<String> = redacted
+        .observations
+        .iter()
+        .filter_map(|observation| observation.named("deviceName").map(str::to_owned))
+        .collect();
+    assert_eq!(reported.len(), 2, "the fixture reports the device name twice");
+    assert!(reported[0].starts_with("[redacted:"), "got {}", reported[0]);
+    assert_eq!(
+        reported[0], reported[1],
+        "one identity must mint one token whatever case it arrives in"
+    );
+
+    let message = redacted.observations[2]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert_eq!(
+        message.matches(&reported[0]).count(),
+        2,
+        "both spellings in narrative must carry that one token, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for survivor in ["PC-ÉLODIE", "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+}
+
 /// The literal scrub runs last in every free-text pipeline, behind the shaped
 /// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
 /// inside the address, the mail-address rule would no longer match it, and the
