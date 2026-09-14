@@ -2201,6 +2201,73 @@ fn a_narrative_hardware_hash_masks_to_the_token_its_typed_field_carries() {
     );
 }
 
+/// Case folding must be Unicode-aware, not ASCII-only. An identity can carry a
+/// non-ASCII letter -- the corpus's own macOS Company Portal fixture names a
+/// real user `élodie.martin@contoso.example` -- and a log line is free to spell
+/// it in another case. Folding ASCII only leaves `É` and `é` distinct, so the
+/// narrative occurrence is neither scrubbed nor matched to its typed token.
+///
+/// The narrative variant differs from the typed value *only* in the case of the
+/// non-ASCII letter, so an ASCII-only fold misses it for exactly that reason.
+#[test]
+fn a_non_ascii_literal_masks_its_differently_cased_occurrence_to_the_same_token() {
+    let device = "PC-ÉLODIE";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "unicode-e1", "unicode-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": device }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "unicode-e2", "unicode-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "unicode-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = once.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "a differently-cased non-ASCII occurrence must carry the typed field's token {typed}, \
+         got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in [device, "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a non-ASCII literal must not be re-matched on the second pass"
+    );
+}
+
 /// The literal scrub runs last in every free-text pipeline, behind the shaped
 /// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
 /// inside the address, the mail-address rule would no longer match it, and the

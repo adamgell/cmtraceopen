@@ -240,7 +240,11 @@ fn sensitive_value_key(name: &str) -> bool {
 /// that is both shaped and masked correlates as well.
 #[derive(Default)]
 struct MaskedLiterals {
-    /// ASCII-lowercased literal to the token its typed field carries.
+    /// Unicode-lowercased literal to the token its typed field carries.
+    ///
+    /// Case folding is `to_lowercase`, not `to_ascii_lowercase`: a device name
+    /// or display name can carry a non-ASCII letter, and a log line is free to
+    /// spell it in another case.
     tokens: BTreeMap<String, String>,
 }
 
@@ -255,27 +259,36 @@ impl MaskedLiterals {
             if is_token(value) {
                 continue;
             }
-            let literal = value.to_ascii_lowercase();
             // Firmware routinely reports junk serials ("0", "N/A", "None"). A
             // value that short cannot be told apart from an ordinary word once
             // it sits unlabelled in narrative, so scrubbing it would mangle
             // readable evidence without protecting anything. The floor stays
             // below the seven characters of a Dell service tag, so real serials
             // are still covered.
-            if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+            if value.len() < MIN_SCRUBBED_LITERAL_BYTES {
                 continue;
             }
-            let token = stable_token(VALUE_KIND, &literal);
-            tokens.insert(literal, token);
+            // The key is the Unicode-aware fold, so a log line spelling the
+            // same name in another case still finds it. The token is the one
+            // `mask_value` gives this value, so the scrub and the typed field
+            // always agree.
+            let literal = value.to_lowercase();
+            let token = mask_value(value);
+            // Two values that differ only in the case of a non-ASCII letter
+            // fold to one key. The first in byte order keeps its token, so the
+            // choice is deterministic; `mask_value` itself treats those two
+            // spellings as distinct, which is why only one of them can win.
+            tokens.entry(literal).or_insert(token);
         }
         Self { tokens }
     }
 
     /// The token this value carries as a typed field, if the export masks it.
+    ///
+    /// Folded the same way the scrub folds, so a shaped rule does not depend on
+    /// how the text happened to be cased either.
     fn masked_token(&self, value: &str) -> Option<String> {
-        self.tokens
-            .get(&value.trim().to_ascii_lowercase())
-            .cloned()
+        self.tokens.get(&value.trim().to_lowercase()).cloned()
     }
 
     /// Replace every occurrence of a masked literal with that literal's token.
@@ -288,14 +301,10 @@ impl MaskedLiterals {
             return value.to_owned();
         }
 
-        // ASCII folding only. Case is the only way a serial, GUID, or DNS name
-        // varies between log lines, and unlike `to_lowercase` it cannot shift a
-        // byte offset out from under the slicing below.
-        let haystack = value.to_ascii_lowercase();
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) = self.leftmost_longest_match(&haystack, cursor) {
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, cursor) {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -313,11 +322,9 @@ impl MaskedLiterals {
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
         for (literal, token) in &self.tokens {
-            let Some(offset) = haystack[cursor..].find(literal.as_str()) else {
+            let Some((start, end)) = find_ignore_case(haystack, literal, cursor) else {
                 continue;
             };
-            let start = cursor + offset;
-            let end = start + literal.len();
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
                 start < best_start || (start == best_start && end > best_end)
             });
@@ -327,6 +334,60 @@ impl MaskedLiterals {
         }
         best
     }
+}
+
+/// The next case-insensitive occurrence of `literal` in `haystack`, at or after
+/// `from`, as the byte range it occupies.
+///
+/// Compared character by character rather than by folding a copy of the
+/// haystack: lowercasing can change a string's length, and a folded copy's byte
+/// offsets cannot index the original. Every offset returned here is a real byte
+/// offset into `haystack`, so the caller can slice with it.
+///
+/// Per-character lowercase equality reaches the one-to-one mappings that make a
+/// name look different in a log line (`É`/`é`, `Ä`/`ä`). It deliberately does
+/// not reach the handful of mappings that change a character's count (`İ` to
+/// `i` plus a combining dot): those are different text, not the same name in
+/// another case.
+fn find_ignore_case(haystack: &str, literal: &str, from: usize) -> Option<(usize, usize)> {
+    let expected: Vec<char> = literal.chars().collect();
+    if expected.is_empty() {
+        return None;
+    }
+    for (offset, _) in haystack[from..].char_indices() {
+        let start = from + offset;
+        // The common case is the value spelled exactly as it was typed; taking
+        // it directly keeps the scan proportional to a memchr when nothing
+        // differs in case at all.
+        if haystack[start..].starts_with(literal) {
+            return Some((start, start + literal.len()));
+        }
+        let mut end = start;
+        let mut matched = 0;
+        for (index, actual) in haystack[start..].char_indices() {
+            if matched == expected.len() {
+                break;
+            }
+            if !eq_ignore_case(actual, expected[matched]) {
+                matched = 0;
+                break;
+            }
+            matched += 1;
+            end = start + index + actual.len_utf8();
+        }
+        if matched == expected.len() {
+            return Some((start, end));
+        }
+    }
+    None
+}
+
+/// Whether two characters are the same letter in another case.
+///
+/// `eq_ignore_ascii_case` is not enough: an identity can carry a non-ASCII
+/// letter, and a log line is free to spell it in another case.
+fn eq_ignore_case(left: char, right: char) -> bool {
+    left == right || left.to_lowercase().eq(right.to_lowercase())
 }
 
 /// Mask the sensitive spans inside a free-text value, then scrub the literals
@@ -622,5 +683,22 @@ mod tests {
         // to be identity than not.
         let masked = redact_conflict_value("someOtherKey=5CD1234ABC");
         assert!(!masked.contains("5CD1234ABC"), "got {masked}");
+    }
+
+    /// The literal search is cursor-driven and case-insensitive, so it has to
+    /// hold at the tail of the text, across repeats, and for a value that is
+    /// the whole text -- without re-finding what it already replaced.
+    #[test]
+    fn the_literal_search_replaces_every_occurrence_including_at_the_tail() {
+        let literals = MaskedLiterals::new(BTreeSet::from(["PC-ÉLODIE".to_owned()]));
+        let token = mask_value("PC-ÉLODIE");
+
+        assert_eq!(literals.scrub("device pc-élodie"), format!("device {token}"));
+        assert_eq!(literals.scrub("PC-ÉLODIE"), token);
+        assert_eq!(
+            literals.scrub("pc-élodie met PC-ÉLODIE"),
+            format!("{token} met {token}")
+        );
+        assert_eq!(literals.scrub("unrelated narrative"), "unrelated narrative");
     }
 }
