@@ -371,6 +371,34 @@ describe("the fan-out behind a channel load", () => {
     expect(peakInFlight).toBe(MAX_CONCURRENT_CHANNEL_QUERIES);
   });
 
+  it("starts its own scan instead of joining a load a newer request superseded", async () => {
+    // A running scan whose request has been superseded writes nothing: every result it produces is
+    // rejected as stale. A mount that joined it would wait for a load that can never fill the view.
+    const gate = deferred<void>();
+    let reads = 0;
+    invoke.mockImplementation(async (name: string, args: QueryArgs) => {
+      if (name === "evtx_enumerate_channels") {
+        return CORE_CHANNELS.map((core) => channel(core, "enabled"));
+      }
+      reads += 1;
+      // The automatic scan's own four reads are the ones left hanging.
+      if (reads <= CORE_CHANNELS.length) await gate.promise;
+      return streamed(args, 0);
+    });
+
+    const superseded = useEvtxStore.getState().enumerateChannels();
+    await vi.waitFor(() => expect(queryCalls()).toHaveLength(CORE_CHANNELS.length));
+
+    // A different request takes over the view.
+    await useEvtxStore.getState().queryChannels(["Application"]);
+
+    const remount = useEvtxStore.getState().enumerateChannels();
+    await vi.waitFor(() => expect(queryCalls()).toHaveLength(CORE_CHANNELS.length * 2 + 1));
+
+    gate.resolve(undefined);
+    await Promise.all([superseded, remount]);
+  });
+
   it("shows a channel as it lands instead of waiting for the slowest one", async () => {
     // Collecting every channel before merging any of them leaves the view empty until the slowest
     // one answers, and Security alone is minutes on a busy machine.

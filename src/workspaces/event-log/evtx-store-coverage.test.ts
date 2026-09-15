@@ -697,6 +697,9 @@ describe("live batch delivery through initial and refresh loads", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    // The second load has to be a different request to supersede the first: a second call for the
+    // same criteria joins the load already running instead of starting another one.
+    useEvtxStore.setState({ filterEventIds: "4624" });
     const freshLoad = useEvtxStore.getState().enumerateChannels();
     await Promise.resolve();
     await Promise.resolve();
@@ -2274,11 +2277,6 @@ describe("remote event sources", () => {
 
     expect(invoke).toHaveBeenCalledTimes(1_000);
     expect(peak).toBe(4);
-    expect(
-      invoke.mock.calls.every((call) =>
-        Object.is((call[1] as { maxEvents?: number | null }).maxEvents, null)
-      )
-    ).toBe(true);
     expect(publications).toBeLessThan(10);
     expect(useEvtxStore.getState().loadedChannels).toEqual(new Set(channelNames));
     expect(useEvtxStore.getState().isLoading).toBe(false);

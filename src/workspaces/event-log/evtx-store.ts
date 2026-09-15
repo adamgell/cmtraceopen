@@ -56,6 +56,20 @@ type ServerFilter = EventQueryFilterSubset & {
 
 const MAX_CONCURRENT_CHANNEL_QUERIES = 4;
 
+/**
+ * How many events the automatic load takes per channel.
+ *
+ * The time window alone does not bound a channel. Security held 239,704 events in twenty-four hours
+ * on the machine this was measured on and took 318 seconds to read, so the workspace sat empty
+ * behind one channel before the operator had asked for anything. The newest slice arrives in
+ * seconds, and the explicit Load remains the way to fetch a channel in full.
+ *
+ * That measurement justifies bounding the read; it does not pin this number. The value itself is a
+ * deliberate choice, picked to hold a busy channel's recent activity without paying for a whole
+ * day of it, and it is not a figure anything here measured.
+ */
+const AUTO_LOAD_MAX_EVENTS = 2_000;
+
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
@@ -526,6 +540,34 @@ function beginRequest(): string {
 
 function isCurrentRequest(requestId: string): boolean {
   return requestId === activeRequestId;
+}
+
+/**
+ * The automatic load currently running, with the scope it is reading for and the request it belongs
+ * to.
+ *
+ * Kept outside the Zustand view: it describes work in flight, not what is on screen, and a remount
+ * must be able to find it before the store has published anything.
+ */
+let automaticLoad: { scope: string; requestId: string; promise: Promise<void> } | null = null;
+
+/**
+ * What makes one automatic load a different request from another: the machine it reads and the
+ * criteria it reads with.
+ *
+ * These are exactly the inputs the server filter is built from, and they are all readable before any
+ * backend call, so the decision to join a running load is made before the enumeration starts. The
+ * core channel list is deliberately not part of it: it is fixed, and which of those channels the
+ * service allows is read from the enumeration that the load itself performs.
+ */
+function automaticLoadScope(): string {
+  const state = useEvtxStore.getState();
+  return [
+    state.remoteMachine ?? "",
+    state.timeWindow,
+    state.filterEventIds,
+    [...state.filterLevels].sort().join(","),
+  ].join("\u0000");
 }
 
 function invokeEventQuery<T>(
@@ -1013,192 +1055,224 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
   },
 
   enumerateChannels: async () => {
-    const generation = get().loadGeneration + 1;
+    // One automatic load per scope. A remount used to start a second scan of every channel while
+    // the first was still reading, which stacked three concurrent Security scans on the machine
+    // this was measured on. A caller whose scope differs, another machine or criteria the running
+    // scan is not reading with, starts its own: the load already running answers the wrong request.
+    const scope = automaticLoadScope();
+    const running = automaticLoad;
+    // A load whose request a newer one has already superseded is not worth joining: every write it
+    // makes is rejected as stale, so a caller that joined it would wait for a load that publishes
+    // nothing.
+    if (running?.scope === scope && isCurrentRequest(running.requestId)) return running.promise;
+
     const requestId = beginRequest();
-    captureSelectedRecord(get().records, get().selectedRecordId);
-    invalidateAllStreamedRecords(requestId);
-    set({
-      loadGeneration: generation,
-      isLoading: true,
-      loadError: null,
-      sourceManifest: null,
-      coverageDetails: [],
-      archiveMembers: [],
-      timeWindow:
-        get().sourceMode === null && get().timeWindow === "all" ? "24h" : get().timeWindow,
-    });
-    const filterSnapshot = snapshotFilterInputs(
-      get().timeWindow,
-      get().filterEventIds,
-      get().filterLevels
-    );
-    try {
-      const remoteMachine = get().remoteMachine;
-      const channels = remoteMachine
-        ? await invoke<EvtxChannelInfo[]>("evtx_enumerate_remote_channels", {
-            machine: remoteMachine,
-          })
-        : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
-      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-
-      // Step 2: Auto-query the core Windows Logs channels immediately
-      const coreChannels = ["Application", "System", "Security", "Setup"];
-      // A switched-off core channel is not acquired: the service refuses it, and every refusal was
-      // reported as a coverage gap even though there was nothing in the channel to read. An unknown
-      // one still is.
-      const availableCore = coreChannels.filter((c) => {
-        const info = channels.find((ch) => ch.name === c);
-        return info !== undefined && channelCanHoldEvents(info);
-      });
-      let updatedChannels = channels;
-      let loadError: string | null = null;
-      const emptyRemoteGaps =
-        remoteMachine && channels.length === 0
-          ? [`${remoteMachine}: remote source is empty (no channels available)`]
-          : [];
-
-      // Show channels immediately, then load events in parallel
-      const selectedNames = new Set(availableCore);
-      const startTime = performance.now();
+    const run = (async () => {
+      const generation = get().loadGeneration + 1;
       captureSelectedRecord(get().records, get().selectedRecordId);
+      invalidateAllStreamedRecords(requestId);
       set({
-        channels: updatedChannels,
-        sourceMode: "live",
-        sourcePaths: [],
-        remoteMachine,
-        sourceManifest: null,
+        loadGeneration: generation,
         isLoading: true,
         loadError: null,
-        coverageGaps: emptyRemoteGaps,
-        loadStartTime: startTime,
+        sourceManifest: null,
         coverageDetails: [],
         archiveMembers: [],
-        loadElapsedMs: null,
-        selectedChannels: selectedNames,
-        loadedChannels: new Set<string>(),
-        records: [],
-        selectedRecordId: null,
+        timeWindow:
+          get().sourceMode === null && get().timeWindow === "all" ? "24h" : get().timeWindow,
       });
-      // Live query records arrive through the batch event. This path invokes the backend directly
-      // rather than through queryChannels, so it must drain the same stream before merging.
-      const mergeResult = (ch: string, reconciliation: StreamReconciliation) => {
+      const filterSnapshot = snapshotFilterInputs(
+        get().timeWindow,
+        get().filterEventIds,
+        get().filterLevels
+      );
+      try {
+        const remoteMachine = get().remoteMachine;
+        const channels = remoteMachine
+          ? await invoke<EvtxChannelInfo[]>("evtx_enumerate_remote_channels", {
+              machine: remoteMachine,
+            })
+          : await invoke<EvtxChannelInfo[]>("evtx_enumerate_channels");
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const state = get();
-        const { checked, result, records, gaps } = reconciliation;
-        const merged = mergeRecordsPreservingSelection(
-          state.records,
-          state.selectedRecordId,
-          records
-        );
 
-        const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
-        const newChannels = state.channels.map((c) => ({
-          ...c,
-          eventCount: countMap.get(c.name) ?? c.eventCount,
-        }));
-        const newLoaded = new Set(state.loadedChannels);
-        const channelHasUsableData = hasUsableChannelData(
-          records.length,
-          result.channels.find((c) => c.name === ch)?.eventCount ?? 0,
-          gaps.length,
-          reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
-        );
-        if (channelHasUsableData) newLoaded.add(ch);
-        else newLoaded.delete(ch);
-
-        set({
-          ...merged,
-          channels: newChannels,
-          loadedChannels: newLoaded,
-          loadElapsedMs: performance.now() - startTime,
-          // Channels load one at a time and each may report its own gaps, so they accumulate
-          // rather than replace. Deduplicated because re-querying a channel would otherwise
-          // repeat the same line.
-          coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
-          coverageDetails: mergeStructuredCoverageGaps(
-            state.coverageDetails,
-            checked.coverageGaps
-          ),
+        // Step 2: Auto-query the core Windows Logs channels immediately
+        const coreChannels = ["Application", "System", "Security", "Setup"];
+        // A switched-off core channel is not acquired: the service refuses it, and every refusal was
+        // reported as a coverage gap even though there was nothing in the channel to read. An unknown
+        // one still is.
+        const availableCore = coreChannels.filter((c) => {
+          const info = channels.find((ch) => ch.name === c);
+          return info !== undefined && channelCanHoldEvents(info);
         });
-      };
-      const promises = availableCore.map(async (ch) => {
-        const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
-        resetStreamedRecords([ch], requestId);
-        try {
-          const result = await invokeEventQuery<EvtxParseResult>(
-            requestId,
-            remoteMachine,
-            [ch],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : null,
-            buildServerFilter(
-              filterSnapshot.timeWindow,
-              filterSnapshot.filterEventIds,
-              filterSnapshot.filterLevels
-            )
+        let updatedChannels = channels;
+        let loadError: string | null = null;
+        const emptyRemoteGaps =
+          remoteMachine && channels.length === 0
+            ? [`${remoteMachine}: remote source is empty (no channels available)`]
+            : [];
+
+        // Show channels immediately, then load events in parallel
+        const selectedNames = new Set(availableCore);
+        const startTime = performance.now();
+        captureSelectedRecord(get().records, get().selectedRecordId);
+        set({
+          channels: updatedChannels,
+          sourceMode: "live",
+          sourcePaths: [],
+          remoteMachine,
+          sourceManifest: null,
+          isLoading: true,
+          loadError: null,
+          coverageGaps: emptyRemoteGaps,
+          loadStartTime: startTime,
+          coverageDetails: [],
+          archiveMembers: [],
+          loadElapsedMs: null,
+          selectedChannels: selectedNames,
+          loadedChannels: new Set<string>(),
+          records: [],
+          selectedRecordId: null,
+        });
+        // Live query records arrive through the batch event. This path invokes the backend directly
+        // rather than through queryChannels, so it must drain the same stream before merging.
+        const mergeResult = (ch: string, reconciliation: StreamReconciliation) => {
+          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+          const state = get();
+          const { checked, result, records, gaps } = reconciliation;
+          const merged = mergeRecordsPreservingSelection(
+            state.records,
+            state.selectedRecordId,
+            records
           );
-          observeStreamReply(ch, requestId, { kind: "success" });
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          await waitForStreamReconciliation(ch, requestId);
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          const reconciliation = reconcileStreamedResult(ch, requestId, result, context);
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          mergeResult(ch, reconciliation);
-          acknowledgeStreamedRecords(ch, requestId);
-        } catch (e) {
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          const msg = e instanceof Error ? e.message : String(e);
-          observeStreamReply(ch, requestId, { kind: "error", message: msg });
-          await waitForStreamReconciliation(ch, requestId);
-          if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-          console.warn(`[evtx] Failed to query ${context}: ${msg}`);
-          if (!loadError) loadError = `${context}: ${msg}`;
-          drainStreamedRecords(ch, requestId);
-          acknowledgeStreamedRecords(ch, requestId);
-          set((s) => ({
-            coverageGaps: mergeCoverageGaps(s.coverageGaps, [
-              `${context}: not read (${msg})`,
-            ]),
+
+          const countMap = new Map(result.channels.map((c) => [c.name, c.eventCount]));
+          const newChannels = state.channels.map((c) => ({
+            ...c,
+            eventCount: countMap.get(c.name) ?? c.eventCount,
           }));
-        }
-      });
-      await Promise.all(promises);
-      if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-      const finalState = get();
-      const remoteQueryFailed =
-        remoteMachine !== null &&
-        (availableCore.length === 0
-          ? channels.length === 0
-          : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
-      set({
-        sourceMode: remoteQueryFailed ? null : "live",
-        isLoading: false,
-        loadingChannel: null,
-        loadingProgress: null,
-        loadElapsedMs: performance.now() - startTime,
-        loadError,
-      });
-    if (refreshRequested) refreshBeforeLoad();
-  } catch (error) {
-    if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-      const message = error instanceof Error ? error.message : String(error);
-      const remoteMachine = get().remoteMachine;
-      const remoteGap = remoteMachine
-        ? message.startsWith(`${remoteMachine}:`)
-          ? message
-          : message.includes("access denied") || message.includes("credentials rejected")
-            ? `${remoteMachine}: remote source access denied (${message})`
-            : message.includes("unavailable")
-              ? `${remoteMachine}: remote source unavailable (${message})`
-              : `${remoteMachine}: remote source query failed (${message})`
-        : null;
-      set((state) => ({
-        isLoading: false,
-        loadError: message,
-        coverageGaps: remoteGap
-          ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
-          : state.coverageGaps,
-      }));
-    }
+          const newLoaded = new Set(state.loadedChannels);
+          const channelHasUsableData = hasUsableChannelData(
+            records.length,
+            result.channels.find((c) => c.name === ch)?.eventCount ?? 0,
+            gaps.length,
+            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
+          );
+          if (channelHasUsableData) newLoaded.add(ch);
+          else newLoaded.delete(ch);
+
+          set({
+            ...merged,
+            channels: newChannels,
+            loadedChannels: newLoaded,
+            loadElapsedMs: performance.now() - startTime,
+            // Channels load one at a time and each may report its own gaps, so they accumulate
+            // rather than replace. Deduplicated because re-querying a channel would otherwise
+            // repeat the same line.
+            coverageGaps: mergeCoverageGaps(state.coverageGaps, gaps),
+            coverageDetails: mergeStructuredCoverageGaps(
+              state.coverageDetails,
+              checked.coverageGaps
+            ),
+          });
+        };
+        // Bounded like the bulk paths are: the automatic selection is the four core channels today,
+        // and routing it through the same pool keeps a longer list from fanning out at the service
+        // all at once. Each channel is still merged the moment it lands.
+        await mapWithConcurrency(
+          availableCore,
+          MAX_CONCURRENT_CHANNEL_QUERIES,
+          async (ch) => {
+            const context = remoteMachine ? `${remoteMachine}/${ch}` : ch;
+            resetStreamedRecords([ch], requestId);
+            try {
+              const result = await invokeEventQuery<EvtxParseResult>(
+                requestId,
+                remoteMachine,
+                [ch],
+                hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : AUTO_LOAD_MAX_EVENTS,
+                buildServerFilter(
+                  filterSnapshot.timeWindow,
+                  filterSnapshot.filterEventIds,
+                  filterSnapshot.filterLevels
+                )
+              );
+              observeStreamReply(ch, requestId, { kind: "success" });
+              if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+              await waitForStreamReconciliation(ch, requestId);
+              if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+              const reconciliation = reconcileStreamedResult(
+                ch,
+                requestId,
+                result,
+                context,
+                AUTO_LOAD_MAX_EVENTS
+              );
+              if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+              mergeResult(ch, reconciliation);
+              acknowledgeStreamedRecords(ch, requestId);
+            } catch (e) {
+              if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+              const msg = e instanceof Error ? e.message : String(e);
+              observeStreamReply(ch, requestId, { kind: "error", message: msg });
+              await waitForStreamReconciliation(ch, requestId);
+              if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+              console.warn(`[evtx] Failed to query ${context}: ${msg}`);
+              if (!loadError) loadError = `${context}: ${msg}`;
+              drainStreamedRecords(ch, requestId);
+              acknowledgeStreamedRecords(ch, requestId);
+              set((s) => ({
+                coverageGaps: mergeCoverageGaps(s.coverageGaps, [
+                  `${context}: not read (${msg})`,
+                ]),
+              }));
+            }
+          }
+        );
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const finalState = get();
+        const remoteQueryFailed =
+          remoteMachine !== null &&
+          (availableCore.length === 0
+            ? channels.length === 0
+            : finalState.loadedChannels.size === 0 && finalState.coverageGaps.length > 0);
+        set({
+          sourceMode: remoteQueryFailed ? null : "live",
+          isLoading: false,
+          loadingChannel: null,
+          loadingProgress: null,
+          loadElapsedMs: performance.now() - startTime,
+          loadError,
+        });
+        if (refreshRequested) refreshBeforeLoad();
+      } catch (error) {
+        if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
+        const message = error instanceof Error ? error.message : String(error);
+        const remoteMachine = get().remoteMachine;
+        const remoteGap = remoteMachine
+          ? message.startsWith(`${remoteMachine}:`)
+            ? message
+            : message.includes("access denied") || message.includes("credentials rejected")
+              ? `${remoteMachine}: remote source access denied (${message})`
+              : message.includes("unavailable")
+                ? `${remoteMachine}: remote source unavailable (${message})`
+                : `${remoteMachine}: remote source query failed (${message})`
+          : null;
+        set((state) => ({
+          isLoading: false,
+          loadError: message,
+          coverageGaps: remoteGap
+            ? mergeCoverageGaps(state.coverageGaps, [remoteGap])
+            : state.coverageGaps,
+        }));
+      }
+    })();
+    // Cleared however the load ends, including an unexpected throw, so one failed load cannot leave
+    // every later mount waiting on a load that is no longer running.
+    const promise = run.finally(() => {
+      if (automaticLoad?.promise === promise) automaticLoad = null;
+    });
+    automaticLoad = { scope, requestId, promise };
+    return promise;
   },
 
   enumerateLocalChannels: async () => {
@@ -1500,7 +1574,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             requestId,
             remoteMachine,
             [channel],
-            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : null,
+            hasInvalidEventIdFilter(filterSnapshot.filterEventIds) ? 0 : AUTO_LOAD_MAX_EVENTS,
             buildServerFilter(
               filterSnapshot.timeWindow,
               filterSnapshot.filterEventIds,
@@ -1543,7 +1617,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
         await waitForStreamReconciliation(channel, requestId);
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
-        const reconciliation = reconcileStreamedResult(channel, requestId, result, context);
+        const reconciliation = reconcileStreamedResult(
+          channel,
+          requestId,
+          result,
+          context,
+          AUTO_LOAD_MAX_EVENTS
+        );
         if (!isCurrentRequest(requestId) || get().loadGeneration !== generation) return;
         const { checked, records } = reconciliation;
         appendRecords(recordsToMerge, records);
@@ -2383,7 +2463,8 @@ function reconcileStreamedResult(
   channel: string,
   requestId: string,
   result: EvtxParseResult,
-  context: string
+  context: string,
+  cappedAt?: number
 ): StreamReconciliation {
   const checked = assertParseResultShape(result);
   const streamed = drainStreamedRecords(channel, requestId);
@@ -2417,6 +2498,12 @@ function reconcileStreamedResult(
   const recordShortfall = expected !== null && records.length < expected;
   if (recordShortfall) {
     gaps.push(`${context}: ${expected - records.length} of ${expected} events did not reach the view`);
+  }
+  if (cappedAt !== undefined && records.length >= cappedAt) {
+    // A channel that came back at the bound may hold more, and this side cannot tell: the read
+    // stopped at the bound rather than counting the channel. Saying what was not read is the
+    // difference between a partial view and a view that claims to be whole.
+    gaps.push(`${context}: newest ${cappedAt} events shown (the channel may hold more)`);
   }
   return {
     checked,
