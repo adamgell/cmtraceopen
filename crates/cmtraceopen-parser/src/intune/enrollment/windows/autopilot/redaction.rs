@@ -381,11 +381,23 @@ fn fold_with_offsets(value: &str) -> Vec<FoldedChar> {
 /// expansions are equal, which is what reaches the final sigma: `Σ` and `ς`
 /// both uppercase to `Σ` while their lowercase forms differ.
 ///
-/// Out of reach, and deliberately so: a pair whose spellings differ by a
-/// character the fold does not add back. The Turkic dotless `i` never equals
-/// `İ` (default folding yields `i` plus U+0307; only Unicode's Turkic mapping
-/// drops the dot), and one-to-many spellings such as `ß` against `SS` cannot
-/// line up at all, because each step consumes one folded character per side.
+/// Out of reach, and deliberately so, are the spellings the fold does not
+/// reproduce:
+///
+/// * the Turkic dotless `i` never equals `İ`: default folding yields `i` plus
+///   U+0307, and only Unicode's Turkic mapping drops the dot;
+/// * one-to-many spellings such as `ß` against `SS`, or a ligature against the
+///   letters it stands for, cannot line up at all, because each step consumes
+///   one folded character per side;
+/// * the same letter in another *normalization form* does not match. A typed
+///   precomposed `PC-ÉLODIE` folds to `pc-élodie`, while a narrative spelling
+///   of `PC-E` plus U+0301 folds to `e`, U+0301 and fails at that position, so
+///   that spelling stays visible.
+///
+/// Normalizing would close the last of those, and is not done: it rewrites the
+/// narrative on its way into the export, which is a behaviour change with its
+/// own trade-offs rather than a free win. A test pins the gap so it stays a
+/// decision on record.
 fn find_ignore_case(
     haystack: &str,
     literal: &str,

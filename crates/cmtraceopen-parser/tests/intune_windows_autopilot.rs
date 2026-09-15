@@ -2444,6 +2444,74 @@ fn a_literal_that_folds_to_several_characters_matches_its_other_casing() {
     );
 }
 
+/// The matcher never normalizes, and this pins that as a decision on record
+/// rather than a surprise: a precomposed `é` and an `e` plus U+0301 are
+/// different text, so a value typed one way and logged the other way keeps its
+/// decomposed spelling in the export. The precomposed spelling in the same
+/// fixture is masked, so the gap is exactly the normalization form and not a
+/// matcher that fails to fold at all.
+///
+/// Normalizing would close the gap and is deliberately not done: it rewrites
+/// the narrative on its way into the export, which is a behaviour change with
+/// its own trade-offs. Anyone who later adds it must delete this test on
+/// purpose.
+#[test]
+fn a_decomposed_spelling_is_left_readable_because_the_matcher_never_normalizes() {
+    let decomposed = "PC-E\u{301}LODIE";
+    let precomposed_narrative =
+        "Network is available to attempt policy download for device PC-élodie.";
+    let decomposed_narrative =
+        format!("Network is available to attempt policy download for device {decomposed}.");
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "form-e1", "form-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same letters, precomposed, in another casing: masked.
+            synthetic_event(
+                "form-e2", "form-channel", 2, 164, "available", "parsed",
+                json!([]),
+                precomposed_narrative,
+            ),
+            // The same letters decomposed: out of reach by design.
+            synthetic_event(
+                "form-e3", "form-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &decomposed_narrative,
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "form-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let masked_precomposed = precomposed_narrative.replace("PC-élodie", &typed);
+    assert_eq!(
+        redacted.observations[1].message.as_deref(),
+        Some(masked_precomposed.as_str()),
+        "the precomposed spelling in another casing must still be masked"
+    );
+    assert_eq!(
+        redacted.observations[2].message.as_deref(),
+        Some(decomposed_narrative.as_str()),
+        "the decomposed spelling is documented as out of reach, not silently meant to be masked"
+    );
+}
+
 /// The literal scrub runs last in every free-text pipeline, behind the shaped
 /// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
 /// inside the address, the mail-address rule would no longer match it, and the
