@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventLogSourceManifest } from "./types";
-import type { EvtxRecord } from "./types";
+import type { EvtxChannelInfo, EvtxRecord } from "./types";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -2295,5 +2295,164 @@ describe("load error state", () => {
       isLoading: true,
       loadError: null,
     });
+  });
+});
+
+/**
+ * Channel eligibility: which enumerated channels the store is willing to ask the service for.
+ *
+ * `Select all` meant "every channel this machine enumerates", the switched-off ones included. The
+ * service refuses a channel that is not recording, and every refusal became a coverage-gap line, so
+ * the banner described the machine's configuration instead of what the view was missing. On the
+ * machine those lines came from, 85 of 517 enumerated channels are switched off and hold no log.
+ *
+ * Three states have to stay apart: recording, reported switched off, and not determined. Only the
+ * second is excluded, and only because the service said so; a probe that could not answer must not
+ * hide a channel that is quiet because nothing has been written to it or because reading it needs
+ * elevation.
+ *
+ * The state travels as `enabled` on the channel DTO in the change these tests describe. It is
+ * written here through a local alias so the RED tests typecheck against the tree before it exists.
+ */
+type ChannelRecordingState = { enabled?: boolean };
+
+function channel(
+  name: string,
+  state: ChannelRecordingState = {},
+  eventCount = 0
+): EvtxChannelInfo {
+  return { name, eventCount, sourceType: "live" as const, ...state } as EvtxChannelInfo;
+}
+
+describe("channel eligibility", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.setState({
+      records: [],
+      channels: [],
+      coverageGaps: [],
+      coverageDetails: [],
+      sourceManifest: null,
+      loadedChannels: new Set<string>(),
+      selectedChannels: new Set<string>(),
+      remoteMachine: null,
+      sourceMode: null,
+      isLoading: false,
+      loadError: null,
+    });
+  });
+
+  it("leaves out of Select all the channels the service reports as switched off", () => {
+    useEvtxStore.setState({
+      channels: [
+        channel("Application", { enabled: true }, 152),
+        channel("AirSpaceChannel", { enabled: false }),
+      ],
+      selectedChannels: new Set<string>(),
+    });
+
+    useEvtxStore.getState().selectAllChannels();
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["Application"]);
+  });
+
+  it("fails open when the service could not report whether a channel is recording", () => {
+    // An unreadable configuration counts as recording. A channel the probe could not answer for is
+    // still one that may hold events, and leaving it out would hide those events from the operator:
+    // worse than asking for a channel that turns out to be empty.
+    useEvtxStore.setState({
+      channels: [
+        channel("Application", { enabled: true }, 152),
+        channel("Unprobed/Operational"),
+        channel("AirSpaceChannel", { enabled: false }),
+      ],
+      selectedChannels: new Set<string>(),
+    });
+
+    useEvtxStore.getState().selectAllChannels();
+
+    expect([...useEvtxStore.getState().selectedChannels].sort()).toEqual([
+      "Application",
+      "Unprobed/Operational",
+    ]);
+  });
+
+  it("does not add a switched-off channel through its own control", () => {
+    // The picker is not the only way into the selection, so the rule belongs where the selection
+    // changes. A channel already in the selection outlives the rule, though: it stays removable.
+    useEvtxStore.setState({
+      channels: [
+        channel("Unprobed/Operational"),
+        channel("AirSpaceChannel", { enabled: false }),
+      ],
+      selectedChannels: new Set<string>(),
+    });
+
+    useEvtxStore.getState().toggleChannel("Unprobed/Operational");
+    useEvtxStore.getState().toggleChannel("AirSpaceChannel");
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["Unprobed/Operational"]);
+
+    useEvtxStore.setState({ selectedChannels: new Set<string>(["AirSpaceChannel"]) });
+    useEvtxStore.getState().toggleChannel("AirSpaceChannel");
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual([]);
+  });
+
+  it("does not ask the service for a switched-off channel during automatic acquisition", async () => {
+    // `Setup` is one of the four channels the initial load acquires without being asked, and it is
+    // switched off on the machine the noise came from, so it is the one that filled the banner.
+    invoke.mockImplementation(async (name: string, args?: { channels?: string[] }) => {
+      if (name === "evtx_enumerate_channels") {
+        return [
+          channel("Application", { enabled: true }),
+          channel("Setup", { enabled: false }),
+        ];
+      }
+      const target = args?.channels?.[0] ?? "";
+      if (target === "Setup") {
+        throw new Error("EvtQuery(Setup): The request is not supported.");
+      }
+      return result("Application", []);
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const asked = invoke.mock.calls.flatMap(
+      (call) => (call[1] as { channels?: string[] } | undefined)?.channels ?? []
+    );
+    expect(asked).toEqual(["Application"]);
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["Application"]);
+    expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+    // Still listed: the channel is part of the machine's configuration, and the picker is where an
+    // operator sees that. Excluded from acquisition is not the same as hidden.
+    expect(useEvtxStore.getState().channels.map((info) => info.name)).toEqual([
+      "Application",
+      "Setup",
+    ]);
+  });
+
+  it("keeps a recording channel the service refused as a real coverage gap", async () => {
+    // The epic's rule is preserved, not relaxed: a channel that holds events and cannot be read is
+    // still reported. What goes away is the configuration noise beside it.
+    invoke.mockImplementation(async (name: string, args?: { channels?: string[] }) => {
+      if (name === "evtx_enumerate_channels") {
+        return [
+          channel("Application", { enabled: true }),
+          channel("Setup", { enabled: false }),
+        ];
+      }
+      const target = args?.channels?.[0] ?? "";
+      if (target === "Setup") {
+        throw new Error("EvtQuery(Setup): The request is not supported.");
+      }
+      throw new Error("Access is denied.");
+    });
+
+    await useEvtxStore.getState().enumerateChannels();
+
+    const state = useEvtxStore.getState();
+    expect(state.coverageGaps).toContain("Application: not read (Access is denied.)");
+    expect(state.coverageGaps).toEqual(["Application: not read (Access is denied.)"]);
   });
 });
