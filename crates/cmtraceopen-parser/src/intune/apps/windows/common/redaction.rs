@@ -305,6 +305,105 @@ pub fn redact_field_value(kind: &str, value: &str) -> String {
     stable_token(kind, value)
 }
 
+/// The byte offset in `haystack` just past `literal`, when the text at `start`
+/// begins with that literal in any case.
+///
+/// Offsets are always into `haystack` itself, never into a folded copy: folding
+/// can change byte length (`İ` lowers from one code point to two), so an index
+/// into a folded copy would not address the same text.
+///
+/// A character whose case mapping is a sequence may be spelled out by the other
+/// side. `İ` maps to `i` plus a combining dot, so a literal using the
+/// precomposed character matches a haystack that writes `i` U+0307 and the
+/// reverse: a literal that writes the mapping out matches the precomposed
+/// character. What stays out of reach, stated rather than implied, is any pair
+/// neither mapping bridges — the length-changing case mappings (`ß` against
+/// `SS`, the `ﬀ`-style ligatures) and text that differs by normalization rather
+/// than by case (`é` written as `e` plus U+0301). Covering those needs a case
+/// folding or normalization table, which is a dependency decision rather than
+/// something this grammar can derive.
+pub(crate) fn caseless_match_end(haystack: &str, start: usize, literal: &str) -> Option<usize> {
+    let mut haystack_end = start;
+    let mut literal_start = 0;
+
+    while literal_start < literal.len() {
+        let haystack_char = haystack[haystack_end..].chars().next()?;
+        let literal_char = literal[literal_start..].chars().next()?;
+        let haystack_next = haystack_end + haystack_char.len_utf8();
+        let literal_next = literal_start + literal_char.len_utf8();
+
+        let (next_haystack, next_literal) = if chars_equal_caselessly(haystack_char, literal_char) {
+            (haystack_next, literal_next)
+        } else if let Some(end) =
+            consume_caselessly(haystack, haystack_end, literal_char.to_lowercase())
+        {
+            // The haystack writes this literal character's mapping out.
+            (end, literal_next)
+        } else if let Some(end) =
+            consume_caselessly(literal, literal_start, haystack_char.to_lowercase())
+        {
+            // The literal writes this haystack character's mapping out.
+            (haystack_next, end)
+        } else {
+            return None;
+        };
+
+        haystack_end = next_haystack;
+        literal_start = next_literal;
+    }
+
+    Some(haystack_end)
+}
+
+/// Whether two strings are the same text in any case.
+///
+/// The comparison is the same one [`caseless_match_end`] performs, so a caller
+/// that groups identifiers and a caller that masks text agree on when two
+/// spellings are one identity.
+pub(crate) fn caseless_equal(left: &str, right: &str) -> bool {
+    caseless_match_end(left, 0, right) == Some(left.len())
+}
+
+/// Whether two characters are the same letter in either case, for any script.
+///
+/// Two ways to be equal, and both are needed: the lowercase expansions agree
+/// (`É` and `é`), or the uppercase expansions do (`Σ` and Greek's final `ς`,
+/// which lowercasing `Σ` never produces). The whole expansion is compared
+/// rather than its first character, so `İ` — which lowers to `i` plus a
+/// combining dot — is not mistaken for `i`.
+fn chars_equal_caselessly(left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+
+    if left.is_ascii() && right.is_ascii() {
+        return left.eq_ignore_ascii_case(&right);
+    }
+
+    left.to_lowercase().eq(right.to_lowercase()) || left.to_uppercase().eq(right.to_uppercase())
+}
+
+/// Consume `pattern` from `target` starting at `start`, one pattern character
+/// per target character and caselessly, and return where the match ended.
+fn consume_caselessly(
+    target: &str,
+    start: usize,
+    pattern: impl Iterator<Item = char>,
+) -> Option<usize> {
+    let mut end = start;
+    let mut target_chars = target[start..].chars();
+
+    for pattern_char in pattern {
+        let target_char = target_chars.next()?;
+        if !chars_equal_caselessly(target_char, pattern_char) {
+            return None;
+        }
+        end += target_char.len_utf8();
+    }
+
+    Some(end)
+}
+
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
     let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
