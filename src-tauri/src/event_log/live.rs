@@ -20,7 +20,11 @@ use std::time::Duration;
 use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
 #[cfg(target_os = "windows")]
 use super::models::{ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus};
-use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxField, EvtxRecord};
+use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxRecord};
+// Only the Windows-only provider-message recovery path and its tests name this type, so it is
+// imported under the same gate: importing it unconditionally warns on macOS and Linux builds.
+#[cfg(any(target_os = "windows", test))]
+use super::models::EvtxField;
 #[cfg(any(target_os = "windows", test))]
 use super::models::{
     EvtxCoverageGapKind, EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, ProviderMessageStage,
