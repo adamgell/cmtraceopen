@@ -1913,6 +1913,608 @@ fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
     }
 }
 
+// ── Literals masked as typed fields must not survive in free text ───────────
+//
+// Issue #564: `redacted_export_projection` masks serial numbers, tenant
+// domains, device names, hardware hashes, and UPNs where they are typed fields,
+// but the same literals used to ride out untouched inside narrative. A bare
+// serial, a bare DNS domain, and a bare host name carry no distinctive shape,
+// so no free-text pattern can recognize one; the projection has to scrub the
+// exact values it is about to mask.
+
+/// A snapshot whose typed identity fields are also planted, unlabelled, in the
+/// narrative: the shape issue #564 is about.
+///
+/// The values are the corpus's own synthetic identity material
+/// (`deterministic-identity-redaction`), not invented text. The second event's
+/// narrative names the device the way a real record does -- "Device X
+/// (serial) ... tenant" -- with no field label anywhere in sight.
+fn literal_carrying_export_snapshot() -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The typed fields: every one of these values is masked.
+            synthetic_event(
+                "literal-e1", "literal-channel", 1, 161, "available", "parsed",
+                json!([
+                    { "name": "serialNumber", "value": "SYNTH-SERIAL-0001" },
+                    { "name": "tenantDomain", "value": "contoso.example" },
+                    { "name": "deviceName", "value": "SYNTH-DEV-01" }
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same three literals, unlabelled, in free narrative.
+            synthetic_event(
+                "literal-e2", "literal-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download. Device SYNTH-DEV-01 \
+                 (SYNTH-SERIAL-0001) last checked in to contoso.example.",
+            ),
+        ]
+    });
+    reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "literal-channel",
+        "autopilotEvents",
+        &events,
+    )]))
+}
+
+#[test]
+fn bare_identity_literals_in_narrative_do_not_survive_the_export() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    // The typed fields really do carry these values, so the assertions below
+    // are about the narrative and not about a fixture that declared nothing.
+    for (field, typed) in [
+        ("serialNumber", &redacted.identity.serial_number),
+        ("tenantDomain", &redacted.identity.tenant_domain),
+        ("deviceName", &redacted.identity.device_name),
+    ] {
+        let typed = typed
+            .as_deref()
+            .unwrap_or_else(|| panic!("the fixture declares {field}"));
+        assert!(
+            typed.starts_with("[redacted:"),
+            "{field} must be masked as a typed field, got {typed}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for needle in ["SYNTH-SERIAL-0001", "contoso.example", "SYNTH-DEV-01"] {
+        assert!(
+            !text.contains(needle),
+            "the bare literal {needle:?} survived the exported projection: {text}"
+        );
+    }
+}
+
+/// The scrub must not merely delete identity from narrative: it must put the
+/// same token there that the typed field carries. Otherwise an export that
+/// named one device in two records would read as two different devices.
+#[test]
+fn a_free_text_literal_masks_to_the_same_token_as_its_typed_field() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    let serial_token = redacted
+        .identity
+        .serial_number
+        .clone()
+        .expect("the fixture declares a serial number");
+    assert!(serial_token.starts_with("[redacted:"), "got {serial_token}");
+
+    let messages = |snapshot: &AutopilotSnapshot| -> Vec<Option<String>> {
+        snapshot
+            .observations
+            .iter()
+            .map(|observation| observation.message.clone())
+            .collect()
+    };
+    let before = messages(&snapshot);
+    let after = messages(&redacted);
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "the projection must not add or drop observations"
+    );
+
+    let mut rewritten = 0;
+    for (before, after) in before.iter().zip(&after) {
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        if !before.contains("SYNTH-SERIAL-0001") {
+            continue;
+        }
+        rewritten += 1;
+        assert!(
+            after.contains(&serial_token),
+            "the free-text mention must carry the typed field's token {serial_token}, got {after}"
+        );
+    }
+    assert_eq!(
+        rewritten, 1,
+        "the fixture plants exactly one free-text mention of the serial"
+    );
+}
+
+/// Firmware routinely reports junk serials. A value too short to be told apart
+/// from an ordinary word must not be scrubbed, or readable evidence is mangled
+/// without anything being protected.
+#[test]
+fn a_degenerate_short_serial_does_not_scrub_unrelated_narrative() {
+    let message = "AutopilotManager reported serial N/A to the service.";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "junk-e1", "junk-channel", 1, 161, "available", "parsed",
+            json!([{ "name": "serialNumber", "value": "N/A" }]),
+            message,
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "junk-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    assert!(
+        matches!(
+            redacted.identity.serial_number.as_deref(),
+            Some(serial) if serial.starts_with("[redacted:")
+        ),
+        "the fixture's junk serial must still be masked as a typed field, got {:?}",
+        redacted.identity.serial_number
+    );
+    assert_eq!(
+        redacted.observations[0].message.as_deref(),
+        Some(message),
+        "a three-byte junk serial must not scrub ordinary narrative"
+    );
+}
+
+/// The scrub reads its own output back on the second pass, so a token must
+/// never be treated as a literal to scrub again.
+#[test]
+fn the_literal_scrub_is_idempotent() {
+    let snapshot = literal_carrying_export_snapshot();
+    let once = redacted_export_projection(&snapshot);
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a projection of a projection must serialize identically"
+    );
+}
+
+/// A value with a shape of its own must correlate too. A UPN in narrative is
+/// consumed by the mail-address rule long before the literal scrub looks for
+/// it, so that rule has to resolve a value the export masks to the token the
+/// typed field carries. Otherwise one identity exports under two tokens and the
+/// export reads as two different users.
+#[test]
+fn a_narrative_upn_masks_to_the_token_its_typed_field_carries() {
+    let address = "synthetic.user@contoso.example";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "upn-e1", "upn-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "userPrincipalName", "value": address }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn.",
+            ),
+            synthetic_event(
+                "upn-e2", "upn-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager retrieve settings succeeded for {address}."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "upn-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted.observations[0]
+        .named("userPrincipalName")
+        .expect("the fixture declares a user principal name")
+        .to_owned();
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative UPN must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(
+        !text.contains(address),
+        "the address must not survive: {text}"
+    );
+    assert!(
+        !text.contains("[upn:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
+/// The same holds for a hardware hash: it is long enough for the opaque-blob
+/// rule to take it, so that rule must hand back the token the typed field
+/// carries rather than a token of its own kind.
+#[test]
+fn a_narrative_hardware_hash_masks_to_the_token_its_typed_field_carries() {
+    let hash = "U1lOVEhFVElDSEFSRFdBUkVIQVNIRk9SRklYVFVSRVVTRU9OTFlaWloK";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "hash-e1", "hash-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "hardwareHash", "value": hash }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedDeviceHardwareHash.",
+            ),
+            synthetic_event(
+                "hash-e2", "hash-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported hardware hash {hash} for this device."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "hash-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .hardware_hash
+        .clone()
+        .expect("the fixture declares a hardware hash");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative hash must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(!text.contains(hash), "the hash must not survive: {text}");
+    assert!(
+        !text.contains("[blob:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
+/// Case folding must be Unicode-aware, not ASCII-only. An identity can carry a
+/// non-ASCII letter -- the corpus's own macOS Company Portal fixture names a
+/// real user `élodie.martin@contoso.example` -- and a log line is free to spell
+/// it in another case. Folding ASCII only leaves `É` and `é` distinct, so the
+/// narrative occurrence is neither scrubbed nor matched to its typed token.
+///
+/// The narrative variant differs from the typed value *only* in the case of the
+/// non-ASCII letter, so an ASCII-only fold misses it for exactly that reason.
+#[test]
+fn a_non_ascii_literal_masks_its_differently_cased_occurrence_to_the_same_token() {
+    let device = "PC-ÉLODIE";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "unicode-e1", "unicode-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": device }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "unicode-e2", "unicode-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "unicode-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = once.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "a differently-cased non-ASCII occurrence must carry the typed field's token {typed}, \
+         got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in [device, "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a non-ASCII literal must not be re-matched on the second pass"
+    );
+}
+
+/// One identity must mint one token, whatever case a non-ASCII letter arrives
+/// in. `mask_value` canonicalizes the value before hashing it and the literal
+/// table keys on that same canonical form, so a typed value and its
+/// differently-cased variant cannot disagree. Were they to, the table would
+/// hold one of the two tokens and put it in every narrative occurrence, while
+/// the other typed field went on showing a token its own free-text mentions do
+/// not match.
+#[test]
+fn one_identity_mints_one_token_whatever_case_a_non_ascii_letter_arrives_in() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The same device name, reported twice in two casings.
+            synthetic_event(
+                "case-e1", "case-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "case-e2", "case-channel", 2, 164, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "pc-élodie" }]),
+                "Network is available to attempt policy download.",
+            ),
+            // And both spellings, unlabelled, in one narrative record.
+            synthetic_event(
+                "case-e3", "case-channel", 3, 153, "available", "parsed",
+                json!([]),
+                "Device PC-ÉLODIE is the same record as device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "case-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let reported: Vec<String> = redacted
+        .observations
+        .iter()
+        .filter_map(|observation| observation.named("deviceName").map(str::to_owned))
+        .collect();
+    assert_eq!(reported.len(), 2, "the fixture reports the device name twice");
+    assert!(reported[0].starts_with("[redacted:"), "got {}", reported[0]);
+    assert_eq!(
+        reported[0], reported[1],
+        "one identity must mint one token whatever case it arrives in"
+    );
+
+    let message = redacted.observations[2]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert_eq!(
+        message.matches(&reported[0]).count(),
+        2,
+        "both spellings in narrative must carry that one token, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for survivor in ["PC-ÉLODIE", "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+}
+
+/// A character whose lowercase form is several characters must still line up.
+/// `İ` lowercases to `i` plus U+0307, so a value spelling it one way and a log
+/// line spelling it another used to be compared as one character against a
+/// two-character expansion and never matched at all.
+#[test]
+fn a_literal_that_folds_to_several_characters_matches_its_other_casing() {
+    let folded_spelling = "i\u{307}stanbul-pc";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "dotted-e1", "dotted-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "İSTANBUL-PC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The named device, in the other casing and with a lowercase ASCII
+            // tail: the `İ` is the only character whose fold expands.
+            synthetic_event(
+                "dotted-e2", "dotted-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device İstanbul-PC.",
+            ),
+            // And the same value spelled with the expansion written out.
+            synthetic_event(
+                "dotted-e3", "dotted-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &format!(
+                    "AutopilotManager reported the state changed from ProfileState_Unknown \
+                     to ProfileState_Available for {folded_spelling}."
+                ),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "dotted-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    for index in [1, 2] {
+        let message = once.observations[index]
+            .message
+            .as_deref()
+            .expect("the narrative record carries a message");
+        assert!(
+            message.contains(&typed),
+            "narrative record {index} must carry the typed field's token {typed}, got {message}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in ["İSTANBUL-PC", "İstanbul-PC", folded_spelling] {
+        assert!(
+            !text.contains(survivor),
+            "the literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a literal that folds to several characters must not be re-matched"
+    );
+}
+
+/// The matcher never normalizes, and this pins that as a decision on record
+/// rather than a surprise: a precomposed `é` and an `e` plus U+0301 are
+/// different text, so a value typed one way and logged the other way keeps its
+/// decomposed spelling in the export. The precomposed spelling in the same
+/// fixture is masked, so the gap is exactly the normalization form and not a
+/// matcher that fails to fold at all.
+///
+/// Normalizing would close the gap and is deliberately not done: it rewrites
+/// the narrative on its way into the export, which is a behaviour change with
+/// its own trade-offs. Anyone who later adds it must delete this test on
+/// purpose.
+#[test]
+fn a_decomposed_spelling_is_left_readable_because_the_matcher_never_normalizes() {
+    let decomposed = "PC-E\u{301}LODIE";
+    let precomposed_narrative =
+        "Network is available to attempt policy download for device PC-élodie.";
+    let decomposed_narrative =
+        format!("Network is available to attempt policy download for device {decomposed}.");
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "form-e1", "form-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same letters, precomposed, in another casing: masked.
+            synthetic_event(
+                "form-e2", "form-channel", 2, 164, "available", "parsed",
+                json!([]),
+                precomposed_narrative,
+            ),
+            // The same letters decomposed: out of reach by design.
+            synthetic_event(
+                "form-e3", "form-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &decomposed_narrative,
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "form-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let masked_precomposed = precomposed_narrative.replace("PC-élodie", &typed);
+    assert_eq!(
+        redacted.observations[1].message.as_deref(),
+        Some(masked_precomposed.as_str()),
+        "the precomposed spelling in another casing must still be masked"
+    );
+    assert_eq!(
+        redacted.observations[2].message.as_deref(),
+        Some(decomposed_narrative.as_str()),
+        "the decomposed spelling is documented as out of reach, not silently meant to be masked"
+    );
+}
+
+/// The literal scrub runs last in every free-text pipeline, behind the shaped
+/// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
+/// inside the address, the mail-address rule would no longer match it, and the
+/// local part would ride out in the clear.
+#[test]
+fn a_tenant_domain_literal_does_not_break_the_upn_match_that_precedes_it() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "suffix-e1", "suffix-channel", 1, 103, "available", "parsed",
+            json!([{ "name": "tenantDomain", "value": "contoso.example" }]),
+            "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn; \
+             policy value = synthetic.user@contoso.example.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "suffix-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    assert!(
+        !text.contains("synthetic.user"),
+        "the local part of a masked UPN must not survive: {text}"
+    );
+    assert!(
+        !text.contains("contoso.example"),
+        "the tenant domain must not survive: {text}"
+    );
+}
+
 // ── Golden maintenance ──────────────────────────────────────────────────────
 
 /// Rewrite every scenario's `findings` golden from the current reducer output.
