@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Badge,
   Button,
   Checkbox,
   Dropdown,
@@ -304,6 +305,10 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         fontSize: controlFontSize,
       }}
     >
+      <Badge appearance="ghost" size="small" style={{ flexShrink: 0 }}>
+        Preview
+      </Badge>
+
       {sourceMode === "live" && (
         <>
           <Dropdown

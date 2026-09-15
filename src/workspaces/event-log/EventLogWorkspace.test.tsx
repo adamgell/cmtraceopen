@@ -166,6 +166,7 @@ import {
   MAX_EXPORT_CHUNK_BYTES,
   MAX_EXPORT_CHUNK_RECORDS,
 } from "./evtx-export";
+import { eventLogWorkspace } from "./index";
 import type { EvtxRecord } from "./types";
 
 const RECORD: EvtxRecord = {
@@ -1121,5 +1122,18 @@ describe("EventLogWorkspace fixtures", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show Raw XML" }));
     expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
     expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
+  });
+});
+
+describe("Event Log Viewer preview badge", () => {
+  it("registry labels the workspace as preview", () => {
+    expect(eventLogWorkspace.label).toBe("Event Log Viewer (Preview)");
+    expect(eventLogWorkspace.statusLabel).toBe("Event Log (Preview)");
+  });
+  it("shows a Preview badge in the filter bar with events loaded", () => {
+    seedEventLog();
+    render(<EventLogWorkspace />);
+
+    expect(screen.getByText("Preview")).toBeInTheDocument();
   });
 });
