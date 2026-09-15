@@ -387,3 +387,70 @@ pub struct EvtxTailBatch {
     pub records: Vec<EvtxRecord>,
     pub coverage_gaps: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One enumerated channel entry as it arrives over IPC, with the state its producer wrote.
+    ///
+    /// Spelled as JSON text rather than built from the struct, so the test states the contract the
+    /// frontend actually receives -- including the case where a payload carries no state at all.
+    fn channel_payload(enabled_state: Option<&str>) -> String {
+        match enabled_state {
+            Some(state) => format!(
+                r#"{{"name":"C","eventCount":0,"sourceType":"live","enabledState":"{state}"}}"#
+            ),
+            None => r#"{"name":"C","eventCount":0,"sourceType":"live"}"#.to_string(),
+        }
+    }
+
+    fn parse(payload: &str) -> EvtxChannelInfo {
+        serde_json::from_str(payload)
+            .unwrap_or_else(|error| panic!("{payload} should parse as a channel entry: {error}"))
+    }
+
+    #[test]
+    fn a_payload_that_omits_the_enabled_state_is_unknown_rather_than_enabled() {
+        // `#[serde(default)]` on the field reads an omitted state through `Default`, and the enum's
+        // `#[default]` is `Unknown`. This is the Rust half of the fail-open rule: a payload written
+        // before the field existed, or an enumeration that never asked, must not claim the channel
+        // is recording. Only `Unknown` can make that claim safely -- `Enabled` selects and acquires
+        // identically while asserting something unproven about the machine.
+        let observed = parse(&channel_payload(None));
+
+        println!("{} -> {:?}", channel_payload(None), observed.enabled_state);
+        assert_eq!(observed.enabled_state, ChannelEnabledState::Unknown);
+        assert_eq!(ChannelEnabledState::default(), ChannelEnabledState::Unknown);
+
+        // An absent state is written back as `unknown` on the next reply, never omitted and never
+        // `enabled`: the field is part of the payload the frontend reads.
+        let written = serde_json::to_string(&observed).expect("serializes");
+        assert!(
+            written.contains(r#""enabledState":"unknown""#),
+            "an absent state is written as unknown: {written}"
+        );
+    }
+
+    #[test]
+    fn the_three_states_round_trip_through_their_wire_values() {
+        for (wire, expected) in [
+            ("enabled", ChannelEnabledState::Enabled),
+            ("disabled", ChannelEnabledState::Disabled),
+            ("unknown", ChannelEnabledState::Unknown),
+        ] {
+            let payload = channel_payload(Some(wire));
+            let observed = parse(&payload);
+
+            println!("{payload} -> {:?}", observed.enabled_state);
+            assert_eq!(observed.enabled_state, expected, "{payload}");
+
+            let written = serde_json::to_string(&observed).expect("serializes");
+            assert!(
+                written.contains(&format!(r#""enabledState":"{wire}""#)),
+                "{wire} is written back as itself: {written}"
+            );
+            assert_eq!(parse(&written).enabled_state, expected);
+        }
+    }
+}
