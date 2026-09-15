@@ -305,100 +305,142 @@ pub fn redact_field_value(kind: &str, value: &str) -> String {
     stable_token(kind, value)
 }
 
-/// The byte offset in `haystack` just past `literal`, when the text at `start`
-/// begins with that literal in any case.
+/// One character of a case-folded view of some source text, and the byte range
+/// of the source character it came from.
 ///
-/// Offsets are always into `haystack` itself, never into a folded copy: folding
-/// can change byte length (`İ` lowers from one code point to two), so an index
-/// into a folded copy would not address the same text.
+/// Folding can turn one character into several (`İ` lowercases to `i` plus
+/// U+0307), so a folded view cannot be sliced: an offset into it would not
+/// address the same text as an offset into the source. Every folded character
+/// therefore carries the source range it came from, and a match reports the
+/// range its first and last characters cover.
+pub(crate) struct FoldedChar {
+    folded: char,
+    source_start: usize,
+    source_end: usize,
+}
+
+/// Case-fold `value` for caseless matching, keeping every folded character tied
+/// to the source range it came from.
 ///
-/// A character whose case mapping is a sequence may be spelled out by the other
-/// side. `İ` maps to `i` plus a combining dot, so a literal using the
-/// precomposed character matches a haystack that writes `i` U+0307 and the
-/// reverse: a literal that writes the mapping out matches the precomposed
-/// character. What stays out of reach, stated rather than implied, is any pair
-/// neither mapping bridges — the length-changing case mappings (`ß` against
-/// `SS`, the `ﬀ`-style ligatures) and text that differs by normalization rather
-/// than by case (`é` written as `e` plus U+0301). Covering those needs a case
-/// folding or normalization table, which is a dependency decision rather than
-/// something this grammar can derive.
-pub(crate) fn caseless_match_end(haystack: &str, start: usize, literal: &str) -> Option<usize> {
-    let mut haystack_end = start;
-    let mut literal_start = 0;
-
-    while literal_start < literal.len() {
-        let haystack_char = haystack[haystack_end..].chars().next()?;
-        let literal_char = literal[literal_start..].chars().next()?;
-        let haystack_next = haystack_end + haystack_char.len_utf8();
-        let literal_next = literal_start + literal_char.len_utf8();
-
-        let (next_haystack, next_literal) = if chars_equal_caselessly(haystack_char, literal_char) {
-            (haystack_next, literal_next)
-        } else if let Some(end) =
-            consume_caselessly(haystack, haystack_end, literal_char.to_lowercase())
-        {
-            // The haystack writes this literal character's mapping out.
-            (end, literal_next)
-        } else {
-            let end = consume_caselessly(literal, literal_start, haystack_char.to_lowercase())?;
-            // The literal writes this haystack character's mapping out.
-            (haystack_next, end)
-        };
-
-        haystack_end = next_haystack;
-        literal_start = next_literal;
+/// This is the one caseless rule in the crate, and the two lanes that own a
+/// caseless identity both call it: the Autopilot export
+/// (`intune::enrollment::windows::autopilot::redaction`) and the dsregcmd
+/// projection (`dsregcmd::redaction`). The fold is `to_lowercase` -- not
+/// `to_ascii_lowercase`, because an identity can carry a non-ASCII letter --
+/// and it is the same fold at every level: the key a lane files an identity
+/// under, the token that key mints, and the match [`find_ignore_case`]
+/// performs. [`folded_chars_equal`] adds the second accept path, `to_uppercase`
+/// equality, which is what reaches Greek's final sigma (`Σ` and `ς` both
+/// uppercase to `Σ` while their lowercase forms differ).
+pub(crate) fn fold_with_offsets(value: &str) -> Vec<FoldedChar> {
+    let mut folded = Vec::with_capacity(value.len());
+    for (source_start, source) in value.char_indices() {
+        let source_end = source_start + source.len_utf8();
+        for folded_char in source.to_lowercase() {
+            folded.push(FoldedChar {
+                folded: folded_char,
+                source_start,
+                source_end,
+            });
+        }
     }
+    folded
+}
 
-    Some(haystack_end)
+/// The next occurrence of `literal` in the folded view of `haystack`, at or
+/// after the source byte offset `from`, as the source byte range it covers.
+///
+/// Called by the two lanes that scrub classified literals out of free text --
+/// the Autopilot export and the dsregcmd projection -- each folding the text
+/// once per scrub with [`fold_with_offsets`] and sharing that one view across
+/// every literal it holds.
+///
+/// Both sides are compared one folded character per side per step, so a
+/// character that folds to several still lines up: a typed `İSTANBUL-PC` folds
+/// to `i`, U+0307, `stanbul-pc`, and the narrative spelling `İstanbul-PC` folds
+/// to exactly that same sequence. `literal` is a literal-table key, so it
+/// arrives already folded, and the caller folds `haystack` once per call rather
+/// than once per literal. A match reports offsets into `haystack` itself, never
+/// into the folded view, which lowercasing may have resized.
+///
+/// Out of reach, and deliberately so, are the spellings the fold does not
+/// reproduce:
+///
+/// * the Turkic dotless `i` never equals `İ`: default folding yields `i` plus
+///   U+0307, and only Unicode's Turkic mapping drops the dot;
+/// * one-to-many spellings such as `ß` against `SS`, or a ligature against the
+///   letters it stands for, cannot line up at all, because each step consumes
+///   one folded character per side;
+/// * the same letter in another *normalization form* does not match. A typed
+///   precomposed `PC-ÉLODIE` folds to `pc-élodie`, while a narrative spelling of
+///   `PC-E` plus U+0301 folds to `e`, U+0301 and fails at that position, so that
+///   spelling stays visible.
+///
+/// Normalizing would close the last of those, and is not done: it rewrites the
+/// narrative on its way into the export, which is a behaviour change with its
+/// own trade-offs rather than a free win. Tests in both lanes pin these gaps so
+/// they stay decisions on record.
+pub(crate) fn find_ignore_case(
+    haystack: &str,
+    literal: &str,
+    folded: &[FoldedChar],
+    from: usize,
+) -> Option<(usize, usize)> {
+    let expected: Vec<char> = literal.chars().collect();
+    if expected.is_empty() {
+        return None;
+    }
+    for (index, folded_char) in folded.iter().enumerate() {
+        let start = folded_char.source_start;
+        if start < from {
+            continue;
+        }
+        // The value spelled exactly as it was typed, which needs no folding and
+        // keeps the scan proportional to a memchr when nothing differs in case.
+        if haystack[start..].starts_with(literal) {
+            return Some((start, start + literal.len()));
+        }
+        let Some(window) = folded.get(index..index + expected.len()) else {
+            break;
+        };
+        let matched = window
+            .iter()
+            .zip(&expected)
+            .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
+        if matched {
+            return Some((start, window[window.len() - 1].source_end));
+        }
+    }
+    None
+}
+
+/// Whether two folded characters are the same letter in another case.
+///
+/// Comparing only lowercase forms misses the final sigma: `Σ` folds to `σ`,
+/// while `ς` keeps its own shape. Both uppercase to `Σ`, so the uppercase
+/// expansions settle it.
+fn folded_chars_equal(left: char, right: char) -> bool {
+    left == right || left.to_uppercase().eq(right.to_uppercase())
 }
 
 /// Whether two strings are the same text in any case.
 ///
-/// The comparison is the same one [`caseless_match_end`] performs, so a caller
-/// that groups identifiers and a caller that masks text agree on when two
-/// spellings are one identity.
+/// The membership convenience both lanes use to decide that two spellings are
+/// one identity -- dsregcmd's classified-identity table and the Autopilot
+/// literal table -- so a table can never hold two entries that
+/// [`find_ignore_case`] would treat as one identity. Expressed over the same
+/// fold: the two folded views must be the same sequence of folded characters,
+/// one folded character per side, so `İ` equals the `i` plus U+0307 it
+/// lowercases to, and a pair whose case mapping changes length (`ß` against
+/// `SS`) is not equal.
 pub(crate) fn caseless_equal(left: &str, right: &str) -> bool {
-    caseless_match_end(left, 0, right) == Some(left.len())
-}
-
-/// Whether two characters are the same letter in either case, for any script.
-///
-/// Two ways to be equal, and both are needed: the lowercase expansions agree
-/// (`É` and `é`), or the uppercase expansions do (`Σ` and Greek's final `ς`,
-/// which lowercasing `Σ` never produces). The whole expansion is compared
-/// rather than its first character, so `İ` — which lowers to `i` plus a
-/// combining dot — is not mistaken for `i`.
-fn chars_equal_caselessly(left: char, right: char) -> bool {
-    if left == right {
-        return true;
-    }
-
-    if left.is_ascii() && right.is_ascii() {
-        return left.eq_ignore_ascii_case(&right);
-    }
-
-    left.to_lowercase().eq(right.to_lowercase()) || left.to_uppercase().eq(right.to_uppercase())
-}
-
-/// Consume `pattern` from `target` starting at `start`, one pattern character
-/// per target character and caselessly, and return where the match ended.
-fn consume_caselessly(
-    target: &str,
-    start: usize,
-    pattern: impl Iterator<Item = char>,
-) -> Option<usize> {
-    let mut end = start;
-    let mut target_chars = target[start..].chars();
-
-    for pattern_char in pattern {
-        let target_char = target_chars.next()?;
-        if !chars_equal_caselessly(target_char, pattern_char) {
-            return None;
-        }
-        end += target_char.len_utf8();
-    }
-
-    Some(end)
+    let left = fold_with_offsets(left);
+    let right = fold_with_offsets(right);
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(&right)
+            .all(|(left, right)| folded_chars_equal(left.folded, right.folded))
 }
 
 /// Mask the sensitive spans inside a free-text value.
