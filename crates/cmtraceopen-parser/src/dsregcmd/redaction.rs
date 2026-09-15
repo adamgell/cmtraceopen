@@ -81,7 +81,8 @@
 //! one, and the fix would not reach it.
 
 use crate::intune::apps::windows::common::{
-    caseless_equal, caseless_match_end, redact_field_value, redact_text,
+    caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
+    FoldedChar,
 };
 use crate::intune::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
@@ -132,8 +133,14 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// that write a case mapping out (`İ` against `i` plus U+0307).
 #[derive(Default)]
 struct IdentityLiterals {
-    /// Literal as classified, paired with its token, longest literal first so a
-    /// literal that sits inside a longer one cannot cut the longer one in half.
+    /// Literal as classified, paired with its token, longest literal first.
+    ///
+    /// The scrub no longer depends on that order —
+    /// [`IdentityLiterals::leftmost_longest_match`] takes the longest match at
+    /// the leftmost position itself, so a literal that sits inside a longer one
+    /// still cannot cut the longer one in half — but the table is left in the
+    /// order it has always held rather than reshuffled for no observable
+    /// difference.
     values: Vec<(String, String)>,
 }
 
@@ -190,10 +197,13 @@ impl IdentityLiterals {
             return value.to_string();
         }
 
+        // One folded view of the text, shared by every literal. The fold is the
+        // grammar's, not this lane's.
+        let folded = fold_with_offsets(value);
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) = self.leftmost_longest_match(value, cursor) {
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, &folded, cursor) {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -205,23 +215,29 @@ impl IdentityLiterals {
     /// The leftmost match, longest at that position, as `(start, end, token)`
     /// with byte offsets into `haystack` itself.
     ///
-    /// Scans in increasing character order, so the first position that matches
-    /// anything is the leftmost one, and takes the first literal that matches
-    /// there, which [`IdentityLiterals::values`] orders longest-first.
-    fn leftmost_longest_match(
-        &self,
+    /// Each literal asks the grammar's cursor search for its next occurrence at
+    /// or after `cursor`; the leftmost of those answers wins, and a tie there
+    /// goes to the longest match, so a literal that sits inside a longer one can
+    /// never cut the longer one in half.
+    fn leftmost_longest_match<'a>(
+        &'a self,
         haystack: &str,
+        folded: &[FoldedChar],
         cursor: usize,
-    ) -> Option<(usize, usize, &str)> {
-        for (offset, _) in haystack[cursor..].char_indices() {
-            let start = cursor + offset;
-            for (literal, token) in &self.values {
-                if let Some(end) = caseless_match_end(haystack, start, literal) {
-                    return Some((start, end, token.as_str()));
-                }
+    ) -> Option<(usize, usize, &'a str)> {
+        let mut best: Option<(usize, usize, &'a str)> = None;
+        for (literal, token) in &self.values {
+            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
+                continue;
+            };
+            let replaces = best.is_none_or(|(best_start, best_end, _)| {
+                start < best_start || (start == best_start && end > best_end)
+            });
+            if replaces {
+                best = Some((start, end, token.as_str()));
             }
         }
-        None
+        best
     }
 }
 
