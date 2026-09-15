@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Updater manifest publisher**: The `publish-updater-manifest` job in both release workflows called its local action without checking the repository out first, so it died at load time with `Can't find 'action.yml'` and `latest.json` was never published by that path — the job had never once succeeded. Both callers now check out, and a workflow-contract test fails naming any job that runs a local action without doing so.
+
+### Build & CI
+
+- **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
+
 ## [1.6.0] - 2026-09-14
 
 ### Added
@@ -15,7 +23,7 @@ All notable changes to this project will be documented in this file.
 - **Intune Device Inventory Agent log family (#397 / #354)**: Discover and parse the full Microsoft Device Inventory Agent log set under Program Files (harvester, Inventory Adaptor, and rotation-failure dialects) with known-sources entry, folder aggregation for `.log` / rotations / `.log_`, and logical-record-aware real-time tailing.
 - **Company Portal iOS/iPadOS Console exports (#402)**: Parse imported Console plain-text diagnostics for Company Portal on iOS/iPadOS with fail-closed empty attribution cells and overflow-safe column handling.
 - **Windows device compliance analyzer (#364 / #495)**: Pure-parser four-phase compliance model (local evaluation → aggregate → reporting → access) with 16-scenario fixtures, privacy redaction, and conservative access-only findings that never promote Conditional Access denials into local setting verdicts.
-- **Native SCCM diagnostics path (#319, #490 and related)**: Native client evidence admission, discovery/normalization, and diagnostics workspace foundations for ConfigMgr client and server workflows—including site-core, management point, distribution point, software update point, hierarchy/replication, task-sequence provenance sealing, client health/policy/deployment/updates/inventory-compliance-metering analysis, and bounded database export coverage contracts (#493–#499, #443–#459, #494, #498, #499), plus bounded advanced server capture (#500).
+- **Native SCCM diagnostics path (#319, #490 and related)**: Native client evidence admission, discovery/normalization, and diagnostics workspace foundations for ConfigMgr client and server workflows—including site-core, management point, distribution point, software update point, hierarchy/replication, task-sequence provenance sealing, client health/policy/deployment/updates/inventory-compliance-metering analysis, and bounded database export coverage contracts (#493–#499, #443–#459, #494, #498, #499), plus bounded advanced server capture (#500). The foundation underneath it is the same series: #335, #336, #342, #344, #346, #348, #350, #394, #404, #418, #444, #458.
 - **Non-blocking Microsoft Graph WAM authentication (#441 / #512)**: Enable Graph without freezing the UI; explicit Sign in, host capability fast-fail (personal MSA / missing org account / provider unavailable), cancellable interactive auth, and retention of the Entra interactive path for real consent.
 - **Windows Autopilot evidence parser outside ESP (#362 / #450)**: Standalone Autopilot snapshot/outcome/phase model with ESP-linkage correlation, evidence-backed findings, and a 15-scenario fixture matrix, independent of the ESP Diagnostics workspace.
 - **Company Portal Windows LocalState logs (#366 / #460)**: Parse `%LOCALAPPDATA%\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` and sibling bridge logs, version-scoped to the single published Company Portal 12-0-0 record with confidence downgraded for unverified app versions.
@@ -30,8 +38,8 @@ All notable changes to this project will be documented in this file.
 - **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
 - **SCCM intake authority (#508 and related)**: Remove fixture identity allowlists from production intake; bind client/server analysis to sealed intake, topology, chronology, and coverage-gap contracts rather than synthetic identity shortcuts.
 - **Agent / contributor docs (#448)**: Expand agent-facing repository guidance for multi-lane SCCM and Intune work.
-- **Reducer Framework v1 governance (#519)**: Establish the architecture, ADRs (evidence strength/confidence, identity correlation, chronology terminal precedence, redaction scope), and contract/adversary/integration charters that govern how evidence-folding reducer modules—including the Microsoft Store lane and Autopilot parser above—are designed and reviewed.
-- **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions.
+- **Reducer Framework v1 governance (#519)**: Establish the architecture, ADRs (evidence strength/confidence, identity correlation, chronology terminal precedence, redaction scope), and contract/adversary/integration charters that govern how evidence-folding reducer modules—including the Microsoft Store lane and Autopilot parser above—are designed and reviewed. The framework's own extraction is part of it: the citation predicate is asked rather than restated in two lanes (#548), and the shared extraction is thinned to mapping, test support and invariant docs (#543).
+- **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions. The review loop retargets from Copilot to CodeRabbit (#537) and the code-review charter and operator skills land with it (#538).
 - **Win32 and Store redaction grammar (#357 / #533)**: Extend the shared Intune redaction grammar so the Win32 deployment and Microsoft Store lanes mask every identity shape they can emit, including SIDs, tenant domains, and device names.
 - **Agent-driven development orchestration (#570)**: Add the OMP orchestration layer that turns an issue into a worktree lane, a RED-first proposal, exact gates, and a draft pull request, with staff roles bounded to read-only proposals and Main as the only writer.
 
