@@ -257,6 +257,13 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # A local `uses:` path is resolved from the workspace, so the calling job
+      # must check the repository out before it can name this action at all.
+      # Without this step the job dies with "Can't find 'action.yml'".
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Publish updater manifest
         uses: ./.github/actions/publish-updater-manifest
         with:

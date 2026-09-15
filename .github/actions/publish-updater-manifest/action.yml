@@ -17,14 +17,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
     - name: Publish updater manifest
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-        # Composite steps get no working tree of their own, and the checkout
-        # above is the caller's repo, so name the repository explicitly rather
+        # The calling job checks the repository out so this action can be found
+        # and `.github/scripts/updater-manifest.mjs` read. Composite steps get no
+        # working tree of their own, so name the repository explicitly rather
         # than letting gh infer it from a git remote that may not be there.
         GH_REPO: ${{ github.repository }}
         GITHUB_REPOSITORY: ${{ github.repository }}

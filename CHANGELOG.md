@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-14
+
 ### Added
 
 - **Canonical user-story tracker**: Inventory every chrome and workspace feature in `docs/qa/user-stories.csv` with expected behavior derived from the current code, plus fixture/RTL coverage for those surfaces.
@@ -18,6 +20,8 @@ All notable changes to this project will be documented in this file.
 - **Windows Autopilot evidence parser outside ESP (#362 / #450)**: Standalone Autopilot snapshot/outcome/phase model with ESP-linkage correlation, evidence-backed findings, and a 15-scenario fixture matrix, independent of the ESP Diagnostics workspace.
 - **Company Portal Windows LocalState logs (#366 / #460)**: Parse `%LOCALAPPDATA%\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` and sibling bridge logs, version-scoped to the single published Company Portal 12-0-0 record with confidence downgraded for unverified app versions.
 - **Microsoft Store app evidence lane (#358 / #518)**: UWP user-context, provisioned UWP, and Store Win32 installer families for Intune app deployments, with coverage states, evidence-backed findings, and 17 synthetic fixtures.
+- **Win32 app deployment transactions (#357 / #525)**: Reduce Intune Win32 app deployment logs into install, detection, retry, and reboot transactions with evidence-backed findings that fail closed when a phase has no record.
+- **Windows configuration policy evidence (#363 / #526)**: Model configuration policy retrieval, evaluation, and application evidence for Intune-managed Windows devices, including conflict handling and coverage states.
 
 ### Changed
 
@@ -28,6 +32,8 @@ All notable changes to this project will be documented in this file.
 - **Agent / contributor docs (#448)**: Expand agent-facing repository guidance for multi-lane SCCM and Intune work.
 - **Reducer Framework v1 governance (#519)**: Establish the architecture, ADRs (evidence strength/confidence, identity correlation, chronology terminal precedence, redaction scope), and contract/adversary/integration charters that govern how evidence-folding reducer modules—including the Microsoft Store lane and Autopilot parser above—are designed and reviewed.
 - **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions.
+- **Win32 and Store redaction grammar (#357 / #533)**: Extend the shared Intune redaction grammar so the Win32 deployment and Microsoft Store lanes mask every identity shape they can emit, including SIDs, tenant domains, and device names.
+- **Agent-driven development orchestration (#570)**: Add the OMP orchestration layer that turns an issue into a worktree lane, a RED-first proposal, exact gates, and a draft pull request, with staff roles bounded to read-only proposals and Main as the only writer.
 
 ### Fixed
 
@@ -43,10 +49,16 @@ All notable changes to this project will be documented in this file.
 - **SCCM server coverage topology (#455)**: Keep producer-host and workflow-subject handles on coverage rows so distinct physical producers do not collapse; reject incongruent topology instead of inventing results.
 - **Bounded discovery coverage (#454)**: Preserve correctness of bounded discovery coverage under partial native capture.
 - **Rust 1.97 hierarchy lint**: Satisfy newer compiler hierarchy lints in SCCM hierarchy modules.
+- **ESP session export redaction (#549 / #558)**: Bind the ESP session export to a redacting crate boundary so an unredacted snapshot can no longer be written to a user-chosen file.
+- **Intune Compliance export redaction (#546)**: Stop the Compliance lane exporting unmasked SIDs and eight other identity shapes.
+- **Intune Compliance reducer determinism (#545)**: Make the Compliance reducer independent of caller order so the same records fold to the same verdict regardless of arrival order.
+- **Store and Autopilot reducer hardening (#531 / #532)**: Apply the Framework v1 review discipline to the merged Store and Autopilot lanes, including conflict handling over redacted tokens.
+- **MSI `DISABLEUPDATECHECKS=1` rollback (#576)**: The installer custom action writes the HKLM update policy through the 64-bit `reg.exe` in `System32`, so the property no longer aborts and rolls back the install under Constrained Language Mode.
+- **Nightly and shipping channel lockstep (#587)**: Bump the frontend, Tauri, and `cmtrace-open` crate versions to the shipped release so a nightly build cannot brand itself older than stable.
 
 ### Build & CI
 
-- **Scoop bucket (#446)**: Bump Scoop manifest packaging to 1.5.1.
+- **Package-manager manifests (#446 / #587)**: Keep the Scoop bucket, Winget locale metadata, and Homebrew cask pointing at the assets that are actually published, including the rebuilt 1.5.2 installers whose digests had drifted.
 - **chrono floor (#501 / #417)**: Raise the `chrono` dependency floor to 0.4.35 so parser code that needs newer APIs is honest about the minimum version.
 - **GitHub Actions**: Updated `actions/checkout` 4 → 7, `actions/github-script` 7.1.0 → 9.0.0, and `taiki-e/install-action` 2.85.2 → 2.85.5.
 - **Rust crates**: Updated `libc` 0.2.185 → 0.2.189, `tokio` 1.52.1 → 1.53.1, `ureq` 3.2.0 → 3.3.0, and `zip` 4.2.0 → 8.6.0.
@@ -54,6 +66,15 @@ All notable changes to this project will be documented in this file.
 - **Rust crates**: Updated `quick-xml` 0.38.4 → 0.41.0 (#471) and `time` 0.3.54 → 0.3.55 (#515).
 - **GitHub Actions**: Updated `taiki-e/install-action` 2.85.5 → 2.85.7 (#514).
 - **Funding**: Added a GitHub Sponsors link to `.github/FUNDING.yml`.
+- **Release pipeline (#566 / #567 / #568 / #569)**: Build every platform from a tag, carry the download shortlinks into the release notes, and publish `latest.json` from the release's own `.sig` assets through a single writer, so a platform that uploads first can no longer clobber the manifest.
+- **Dependency pull-request review**: CodeRabbit now reviews dependency pull requests instead of ignoring Dependabot, and the download-metrics link checks follow the release workflows.
+- **Dependencies**: Routine updates across the workspace, including `quick-xml` 0.38.4 → 0.41.0, `getrandom` 0.3.4 → 0.4.3, `thiserror` 2.0.20, `uuid` 1.24.1, Vite and frontend development-dependency groups, `taiki-e/install-action` 2.85.10 → 2.87.2, and `actions/attest-build-provenance` 4.1.1 → 4.2.2.
+
+## [1.5.2] - 2026-08-11
+
+### Fixed
+
+- **Windows clipboard history (#520 / #521)**: Info-pane copies now register in Windows clipboard history (Win+V), and Ctrl+C preserves a selected text range instead of copying the entire log entry.
 
 ## [1.5.1] - 2026-08-02
 
