@@ -64,15 +64,25 @@
 //! text — and changing that derivation would change every lane's tokens, so it
 //! is the grammar owner's call rather than something to fork here.
 //!
+//! Two spellings are one identity when the shared caseless comparison says so:
+//! equal after lowercasing, or after uppercasing (which is what bridges `Σ` and
+//! Greek's final `ς`), or one side writes out the other's case mapping (`İ`
+//! against `i` plus U+0307). What that deliberately does not reach is a pair
+//! whose case mapping changes length (`ß` against `SS`, the `ﬀ`-style
+//! ligatures), or a difference that is normalization rather than case (`é`
+//! against `e` plus U+0301). Those need a folding or normalization table, which
+//! this crate does not depend on; the limit is pinned by a test rather than
+//! left to be assumed.
+//!
 //! Ruling 2 requires the derivation to be keyed per analysis and Ruling 4
 //! forbids a scope the caller did not supply; neither is implemented for any
 //! lane yet, and this lane adopts the one shared derivation rather than minting
 //! a fifth (Ruling 5). A lane that forked the derivation would keep the unkeyed
 //! one, and the fix would not reach it.
 
-use std::collections::BTreeSet;
-
-use crate::intune::apps::windows::common::{redact_field_value, redact_text};
+use crate::intune::apps::windows::common::{
+    caseless_equal, caseless_match_end, redact_field_value, redact_text,
+};
 use crate::intune::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
     EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, IntuneTimestampBounds,
@@ -113,20 +123,18 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// replaces it.
 ///
 /// Built from the unprojected analysis and then applied to it, so a literal is
-/// known before any free-text field is scrubbed. The literal is kept exactly as
-/// the field carried it, and matching is case-insensitive over the original
-/// string: folding first and matching on the folded copy would be wrong for two
-/// reasons — ASCII-only folding misses a literal whose letters are not ASCII
-/// entirely, and full folding changes byte length for some characters (`İ`
-/// lowers to two code points), so an offset into the folded copy would not
-/// address the same text as the original.
+/// known before any free-text field is scrubbed. The table is the single source
+/// of tokens: a typed field asks it for the token of the identity it holds rather
+/// than minting a second one, and membership is decided by the shared
+/// caseless comparison, so the table can never hold two entries that the
+/// scrubber would treat as one identity — including spellings that differ by
+/// case in a way only one of the two folds bridges (`Σ` against final `ς`) or
+/// that write a case mapping out (`İ` against `i` plus U+0307).
 #[derive(Default)]
 struct IdentityLiterals {
     /// Literal as classified, paired with its token, longest literal first so a
     /// literal that sits inside a longer one cannot cut the longer one in half.
     values: Vec<(String, String)>,
-    /// Folded literals already classified, so one value is classified once.
-    seen: BTreeSet<String>,
 }
 
 impl IdentityLiterals {
@@ -142,7 +150,11 @@ impl IdentityLiterals {
         // second spelling of an identity already classified cannot reach a
         // second token.
         let canonical = canonical_identity(literal);
-        if !self.seen.insert(canonical.clone()) {
+        if self
+            .values
+            .iter()
+            .any(|(classified, _)| caseless_equal(classified, &canonical))
+        {
             return;
         }
 
@@ -154,6 +166,17 @@ impl IdentityLiterals {
                 .cmp(&left.0.len())
                 .then_with(|| left.0.cmp(&right.0))
         });
+    }
+
+    /// The token this identity already reached, when it is one of the classified
+    /// ones. Caseless-equal spellings are one identity, so they all reach the
+    /// token the table minted for the first of them.
+    fn token_for(&self, value: &str) -> Option<&str> {
+        let canonical = canonical_identity(value);
+        self.values
+            .iter()
+            .find(|(classified, _)| caseless_equal(classified, &canonical))
+            .map(|(_, token)| token.as_str())
     }
 
     /// Replace every occurrence of a classified literal, whatever its case.
@@ -193,52 +216,12 @@ impl IdentityLiterals {
         for (offset, _) in haystack[cursor..].char_indices() {
             let start = cursor + offset;
             for (literal, token) in &self.values {
-                if let Some(end) = match_end_ignoring_case(haystack, start, literal) {
+                if let Some(end) = caseless_match_end(haystack, start, literal) {
                     return Some((start, end, token.as_str()));
                 }
             }
         }
         None
-    }
-}
-
-/// The byte offset in `haystack` just past `literal`, when the text at `start`
-/// begins with that literal in any case.
-fn match_end_ignoring_case(haystack: &str, start: usize, literal: &str) -> Option<usize> {
-    let mut end = start;
-    let mut haystack_chars = haystack[start..].chars();
-
-    for literal_char in literal.chars() {
-        let haystack_char = haystack_chars.next()?;
-        if !equal_ignoring_case(haystack_char, literal_char) {
-            return None;
-        }
-        end += haystack_char.len_utf8();
-    }
-
-    Some(end)
-}
-
-/// Whether two characters are the same letter in either case, for any script.
-fn equal_ignoring_case(left: char, right: char) -> bool {
-    if left == right {
-        return true;
-    }
-
-    if left.is_ascii() && right.is_ascii() {
-        return left.eq_ignore_ascii_case(&right);
-    }
-
-    // Full Unicode without allocating: compare the lowercase expansions, which
-    // can be more than one character (`İ` lowers to `i` plus a combining dot).
-    let mut left_lower = left.to_lowercase();
-    let mut right_lower = right.to_lowercase();
-    loop {
-        match (left_lower.next(), right_lower.next()) {
-            (None, None) => return true,
-            (Some(left_char), Some(right_char)) if left_char == right_char => {}
-            _ => return false,
-        }
     }
 }
 
@@ -299,8 +282,17 @@ impl Projection {
 
     /// An identity field: masked whole, because the field's meaning is what
     /// makes the value an identifier rather than anything in the value.
+    ///
+    /// The table is asked first. It decided this identity's token when the
+    /// classification was collected, and the narrative scrub will use that same
+    /// token, so minting a second one here would be the one way left for a field
+    /// and a prose mention of one identity to disagree. A value the table does
+    /// not hold is one below the scrub floor, and it mints its own.
     fn identity(&self, value: &Option<String>, kind: &str) -> Option<String> {
-        value.as_deref().map(|value| identity_token(value, kind))
+        value.as_deref().map(|value| match self.literals.token_for(value) {
+            Some(token) => token.to_string(),
+            None => identity_token(value, kind),
+        })
     }
 }
 
@@ -861,8 +853,14 @@ fn collect_event_log_into(analysis: &EventLogAnalysis, literals: &mut IdentityLi
 #[cfg(test)]
 mod tests {
     use super::{
-        super::{analyze_text, analyze_text_preserving_local_values, models::DsregcmdAnalysisResult},
+        super::{
+            analyze_text, analyze_text_preserving_local_values, analyze_text_with_evidence,
+            models::{DsregcmdAnalysisResult, DsregcmdBundleEvidence},
+        },
         redacted_status_text,
+    };
+    use crate::intune::models::{
+        EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
     };
 
     /// A capture carrying one identifier of every class this projection masks.
@@ -1013,7 +1011,7 @@ mod tests {
                        Server Message : retry against ÉLODIE.Example failed\n";
         let published = json(&analyze_text(capture).expect("parses"));
 
-        let tokens = tenant_tokens(&published);
+        let tokens = tokens_of_kind(&published, "tenant");
         assert_eq!(
             tokens.len(),
             3,
@@ -1025,12 +1023,147 @@ mod tests {
         );
     }
 
-    /// Every `[tenant:…]` token in a serialized analysis, in order.
-    fn tenant_tokens(published: &str) -> Vec<&str> {
+    /// `ΣΟΦΟΥΣ.Example` in capitals: `Σ` U+03A3, `Ο` U+039F, `Φ` U+03A6,
+    /// `Υ` U+03A5, and a final `Σ` U+03A3 that the narrative renders as `ς`.
+    const CAPITAL_SIGMA_IDENTITY: &str =
+        "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
+
+    /// The same name written in lower case with Greek's final sigma: it ends in
+    /// `ς` U+03C2, which lowercasing `Σ` never produces.
+    const FINAL_SIGMA_NARRATIVE: &str =
+        "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
+
+    /// `Σ` and final `ς` are caseless-equal, but they are two different
+    /// lowercase letters, so a comparison that only folds down keeps them apart
+    /// and the narrative spelling of the identity survives.
+    #[test]
+    fn a_final_sigma_narrative_reaches_the_capital_sigma_token() {
+        let capture = format!(
+            " TenantName : {CAPITAL_SIGMA_IDENTITY}\n \
+               Server Message : discovery failed for {FINAL_SIGMA_NARRATIVE}\n"
+        );
+        let projected = redacted_status_text(&capture);
+
+        assert!(
+            !projected.contains(CAPITAL_SIGMA_IDENTITY)
+                && !projected.contains(FINAL_SIGMA_NARRATIVE),
+            "a sigma spelling of one identity survived: {projected:?}"
+        );
+        let tokens = tokens_of_kind(&projected, "tenant");
+        assert_eq!(
+            tokens.len(),
+            2,
+            "expected both spellings at the typed token: {projected:?}"
+        );
+        assert!(
+            tokens.iter().all(|token| *token == tokens[0]),
+            "one identity reached more than one token: {tokens:?}"
+        );
+    }
+
+    /// `İSTANBUL-PC` with the precomposed dotted capital I, which is U+0130.
+    const DOTTED_CAPITAL_IDENTITY: &str = "\u{130}STANBUL-PC";
+
+    /// The same name written with the capital I intact but lower case: `İ` then
+    /// `stanbul-pc`. This is the spelling the identity's own lowercasing does not
+    /// produce, so matching it needs the precomposed character understood as the
+    /// sequence its case mapping stands for.
+    const PRECOMPOSED_NARRATIVE: &str = "\u{130}stanbul-pc";
+
+    /// The same name with that character's decomposition written out: `i`
+    /// followed by U+0307, which is what lowercasing U+0130 produces.
+    const DECOMPOSED_NARRATIVE: &str = "i\u{307}stanbul-pc";
+
+    /// A character whose case mapping is a sequence must match the other side
+    /// spelling that sequence out, in either direction, or the precomposed and
+    /// decomposed spellings of one identity are two identities to this
+    /// projection. A device name is where this lane meets a value like
+    /// `İSTANBUL-PC`: the computer an event log record was written on, and the
+    /// same name spelled inside the record's message.
+    #[test]
+    fn a_dotted_capital_i_reaches_one_token_whichever_way_it_is_spelled() {
+        let events = EventLogAnalysis {
+            source_kind: EventLogAnalysisSource::Live,
+            entries: vec![EventLogEntry {
+                id: 1,
+                channel: EventLogChannel::AadOperational,
+                channel_display: "AAD Operational".to_string(),
+                provider: "Microsoft-Windows-AAD".to_string(),
+                event_id: 1103,
+                severity: EventLogSeverity::Error,
+                timestamp: "2026-08-26T09:15:00Z".to_string(),
+                computer: Some(DOTTED_CAPITAL_IDENTITY.to_string()),
+                message: format!(
+                    "registration failed on {PRECOMPOSED_NARRATIVE} and again on {DECOMPOSED_NARRATIVE}"
+                ),
+                correlation_activity_id: None,
+                source_file: "AAD.evtx".to_string(),
+            }],
+            ..EventLogAnalysis::default()
+        };
+        let evidence = DsregcmdBundleEvidence {
+            event_log_analysis: Some(events),
+            ..DsregcmdBundleEvidence::default()
+        };
+        let published = {
+            let analysis = analyze_text_with_evidence(IDENTITY_CAPTURE, evidence)
+                .expect("the dsregcmd capture analyzes");
+            serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
+        };
+
+        assert!(
+            !published.contains(DOTTED_CAPITAL_IDENTITY)
+                && !published.contains(PRECOMPOSED_NARRATIVE)
+                && !published.contains(DECOMPOSED_NARRATIVE),
+            "a dotted-I spelling of one identity survived: {published}"
+        );
+        let tokens = tokens_of_kind(&published, "host");
+        assert_eq!(
+            tokens.len(),
+            3,
+            "expected the typed host and both message spellings masked: {published}"
+        );
+        assert!(
+            tokens.iter().all(|token| *token == tokens[0]),
+            "one identity reached more than one token: {tokens:?}"
+        );
+    }
+
+    /// The boundary of the rule above, asserted rather than assumed.
+    ///
+    /// A pair only bridges when the case mapping of one side spells the other
+    /// out. `ß` (U+00DF) and `SS` do not: one character cannot be matched
+    /// against two, and `ß`'s uppercase is `SS` while `S`'s is `S`, so neither
+    /// the character comparison nor the mapping consumption reaches it. The
+    /// same holds for the `ﬀ`-style ligatures and for text that differs by
+    /// normalization rather than by case (`é` written as `e` plus U+0301).
+    /// Closing those needs a case folding or normalization table — a dependency
+    /// this crate does not have and should not acquire for this — so the
+    /// limitation is pinned here instead of being implied.
+    #[test]
+    fn a_length_changing_case_pair_stays_out_of_reach() {
+        let capture = " TenantName : Straße.Example\n \
+                       Server Message : retry against strasse.example failed\n";
+        let projected = redacted_status_text(capture);
+
+        assert!(
+            !projected.contains("Straße.Example"),
+            "the typed field itself must still be masked: {projected:?}"
+        );
+        assert!(
+            projected.contains("strasse.example"),
+            "this pair is covered after all; the limitation note and this test need updating: {projected:?}"
+        );
+    }
+
+    /// Every `[kind:…]` token in a serialized analysis, in order.
+    fn tokens_of_kind(published: &str, kind: &str) -> Vec<String> {
+        let marker = format!("[{kind}:");
         published
-            .split("[tenant:")
+            .split(marker.as_str())
             .skip(1)
             .filter_map(|rest| rest.split(']').next())
+            .map(str::to_string)
             .collect()
     }
 
