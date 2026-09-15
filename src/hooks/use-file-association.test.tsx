@@ -137,6 +137,10 @@ describe("useFileAssociation launch intent routing", () => {
     getInitialFilePathsMock.mockResolvedValue([]);
     getInitialWorkspaceMock.mockResolvedValue(null);
     getInitialElevationRestoreMock.mockResolvedValue(null);
+    // Reset rather than clear: these tests queue one response per claim, and
+    // clearAllMocks keeps a leftover queue that would answer the next test's
+    // first claim.
+    takeSecondLaunchPathsMock.mockReset();
     takeSecondLaunchPathsMock.mockResolvedValue([]);
     loadPathAsLogSourceMock.mockImplementation(async (path) => ({
       source: { kind: "file", path },
@@ -645,18 +649,16 @@ describe("useFileAssociation launch intent routing", () => {
     await waitFor(() =>
       expect(loadPathAsLogSourceMock).toHaveBeenCalledOnce(),
     );
-    await waitFor(() =>
-      expect(takeSecondLaunchPathsMock).toHaveBeenCalledOnce(),
-    );
 
     // The startup launch's file is still parsing when the second launch lands.
     announceSecondLaunch();
-    // Drain everything already scheduled, so work started alongside the startup
-    // open would have to show up here.
+    // Drain everything already scheduled. The startup slot is held until its
+    // file is open, so the forwarded claim has not even been made yet.
     const drained = deferred<void>();
     setTimeout(() => drained.resolve(), 0);
     await drained.promise;
 
+    expect(takeSecondLaunchPathsMock).not.toHaveBeenCalled();
     expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
 
     startupOpen.resolve();
@@ -668,6 +670,58 @@ describe("useFileAssociation launch intent routing", () => {
     // for the open already in flight instead of superseding it.
     expect(order).toEqual(["C:\\Logs\\startup.log", "C:\\Logs\\forwarded.log"]);
     expect(peakInFlight).toBe(1);
+  });
+
+  it("reserves the startup slot before a forwarded launch can take it", async () => {
+    const order: string[] = [];
+    const startupReads = deferred<string[]>();
+    const startupOpen = deferred<void>();
+
+    // The startup launch's reads are still in flight when the second launch
+    // arrives: the forwarded open must not start ahead of the startup open.
+    getInitialFilePathsMock.mockReturnValue(startupReads.promise);
+    loadPathAsLogSourceMock.mockImplementation(async (path: string) => {
+      await startupOpen.promise;
+      order.push(path);
+      return {
+        source: { kind: "file", path },
+        entries: [],
+        selectedFilePath: null,
+        parseResult: null,
+      };
+    });
+    openPathForActiveWorkspaceMock.mockImplementation(async (path: string) => {
+      order.push(path);
+    });
+    takeSecondLaunchPathsMock
+      .mockResolvedValueOnce([]) // what is waiting when the window mounts
+      .mockResolvedValueOnce(["C:\\Logs\\forwarded.log"]);
+
+    renderHook(() => useFileAssociation());
+    await waitFor(() => expect(eventListenMock).toHaveBeenCalledOnce());
+
+    announceSecondLaunch();
+    // Drain everything scheduled while the reads are pending: the forwarded
+    // launch has to wait for the startup slot, not run beside it.
+    const drained = deferred<void>();
+    setTimeout(() => drained.resolve(), 0);
+    await drained.promise;
+
+    expect(takeSecondLaunchPathsMock).not.toHaveBeenCalled();
+    expect(openPathForActiveWorkspaceMock).not.toHaveBeenCalled();
+
+    startupReads.resolve(["C:\\Logs\\startup.log"]);
+    await waitFor(() =>
+      expect(loadPathAsLogSourceMock).toHaveBeenCalledOnce(),
+    );
+    startupOpen.resolve();
+
+    await waitFor(() =>
+      expect(openPathForActiveWorkspaceMock).toHaveBeenCalledOnce(),
+    );
+    // Startup opens first, and the forwarded launch follows it rather than
+    // being superseded by it.
+    expect(order).toEqual(["C:\\Logs\\startup.log", "C:\\Logs\\forwarded.log"]);
   });
 
   it("still opens the next launch when a claim fails", async () => {

@@ -136,55 +136,57 @@ export function useFileAssociation() {
   }, [enqueueLaunchOpens, openPathForActiveWorkspace]);
 
   useEffect(() => {
-    Promise.all([
-      getInitialFilePaths(),
-      getInitialWorkspace(),
-      getInitialElevationRestore().catch((error) => {
-        // A restore that cannot even be read must not stop the app starting.
-        console.warn("[elevation] unable to read the restore ticket", {
-          error,
-        });
-        return null;
-      }),
-    ])
-      .then(async ([paths, workspace, ticket]) => {
-        if (paths.length > 0) {
-          await enqueueLaunchOpens(() => openLaunchPaths(paths, clearFilter));
-          return;
-        }
+    // The startup slot is reserved in the queue immediately, with its reads
+    // inside it. The reads take time, and a forwarded launch that arrives
+    // meanwhile is an open too: queuing the reads outside the slot would let the
+    // forwarded open start first and then be superseded by the startup one.
+    void enqueueLaunchOpens(async () => {
+      const [paths, workspace, ticket] = await Promise.all([
+        getInitialFilePaths(),
+        getInitialWorkspace(),
+        getInitialElevationRestore().catch((error) => {
+          // A restore that cannot even be read must not stop the app starting.
+          console.warn("[elevation] unable to read the restore ticket", {
+            error,
+          });
+          return null;
+        }),
+      ]);
 
-        if (ticket) {
-          // Mark here, not on ticket arrival: a positional file association wins
-          // the precedence contest above and returns without restoring, and
-          // latching the loop guard for a restore that never ran would suppress
-          // legitimate elevation offers for the rest of the session.
-          //
-          // Marked before restoring, so a restored source that is still denied
-          // offers troubleshooting rather than a second prompt. Read from the
-          // ticket so the guard has one source of truth.
-          if (ticket.retryAttempted) {
-            markElevationRetryAttempted();
-          }
-          // Queued for the same reason as the file branch: a restored source is
-          // an open, and an open started beside it would supersede it.
-          await enqueueLaunchOpens(() =>
-            restoreElevatedSource(ticket, clearFilter),
-          );
-          return;
-        }
+      if (paths.length > 0) {
+        await openLaunchPaths(paths, clearFilter);
+        return;
+      }
 
-        if (workspace) {
-          useUiStore
-            .getState()
-            .ensureWorkspaceVisible(workspace, "startup.workspace");
+      if (ticket) {
+        // Mark here, not on ticket arrival: a positional file association wins
+        // the precedence contest above and returns without restoring, and
+        // latching the loop guard for a restore that never ran would suppress
+        // legitimate elevation offers for the rest of the session.
+        //
+        // Marked before restoring, so a restored source that is still denied
+        // offers troubleshooting rather than a second prompt. Read from the
+        // ticket so the guard has one source of truth.
+        if (ticket.retryAttempted) {
+          markElevationRetryAttempted();
         }
-      })
-      .catch((error) => {
-        // Covers all three launch intents, not just file association: a restore
-        // ticket that failed to reopen is exactly the case someone is
-        // troubleshooting when they read this line.
-        console.error("[startup] failed to handle launch intent", { error });
-      });
+        // The restore opens a source, so it stays in the startup slot for the
+        // same reason the file branch does.
+        await restoreElevatedSource(ticket, clearFilter);
+        return;
+      }
+
+      if (workspace) {
+        useUiStore
+          .getState()
+          .ensureWorkspaceVisible(workspace, "startup.workspace");
+      }
+    }).catch((error) => {
+      // Covers all three launch intents, not just file association: a restore
+      // ticket that failed to reopen is exactly the case someone is
+      // troubleshooting when they read this line.
+      console.error("[startup] failed to handle launch intent", { error });
+    });
   }, [clearFilter, enqueueLaunchOpens]);
 
   // A second launch opens its files in this window. The paths go through the
