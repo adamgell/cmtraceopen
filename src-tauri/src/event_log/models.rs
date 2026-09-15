@@ -229,12 +229,46 @@ impl EvtxLevel {
     }
 }
 
+/// What the Event Log service reports about a channel's configuration.
+///
+/// A channel that is switched off holds no events and the service refuses to read it, so asking
+/// anyway produced a coverage-gap line per disabled channel: the machine those lines came from
+/// carries 85 of them, and each line described the machine's configuration rather than anything
+/// missing from the view.
+///
+/// `Unknown` is not a third answer to that question but the absence of one: the configuration could
+/// not be opened or read, the channel has no configuration the service will answer for, or the
+/// answer came from a path that never asked. It must never be read as `Disabled`, because that is
+/// the state that removes a channel from the selection and from the initial load, and a channel
+/// whose configuration could not be read is exactly the channel whose events must not be dropped
+/// from the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelEnabledState {
+    /// The service confirmed the channel is recording.
+    Enabled,
+    /// The service confirmed the channel is switched off.
+    Disabled,
+    /// The service did not report the channel's configuration.
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvtxChannelInfo {
     pub name: String,
     pub event_count: u64,
     pub source_type: ChannelSourceType,
+    /// Whether the service reports the channel as recording.
+    ///
+    /// Defaulted to `Unknown`, never to `Enabled`: a payload that omits this field -- an older
+    /// capture, or an enumeration that could not probe -- must not claim the channel is recording.
+    /// The behaviour of the two is deliberately identical (listed, selected, acquired, because a
+    /// probe that failed must never hide a channel that may be readable); what differs is the claim
+    /// made about the machine, which is the whole reason the three states are kept apart.
+    #[serde(default)]
+    pub enabled_state: ChannelEnabledState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

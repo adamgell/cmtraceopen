@@ -457,7 +457,11 @@ function isEvtxChannelInfoResponse(value: unknown): value is EvtxChannelInfo {
     isCommandRecord(value) &&
     typeof value.name === "string" &&
     isNonNegativeCommandCount(value.eventCount) &&
-    isEvtxChannelSourceType(value.sourceType)
+    isEvtxChannelSourceType(value.sourceType) &&
+    (value.enabledState === undefined ||
+      value.enabledState === "enabled" ||
+      value.enabledState === "disabled" ||
+      value.enabledState === "unknown")
   );
 }
 function assertEvtxRecordArray(

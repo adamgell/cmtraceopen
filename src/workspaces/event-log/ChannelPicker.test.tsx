@@ -6,12 +6,13 @@
  * otherwise ask for it and collect a refusal as a coverage gap. It stays listed: an operator
  * looking for a channel has to find it, and "not recording" is what they need to know about it.
  *
- * The state travels as `enabled` on the channel DTO in the change these tests describe. It is
- * written here through a local alias so the RED tests typecheck against the tree before it exists.
+ * The state travels as `enabledState` on the channel DTO in the change these tests describe, as one
+ * of three named states rather than a flag. It is written here through a local alias until the DTO
+ * carries it.
  */
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EvtxChannelInfo } from "./types";
+import type { EvtxChannelEnabledState, EvtxChannelInfo } from "./types";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -22,14 +23,12 @@ vi.mock("@tauri-apps/api/event", () => ({
 const { useEvtxStore } = await import("./evtx-store");
 const { ChannelPicker } = await import("./ChannelPicker");
 
-type ChannelRecordingState = { enabled?: boolean };
-
 function channel(
   name: string,
-  state: ChannelRecordingState = {},
+  enabledState: EvtxChannelEnabledState,
   eventCount = 0
 ): EvtxChannelInfo {
-  return { name, eventCount, sourceType: "live" as const, ...state } as EvtxChannelInfo;
+  return { name, eventCount, sourceType: "live", enabledState };
 }
 
 /** The service tree is collapsed by default, so a non-Windows-Logs channel has to be revealed. */
@@ -43,14 +42,18 @@ function rowFor(name: string): HTMLElement {
   return screen.getByText(name).closest("label") as HTMLElement;
 }
 
+function checkboxFor(name: string): HTMLElement {
+  return within(rowFor(name)).getByRole("checkbox");
+}
+
 describe("channels the service reports as switched off", () => {
   beforeEach(() => {
     useEvtxStore.setState({
       records: [],
       channels: [
-        channel("Application", { enabled: true }, 152),
-        channel("AirSpaceChannel", { enabled: false }),
-        channel("UnprobedChannel"),
+        channel("Application", "enabled", 152),
+        channel("AirSpaceChannel", "disabled"),
+        channel("UnprobedChannel", "unknown"),
       ],
       selectedChannels: new Set<string>(),
       loadedChannels: new Set<string>(),
@@ -62,24 +65,44 @@ describe("channels the service reports as switched off", () => {
     });
   });
 
-  it("keeps a switched-off channel listed and says why it will not be read", () => {
+  it("lists a switched-off channel and marks it as such", () => {
+    // Listed and marked rather than hidden: the channel exists on the machine, it is simply not
+    // recording, and that is why the bulk paths leave it out. Nothing in it is missing from the
+    // view, so it is not a hole in the view.
     render(<ChannelPicker />);
     revealServiceChannels();
 
-    const row = rowFor("AirSpaceChannel");
-    expect(row).toHaveTextContent("AirSpaceChannel");
-    expect(within(row).getByText("disabled")).toBeInTheDocument();
+    expect(rowFor("AirSpaceChannel")).toHaveTextContent("disabled");
   });
 
-  it("does not mark a channel whose recording state could not be read", () => {
-    // Only the service saying "switched off" earns the mark. A probe that failed says nothing about
-    // the channel, and calling it disabled would hide a live channel from the operator.
+  it("does not offer a switched-off channel for selection", () => {
+    // Its own control cannot select it either. Offering the control and then refusing the
+    // selection in the store would leave a checkbox that does nothing.
     render(<ChannelPicker />);
     revealServiceChannels();
 
-    expect(within(rowFor("UnprobedChannel")).queryByText("disabled")).toBeNull();
-    expect(screen.getAllByText("disabled")).toHaveLength(1);
-    expect(rowFor("AirSpaceChannel")).toHaveTextContent("disabled");
+    const switchedOff = checkboxFor("AirSpaceChannel");
+    expect(switchedOff).toBeDisabled();
+
+    fireEvent.click(switchedOff);
+
+    expect(useEvtxStore.getState().selectedChannels.has("AirSpaceChannel")).toBe(false);
+  });
+
+  it("refuses only the channel the service reported as switched off", () => {
+    // Fail open at the surface too. Only the service saying "switched off" earns the mark and the
+    // refused control; an unreadable configuration says nothing, and treating that silence as
+    // "switched off" would hide a live channel from the operator. Asserted through what the
+    // controls do, so a rule written as "not known to be recording" fails here.
+    render(<ChannelPicker />);
+    revealServiceChannels();
+
+    expect(rowFor("UnprobedChannel")).not.toHaveTextContent("disabled");
+
+    fireEvent.click(checkboxFor("UnprobedChannel"));
+    fireEvent.click(checkboxFor("AirSpaceChannel"));
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["UnprobedChannel"]);
   });
 
   it("leaves a switched-off channel out of Select all", () => {
@@ -91,16 +114,5 @@ describe("channels the service reports as switched off", () => {
       "Application",
       "UnprobedChannel",
     ]);
-  });
-
-  it("does not offer a switched-off channel for selection", () => {
-    render(<ChannelPicker />);
-    revealServiceChannels();
-
-    const switchedOff = within(rowFor("AirSpaceChannel")).getByRole("checkbox");
-    expect(switchedOff).toBeDisabled();
-
-    fireEvent.click(switchedOff);
-    expect(useEvtxStore.getState().selectedChannels.has("AirSpaceChannel")).toBe(false);
   });
 });

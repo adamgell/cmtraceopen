@@ -1,5 +1,8 @@
 #[cfg(not(target_os = "windows"))]
 use super::models::EvtxLiveMode;
+// Named only by the Windows query path, which is where these channel entries are built.
+#[cfg(target_os = "windows")]
+use super::models::ChannelEnabledState;
 use super::models::{
     EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxCoverageGap, EvtxCoverageGapKind,
     EvtxParseResult, EvtxTailStatus, MAX_SAFE_EVENT_RECORD_ID,
@@ -362,6 +365,10 @@ async fn query_channels_impl(
                             name: channel.clone(),
                             event_count: scan.delivered as u64,
                             source_type: source_type.clone(),
+                            // It was read, so it exists and is recording. A channel that is switched
+                            // off is refused by the service, which is why this is proof of the one
+                            // and not of the other.
+                            enabled_state: ChannelEnabledState::Enabled,
                         });
                         streamed += scan.delivered;
                         aggregation.absorb_scan(&coverage_source, scan);
@@ -384,6 +391,9 @@ async fn query_channels_impl(
                             name: channel,
                             event_count: 0,
                             source_type: source_type.clone(),
+                            // A refusal says nothing about the channel's configuration, so it is not
+                            // reported as switched off. The refusal itself is the gap.
+                            enabled_state: ChannelEnabledState::Unknown,
                         });
                         aggregation.parse_errors = aggregation.parse_errors.saturating_add(1);
                     }

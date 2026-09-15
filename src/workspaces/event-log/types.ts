@@ -56,10 +56,26 @@ export interface EvtxField {
 
 export type EvtxLevel = "Critical" | "Error" | "Warning" | "Information" | "Verbose";
 
+/**
+ * What the Event Log service reports about a channel's configuration.
+ *
+ * `unknown` is not a third answer but the absence of one: the configuration could not be read, the
+ * channel has no configuration the service will answer for, or nothing asked. It is fail-open --
+ * a channel whose configuration could not be read is still listed, selected and acquired -- because
+ * the alternative is hiding a channel that may be perfectly readable. It must never be read as
+ * `disabled`, which is the state that removes a channel from the bulk paths.
+ */
+export type EvtxChannelEnabledState = "enabled" | "disabled" | "unknown";
+
 export interface EvtxChannelInfo {
   name: string;
   eventCount: number;
   sourceType: "live" | { remote: { machine: string } } | { file: { path: string } };
+  /**
+   * Absent means `unknown`, mirroring the backend's default for a payload that omits it. Read it
+   * through `channelCanHoldEvents` rather than directly, so the three states stay distinguished.
+   */
+  enabledState?: EvtxChannelEnabledState;
 }
 
 export type EvtxCoverageGapKind =

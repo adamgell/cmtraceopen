@@ -601,6 +601,28 @@ export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
 export type EvtxSortDirection = "asc" | "desc";
 
+/**
+ * Whether a channel may be acquired, and therefore whether it belongs in the bulk selection.
+ *
+ * Only the service reporting a channel as switched off excludes it. A channel that is not recording
+ * holds nothing the service will let us read, so asking for it buys a coverage-gap line that
+ * describes the machine's configuration rather than anything missing from the view; on the machine
+ * those lines came from that is 85 of 517 enumerated channels. `unknown` is acquired, because the
+ * only alternative is hiding a channel whose configuration could not be read.
+ */
+export function channelCanHoldEvents(channel: EvtxChannelInfo): boolean {
+  // Every state named, with absence read as `unknown`. Deliberately not a truthiness test: written
+  // as `if (channel.enabledState)` the two states that are not "switched off" collapse together,
+  // and `unknown` -- the answer a failed probe gives -- would read as a reason to hide the channel.
+  switch (channel.enabledState ?? "unknown") {
+    case "enabled":
+    case "unknown":
+      return true;
+    case "disabled":
+      return false;
+  }
+}
+
 
 /**
  * Builds the filter handed to the backend, which compiles it to XPath.
@@ -1021,9 +1043,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
 
       // Step 2: Auto-query the core Windows Logs channels immediately
       const coreChannels = ["Application", "System", "Security", "Setup"];
-      const availableCore = coreChannels.filter((c) =>
-        channels.some((ch) => ch.name === c)
-      );
+      // A switched-off core channel is not acquired: the service refuses it, and every refusal was
+      // reported as a coverage gap even though there was nothing in the channel to read. An unknown
+      // one still is.
+      const availableCore = coreChannels.filter((c) => {
+        const info = channels.find((ch) => ch.name === c);
+        return info !== undefined && channelCanHoldEvents(info);
+      });
       let updatedChannels = channels;
       let loadError: string | null = null;
       const emptyRemoteGaps =
@@ -1934,13 +1960,26 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
     if (next.has(channel)) {
       next.delete(channel);
     } else {
-      next.add(channel);
+      const known = get().channels.find((info) => info.name === channel);
+      // A switched-off channel cannot be read, so selecting it only buys a gap line describing the
+      // machine's configuration. An unknown channel is still selected: silence about a channel's
+      // configuration is not a reason to hide it, and a channel that is not enumerated at all has
+      // no state to judge it by. A channel already in the selection is still removable, so
+      // deselecting never depends on this rule.
+      if (known === undefined || channelCanHoldEvents(known)) next.add(channel);
     }
     set({ selectedChannels: next });
   },
 
   selectAllChannels: () => {
-    const channelNames = new Set(get().channels.map((c) => c.name));
+    // Only the channels that can hold events. A measured machine carried 85 switched-off channels
+    // with no log file: the service refuses them, and every refusal became a line in the coverage
+    // banner describing the machine rather than the view. The rest stay listed in the picker.
+    const channelNames = new Set(
+      get()
+        .channels.filter((channel) => channelCanHoldEvents(channel))
+        .map((channel) => channel.name)
+    );
     set({ selectedChannels: channelNames });
   },
 

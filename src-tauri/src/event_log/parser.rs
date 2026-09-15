@@ -15,9 +15,9 @@ use super::event_node::{extract_event_data, EventFields};
 use super::provider_db::{ProviderEventLookup, ProviderStore};
 
 use super::models::{
-    ChannelSourceType, EvtxArchiveMember, EvtxArchiveMemberKind, EvtxArchiveMemberOutcome,
-    EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxField, EvtxLevel, EvtxParseResult,
-    EvtxRecord,
+    ChannelEnabledState, ChannelSourceType, EvtxArchiveMember, EvtxArchiveMemberKind,
+    EvtxArchiveMemberOutcome, EvtxChannelInfo, EvtxCoverageGap, EvtxCoverageGapKind, EvtxField,
+    EvtxLevel, EvtxParseResult, EvtxRecord,
 };
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
@@ -1850,6 +1850,8 @@ where
             source_type: ChannelSourceType::File {
                 path: source_path.to_string(),
             },
+            // The file was read, so the channel was recording when these events were written.
+            enabled_state: ChannelEnabledState::Enabled,
         });
     } else {
         channels.extend(
@@ -1861,6 +1863,7 @@ where
                     source_type: ChannelSourceType::File {
                         path: source_path.to_string(),
                     },
+                    enabled_state: ChannelEnabledState::Enabled,
                 }),
         );
     }

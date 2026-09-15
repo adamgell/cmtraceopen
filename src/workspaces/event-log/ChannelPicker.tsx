@@ -14,7 +14,7 @@ import {
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
-import { useEvtxStore } from "./evtx-store";
+import { channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -698,6 +698,7 @@ const ChannelLeaf = memo(function ChannelLeaf({
   rowHeight: number;
   smallFontSize: number;
 }) {
+  const selectable = channelCanHoldEvents(channel);
   return (
     <label
       style={{
@@ -718,9 +719,23 @@ const ChannelLeaf = memo(function ChannelLeaf({
         type="checkbox"
         checked={selected}
         onChange={onToggle}
+        disabled={!selectable}
         style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
       />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+      {!selectable && (
+        // Listed and marked rather than hidden: the channel exists, it is simply not recording, and
+        // that is why Select all leaves it out. Nothing in it is missing from the view.
+        <span
+          style={{
+            fontSize: `${smallFontSize}px`,
+            color: tokens.colorNeutralForeground4,
+            flexShrink: 0,
+          }}
+        >
+          disabled
+        </span>
+      )}
       {loaded && channel.eventCount > 0 && (
         <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})
@@ -755,6 +770,9 @@ const FolderRow = memo(function FolderRow({
   rowHeight: number;
   smallFontSize: number;
 }) {
+  // A folder row that carries a channel is a channel row, and the same rule governs its control.
+  // A folder with no channel of its own has nothing to judge and keeps its disclosure only.
+  const selectable = channel === undefined || channelCanHoldEvents(channel);
   return (
     <div
       style={{
@@ -793,6 +811,7 @@ const FolderRow = memo(function FolderRow({
           type="checkbox"
           checked={selected ?? false}
           onChange={onChannelToggle}
+          disabled={!selectable}
           aria-label={`Select ${channel?.name ?? label}`}
           style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
         />
@@ -810,6 +829,11 @@ const FolderRow = memo(function FolderRow({
       >
         {label}
       </span>
+      {channel !== undefined && !selectable && (
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+          disabled
+        </span>
+      )}
       {count != null && count > 0 && (
         <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           {count}

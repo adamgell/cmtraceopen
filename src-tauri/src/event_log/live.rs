@@ -19,7 +19,9 @@ use std::time::Duration;
 #[cfg(any(target_os = "windows", test))]
 use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
 #[cfg(target_os = "windows")]
-use super::models::{ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus};
+use super::models::{
+    ChannelEnabledState, ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus,
+};
 use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxRecord};
 // Only the Windows-only provider-message recovery path and its tests name this type, so it is
 // imported under the same gate: importing it unconditionally warns on macOS and Linux builds.
@@ -44,12 +46,13 @@ use tauri::{AppHandle, Emitter};
 use windows::core::{Error, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
-    EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
-    EvtOpenPublisherMetadata, EvtOpenSession, EvtQuery, EvtQueryChannelPath,
-    EvtQueryReverseDirection, EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml,
-    EvtRpcLogin, EvtRpcLoginAuthDefault, EvtSubscribe, EvtSubscribeActionDeliver,
-    EvtSubscribeActionError, EvtSubscribeToFutureEvents, EvtSubscribeTolerateQueryErrors,
-    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION,
+    EvtChannelConfigEnabled, EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent,
+    EvtGetChannelConfigProperty, EvtNext, EvtOpenChannelConfig, EvtOpenPublisherMetadata,
+    EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
+    EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml, EvtRpcLogin, EvtRpcLoginAuthDefault,
+    EvtSubscribe, EvtSubscribeActionDeliver, EvtSubscribeActionError, EvtSubscribeToFutureEvents,
+    EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EVT_HANDLE, EVT_RPC_LOGIN,
+    EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EVT_VARIANT,
 };
 
 /// Event handles fetched per `EvtNext` call.
@@ -439,6 +442,51 @@ pub fn enumerate_remote_channels(machine: &str) -> Result<Vec<EvtxChannelInfo>, 
     enumerate_channels_for_session(Some(session.raw()), ChannelSourceType::Remote { machine })
 }
 
+/// What the service reports about `channel`'s configuration, or `Unknown` when it will not say.
+///
+/// The rule fails open. Only the service reporting a channel as switched off removes it from the
+/// bulk paths; a configuration that cannot be opened or read says nothing about the channel, and
+/// reading that silence as "switched off" would hide a readable channel's events from the view.
+///
+/// `session` is the enumeration's own session, so a remote enumeration reads the remote machine's
+/// configuration rather than this machine's.
+#[cfg(target_os = "windows")]
+fn channel_enabled_state(session: Option<EVT_HANDLE>, channel: &str) -> ChannelEnabledState {
+    let path = HSTRING::from(channel);
+    let Ok(config) = (unsafe { EvtOpenChannelConfig(session, &path, 0) }) else {
+        return ChannelEnabledState::Unknown;
+    };
+    let config = OwnedEvtHandle::new(config);
+
+    let mut variant = EVT_VARIANT::default();
+    let mut used = 0u32;
+    let read = unsafe {
+        EvtGetChannelConfigProperty(
+            config.raw(),
+            EvtChannelConfigEnabled,
+            0,
+            std::mem::size_of::<EVT_VARIANT>() as u32,
+            Some(&mut variant),
+            &mut used,
+        )
+    };
+    if read.is_err() {
+        return ChannelEnabledState::Unknown;
+    }
+
+    // The variant says what it carries, and it has to be asked. Reading the union without checking
+    // would take an unset property (`EvtVarTypeNull`, zeroed) as `false`, i.e. as switched off:
+    // the one answer that must never be invented.
+    if variant.Type != EvtVarTypeBoolean.0 as u32 {
+        return ChannelEnabledState::Unknown;
+    }
+    if unsafe { variant.Anonymous.BooleanVal.as_bool() } {
+        ChannelEnabledState::Enabled
+    } else {
+        ChannelEnabledState::Disabled
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn enumerate_channels_for_session(
     session: Option<EVT_HANDLE>,
@@ -485,10 +533,12 @@ fn enumerate_channels_for_session(
         if ok != 0 {
             let len = used.saturating_sub(1) as usize;
             let name = String::from_utf16_lossy(&buffer[..len]);
+            let enabled_state = channel_enabled_state(session, &name);
             channels.push(EvtxChannelInfo {
                 name,
                 event_count: 0,
                 source_type: source_type.clone(),
+                enabled_state,
             });
         } else {
             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
@@ -2847,6 +2897,8 @@ mod live_service_tests {
     // Only the assertions need the level type; the query path itself no longer builds records, so
     // importing it at module scope would warn in a non-test build.
     use super::super::models::EvtxLevel;
+    // Named by the eligibility assertions below; the probe's own import is private to this module.
+    use super::super::models::ChannelEnabledState;
     use cmtraceopen_parser::event_query::{EventQueryFilter, TimeWindow};
 
     const CHANNEL: &str = "Application";
@@ -3131,5 +3183,51 @@ mod live_service_tests {
         // Repeated successful queries and session opens exercise the RAII guards: a leaked session,
         // query, event, or publisher-metadata handle would eventually exhaust the Event Log RPC
         // resource quota rather than pass this loop.
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service"]
+    fn a_channel_whose_configuration_cannot_be_read_is_not_reported_as_switched_off() {
+        // The rule fails open. A configuration the service will not open, or will not answer for,
+        // must never come back as `Disabled`: that is the state that drops a channel from the
+        // selection and from the initial load, so conflating the two would hide the events of a
+        // channel that is merely awkward to interrogate -- the failure this workspace exists to
+        // prevent, one level up.
+        assert_eq!(
+            channel_enabled_state(None, CHANNEL),
+            ChannelEnabledState::Enabled,
+            "the Application log is recording on any machine with an Event Log service"
+        );
+        assert_eq!(
+            channel_enabled_state(None, "NoSuchChannelOnThisMachine/Debug"),
+            ChannelEnabledState::Unknown,
+            "a channel the service cannot describe is unknown, never switched off"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service"]
+    fn disabled_channels_are_identified_among_the_enumerated_ones() {
+        // Disabled channels are what filled the coverage banner, so the probe has to identify at
+        // least one. The assertion is deliberately not `disabled < channels.len()`: that also holds
+        // when the probe answers `Enabled` for every channel, which is how the first attempt at
+        // this went unnoticed. Analytic and Debug channels ship switched off, so every machine with
+        // an Event Log service carries some.
+        let channels = enumerate_channels().expect("enumerate should work");
+        assert!(!channels.is_empty(), "no channels enumerated");
+        let disabled = channels
+            .iter()
+            .filter(|channel| channel.enabled_state == ChannelEnabledState::Disabled)
+            .count();
+        let unknown = channels
+            .iter()
+            .filter(|channel| channel.enabled_state == ChannelEnabledState::Unknown)
+            .count();
+        println!(
+            "{disabled} of {} enumerated channels are switched off, {unknown} could not be \
+             determined",
+            channels.len()
+        );
+        assert!(disabled > 0, "no switched-off channels were detected");
     }
 }
