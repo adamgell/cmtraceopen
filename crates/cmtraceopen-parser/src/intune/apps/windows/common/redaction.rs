@@ -339,13 +339,10 @@ pub(crate) fn caseless_match_end(haystack: &str, start: usize, literal: &str) ->
         {
             // The haystack writes this literal character's mapping out.
             (end, literal_next)
-        } else if let Some(end) =
-            consume_caselessly(literal, literal_start, haystack_char.to_lowercase())
-        {
+        } else {
+            let end = consume_caselessly(literal, literal_start, haystack_char.to_lowercase())?;
             // The literal writes this haystack character's mapping out.
             (haystack_next, end)
-        } else {
-            return None;
         };
 
         haystack_end = next_haystack;
