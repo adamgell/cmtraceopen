@@ -1,4 +1,4 @@
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LogListView } from "./LogListView";
@@ -45,11 +45,17 @@ vi.mock("./LogRow", () => ({
   LogRow: ({
     entry,
     rowDomId,
+    onToggleMarker,
   }: {
     entry: LogEntry;
     rowDomId: string;
+    onToggleMarker?: (filePath: string, lineId: number) => void;
   }) => (
     <div id={rowDomId} className="log-row">
+      <button
+        aria-label={`Toggle marker ${entry.id}`}
+        onClick={() => onToggleMarker?.(entry.filePath, entry.id)}
+      />
       {entry.message}
     </div>
   ),
@@ -116,7 +122,7 @@ function setLogViewState(
   });
 }
 
-describe("LogListView auto-size effect", () => {
+describe("LogListView", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     calcAutoFitWidthMock.mockReset();
@@ -207,5 +213,68 @@ describe("LogListView auto-size effect", () => {
 
     expect(calcAutoFitWidthMock).toHaveBeenCalledTimes(2);
     expect(useUiStore.getState().columnWidths.message).toBe(980);
+  });
+
+  it("flushes a dirty marker when the view unmounts before the debounce", () => {
+    const filePath = "/logs/unmount.log";
+    const saveMarkers = vi.fn().mockResolvedValue(undefined);
+    useMarkerStore.setState({ saveMarkers });
+    setLogViewState(
+      { kind: "file", path: filePath },
+      [makeEntry(1, filePath)],
+      "single-file",
+    );
+
+    const view = render(<LogListView />);
+    fireEvent.click(view.getByRole("button", { name: "Toggle marker 1" }));
+    expect(saveMarkers).not.toHaveBeenCalled();
+
+    view.unmount();
+
+    expect(saveMarkers).toHaveBeenCalledTimes(1);
+    expect(saveMarkers).toHaveBeenCalledWith(filePath);
+  });
+
+  it("coalesces marker edits and does not save the flushed file again on unmount", () => {
+    const filePath = "/logs/coalesced.log";
+    const saveMarkers = vi.fn().mockResolvedValue(undefined);
+    useMarkerStore.setState({ saveMarkers });
+    setLogViewState(
+      { kind: "file", path: filePath },
+      [makeEntry(1, filePath)],
+      "single-file",
+    );
+
+    const view = render(<LogListView />);
+    const toggle = view.getByRole("button", { name: "Toggle marker 1" });
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    act(() => vi.advanceTimersByTime(1_000));
+
+    expect(saveMarkers).toHaveBeenCalledTimes(1);
+    expect(saveMarkers).toHaveBeenCalledWith(filePath);
+    view.unmount();
+    expect(saveMarkers).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes each dirty marker file once when the view unmounts", () => {
+    const firstPath = "/logs/first.log";
+    const secondPath = "/logs/second.log";
+    const saveMarkers = vi.fn().mockResolvedValue(undefined);
+    useMarkerStore.setState({ saveMarkers });
+    setLogViewState(
+      { kind: "folder", path: "/logs" },
+      [makeEntry(1, firstPath), makeEntry(2, secondPath)],
+      "aggregate-folder",
+    );
+
+    const view = render(<LogListView />);
+    fireEvent.click(view.getByRole("button", { name: "Toggle marker 1" }));
+    fireEvent.click(view.getByRole("button", { name: "Toggle marker 2" }));
+    view.unmount();
+
+    expect(saveMarkers).toHaveBeenCalledTimes(2);
+    expect(saveMarkers).toHaveBeenNthCalledWith(1, firstPath);
+    expect(saveMarkers).toHaveBeenNthCalledWith(2, secondPath);
   });
 });

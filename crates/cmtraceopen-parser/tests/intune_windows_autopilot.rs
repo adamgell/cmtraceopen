@@ -30,9 +30,7 @@ use cmtraceopen_parser::intune::enrollment::windows::autopilot::{
     AutopilotPhase, AutopilotSnapshot, AutopilotSourceInput,
 };
 use serde_json::{json, Value};
-use support::{
-    corpus_root, load_json, mutated, scenario_names, validate_scenario, wire, Failures,
-};
+use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, wire, Failures};
 
 /// The corpus this leaf owns.
 const CORPUS: &str = "enrollment/windows/autopilot";
@@ -507,7 +505,9 @@ fn matched_key_masking_normalizes_case_independently_of_the_reducer() {
         "autopilot_keys must lowercase key values before they reach the snapshot"
     );
 
-    let lower_token = redacted_export_projection(&snapshot).esp_linkage.matched_keys[0]
+    let lower_token = redacted_export_projection(&snapshot)
+        .esp_linkage
+        .matched_keys[0]
         .value
         .clone();
     assert!(
@@ -787,7 +787,11 @@ fn non_assessable_success_records_cannot_prove_profile_progress() {
     });
     let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
         synthetic_source("gated-channel", "autopilotEvents", &events),
-        synthetic_source("gated-report", "mdmReport", &esp_handoff_report("gated-report")),
+        synthetic_source(
+            "gated-report",
+            "mdmReport",
+            &esp_handoff_report("gated-report"),
+        ),
     ]));
 
     assert!(
@@ -955,7 +959,10 @@ fn an_assessable_failed_section_still_produces_the_terminal_failure() {
         synthetic_source("term-channel", "autopilotEvents", &events),
         synthetic_source("term-report", "mdmReport", &report),
     ]));
-    assert_eq!(snapshot.outcome, AutopilotOutcome::ProfileApplicationFailure);
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::ProfileApplicationFailure
+    );
     assert!(
         !snapshot
             .findings
@@ -1064,7 +1071,10 @@ fn an_assessable_failed_event_still_produces_the_terminal_failure() {
         "autopilotEvents",
         &events,
     )]));
-    assert_eq!(snapshot.outcome, AutopilotOutcome::ProfileApplicationFailure);
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::ProfileApplicationFailure
+    );
     assert!(
         !snapshot
             .findings
@@ -1150,11 +1160,18 @@ fn a_conflicting_esp_linkage_cannot_report_completed() {
     });
     let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
         synthetic_source("linked-channel", "autopilotEvents", &events),
-        synthetic_source("linked-report", "mdmReport", &esp_handoff_report("linked-report")),
+        synthetic_source(
+            "linked-report",
+            "mdmReport",
+            &esp_handoff_report("linked-report"),
+        ),
         synthetic_source("esp-session-facts", "espSession", &sessions),
     ]));
 
-    assert_eq!(snapshot.esp_linkage.state, AutopilotEspLinkState::Conflicting);
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting
+    );
     assert_eq!(
         snapshot.outcome,
         AutopilotOutcome::ContradictoryEvidence,
@@ -1306,11 +1323,18 @@ fn a_conflicting_linkage_exports_no_matched_keys() {
     });
     let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
         synthetic_source("nomk-channel", "autopilotEvents", &events),
-        synthetic_source("nomk-report", "mdmReport", &esp_handoff_report("nomk-report")),
+        synthetic_source(
+            "nomk-report",
+            "mdmReport",
+            &esp_handoff_report("nomk-report"),
+        ),
         synthetic_source("esp-session-facts", "espSession", &sessions),
     ]));
 
-    assert_eq!(snapshot.esp_linkage.state, AutopilotEspLinkState::Conflicting);
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting
+    );
     assert!(
         snapshot.esp_linkage.matched_keys.is_empty(),
         "matched_keys is documented empty for every non-Linked state, got {:?}",
@@ -1622,8 +1646,7 @@ fn native_events_are_absorbed_with_their_provenance_artifact() {
         .find(|observation| observation.observation_id == "native-e1")
         .expect("the native event must become an observation under its own evidence id");
     assert_eq!(
-        observation.context.evidence_ref.source_artifact_id,
-        "native-adapter",
+        observation.context.evidence_ref.source_artifact_id, "native-adapter",
         "the artifact must come from the event's own provenance"
     );
     assert!(
@@ -1688,8 +1711,16 @@ fn reduce_profile_retry(events_in_order: Vec<Value>, success_activity: &str) -> 
     });
     reduce_autopilot_bundle(&synthetic_bundle(vec![
         synthetic_source("prof-channel", "autopilotEvents", &events),
-        synthetic_source("prof-report", "mdmReport", &esp_handoff_report("prof-report")),
-        synthetic_source("esp-facts", "espSession", &esp_session_on_activity(success_activity)),
+        synthetic_source(
+            "prof-report",
+            "mdmReport",
+            &esp_handoff_report("prof-report"),
+        ),
+        synthetic_source(
+            "esp-facts",
+            "espSession",
+            &esp_session_on_activity(success_activity),
+        ),
     ]))
 }
 
@@ -1827,9 +1858,10 @@ fn a_non_assessable_tpm_failure_cannot_emit_a_high_confidence_blocker() {
     );
     // The recorded failure must still be visible, just not as a terminal claim.
     assert!(
-        snapshot.findings.iter().any(|finding| {
-            finding.finding_id == "autopilot-non-assessable-failure-recorded"
-        }),
+        snapshot
+            .findings
+            .iter()
+            .any(|finding| { finding.finding_id == "autopilot-non-assessable-failure-recorded" }),
         "the recorded failure must be surfaced by its own low-confidence finding"
     );
 }
@@ -1891,8 +1923,7 @@ fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
             &events,
         )]));
         let redacted = redacted_export_projection(&snapshot);
-        let text =
-            serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+        let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
         assert!(
             !text.contains(&blob),
             "the Base64 hash {blob:?} survived the exported projection: {text}"

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { loadMarkerFile } from "../lib/commands";
 import {
   type Marker,
   type MarkerCategory,
@@ -18,17 +19,26 @@ interface MarkerState {
   activeCategory: string;
   /** File paths currently being loaded from the backend. */
   loadingFiles: Set<string>;
+  /** Per-file tombstones prevent in-flight loads from resurrecting a cleared file. */
+  clearRevisions: Map<string, number>;
   /** Preserved `created` timestamps per file path (from loaded marker files). */
   createdTimestamps: Map<string, string>;
+  /** Per-file I/O ordering and durability state for the current store session. */
+  markerPersistenceByFile: Map<string, MarkerFilePersistenceState>;
 
   // ── Async backend actions ─────────────────────────────────────────────────
-  loadMarkers: (filePath: string) => Promise<void>;
-  saveMarkers: (filePath: string) => Promise<void>;
+  loadMarkers: (filePath: string) => Promise<MarkerLoadOutcome>;
+  saveMarkers: (filePath: string) => Promise<MarkerSaveOutcome>;
 
   // ── Marker mutation actions ───────────────────────────────────────────────
-  toggleMarker: (filePath: string, lineId: number) => void;
-  setMarkerCategory: (filePath: string, lineId: number, category: string) => void;
-  removeMarker: (filePath: string, lineId: number) => void;
+  toggleMarker: (filePath: string, lineId: number, identity?: string) => void;
+  setMarkerCategory: (
+    filePath: string,
+    lineId: number,
+    category: string,
+    identity?: string,
+  ) => void;
+  removeMarker: (filePath: string, lineId: number, identity?: string) => void;
   clearMarkersForFile: (filePath: string) => void;
 
   // ── Category actions ──────────────────────────────────────────────────────
@@ -39,73 +49,433 @@ interface MarkerState {
   getMarkersForFile: (filePath: string) => Map<number, Marker>;
   getMarkedLineIds: (filePath: string, category?: string) => number[];
 }
+export type MarkerLoadOutcome =
+  | "loaded"
+  | "missing"
+  | "failed"
+  | "superseded";
+export type MarkerSaveOutcome = "saved" | "deleted" | "failed";
+
+type SuccessfulMarkerLoadOutcome = Extract<
+  MarkerLoadOutcome,
+  "loaded" | "missing"
+>;
+type SuccessfulMarkerSaveOutcome = Extract<
+  MarkerSaveOutcome,
+  "saved" | "deleted"
+>;
+type MarkerFileLoadState = "unknown" | "ready" | "failed";
+type QueuedMarkerOperation = () => Promise<void>;
+
+interface MarkerFilePersistenceState {
+  loadState: MarkerFileLoadState;
+  lastLoadOutcome: SuccessfulMarkerLoadOutcome | null;
+  preLoadMutationBaseline: Map<number, Marker> | null;
+  discardLoadedMarkers: boolean;
+  mutationVersion: number;
+  requestedMutationVersion: number;
+  savedMutationVersion: number;
+  saveIntentVersion: number;
+  completedSaveIntentVersion: number;
+  lastSaveOutcome: SuccessfulMarkerSaveOutcome | null;
+  operationRunning: boolean;
+  operations: QueuedMarkerOperation[];
+}
+
+function createMarkerFilePersistenceState(): MarkerFilePersistenceState {
+  return {
+    loadState: "unknown",
+    lastLoadOutcome: null,
+    preLoadMutationBaseline: null,
+    discardLoadedMarkers: false,
+    mutationVersion: 0,
+    requestedMutationVersion: 0,
+    savedMutationVersion: 0,
+    saveIntentVersion: 0,
+    completedSaveIntentVersion: 0,
+    lastSaveOutcome: null,
+    operationRunning: false,
+    operations: [],
+  };
+}
+
+function runNextMarkerOperation(persistence: MarkerFilePersistenceState): void {
+  if (persistence.operationRunning) return;
+  const operation = persistence.operations.shift();
+  if (!operation) return;
+
+  persistence.operationRunning = true;
+  const settle = () => {
+    persistence.operationRunning = false;
+    runNextMarkerOperation(persistence);
+  };
+  void operation().then(settle, settle);
+}
+
+function enqueueMarkerOperation<T>(
+  persistence: MarkerFilePersistenceState,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const result = new Promise<T>((resolve, reject) => {
+    persistence.operations.push(async () => {
+      try {
+        resolve(await operation());
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  runNextMarkerOperation(persistence);
+  return result;
+}
+
+function hasPendingMarkerSave(
+  persistence: MarkerFilePersistenceState,
+): boolean {
+  return (
+    persistence.completedSaveIntentVersion < persistence.saveIntentVersion ||
+    persistence.savedMutationVersion < persistence.requestedMutationVersion
+  );
+}
+
+function markersEqual(
+  left: Marker | undefined,
+  right: Marker | undefined,
+): boolean {
+  return (
+    left?.lineId === right?.lineId &&
+    left?.identity === right?.identity &&
+    left?.category === right?.category &&
+    left?.color === right?.color &&
+    left?.added === right?.added
+  );
+}
+type MarkerIdentityIndex = Map<string, [number, Marker]>;
+
+function buildMarkerIdentityIndex(fileMap: ReadonlyMap<number, Marker>): MarkerIdentityIndex {
+  const index: MarkerIdentityIndex = new Map();
+  for (const entry of fileMap) {
+    if (entry[1].identity !== undefined && !index.has(entry[1].identity)) {
+      index.set(entry[1].identity, entry);
+    }
+  }
+  return index;
+}
+
+function updateMarkerIdentityIndex(
+  index: MarkerIdentityIndex,
+  entry: [number, Marker]
+): void {
+  if (entry[1].identity !== undefined) index.set(entry[1].identity, entry);
+}
+
+function removeMarkerIdentityIndex(
+  index: MarkerIdentityIndex,
+  fileMap: ReadonlyMap<number, Marker>,
+  entry: [number, Marker]
+): void {
+  if (entry[1].identity === undefined || index.get(entry[1].identity)?.[0] !== entry[0]) {
+    return;
+  }
+  index.delete(entry[1].identity);
+  for (const candidate of fileMap) {
+    if (candidate[1].identity === entry[1].identity) {
+      index.set(entry[1].identity, candidate);
+      break;
+    }
+  }
+}
+
+export function mergeLoadedFileMarkers(
+  loaded: Map<number, Marker>,
+  initial: ReadonlyMap<number, Marker>,
+  current: ReadonlyMap<number, Marker> | undefined,
+): Map<number, Marker> {
+  const merged = new Map(loaded);
+  const mergedIdentityIndex = buildMarkerIdentityIndex(merged);
+  const currentMap = current ?? new Map<number, Marker>();
+  const currentIdentityIndex = buildMarkerIdentityIndex(currentMap);
+  const matchedCurrentKeys = new Set<number>();
+  const changedPairs: Array<{
+    initialKey: number;
+    initialMarker: Marker;
+    currentMarker: Marker;
+  }> = [];
+
+  // Identity-bearing markers may share a legacy line hash. Match those by their
+  // identity first, falling back to an identity-less marker at the requested key
+  // so a legacy marker can be upgraded in place.
+  for (const [initialKey, initialMarker] of initial) {
+    const currentEntry = findMergeMarkerEntry(
+      currentMap,
+      initialKey,
+      initialMarker,
+      currentIdentityIndex,
+    );
+    if (!currentEntry) {
+      const loadedEntry = findMergeMarkerEntry(
+        merged,
+        initialKey,
+        initialMarker,
+        mergedIdentityIndex,
+      );
+      if (loadedEntry) {
+        merged.delete(loadedEntry[0]);
+        removeMarkerIdentityIndex(mergedIdentityIndex, merged, loadedEntry);
+      }
+      continue;
+    }
+    matchedCurrentKeys.add(currentEntry[0]);
+    if (markersEqual(initialMarker, currentEntry[1])) {
+      if (!findMergeMarkerEntry(merged, initialKey, initialMarker, mergedIdentityIndex)) {
+        addMergedMarker(merged, currentEntry[1], currentEntry[0], mergedIdentityIndex);
+      }
+      continue;
+    }
+    changedPairs.push({
+      initialKey,
+      initialMarker,
+      currentMarker: currentEntry[1],
+    });
+  }
+
+  for (const { initialKey, initialMarker, currentMarker } of changedPairs) {
+    const loadedEntry = findMergeMarkerEntry(
+      merged,
+      initialKey,
+      initialMarker,
+      mergedIdentityIndex,
+    );
+    if (loadedEntry) {
+      const updatedEntry: [number, Marker] = [
+        loadedEntry[0],
+        { ...currentMarker, lineId: loadedEntry[0] },
+      ];
+      merged.set(updatedEntry[0], updatedEntry[1]);
+      updateMarkerIdentityIndex(mergedIdentityIndex, updatedEntry);
+    } else {
+      addMergedMarker(merged, currentMarker, currentMarker.lineId, mergedIdentityIndex);
+    }
+  }
+
+  // Markers added while loading must not overwrite a loaded marker that happens
+  // to use the same line ID. Allocate a free storage key instead.
+  for (const [currentKey, currentMarker] of currentMap) {
+    if (matchedCurrentKeys.has(currentKey)) continue;
+    addMergedMarker(merged, currentMarker, currentKey, mergedIdentityIndex);
+  }
+
+  return merged;
+}
+
+function findMergeMarkerEntry(
+  fileMap: ReadonlyMap<number, Marker>,
+  lineId: number,
+  marker: Marker,
+  identityIndex?: MarkerIdentityIndex,
+): [number, Marker] | undefined {
+  if (marker.identity !== undefined) {
+    return findMarkerEntry(fileMap, lineId, marker.identity, identityIndex);
+  }
+  const candidate = fileMap.get(lineId);
+  return candidate !== undefined && candidate.identity === undefined
+    ? [lineId, candidate]
+    : undefined;
+}
+
+function addMergedMarker(
+  merged: Map<number, Marker>,
+  marker: Marker,
+  preferredLineId = marker.lineId,
+  identityIndex?: MarkerIdentityIndex,
+): void {
+  const existing = findMergeMarkerEntry(merged, preferredLineId, marker, identityIndex);
+  if (existing) {
+    const updatedEntry: [number, Marker] = [existing[0], { ...marker, lineId: existing[0] }];
+    merged.set(updatedEntry[0], updatedEntry[1]);
+    if (identityIndex) updateMarkerIdentityIndex(identityIndex, updatedEntry);
+    return;
+  }
+  if (
+    marker.identity === undefined &&
+    merged.get(preferredLineId)?.identity !== undefined
+  ) {
+    return;
+  }
+
+  let storageLineId = preferredLineId;
+  while (merged.has(storageLineId)) {
+    storageLineId = (storageLineId + 1) >>> 0;
+  }
+  const storedEntry: [number, Marker] = [
+    storageLineId,
+    { ...marker, lineId: storageLineId },
+  ];
+  merged.set(storedEntry[0], storedEntry[1]);
+  if (identityIndex) updateMarkerIdentityIndex(identityIndex, storedEntry);
+}
+function findMarkerEntry(
+  fileMap: ReadonlyMap<number, Marker>,
+  lineId: number,
+  identity?: string,
+  identityIndex?: MarkerIdentityIndex,
+): [number, Marker] | undefined {
+  if (identity !== undefined) {
+    const indexed = identityIndex?.get(identity);
+    if (indexed) return indexed;
+    if (!identityIndex) {
+      for (const entry of fileMap) {
+        if (entry[1].identity === identity) return entry;
+      }
+    }
+  }
+  const candidate = fileMap.get(lineId);
+  if (
+    !candidate ||
+    (identity !== undefined && candidate.identity !== undefined)
+  )
+    return undefined;
+  return [lineId, candidate];
+}
 
 // ── Store implementation ──────────────────────────────────────────────────────
 
-export const useMarkerStore = create<MarkerState>((set, get) => ({
-  markersByFile: new Map(),
-  categories: [...DEFAULT_CATEGORIES],
-  activeCategory: "bug",
-  loadingFiles: new Set(),
-  createdTimestamps: new Map(),
+export const useMarkerStore = create<MarkerState>((set, get) => {
+  const getPersistence = (filePath: string): MarkerFilePersistenceState => {
+    const persistenceByFile = get().markerPersistenceByFile;
+    const existing = persistenceByFile.get(filePath);
+    if (existing) return existing;
+    const created = createMarkerFilePersistenceState();
+    persistenceByFile.set(filePath, created);
+    return created;
+  };
 
-  // ── loadMarkers ─────────────────────────────────────────────────────────
-
-  loadMarkers: async (filePath) => {
-    const { loadingFiles, markersByFile } = get();
-
-    // Guard against duplicate in-flight loads.
-    if (loadingFiles.has(filePath)) {
-      return;
+  const noteMarkerMutation = (
+    filePath: string,
+    baseline: ReadonlyMap<number, Marker> | undefined,
+    clearsFile = false,
+  ): void => {
+    const persistence = getPersistence(filePath);
+    if (
+      persistence.loadState !== "ready" &&
+      persistence.preLoadMutationBaseline === null
+    ) {
+      persistence.preLoadMutationBaseline = new Map(baseline ?? []);
     }
+    if (clearsFile && persistence.loadState !== "ready") {
+      persistence.discardLoadedMarkers = true;
+    }
+    persistence.mutationVersion += 1;
+    if (hasPendingMarkerSave(persistence)) {
+      persistence.requestedMutationVersion = persistence.mutationVersion;
+    }
+  };
+
+  const loadMarkerFileIntoStore = async (
+    filePath: string,
+    persistence: MarkerFilePersistenceState,
+  ): Promise<MarkerLoadOutcome> => {
+    const { markersByFile, clearRevisions, categories } = get();
+    // Edits made after this snapshot but before the backend responds must win over stale disk
+    // state, including edits made when the file had no map yet.
+    const initialFileMap = new Map(
+      persistence.preLoadMutationBaseline ?? markersByFile.get(filePath) ?? [],
+    );
+    const initialCategories = [...categories];
+    const clearRevision = clearRevisions.get(filePath) ?? 0;
+    const discardLoadedMarkers = persistence.discardLoadedMarkers;
 
     set((state) => ({
       loadingFiles: new Set([...state.loadingFiles, filePath]),
     }));
 
     try {
-      const result = await invoke<MarkerFile | null>("load_markers", { filePath });
-
+      const result = await loadMarkerFile(filePath);
+      const loadOutcome: SuccessfulMarkerLoadOutcome = result
+        ? "loaded"
+        : "missing";
+      const loadedFileMap = new Map<number, Marker>();
       if (result) {
-        const fileMap = new Map<number, Marker>();
         for (const marker of result.markers) {
-          fileMap.set(marker.lineId, marker);
-        }
-
-        set((state) => {
-          const next = new Map(state.markersByFile);
-          next.set(filePath, fileMap);
-
-          // Preserve the original created timestamp for later saves
-          const nextCreated = new Map(state.createdTimestamps);
-          if (result.created) {
-            nextCreated.set(filePath, result.created);
+          const existing = loadedFileMap.get(marker.lineId);
+          if (
+            !existing ||
+            (existing.identity === undefined &&
+              marker.identity === undefined) ||
+            (existing.identity !== undefined &&
+              existing.identity === marker.identity)
+          ) {
+            loadedFileMap.set(marker.lineId, marker);
+            continue;
           }
-
-          // Restore saved categories if the file provided them
-          const nextCategories =
-            result.categories && result.categories.length > 0
-              ? result.categories
-              : state.categories;
-
-          return {
-            markersByFile: next,
-            createdTimestamps: nextCreated,
-            categories: nextCategories,
-          };
-        });
-      } else {
-        // Ensure the file has an empty map so callers can safely query it.
-        if (!markersByFile.has(filePath)) {
-          set((state) => {
-            const next = new Map(state.markersByFile);
-            next.set(filePath, new Map());
-            return { markersByFile: next };
-          });
+          if (
+            existing.identity !== undefined &&
+            marker.identity === undefined
+          ) {
+            continue;
+          }
+          let storedLineId = marker.lineId;
+          while (loadedFileMap.has(storedLineId)) {
+            storedLineId = (storedLineId + 1) >>> 0;
+          }
+          loadedFileMap.set(storedLineId, { ...marker, lineId: storedLineId });
         }
       }
+      if (discardLoadedMarkers) loadedFileMap.clear();
+
+      persistence.loadState = "ready";
+      persistence.lastLoadOutcome = loadOutcome;
+      if ((get().clearRevisions.get(filePath) ?? 0) !== clearRevision) {
+        persistence.preLoadMutationBaseline = null;
+        persistence.discardLoadedMarkers = false;
+        return "superseded";
+      }
+
+      set((state) => {
+        const next = new Map(state.markersByFile);
+        next.set(
+          filePath,
+          mergeLoadedFileMarkers(
+            loadedFileMap,
+            initialFileMap,
+            state.markersByFile.get(filePath),
+          ),
+        );
+
+        // Preserve the original created timestamp for later saves.
+        const nextCreated = new Map(state.createdTimestamps);
+        if (result?.created) {
+          nextCreated.set(filePath, result.created);
+        }
+        // Restore saved categories while preserving categories added during the load.
+        const nextCategories = (() => {
+          if (!result?.categories || result.categories.length === 0)
+            return state.categories;
+          const loadedIds = new Set(
+            result.categories.map((category) => category.id),
+          );
+          const addedDuringLoad = state.categories.filter(
+            (category) =>
+              !initialCategories.some(
+                (initial) => initial.id === category.id,
+              ) && !loadedIds.has(category.id),
+          );
+          return [...result.categories, ...addedDuringLoad];
+        })();
+
+        return {
+          markersByFile: next,
+          createdTimestamps: nextCreated,
+          categories: nextCategories,
+        };
+      });
+      persistence.preLoadMutationBaseline = null;
+      persistence.discardLoadedMarkers = false;
+      return loadOutcome;
     } catch (err) {
+      persistence.loadState = "failed";
       console.error("[marker-store] loadMarkers failed", { filePath, err });
+      return "failed";
     } finally {
       set((state) => {
         const next = new Set(state.loadingFiles);
@@ -113,11 +483,11 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
         return { loadingFiles: next };
       });
     }
-  },
+  };
 
-  // ── saveMarkers ─────────────────────────────────────────────────────────
-
-  saveMarkers: async (filePath) => {
+  const saveMarkerFileSnapshot = async (
+    filePath: string,
+  ): Promise<MarkerSaveOutcome> => {
     const { markersByFile, categories, createdTimestamps } = get();
     const fileMap = markersByFile.get(filePath);
 
@@ -125,10 +495,14 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
       // No markers remaining — delete any persisted file.
       try {
         await invoke<void>("delete_markers", { filePath });
+        return "deleted";
       } catch (err) {
-        console.error("[marker-store] delete_markers failed", { filePath, err });
+        console.error("[marker-store] delete_markers failed", {
+          filePath,
+          err,
+        });
+        return "failed";
       }
-      return;
     }
 
     const now = new Date().toISOString();
@@ -145,114 +519,224 @@ export const useMarkerStore = create<MarkerState>((set, get) => ({
 
     try {
       await invoke<void>("save_markers", { filePath, markerFile });
+      return "saved";
     } catch (err) {
       console.error("[marker-store] save_markers failed", { filePath, err });
+      return "failed";
     }
-  },
+  };
 
-  // ── toggleMarker ────────────────────────────────────────────────────────
+  const flushPendingMarkerSave = async (
+    filePath: string,
+    persistence: MarkerFilePersistenceState,
+  ): Promise<MarkerSaveOutcome | null> => {
+    let lastOutcome: MarkerSaveOutcome | null = null;
+    while (hasPendingMarkerSave(persistence)) {
+      const savingMutationVersion = persistence.mutationVersion;
+      const savingIntentVersion = persistence.saveIntentVersion;
+      const outcome = await saveMarkerFileSnapshot(filePath);
+      lastOutcome = outcome;
+      if (outcome === "failed") return outcome;
 
-  toggleMarker: (filePath, lineId) => {
-    const { activeCategory, categories } = get();
+      persistence.savedMutationVersion = Math.max(
+        persistence.savedMutationVersion,
+        savingMutationVersion,
+      );
+      persistence.completedSaveIntentVersion = Math.max(
+        persistence.completedSaveIntentVersion,
+        savingIntentVersion,
+      );
+      persistence.lastSaveOutcome = outcome;
+    }
+    return lastOutcome;
+  };
 
-    set((state) => {
-      const next = new Map(state.markersByFile);
-      const fileMap = new Map(next.get(filePath) ?? []);
+  const performMarkerLoadRequest = async (
+    filePath: string,
+    persistence: MarkerFilePersistenceState,
+  ): Promise<MarkerLoadOutcome> => {
+    // Marker maps remain resident for one store session. Reuse a successful read so repeated
+    // Event Log render/effect requests cannot race a newer in-memory mutation back to disk.
+    const outcome =
+      persistence.loadState === "ready"
+        ? (persistence.lastLoadOutcome ?? "missing")
+        : await loadMarkerFileIntoStore(filePath, persistence);
+    if (
+      persistence.loadState === "ready" &&
+      hasPendingMarkerSave(persistence)
+    ) {
+      await flushPendingMarkerSave(filePath, persistence);
+    }
+    return outcome;
+  };
 
-      if (fileMap.has(lineId)) {
-        // Toggle off — remove the marker.
-        fileMap.delete(lineId);
-      } else {
-        // Toggle on — add a new marker using the active category.
-        const categoryDef = categories.find((c) => c.id === activeCategory);
-        const color = categoryDef?.color ?? "#60a5fa";
-        const marker: Marker = {
-          lineId,
-          category: activeCategory,
+  const performMarkerSaveRequest = async (
+    filePath: string,
+    persistence: MarkerFilePersistenceState,
+  ): Promise<MarkerSaveOutcome> => {
+    if (persistence.loadState !== "ready") {
+      await loadMarkerFileIntoStore(filePath, persistence);
+    }
+    if (persistence.loadState !== "ready") return "failed";
+
+    const outcome = await flushPendingMarkerSave(filePath, persistence);
+    return outcome ?? persistence.lastSaveOutcome ?? "failed";
+  };
+
+  return {
+    markersByFile: new Map(),
+    categories: [...DEFAULT_CATEGORIES],
+    activeCategory: "bug",
+    loadingFiles: new Set(),
+    clearRevisions: new Map(),
+    createdTimestamps: new Map(),
+    markerPersistenceByFile: new Map(),
+
+    // ── loadMarkers ───────────────────────────────────────────────────────
+    loadMarkers: (filePath) => {
+      const persistence = getPersistence(filePath);
+      return enqueueMarkerOperation(persistence, () =>
+        performMarkerLoadRequest(filePath, persistence),
+      );
+    },
+
+    // ── saveMarkers ───────────────────────────────────────────────────────
+    saveMarkers: (filePath) => {
+      const persistence = getPersistence(filePath);
+      persistence.saveIntentVersion += 1;
+      persistence.requestedMutationVersion = Math.max(
+        persistence.requestedMutationVersion,
+        persistence.mutationVersion,
+      );
+      return enqueueMarkerOperation(persistence, () =>
+        performMarkerSaveRequest(filePath, persistence),
+      );
+    },
+
+    // ── toggleMarker ──────────────────────────────────────────────────────
+
+    toggleMarker: (filePath, lineId, identity) => {
+      const { activeCategory, categories } = get();
+      const mutationBaseline = get().markersByFile.get(filePath);
+
+      set((state) => {
+        const next = new Map(state.markersByFile);
+        const fileMap = new Map(next.get(filePath) ?? []);
+        const existingEntry = findMarkerEntry(fileMap, lineId, identity);
+
+        if (existingEntry) {
+          fileMap.delete(existingEntry[0]);
+        } else {
+          const categoryDef = categories.find((c) => c.id === activeCategory);
+          const color = categoryDef?.color ?? "#60a5fa";
+          let storedLineId = lineId;
+          while (fileMap.has(storedLineId))
+            storedLineId = (storedLineId + 1) >>> 0;
+          const marker: Marker = {
+            lineId: storedLineId,
+            ...(identity === undefined ? {} : { identity }),
+            category: activeCategory,
+            color,
+            added: new Date().toISOString(),
+          };
+          fileMap.set(storedLineId, marker);
+        }
+
+        next.set(filePath, fileMap);
+        return { markersByFile: next };
+      });
+      noteMarkerMutation(filePath, mutationBaseline);
+    },
+
+    // ── setMarkerCategory ─────────────────────────────────────────────────
+    setMarkerCategory: (filePath, lineId, category, identity) => {
+      let changed = false;
+      const mutationBaseline = get().markersByFile.get(filePath);
+      set((state) => {
+        const next = new Map(state.markersByFile);
+        const fileMap = new Map(next.get(filePath) ?? []);
+        const existingEntry = findMarkerEntry(fileMap, lineId, identity);
+        if (!existingEntry) return {};
+
+        const categoryDef = state.categories.find(
+          (item) => item.id === category,
+        );
+        const color = categoryDef?.color ?? existingEntry[1].color;
+        fileMap.set(existingEntry[0], {
+          ...existingEntry[1],
+          ...(identity === undefined ? {} : { identity }),
+          category,
           color,
-          added: new Date().toISOString(),
-        };
-        fileMap.set(lineId, marker);
+        });
+        next.set(filePath, fileMap);
+        changed = true;
+        return { markersByFile: next };
+      });
+      if (changed) noteMarkerMutation(filePath, mutationBaseline);
+    },
+
+    // ── removeMarker ───────────────────────────────────────────────────────
+
+    removeMarker: (filePath, lineId, identity) => {
+      let changed = false;
+      const mutationBaseline = get().markersByFile.get(filePath);
+      set((state) => {
+        const next = new Map(state.markersByFile);
+        const fileMap = new Map(next.get(filePath) ?? []);
+        const existingEntry = findMarkerEntry(fileMap, lineId, identity);
+        if (existingEntry) {
+          fileMap.delete(existingEntry[0]);
+          changed = true;
+        }
+        next.set(filePath, fileMap);
+        return { markersByFile: next };
+      });
+      if (changed) noteMarkerMutation(filePath, mutationBaseline);
+    },
+
+    clearMarkersForFile: (filePath) => {
+      const mutationBaseline = get().markersByFile.get(filePath);
+      set((state) => {
+        const next = new Map(state.markersByFile);
+        next.delete(filePath);
+        const clearRevisions = new Map(state.clearRevisions);
+        clearRevisions.set(filePath, (clearRevisions.get(filePath) ?? 0) + 1);
+        return { markersByFile: next, clearRevisions };
+      });
+      noteMarkerMutation(filePath, mutationBaseline, true);
+    },
+
+    // ── setActiveCategory ─────────────────────────────────────────────────
+
+    setActiveCategory: (category) => set({ activeCategory: category }),
+
+    // ── addCategory ───────────────────────────────────────────────────────
+
+    addCategory: (category) => {
+      set((state) => ({
+        categories: [...state.categories, category],
+      }));
+    },
+
+    // ── getMarkersForFile (selector) ──────────────────────────────────────
+
+    getMarkersForFile: (filePath) => {
+      return get().markersByFile.get(filePath) ?? new Map<number, Marker>();
+    },
+
+    // ── getMarkedLineIds (selector) ───────────────────────────────────────
+
+    getMarkedLineIds: (filePath, category) => {
+      const fileMap = get().markersByFile.get(filePath);
+      if (!fileMap) return [];
+
+      const ids: number[] = [];
+      for (const [lineId, marker] of fileMap) {
+        if (category === undefined || marker.category === category) {
+          ids.push(lineId);
+        }
       }
-
-      next.set(filePath, fileMap);
-      return { markersByFile: next };
-    });
-  },
-
-  // ── setMarkerCategory ───────────────────────────────────────────────────
-
-  setMarkerCategory: (filePath, lineId, category) => {
-    set((state) => {
-      const next = new Map(state.markersByFile);
-      const fileMap = new Map(next.get(filePath) ?? []);
-      const existing = fileMap.get(lineId);
-
-      if (!existing) {
-        return {};
-      }
-
-      const categoryDef = state.categories.find((c) => c.id === category);
-      const color = categoryDef?.color ?? existing.color;
-
-      fileMap.set(lineId, { ...existing, category, color });
-      next.set(filePath, fileMap);
-      return { markersByFile: next };
-    });
-  },
-
-  // ── removeMarker ────────────────────────────────────────────────────────
-
-  removeMarker: (filePath, lineId) => {
-    set((state) => {
-      const next = new Map(state.markersByFile);
-      const fileMap = new Map(next.get(filePath) ?? []);
-      fileMap.delete(lineId);
-      next.set(filePath, fileMap);
-      return { markersByFile: next };
-    });
-  },
-
-  // ── clearMarkersForFile ─────────────────────────────────────────────────
-
-  clearMarkersForFile: (filePath) => {
-    set((state) => {
-      const next = new Map(state.markersByFile);
-      next.delete(filePath);
-      return { markersByFile: next };
-    });
-  },
-
-  // ── setActiveCategory ───────────────────────────────────────────────────
-
-  setActiveCategory: (category) => set({ activeCategory: category }),
-
-  // ── addCategory ─────────────────────────────────────────────────────────
-
-  addCategory: (category) => {
-    set((state) => ({
-      categories: [...state.categories, category],
-    }));
-  },
-
-  // ── getMarkersForFile (selector) ────────────────────────────────────────
-
-  getMarkersForFile: (filePath) => {
-    return get().markersByFile.get(filePath) ?? new Map<number, Marker>();
-  },
-
-  // ── getMarkedLineIds (selector) ─────────────────────────────────────────
-
-  getMarkedLineIds: (filePath, category) => {
-    const fileMap = get().markersByFile.get(filePath);
-    if (!fileMap) return [];
-
-    const ids: number[] = [];
-    for (const [lineId, marker] of fileMap) {
-      if (category === undefined || marker.category === category) {
-        ids.push(lineId);
-      }
-    }
-    return ids;
-  },
-}));
+      return ids;
+    },
+  };
+});

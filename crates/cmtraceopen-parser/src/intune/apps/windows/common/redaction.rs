@@ -11,6 +11,12 @@
 //! visibly mention the same user. The projection is idempotent: replacement
 //! tokens cannot themselves match a rule.
 
+const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
+const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
+// Ten bytes cover every decimal `u32` value and an `x` plus every hexadecimal
+// `u32` value. Longer numeric prefixes cannot decode to a Unicode scalar and
+// must not make each `&#` scan an unbounded remainder for a distant semicolon.
+const MAX_NUMERIC_ENTITY_BODY_BYTES: usize = 10;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -45,14 +51,11 @@ fn user_path_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         // The segment is bounded by the path separator, a quote, or the end of
-        // the line -- not by whitespace. Windows permits spaces in profile
-        // directory names, and bounding on `\s` masked only the first word:
-        // `C:\Users\John Doe\...` leaked "Doe" into the export.
-        //
-        // The leading `[` exclusion is what makes the projection idempotent:
-        // an already-masked `[user:...]` segment must not be masked again.
+        // the line -- not by whitespace. Windows permits spaces and brackets in
+        // profile directory names, and bounding on `\s` or `]` masked only part
+        // of names such as `C:\Users\[Alice]Smith\...`.
         Regex::new(
-            r"(?i)(?P<prefix>[\\/]{1,2}(?:Users|Documents and Settings)[\\/]{1,2})(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)",
+            r"(?i)(?P<prefix>[\\/]{1,2}(?:Users|Documents and Settings)[\\/]{1,2})(?P<user>[^\\/\r\n\x22]+)",
         )
         .expect("user path regex must compile")
     })
@@ -69,6 +72,7 @@ fn user_path_re() -> &'static Regex {
 /// * The separator between flag and value may be whitespace, `:` or `=`.
 ///   `-Password:hunter2` and `-Token=abc` are as common as the spaced form and
 ///   were previously exported verbatim.
+///
 /// * The flag vocabulary covers credential-bearing switches, not just
 ///   `-Command`. A launch record reading `-Password hunter2` is exactly as
 ///   sensitive as an inline command and was previously exported verbatim.
@@ -98,10 +102,377 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
+            r#"(?P<pre>^|[^\[])(?P<property>(?:\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*=\s*|\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*))(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)"#,
+
         )
         .expect("msi property regex must compile")
     })
+}
+
+/// A nested bracket prefix such as `[[PASSWORD=value]`. The outer bracket is
+/// log syntax; the inner bracket belongs to the property name and must not be
+/// mistaken for the guard that protects an emitted replacement token.
+fn nested_msi_property_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?P<pre>\[)(?P<property>\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n]+)"#,
+        )
+        .expect("nested MSI property regex must compile")
+    })
+}
+/// A bounded guard for malformed secret replacement-token lookalikes.
+///
+/// A valid emitted token is returned unchanged. A bracketed `secret:` value
+/// without a valid token body is hashed as one value before the generic
+/// property projection can mistake `secret:` for an MSI property name.
+fn secret_token_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\[secret:[^\]\r\n]+\]?")
+            .expect("secret token lookalike regex must compile")
+    })
+}
+
+/// A bracketed MSI property whose unquoted value may contain spaces.
+///
+/// The general MSI-property expression intentionally stops unquoted values at
+/// whitespace because an unbracketed command line continues with another
+/// argument. Inside `[...]`, the closing bracket is the value boundary instead.
+fn bracketed_msi_property_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?P<pre>^|[^\[])(?P<property>\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\]\r\n]*|[^"'\]\r\n][^\]\r\n]*)\]"#,
+        )
+        .expect("bracketed MSI property regex must compile")
+    })
+}
+
+/// Organization-owned identifiers and device inventory values are sensitive
+/// when they occur in an explicitly labelled field. Bare GUIDs remain visible
+/// because they are often correlation keys rather than tenant identity.
+fn sensitive_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|credentialdata)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+
+        )
+        .expect("sensitive field redaction pattern must compile")
+    })
+}
+fn credential_data_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<field>\bCredentialData\s*["']?\s*[:=]\s*)(?P<value>\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}\]<>]+)"#,
+        )
+        .expect("credential data field regex must compile")
+    })
+}
+
+/// JSON properties whose delimiters are HTML entities.
+///
+/// The expression finds only the field and opening delimiter. The value is
+/// scanned below so an escaped `\&quot;` inside it cannot be mistaken for the
+/// closing delimiter.
+fn entity_encoded_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)&quot;(?P<field>RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName|ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost|Password|Pwd|Passphrase|LicenseKey|License_Key|ProductKey|Product_Key|SerialKey|Serial|ApiKey|Api_Key|ApiSecret|Api_Secret|AccessToken|Access_Token|Token|Secret|ClientSecret|Client_Secret|Credential|Credentials|CredentialData|Authorization|AADTenantId|TenantId|DeviceId|HardwareHash|DeviceHardwareData)&quot;\s*:\s*&quot;"#,
+        )
+        .expect("entity-encoded field redaction pattern must compile")
+    })
+}
+
+/// JSON properties whose delimiters are escaped with backslashes.
+///
+/// As with entity-encoded fields, only the prefix is matched. A value scanner
+/// distinguishes a one-backslash delimiter from an escaped quote, while also
+/// recognizing a delimiter after a literal backslash at the end of a value.
+fn escaped_json_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?is)\\"(?P<field>RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName|ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost|Password|Pwd|Passphrase|LicenseKey|License_Key|ProductKey|Product_Key|SerialKey|Serial|ApiKey|Api_Key|ApiSecret|Api_Secret|AccessToken|Access_Token|Token|Secret|ClientSecret|Client_Secret|Credential|Credentials|CredentialData|Authorization|AADTenantId|TenantId|DeviceId|HardwareHash|DeviceHardwareData)\\"\s*:\s*\\""#,
+        )
+        .expect("escaped JSON field redaction pattern must compile")
+    })
+}
+
+fn scan_escaped_json_value(value: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = value.as_bytes();
+    let mut quote = start;
+    while quote < bytes.len() {
+        if bytes[quote] == b'"' {
+            let mut slash_count = 0;
+            let mut cursor = quote;
+            while cursor > start && bytes[cursor - 1] == b'\\' {
+                slash_count += 1;
+                cursor -= 1;
+            }
+            if slash_count == 1
+                || (slash_count % 2 == 1 && is_escaped_json_boundary(value, quote + 1))
+            {
+                return Some((quote - 1, 2));
+            }
+        }
+        quote += 1;
+    }
+    None
+}
+
+fn is_escaped_json_boundary(value: &str, start: usize) -> bool {
+    let Some(remainder) = value.get(start..) else {
+        return false;
+    };
+    let remainder = remainder.trim_start();
+    if let Some(remainder) = remainder.strip_prefix('}') {
+        let remainder = remainder.trim_start();
+        if remainder.is_empty() || matches!(remainder.as_bytes().first(), Some(b']' | b'}' | b','))
+        {
+            return true;
+        }
+    }
+    let Some(remainder) = remainder.strip_prefix(',') else {
+        return false;
+    };
+    let remainder = remainder.trim_start();
+    let Some(remainder) = remainder.strip_prefix(r#"\""#) else {
+        return false;
+    };
+    let Some(field_end) = remainder.find(r#"\""#) else {
+        return false;
+    };
+    remainder[field_end + 2..].trim_start().starts_with(':')
+}
+
+fn scan_entity_encoded_value(value: &str, start: usize) -> Option<(usize, usize)> {
+    let mut cursor = start;
+    while let Some(relative) = value[cursor..].find("&quot;") {
+        let quote = cursor + relative;
+        let mut slash_count = 0;
+        let mut before = quote;
+        while before > start && value.as_bytes()[before - 1] == b'\\' {
+            slash_count += 1;
+            before -= 1;
+        }
+        if slash_count == 0 {
+            return Some((quote, "&quot;".len()));
+        }
+        cursor = quote + "&quot;".len();
+    }
+    None
+}
+
+fn decode_json_escaped_value(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => decoded.push('"'),
+            Some('\\') => decoded.push('\\'),
+            Some('/') => decoded.push('/'),
+            Some('b') => decoded.push('\u{0008}'),
+            Some('f') => decoded.push('\u{000c}'),
+            Some('n') => decoded.push('\n'),
+            Some('r') => decoded.push('\r'),
+            Some('t') => decoded.push('\t'),
+            Some(other) => {
+                decoded.push('\\');
+                decoded.push(other);
+            }
+            None => decoded.push('\\'),
+        }
+    }
+    decoded
+}
+
+fn encode_json_escaped_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '"' => encoded.push_str(r#"\""#),
+            '\\' => encoded.push_str(r"\\"),
+            '\u{0008}' => encoded.push_str(r"\b"),
+            '\u{000c}' => encoded.push_str(r"\f"),
+            '\n' => encoded.push_str(r"\n"),
+            '\r' => encoded.push_str(r"\r"),
+            '\t' => encoded.push_str(r"\t"),
+            character if character.is_control() => {
+                use std::fmt::Write;
+                write!(&mut encoded, r"\u{:04x}", character as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            character => encoded.push(character),
+        }
+    }
+    encoded
+}
+
+fn decode_entity_value(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while cursor < value.len() {
+        let remainder = &value[cursor..];
+        let replacement = [
+            ("&quot;", '"'),
+            ("&apos;", '\''),
+            ("&amp;", '&'),
+            ("&lt;", '<'),
+            ("&gt;", '>'),
+        ]
+        .into_iter()
+        .find_map(|(entity, character)| {
+            remainder.starts_with(entity).then_some((entity, character))
+        });
+        if let Some((entity, character)) = replacement {
+            decoded.push(character);
+            cursor += entity.len();
+            continue;
+        }
+        if let Some((number, consumed)) = remainder.strip_prefix("&#").and_then(|rest| {
+            rest.as_bytes()
+                .iter()
+                .take(MAX_NUMERIC_ENTITY_BODY_BYTES + 1)
+                .position(|byte| *byte == b';')
+                .map(|end| (&rest[..end], end + 3))
+        }) {
+            let parsed = number
+                .strip_prefix('x')
+                .or_else(|| number.strip_prefix('X'))
+                .map_or_else(
+                    || number.parse::<u32>().ok(),
+                    |hex| u32::from_str_radix(hex, 16).ok(),
+                );
+            if let Some(character) = parsed.and_then(char::from_u32) {
+                decoded.push(character);
+                cursor += consumed;
+                continue;
+            }
+        }
+        let character = remainder
+            .chars()
+            .next()
+            .expect("cursor is always within the string");
+        decoded.push(character);
+        cursor += character.len_utf8();
+    }
+    decoded
+}
+
+fn encode_entity_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => encoded.push_str("&amp;"),
+            '"' => encoded.push_str("&quot;"),
+            '\'' => encoded.push_str("&apos;"),
+            '<' => encoded.push_str("&lt;"),
+            '>' => encoded.push_str("&gt;"),
+            character => encoded.push(character),
+        }
+    }
+    encoded
+}
+
+fn redact_escaped_json_fields(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(captures) = escaped_json_field_re().captures_at(value, cursor) {
+        let matched = captures
+            .get(0)
+            .expect("escaped JSON field capture must include the prefix");
+        let value_start = matched.end();
+        output.push_str(&value[cursor..value_start]);
+        let Some((value_end, delimiter_len)) = scan_escaped_json_value(value, value_start) else {
+            let decoded = decode_json_escaped_value(&value[value_start..]);
+            output.push_str(&encode_json_escaped_value(&redact_json_field_value(
+                &captures["field"],
+                &decoded,
+            )));
+            return output;
+        };
+        let decoded = decode_json_escaped_value(&value[value_start..value_end]);
+        output.push_str(&encode_json_escaped_value(&redact_json_field_value(
+            &captures["field"],
+            &decoded,
+        )));
+        output.push_str(&value[value_end..value_end + delimiter_len]);
+        cursor = value_end + delimiter_len;
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn redact_entity_encoded_fields(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(captures) = entity_encoded_field_re().captures_at(value, cursor) {
+        let matched = captures
+            .get(0)
+            .expect("entity-encoded field capture must include the prefix");
+        let value_start = matched.end();
+        output.push_str(&value[cursor..value_start]);
+        let Some((value_end, delimiter_len)) = scan_entity_encoded_value(value, value_start) else {
+            let decoded = decode_entity_value(&value[value_start..]);
+            output.push_str(&encode_entity_value(&redact_json_field_value(
+                &captures["field"],
+                &decoded,
+            )));
+            return output;
+        };
+        let decoded = decode_entity_value(&value[value_start..value_end]);
+        output.push_str(&encode_entity_value(&redact_json_field_value(
+            &captures["field"],
+            &decoded,
+        )));
+        output.push_str(&value[value_end..value_end + delimiter_len]);
+        cursor = value_end + delimiter_len;
+    }
+    output.push_str(&value[cursor..]);
+    output
+}
+
+fn is_redaction_token(value: &str) -> bool {
+    let value = value.trim_matches(|character| character == '"' || character == '\'');
+    value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .is_some_and(is_token_body)
+}
+
+fn redact_sensitive_field(value: &str) -> String {
+    let quote = value
+        .chars()
+        .next()
+        .filter(|character| *character == '"' || *character == '\'');
+    let inner = quote
+        .and_then(|quote| {
+            value
+                .strip_prefix(quote)
+                .and_then(|value| value.strip_suffix(quote))
+        })
+        .unwrap_or(value);
+    let projected = preserve_token_mask_tail(inner, "sensitive")
+        .unwrap_or_else(|| stable_token("sensitive", inner));
+    match quote {
+        Some(quote) => format!("{quote}{projected}{quote}"),
+        None => projected,
+    }
+}
+
+/// Callers invoke this helper only for field names in the sensitive-field
+/// allowlist. Treat the whole value as opaque so identity values containing
+/// spaces cannot leak a tail.
+fn redact_json_field_value(_field: &str, value: &str) -> String {
+    redact_sensitive_field(value)
 }
 
 /// An account named in an explicit field.
@@ -115,22 +486,21 @@ fn msi_property_re() -> &'static Regex {
 fn account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        // The `pre` guard stops the field vocabulary matching *inside* an
-        // existing replacement token: `[upn:…]` and `[account:…]` contain the
-        // words `upn`/`account` followed by `:`, and without the guard a second
-        // pass re-masked the token itself.
-        //
-        // The value's two alternatives are the leading-`[` rule: a
-        // bracket-prefixed value only fires when it is token-*shaped*
-        // (`[kind:hex…]`), so bracketed prose like `[not signed in]` never
-        // matches and survives verbatim. A token-shaped match is then split
-        // by the closure: a well-formed token is preserved (with its tail
-        // masked — see `split_leading_token`), while a malformed
-        // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
+            r#"(?i)(?P<pre>^|[^\[])(?P<field>(?:\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*=\s*|\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*))(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+[^\r\n,;\x22<>]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)"#,
         )
         .expect("account field regex must compile")
+    })
+}
+
+/// The nested form of an explicitly bracketed account field.
+fn nested_account_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(?P<pre>\[)(?P<field>\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n,;\x22<>]+)"#,
+        )
+        .expect("nested account field regex must compile")
     })
 }
 
@@ -148,7 +518,8 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>]+)"#,
+
         )
         .expect("host field regex must compile")
     })
@@ -175,14 +546,13 @@ fn tenant_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)",
+            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
         )
         .expect("tenant field regex must compile")
     })
 }
 
 /// A Windows security identifier, anywhere in the text.
-///
 /// The `S-1-…` shape is unambiguous enough to mask without an anchor, and a
 /// SID identifies a user or machine exactly as strongly as a UPN does.
 ///
@@ -192,9 +562,7 @@ fn tenant_field_re() -> &'static Regex {
 /// masked was an inconsistency nothing in the code or the docs intended.
 fn sid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"(?i)\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"(?i)\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile"))
 }
 
 /// Every Windows SID in `text`, as `(byte offset, matched text)`.
@@ -212,7 +580,7 @@ pub fn sid_occurrences(text: &str) -> Vec<(usize, &str)> {
 }
 
 /// Whether `kind:hash` is a well-formed token body — the one validity rule
-/// [`starts_with_token`] and [`already_masked`] share.
+/// [`split_leading_token`] and [`already_masked`] share.
 fn is_token_body(body: &str) -> bool {
     let Some((kind, hash)) = body.split_once(':') else {
         return false;
@@ -221,21 +589,6 @@ fn is_token_body(body: &str) -> bool {
         && kind.chars().all(|c| c.is_ascii_lowercase())
         && hash.len() == 16
         && hash.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Whether a value *begins* with a well-formed replacement token.
-///
-/// The UPN rule runs before the field rules, so a field value routinely
-/// arrives as an emitted token followed by more text. Re-hashing token-plus-
-/// tail would destroy the stable token — breaking cross-record correlation —
-/// so the token itself is preserved and only the tail is masked (see
-/// [`split_leading_token`]). A malformed token-lookalike does not qualify and
-/// is still masked rather than trusted.
-fn starts_with_token(value: &str) -> bool {
-    value
-        .strip_prefix('[')
-        .and_then(|rest| rest.find(']').map(|end| &rest[..end]))
-        .is_some_and(is_token_body)
 }
 
 /// Whether a value is already a replacement token (optionally quoted), so
@@ -274,26 +627,57 @@ fn split_leading_token(value: &str) -> Option<(&str, &str)> {
 /// mask a non-empty tail with `kind`, and leave an already-masked tail alone.
 /// Returns `None` when the value does not begin with a well-formed token.
 fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
-    let (token, rest) = split_leading_token(value)?;
-    let rest_trimmed = rest.trim_start();
-    if rest_trimmed.is_empty() || starts_with_token(rest_trimmed) || already_masked(rest_trimmed) {
-        return Some(value.to_owned());
+    let (token, mut rest) = split_leading_token(value)?;
+    let mut projected = String::with_capacity(value.len());
+    projected.push_str(token);
+
+    loop {
+        let rest_trimmed = rest.trim_start();
+        if rest_trimmed.is_empty() || already_masked(rest_trimmed) {
+            projected.push_str(rest);
+            return Some(projected);
+        }
+
+        let lead_len = rest.len() - rest_trimmed.len();
+        projected.push_str(&rest[..lead_len]);
+        if let Some((next_token, next_rest)) = split_leading_token(rest_trimmed) {
+            projected.push_str(next_token);
+            rest = next_rest;
+            continue;
+        }
+
+        projected.push_str(&stable_token(kind, rest_trimmed));
+        return Some(projected);
     }
-    let lead = &rest[..rest.len() - rest_trimmed.len()];
-    Some(format!("{token}{lead}{}", stable_token(kind, rest_trimmed)))
 }
 
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
-    let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
+    if value.len() > MAX_REDACTION_INPUT_BYTES {
+        return REMOVED_OVERSIZE.to_owned();
+    }
+    let masked = secret_token_re().replace_all(value, |caps: &regex::Captures<'_>| {
+        let token = caps
+            .get(0)
+            .expect("secret token lookalike capture must include the full match")
+            .as_str();
+        if is_redaction_token(token) {
+            token.to_owned()
+        } else {
+            stable_token("secret", token)
+        }
+    });
+    let masked = upn_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         stable_token("upn", &caps[0])
     });
-
     let masked = user_path_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         // Trailing whitespace is not part of the profile name; keeping it out
         // of the hashed value means `C:\Users\John Doe ` and `C:\Users\John Doe`
         // still resolve to the same user.
         let user = caps["user"].trim_end();
+        if already_masked(user) {
+            return caps[0].to_owned();
+        }
         let trailing = &caps["user"][user.len()..];
         format!(
             "{}{}{}",
@@ -304,18 +688,103 @@ pub fn redact_text(value: &str) -> String {
     });
 
     let masked = tenant_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        format!("{}{}", &caps["field"], stable_token("tenant", &caps["value"]))
+        let delimiter = caps
+            .name("delimiter")
+            .map_or("", |matched| matched.as_str());
+        let captured_value = &caps["value"];
+        let value = captured_value
+            .strip_suffix(delimiter)
+            .unwrap_or(captured_value);
+        let quote = value
+            .chars()
+            .next()
+            .filter(|character| *character == '"' || *character == '\'');
+        let inner = quote
+            .and_then(|quote| {
+                value
+                    .strip_prefix(quote)
+                    .and_then(|value| value.strip_suffix(quote))
+            })
+            .unwrap_or(value);
+        if already_masked(inner) {
+            let projected = quote.map_or_else(
+                || inner.to_owned(),
+                |quote| format!("{quote}{inner}{quote}"),
+            );
+            return format!("{}{}{}", &caps["field"], projected, delimiter);
+        }
+        let projected = preserve_token_mask_tail(inner, "tenant")
+            .unwrap_or_else(|| stable_token("tenant", inner));
+        let projected = match quote {
+            Some(quote) => format!("{quote}{projected}{quote}"),
+            None => projected,
+        };
+        format!("{}{}{}", &caps["field"], projected, delimiter)
+    });
+
+    let masked = credential_data_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        format!(
+            "{}{}",
+            &caps["field"],
+            redact_sensitive_field(&caps["value"])
+        )
+    });
+
+    let masked = sensitive_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let delimiter = caps
+            .name("delimiter")
+            .map_or("", |matched| matched.as_str());
+        let captured_value = &caps["value"];
+        let value = captured_value
+            .strip_suffix(delimiter)
+            .unwrap_or(captured_value);
+        format!(
+            "{}{}{}",
+            &caps["field"],
+            redact_sensitive_field(value),
+            delimiter
+        )
     });
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = &caps["value"];
-        if already_masked(value) {
-            return format!("{}{}", &caps["field"], value);
+        let delimiter = caps
+            .name("delimiter")
+            .map_or("", |matched| matched.as_str());
+        let captured_value = &caps["value"];
+        let value = captured_value
+            .strip_suffix(delimiter)
+            .unwrap_or(captured_value);
+        let quote = value
+            .chars()
+            .next()
+            .filter(|character| *character == '"' || *character == '\'');
+        let inner = quote
+            .and_then(|quote| {
+                value
+                    .strip_prefix(quote)
+                    .and_then(|value| value.strip_suffix(quote))
+            })
+            .unwrap_or(value);
+        if already_masked(inner) {
+            return format!("{}{}{}", &caps["field"], value, delimiter);
         }
-        if let Some(projected) = preserve_token_mask_tail(value, "host") {
-            return format!("{}{}", &caps["field"], projected);
-        }
-        format!("{}{}", &caps["field"], stable_token("host", value))
+        let projected =
+            preserve_token_mask_tail(inner, "host").unwrap_or_else(|| stable_token("host", inner));
+        let projected = match quote {
+            Some(quote) => format!("{quote}{projected}{quote}"),
+            None => projected,
+        };
+        format!("{}{}{}", &caps["field"], projected, delimiter)
+    });
+    let masked = nested_account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let value = caps["value"].trim_end();
+        let trailing = &caps["value"][value.len()..];
+        let projected = preserve_token_mask_tail(value, "account")
+            .unwrap_or_else(|| stable_token("account", value));
+        format!(
+            "{}{}{}{}",
+            &caps["pre"], &caps["field"], projected, trailing
+        )
     });
 
     let masked = unc_host_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
@@ -323,6 +792,13 @@ pub fn redact_text(value: &str) -> String {
     });
 
     let masked = account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let matched = caps
+            .get(0)
+            .expect("account field capture must include the full match")
+            .as_str();
+        if is_redaction_token(matched) {
+            return matched.to_owned();
+        }
         // Trailing whitespace is prose spacing, not part of the account name.
         let value = caps["value"].trim_end();
         let trailing = &caps["value"][value.len()..];
@@ -330,7 +806,10 @@ pub fn redact_text(value: &str) -> String {
             return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
         }
         if let Some(projected) = preserve_token_mask_tail(value, "account") {
-            return format!("{}{}{}{}", &caps["pre"], &caps["field"], projected, trailing);
+            return format!(
+                "{}{}{}{}",
+                &caps["pre"], &caps["field"], projected, trailing
+            );
         }
         format!(
             "{}{}{}{}",
@@ -340,26 +819,89 @@ pub fn redact_text(value: &str) -> String {
             trailing
         )
     });
-
-    let masked = msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = &caps["value"];
-        if already_masked(value) {
-            return format!("{}{}", &caps["property"], value);
+    let masked = nested_msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let value = caps["value"].trim_end();
+        let trailing = &caps["value"][value.len()..];
+        let projected = preserve_token_mask_tail(value, "secret")
+            .unwrap_or_else(|| stable_token("secret", value));
+        format!(
+            "{}{}{}{}",
+            &caps["pre"], &caps["property"], projected, trailing
+        )
+    });
+    let masked = bracketed_msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let matched = caps
+            .get(0)
+            .expect("bracketed MSI property capture must include the full match")
+            .as_str();
+        if is_redaction_token(matched) {
+            return matched.to_owned();
         }
-        format!("{}{}", &caps["property"], stable_token("secret", value))
+        if caps["property"].eq_ignore_ascii_case("[secret:")
+            && is_token_body(&format!("secret:{}", caps["value"].trim()))
+        {
+            return matched.to_owned();
+        }
+        let captured_value = &caps["value"];
+        let value = captured_value.trim_end();
+        let trailing = &captured_value[value.len()..];
+        let quote = value
+            .chars()
+            .next()
+            .filter(|character| *character == '"' || *character == '\'');
+        let inner = quote
+            .and_then(|quote| {
+                value
+                    .strip_prefix(quote)
+                    .and_then(|value| value.strip_suffix(quote))
+            })
+            .unwrap_or(value);
+        let projected = preserve_token_mask_tail(inner, "secret")
+            .unwrap_or_else(|| stable_token("secret", inner));
+        let projected = match quote {
+            Some(quote) => format!("{quote}{projected}{quote}"),
+            None => projected,
+        };
+        format!(
+            "{}{}{}{}]",
+            &caps["pre"], &caps["property"], projected, trailing
+        )
+    });
+    let source: &str = &masked;
+    let masked = msi_property_re().replace_all(source, |caps: &regex::Captures<'_>| {
+        let matched = caps
+            .get(0)
+            .expect("MSI property capture must include the full match")
+            .as_str();
+        if is_redaction_token(matched) {
+            return matched.to_owned();
+        }
+        let delimiter = caps
+            .name("delimiter")
+            .map_or("", |matched| matched.as_str());
+        let captured_value = &caps["value"];
+        let value = captured_value
+            .strip_suffix(delimiter)
+            .unwrap_or(captured_value);
+        let prefix = format!("{}{}", &caps["pre"], &caps["property"]);
+        if let Some(projected) = preserve_token_mask_tail(value, "secret") {
+            return format!("{prefix}{projected}{delimiter}");
+        }
+        if already_masked(value) {
+            return format!("{prefix}{value}{delimiter}");
+        }
+        format!("{prefix}{}{delimiter}", stable_token("secret", value))
     });
 
     let masked = command_line_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         let value = caps["value"].trim_end();
-        // Already masked: re-masking would hash the token and break
-        // idempotence.
-        if already_masked(value) {
-            return format!("{}{}", &caps["flag"], value);
+        if let Some(projected) = preserve_token_mask_tail(value, "command") {
+            return format!("{}{}", &caps["flag"], projected);
         }
         format!("{}{}", &caps["flag"], stable_token("command", value))
     });
 
-    sid_re()
+    let masked = sid_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
             // Hashed from the uppercase form. A SID is case-insensitive, so the
             // two spellings name one identity and must reach one token; hashing
@@ -367,13 +909,28 @@ pub fn redact_text(value: &str) -> String {
             // account and break the correlation these tokens exist to provide.
             stable_token("sid", &caps[0].to_ascii_uppercase())
         })
-        .into_owned()
+        .into_owned();
+    let masked = redact_escaped_json_fields(&masked);
+    redact_entity_encoded_fields(&masked)
 }
-
 #[cfg(test)]
 mod tests {
-    use super::{redact_text, sid_occurrences};
+    use super::{decode_entity_value, preserve_token_mask_tail, redact_text, sid_occurrences};
 
+    #[test]
+    fn numeric_entities_decode_only_within_a_bounded_prefix() {
+        assert_eq!(decode_entity_value("&#65; &#x41;"), "A A");
+        assert_eq!(decode_entity_value("&#1114111;"), "\u{10ffff}");
+        assert_eq!(decode_entity_value("&#x10FFFF;"), "\u{10ffff}");
+
+        let oversized_decimal = format!("&#{}65;", "0".repeat(32));
+        let oversized_hex = format!("&#x{}41;", "0".repeat(32));
+        assert_eq!(decode_entity_value(&oversized_decimal), oversized_decimal);
+        assert_eq!(decode_entity_value(&oversized_hex), oversized_hex);
+
+        let unterminated = format!("&#{}", "1".repeat(32));
+        assert_eq!(decode_entity_value(&unterminated), unterminated);
+    }
     #[test]
     fn a_json_escaped_windows_path_is_masked() {
         // These logs embed JSON payloads; a path inside one is escaped.
@@ -382,11 +939,35 @@ mod tests {
         assert!(!redacted.contains("Doe"), "got {redacted:?}");
         assert!(redacted.contains(r"AppData"), "got {redacted:?}");
     }
+    #[test]
+    fn json_escape_preserves_literal_backslashes() {
+        assert_eq!(
+            super::encode_json_escaped_value(r"C:\Users\John"),
+            r#"C:\\Users\\John"#
+        );
+    }
 
     #[test]
     fn a_json_escaped_path_mask_is_idempotent() {
         let once = redact_text(r#"{"Path":"C:\\Users\\John Doe\\AppData"}"#);
         assert_eq!(once, redact_text(&once));
+    }
+    #[test]
+    fn encoded_json_identity_and_credential_fields_are_masked_without_masking_prose() {
+        let entity = redact_text(
+            r#"&quot;Password&quot;:&quot;hunter2&quot; &quot;UserName&quot;:&quot;CONTOSO\John Doe&quot; &quot;Message&quot;:&quot;Password is required&quot;"#,
+        );
+        assert!(!entity.contains("hunter2"), "got {entity:?}");
+        assert!(!entity.contains("John Doe"), "got {entity:?}");
+        assert!(entity.contains("Password is required"), "got {entity:?}");
+
+        let escaped = redact_text(
+            r#"{\"Password\":\"hunter2\",\"UserName\":\"CONTOSO\\John Doe\",\"ComputerName\":\"DESKTOP-JOHN\"}"#,
+        );
+        assert!(!escaped.contains("hunter2"), "got {escaped:?}");
+        assert!(!escaped.contains("John Doe"), "got {escaped:?}");
+        assert!(!escaped.contains("DESKTOP-JOHN"), "got {escaped:?}");
+        assert_eq!(escaped, redact_text(&escaped));
     }
 
     #[test]
@@ -397,8 +978,10 @@ mod tests {
             "app.exe -Token=abc123",
         ] {
             let redacted = redact_text(text);
-            assert!(!redacted.contains("hunter2"), "{text} -> {redacted}");
-            assert!(!redacted.contains("abc123"), "{text} -> {redacted}");
+            assert!(
+                !redacted.contains("hunter2") && !redacted.contains("abc123"),
+                "got {redacted:?}"
+            );
         }
     }
 
@@ -425,11 +1008,61 @@ mod tests {
             let redacted = redact_text(text);
             assert!(!redacted.contains("hunter2"), "{text} -> {redacted}");
             assert!(!redacted.contains("ABCD-1234"), "{text} -> {redacted}");
-            assert!(!redacted.contains("multi word secret"), "{text} -> {redacted}");
+            assert!(
+                !redacted.contains("multi word secret"),
+                "{text} -> {redacted}"
+            );
         }
         // An ordinary property is not credential-shaped and stays visible.
         let benign = redact_text("msiexec /i app.msi INSTALLDIR=C:\\App /qn");
         assert!(benign.contains("INSTALLDIR=C:\\App"), "got {benign:?}");
+    }
+    #[test]
+    fn bracketed_msi_and_account_fields_are_masked() {
+        let redacted = redact_text(r"[PASSWORD=hunter2] [RunAsUser=CONTOSO\jsmith]");
+
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+        assert!(!redacted.contains("CONTOSO"), "got {redacted:?}");
+        assert!(!redacted.contains("jsmith"), "got {redacted:?}");
+    }
+    #[test]
+    fn bracketed_secret_values_with_spaces_are_redacted_as_one_value() {
+        for (text, secret) in [
+            ("[secret:foo bar]", "foo bar"),
+            ("[PASSWORD=top secret]", "top secret"),
+        ] {
+            let redacted = redact_text(text);
+            assert!(!redacted.contains(secret), "{text} leaked in {redacted:?}");
+            assert_eq!(redacted, redact_text(&redacted));
+        }
+    }
+
+    #[test]
+    fn an_escaped_json_value_ending_in_a_backslash_does_not_skip_the_next_field() {
+        let redacted =
+            redact_text(r#"{\"Password\":\"ends-with-backslash\\\\\",\"Token\":\"next-secret\"}"#);
+        assert!(
+            !redacted.contains("ends-with-backslash"),
+            "got {redacted:?}"
+        );
+        assert!(!redacted.contains("next-secret"), "got {redacted:?}");
+        assert_eq!(redacted, redact_text(&redacted));
+    }
+
+    #[test]
+    fn bracketed_replacement_tokens_and_harmless_tails_are_idempotent() {
+        let text = "[secret:0123456789abcdef] [account:fedcba9876543210] PASSWORD=[secret:0123456789abcdef].suffix RunAsUser=[account:fedcba9876543210] (tail)";
+        let redacted = redact_text(text);
+
+        assert!(
+            redacted.contains("[secret:0123456789abcdef]"),
+            "got {redacted:?}"
+        );
+        assert!(
+            redacted.contains("[account:fedcba9876543210]"),
+            "got {redacted:?}"
+        );
+        assert_eq!(redacted, redact_text(&redacted));
     }
 
     #[test]
@@ -455,6 +1088,22 @@ mod tests {
             "the trailing identity must be masked: {once:?}"
         );
         assert_eq!(once, redact_text(&once), "and it must stay idempotent");
+    }
+
+    #[test]
+    fn a_bounded_token_chain_does_not_recurse_and_masks_only_its_first_non_token_tail() {
+        let token = "[account:0123456789abcdef]";
+        let value = format!("{} leaked-identity", format!("{token} ").repeat(12_000));
+
+        let projected =
+            preserve_token_mask_tail(&value, "account").expect("the value starts with a token");
+
+        assert_eq!(projected.matches(token).count(), 12_000);
+        assert!(!projected.contains("leaked-identity"), "{projected:?}");
+        assert_eq!(
+            projected,
+            preserve_token_mask_tail(&projected, "account").unwrap()
+        );
     }
 
     #[test]
@@ -512,8 +1161,7 @@ mod tests {
 
         // The JSON-escaped form arrives with doubled separators, exactly like
         // the Users root.
-        let escaped =
-            redact_text(r#"{"Path":"C:\\Documents and Settings\\John Doe\\AppData"}"#);
+        let escaped = redact_text(r#"{"Path":"C:\\Documents and Settings\\John Doe\\AppData"}"#);
         assert!(!escaped.contains("John"), "got {escaped:?}");
         assert!(!escaped.contains("Doe"), "got {escaped:?}");
         assert!(escaped.contains("AppData"), "got {escaped:?}");
@@ -559,7 +1207,8 @@ mod tests {
 
     #[test]
     fn a_windows_sid_is_masked_anywhere() {
-        let redacted = redact_text("Granting access to S-1-5-21-397955417-626881126-188441444-1010 done");
+        let redacted =
+            redact_text("Granting access to S-1-5-21-397955417-626881126-188441444-1010 done");
         assert!(!redacted.contains("397955417"), "got {redacted:?}");
         assert!(redacted.contains("done"));
         // Well-known machine SIDs with fewer sub-authorities identify nobody
@@ -590,9 +1239,7 @@ mod tests {
     fn a_tenant_id_field_is_masked_but_bare_guids_survive() {
         let app = "11111111-2222-4333-8444-555555555555";
         let tenant = "99999999-8888-4777-8666-555555555555";
-        let redacted = redact_text(&format!(
-            "TenantId: {tenant} processing app with id: {app}"
-        ));
+        let redacted = redact_text(&format!("TenantId: {tenant} processing app with id: {app}"));
         assert!(!redacted.contains(tenant), "got {redacted:?}");
         assert!(
             redacted.contains(app),
@@ -705,10 +1352,215 @@ mod tests {
     }
 
     #[test]
+    fn labeled_serial_hardware_and_tenant_values_are_masked() {
+        let redacted = redact_text(
+            r#"serialNumber: ABC123456 hardwareHash=AA-BB-CC tenantId={99999999-8888-4777-8666-555555555555}"#,
+        );
+        assert!(!redacted.contains("ABC123456"), "got {redacted:?}");
+        assert!(!redacted.contains("AA-BB-CC"), "got {redacted:?}");
+        assert!(!redacted.contains("99999999-8888"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn oversized_text_is_replaced_instead_of_partially_exported() {
+        let input = format!("prefix {}", "secret-user@example.com ".repeat(20_000));
+        let redacted = redact_text(&input);
+        assert!(redacted.contains("[redacted: oversized text omitted]"));
+        assert!(!redacted.contains("secret-user@example.com"));
+    }
+
+    #[test]
     fn the_extended_projection_is_idempotent() {
         let once = redact_text(
             r"ComputerName: DESKTOP-AB12CD RunAsUser = CONTOSO\John Doe, S-1-5-21-397955417-626881126-188441444-1010 ran msiexec PASSWORD=hunter2 from \\FILESRV01\share for adele.vance@contoso.example TenantId: 99999999-8888-4777-8666-555555555555",
         );
         assert_eq!(once, redact_text(&once));
+    }
+
+    #[test]
+    fn labeled_multiword_identity_fields_mask_the_entire_value() {
+        let redacted = redact_text(
+            r"TargetUserName=CONTOSO\Jane Doe, SubjectUserName=CONTOSO\Alice Smith, SubjectDomainName=CONTOSO",
+        );
+        assert!(!redacted.contains("Jane"));
+        assert!(!redacted.contains("Doe"));
+        assert!(!redacted.contains("Alice"));
+        assert!(!redacted.contains("Smith"));
+        assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn quoted_json_field_names_are_redacted() {
+        let redacted = redact_text(
+            r#"{"serialNumber":"ABC123456","tenantId":"99999999-8888-4777-8666-555555555555","TargetUserName":"CONTOSO\Jane Doe"}"#,
+        );
+        assert!(!redacted.contains("ABC123456"));
+        assert!(!redacted.contains("99999999-8888"));
+        assert!(!redacted.contains("Jane Doe"));
+        assert!(!redacted.contains("CONTOSO"));
+    }
+
+    #[test]
+    fn credential_labels_and_quoted_computer_values_are_redacted() {
+        let redacted = redact_text(
+            r#"ApiSecret=hunter2 AccessToken=abc123 Credential=topsecret {"Computer":"DESKTOP-JOHN"}"#,
+        );
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("abc123"));
+        assert!(!redacted.contains("topsecret"));
+        assert!(!redacted.contains("DESKTOP-JOHN"));
+    }
+    #[test]
+    fn escaped_json_quotes_inside_a_sensitive_value_do_not_leak_the_suffix() {
+        let redacted = redact_text(r#"{\"Password\":\"hunter2\\\"quoted-secret\"}"#);
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+        assert!(
+            !redacted.contains("quoted-secret"),
+            "an escaped quote must not terminate masking early: {redacted:?}"
+        );
+    }
+
+    #[test]
+    fn entity_encoded_escaped_quotes_inside_a_sensitive_value_do_not_leak_the_suffix() {
+        let redacted =
+            redact_text(r#"&quot;Password&quot;:&quot;hunter2\&quot;quoted-secret&quot;"#);
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+        assert!(
+            !redacted.contains("quoted-secret"),
+            "an entity-encoded escaped quote must not terminate masking early: {redacted:?}"
+        );
+    }
+
+    #[test]
+    fn bracket_leading_windows_profile_segments_are_masked() {
+        let redacted = redact_text(r"C:\Users\[John Doe]\AppData\Local");
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
+        assert!(redacted.ends_with(r"\AppData\Local"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn encoded_inventory_fields_are_masked() {
+        for (field, secret) in [
+            ("TenantId", "tenant-secret"),
+            ("DeviceId", "device-secret"),
+            ("HardwareHash", "hardware-secret"),
+            ("DeviceHardwareData", "device-hardware-secret"),
+        ] {
+            let escaped = redact_text(&format!(r#"{{\"{field}\":\"{secret}\"}}"#));
+            assert!(!escaped.contains(secret), "{field} leaked in {escaped:?}");
+
+            let entity = redact_text(&format!(r#"&quot;{field}&quot;:&quot;{secret}&quot;"#));
+            assert!(!entity.contains(secret), "{field} leaked in {entity:?}");
+        }
+    }
+    #[test]
+    fn profile_names_with_closing_brackets_are_fully_masked() {
+        let redacted = redact_text(r"C:\Users\[Alice]Smith\AppData\Local");
+        assert!(!redacted.contains("Alice"), "got {redacted:?}");
+        assert!(!redacted.contains("Smith"), "got {redacted:?}");
+        assert!(redacted.ends_with(r"\AppData\Local"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn a_sensitive_field_preserves_a_valid_token_and_masks_its_tail() {
+        let masked = redact_text("DeviceId: original-device-id");
+        let token = masked
+            .strip_prefix("DeviceId: ")
+            .expect("device token")
+            .to_owned();
+        let redacted = redact_text(&format!("DeviceId: \"{token} trailing-device-id\""));
+        assert!(
+            redacted.contains(&token),
+            "token must survive: {redacted:?}"
+        );
+        assert!(
+            !redacted.contains("trailing-device-id"),
+            "token tail must be masked: {redacted:?}"
+        );
+    }
+
+    #[test]
+    fn a_tenant_token_preserves_the_token_and_masks_a_trailing_identity() {
+        let token = "[tenant:0123456789abcdef]";
+        let redacted = redact_text(&format!("TenantId: {token} (aka CONTOSO\\jsmith)"));
+        assert!(redacted.contains(token), "token must survive: {redacted:?}");
+        assert!(
+            !redacted.contains("CONTOSO"),
+            "identity leaked: {redacted:?}"
+        );
+        assert!(
+            !redacted.contains("jsmith"),
+            "identity leaked: {redacted:?}"
+        );
+        assert_eq!(redacted, redact_text(&redacted));
+        let quoted = redact_text(r#"TenantId: "99999999-8888-4777-8666-555555555555""#);
+        assert!(
+            !quoted.contains("99999999-8888"),
+            "tenant leaked: {quoted:?}"
+        );
+        assert_eq!(quoted, redact_text(&quoted));
+    }
+
+    #[test]
+    fn an_unterminated_secret_prefix_is_not_trusted_as_a_token() {
+        let redacted = redact_text("[secret:hunter2");
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn organization_and_credential_fields_mask_unquoted_values() {
+        for (value, secret) in [
+            ("AADTenantId=tenant-secret", "tenant-secret"),
+            ("CredentialData=credential-payload", "credential-payload"),
+            ("CredentialData=[secret payload]", "secret payload"),
+            ("CredentialData=secret payload", "secret payload"),
+        ] {
+            let redacted = redact_text(value);
+            assert!(!redacted.contains(secret), "{value} leaked in {redacted:?}");
+        }
+    }
+    #[test]
+    fn nested_bracketed_properties_are_redacted_without_rehashing_tokens() {
+        for (text, secret) in [
+            ("x [[PASSWORD=double-bracket]", "double-bracket"),
+            ("x [[RunAsUser=CONTOSO\\double-bracket]", "double-bracket"),
+        ] {
+            let redacted = redact_text(text);
+            assert!(!redacted.contains(secret), "{text} leaked in {redacted:?}");
+            assert_eq!(redacted, redact_text(&redacted));
+        }
+        let token = "[secret:0123456789abcdef]";
+        assert_eq!(redact_text(token), token);
+        assert_eq!(
+            redact_text("[account:0123456789abcdef]"),
+            "[account:0123456789abcdef]"
+        );
+    }
+
+    #[test]
+    fn malformed_account_token_prefixes_are_masked() {
+        let redacted = redact_text("RunAsUser: [account:0123456789abcdef trailing-account");
+        assert!(!redacted.contains("0123456789abcdef"));
+        assert!(!redacted.contains("trailing-account"));
+        assert_eq!(redacted, redact_text(&redacted));
+    }
+
+    #[test]
+    fn valid_sensitive_tokens_keep_the_token_but_mask_spaced_tails() {
+        for (field, token_kind, tail) in [
+            ("DeviceId", "device", "trailing-device"),
+            ("ComputerName", "host", "trailing-host"),
+            ("PASSWORD", "secret", "trailing-secret"),
+        ] {
+            let text = format!("{field}: [{token_kind}:0123456789abcdef] {tail}");
+            let redacted = redact_text(&text);
+            assert!(
+                redacted.contains(&format!("[{token_kind}:0123456789abcdef]")),
+                "token was not preserved: {redacted:?}"
+            );
+            assert!(!redacted.contains(tail), "{field} leaked in {redacted:?}");
+            assert_eq!(redacted, redact_text(&redacted));
+        }
     }
 }

@@ -6,6 +6,8 @@ export interface MarkerCategory {
 
 export interface Marker {
   lineId: number;
+  /** Exact EVTX identity; absent for legacy line markers. */
+  identity?: string;
   category: string;
   color: string;
   added: string; // ISO 8601

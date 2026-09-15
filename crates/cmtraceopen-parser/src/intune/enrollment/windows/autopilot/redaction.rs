@@ -126,9 +126,7 @@ fn user_path_re() -> &'static Regex {
 /// projection stays idempotent.
 fn opaque_blob_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile"))
 }
 
 /// Mask the sensitive spans inside a free-text value.
