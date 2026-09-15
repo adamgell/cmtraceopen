@@ -183,10 +183,31 @@ jobs:
             'The required checks are kicked against this branch explicitly, because a pull request opened with `GITHUB_TOKEN` does not start workflows on its own.'
           ) -join "`n"
 
-          gh pr create --base $env:DEFAULT_BRANCH --head $env:BRANCH `
+          $created = gh pr create --base $env:DEFAULT_BRANCH --head $env:BRANCH `
             --title "chore(scoop): bump bucket to $env:VERSION" `
-            --body $body
-          if ($LASTEXITCODE -ne 0) { throw "gh pr create failed with exit code $LASTEXITCODE" }
+            --body $body 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host $created
+            exit 0
+          }
+
+          $detail = $created -join "`n"
+          # GITHUB_TOKEN may only open pull requests when the repository allows it.
+          # Without this check the job dies on a GraphQL error that says nothing
+          # about the setting a maintainer has to change.
+          if ($detail -match 'not permitted to create or approve pull requests') {
+            $hint = @(
+              "gh pr create was refused: this repository does not allow GitHub Actions to open pull requests,"
+              "so the branch $env:BRANCH is pushed and correct but has no pull request."
+              ""
+              "Enable Settings > Actions > General > Workflow permissions > 'Allow GitHub Actions to create and approve pull requests', or give this job a token that may open one."
+              ""
+              "Original error: $detail"
+            ) -join "`n"
+            throw $hint
+          }
+
+          throw "gh pr create failed: $detail"
 
       # GitHub suppresses workflow runs for events created by GITHUB_TOKEN, so the
       # pull request opened above starts no checks and the required status checks
