@@ -576,11 +576,13 @@ export function StatusBar() {
                 ? "Software Deployment"
                 : activeView === "macos-diag"
                   ? "macOS Diagnostics"
-                  : activeView === "secureboot"
-                    ? "Secure Boot"
-                    : activeView === "dsregcmd"
-                      ? "dsregcmd"
-                      : activeView;
+                  : activeView === "macos-jamf"
+                    ? "macOS JAMF"
+                    : activeView === "secureboot"
+                      ? "Secure Boot"
+                      : activeView === "dsregcmd"
+                        ? "dsregcmd"
+                        : activeView;
 
   return (
     <div
