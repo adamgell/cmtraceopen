@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// A gap is not an empty result and is not evidence that the event did not occur. The parser
 /// reports the readable records it can recover and attaches one of these kinds to every rejected
 /// file, chunk, record, or rendered XML value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EvtxCoverageGapKind {
     Unsupported,
@@ -21,6 +21,32 @@ pub enum EvtxCoverageGapKind {
     Xml,
     Provider,
     Limit,
+}
+
+/// Native Windows API stage that could not produce a provider message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderMessageStage {
+    OpenPublisherMetadata,
+    FormatMessage,
+}
+
+impl ProviderMessageStage {
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::OpenPublisherMetadata => "EvtOpenPublisherMetadata",
+            Self::FormatMessage => "EvtFormatMessage",
+        }
+    }
+}
+
+/// Typed native context for a provider-description coverage gap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderMessageCoverage {
+    pub provider: String,
+    pub stage: ProviderMessageStage,
+    pub error_code: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -43,6 +69,8 @@ pub struct EvtxCoverageGap {
     pub event_record_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_record_id_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_message: Option<Box<ProviderMessageCoverage>>,
 }
 
 impl EvtxCoverageGap {
@@ -58,6 +86,7 @@ impl EvtxCoverageGap {
             chunk_id: None,
             event_record_id: None,
             event_record_id_text: None,
+            provider_message: None,
         }
     }
 

@@ -131,9 +131,14 @@ where
     Err(exhausted_error.to_owned())
 }
 
-fn write_to_staged_destination<F>(path: &Path, write: F) -> Result<ExportStats, String>
+fn write_to_staged_destination<F, C>(
+    path: &Path,
+    write: F,
+    before_publish: C,
+) -> Result<ExportStats, String>
 where
     F: FnOnce(&mut std::fs::File) -> Result<ExportStats, String>,
+    C: FnOnce() -> Result<(), String>,
 {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path
@@ -149,13 +154,19 @@ where
     let result = write(staged.file_mut());
     staged.close();
     match result {
-        Ok(stats) => match replace_destination(&staged.path, path) {
-            Ok(()) => {
-                staged.disarm_cleanup();
-                Ok(stats)
+        Ok(stats) => {
+            // This is the last cancellable/validation boundary. A caller may have spent minutes
+            // producing the staged file, so it must be able to veto publication immediately before
+            // the atomic replace without leaving a partial destination behind.
+            before_publish()?;
+            match replace_destination(&staged.path, path) {
+                Ok(()) => {
+                    staged.disarm_cleanup();
+                    Ok(stats)
+                }
+                Err(error) => Err(format!("cannot replace {}: {error}", path.display())),
             }
-            Err(error) => Err(format!("cannot replace {}: {error}", path.display())),
-        },
+        }
         Err(error) => Err(error),
     }
 }
@@ -732,6 +743,33 @@ pub fn validate_raw_xml(records: &[EvtxRecord], format: ExportFormat) -> io::Res
 /// A missing destination is normalized against the current directory so a relative
 /// save path is compared with the same identity as an existing source. `-` remains
 /// the stdout sentinel used by the CLI and is intentionally never treated as a file.
+pub(crate) fn normalized_path_identity(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    let normalized = fs::canonicalize(&absolute).unwrap_or_else(|_| {
+        let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
+        let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+        absolute
+            .file_name()
+            .map(|name| parent.join(name))
+            .unwrap_or(parent)
+    });
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        // Windows and the default macOS filesystems compare paths without case, including when
+        // the destination has not been created yet. Fold the fallback identity too so a case-only
+        // alias cannot race past the source collision check.
+        std::path::PathBuf::from(normalized.to_string_lossy().to_lowercase())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        normalized
+    }
+}
+
 pub fn reject_source_destination(
     sources: &[String],
     destination: Option<&Path>,
@@ -739,38 +777,11 @@ pub fn reject_source_destination(
     let Some(destination) = destination.filter(|path| *path != Path::new("-")) else {
         return Ok(());
     };
-    let normalize = |path: &Path| {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir().unwrap_or_default().join(path)
-        };
-        let normalized = fs::canonicalize(&absolute).unwrap_or_else(|_| {
-            let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
-            let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-            absolute
-                .file_name()
-                .map(|name| parent.join(name))
-                .unwrap_or(parent)
-        });
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        {
-            // Windows and the default macOS filesystems compare paths without
-            // case, including when the destination has not been created yet.
-            // Fold the fallback identity too so a case-only alias cannot race
-            // past the source collision check.
-            std::path::PathBuf::from(normalized.to_string_lossy().to_lowercase())
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            normalized
-        }
-    };
-    let destination = normalize(destination);
+    let destination = normalized_path_identity(destination);
     if sources
         .iter()
         .map(Path::new)
-        .map(normalize)
+        .map(normalized_path_identity)
         .any(|source| source == destination)
     {
         return Err("output path cannot overwrite an opened source or manifest".to_owned());
@@ -802,10 +813,14 @@ pub fn write_records_to_destination(
     }
 
     let path = destination.expect("destination checked above");
-    write_to_staged_destination(path, |file| {
-        write_records(file, format, records)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))
-    })
+    write_to_staged_destination(
+        path,
+        |file| {
+            write_records(file, format, records)
+                .map_err(|error| format!("cannot write {}: {error}", path.display()))
+        },
+        || Ok(()),
+    )
 }
 pub fn write_record_stream_to_writer<W, I, R>(
     output: &mut W,
@@ -864,10 +879,14 @@ where
     }
 
     let path = destination.expect("destination checked above");
-    write_to_staged_destination(path, |file| {
-        write_record_stream(file, format, records, mapped_columns)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))
-    })
+    write_to_staged_destination(
+        path,
+        |file| {
+            write_record_stream(file, format, records, mapped_columns)
+                .map_err(|error| format!("cannot write {}: {error}", path.display()))
+        },
+        || Ok(()),
+    )
 }
 
 /// Streams fallible records to stdout, or atomically replaces a file destination.
@@ -893,10 +912,39 @@ where
     }
 
     let path = destination.expect("destination checked above");
-    write_to_staged_destination(path, |file| {
-        write_fallible_record_stream_to_writer(file, records, format, mapped_columns)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))
-    })
+    write_to_staged_destination(
+        path,
+        |file| {
+            write_fallible_record_stream_to_writer(file, records, format, mapped_columns)
+                .map_err(|error| format!("cannot write {}: {error}", path.display()))
+        },
+        || Ok(()),
+    )
+}
+
+/// Streams fallible records to a file and performs one final validation immediately before the
+/// atomic replacement. GUI export sessions use this to honor late cancellation and to re-resolve
+/// protected source paths after the potentially long serialization pass.
+pub(crate) fn write_fallible_record_stream_to_destination_with_commit_check<I, R, C>(
+    records: I,
+    format: ExportFormat,
+    destination: &Path,
+    mapped_columns: &[String],
+    before_publish: C,
+) -> Result<ExportStats, String>
+where
+    I: IntoIterator<Item = io::Result<R>>,
+    R: Borrow<EvtxRecord>,
+    C: FnOnce() -> Result<(), String>,
+{
+    write_to_staged_destination(
+        destination,
+        |file| {
+            write_fallible_record_stream_to_writer(file, records, format, mapped_columns)
+                .map_err(|error| format!("cannot write {}: {error}", destination.display()))
+        },
+        before_publish,
+    )
 }
 #[cfg(test)]
 fn record(message: &str) -> EvtxRecord {
@@ -1114,6 +1162,56 @@ fn failed_file_validation_preserves_existing_destination() {
         super::writer::write_records_to_destination(&[invalid], ExportFormat::Xml, Some(&path))
             .expect_err("malformed XML fails");
     assert!(error.contains("malformed") || error.contains("incomplete"));
+    assert_eq!(
+        std::fs::read_to_string(path).expect("destination"),
+        "sentinel"
+    );
+}
+
+#[test]
+fn commit_check_can_cancel_after_staging_without_replacing_the_destination() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    let directory = tempfile::tempdir().expect("temp directory");
+    let path = directory.path().join("events.json");
+    std::fs::write(&path, "sentinel").expect("seed destination");
+    let staged = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_path = path.clone();
+    let worker_staged = Arc::clone(&staged);
+    let worker_release = Arc::clone(&release);
+    let worker_cancelled = Arc::clone(&cancelled);
+
+    let worker = std::thread::spawn(move || {
+        write_to_staged_destination(
+            &worker_path,
+            |output| {
+                output
+                    .write_all(b"new output")
+                    .map_err(|error| error.to_string())?;
+                Ok(ExportStats {
+                    bytes: 10,
+                    records: 1,
+                })
+            },
+            || {
+                worker_staged.wait();
+                worker_release.wait();
+                if worker_cancelled.load(Ordering::Acquire) {
+                    Err("event-log export was cancelled".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+    });
+
+    staged.wait();
+    cancelled.store(true, Ordering::Release);
+    release.wait();
+    assert!(worker.join().expect("writer thread").is_err());
     assert_eq!(
         std::fs::read_to_string(path).expect("destination"),
         "sentinel"

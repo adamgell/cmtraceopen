@@ -187,16 +187,15 @@ fn redact_export_text(value: &str) -> String {
 /// renders. Discovered from the records rather than declared, because which properties exist
 /// depends on which maps matched. Returns an error rather than truncating when the explicit schema
 /// budget is exceeded.
-pub fn mapped_columns_iter<I, R>(records: I) -> Result<Vec<String>, String>
-where
-    I: IntoIterator<Item = R>,
-    R: Borrow<EvtxRecord>,
-{
-    let mut names = Vec::new();
-    let mut seen = HashSet::new();
-    let mut schema_bytes = 0usize;
-    for item in records {
-        let record = item.borrow();
+#[derive(Default)]
+pub(crate) struct MappedColumnAccumulator {
+    names: Vec<String>,
+    seen: HashSet<String>,
+    schema_bytes: usize,
+}
+
+impl MappedColumnAccumulator {
+    pub(crate) fn observe(&mut self, record: &EvtxRecord) -> Result<(), String> {
         if record.mapped.len() > MAX_MAPPED_ENTRIES_PER_RECORD {
             return Err(format!(
                 "mapped-column entries per record exceed {MAX_MAPPED_ENTRIES_PER_RECORD}"
@@ -206,26 +205,42 @@ where
             validate_mapped_property(&column.property)?;
             let property = redact_mapped_property(&column.property);
             validate_mapped_property(&property)?;
-            if seen.contains(&property) {
+            if self.seen.contains(&property) {
                 continue;
             }
-            if names.len() >= MAX_MAPPED_COLUMNS {
+            if self.names.len() >= MAX_MAPPED_COLUMNS {
                 return Err(format!(
                     "mapped-column budget of {MAX_MAPPED_COLUMNS} columns exceeded"
                 ));
             }
-            let next_schema_bytes = schema_bytes.saturating_add(property.len());
+            let next_schema_bytes = self.schema_bytes.saturating_add(property.len());
             if next_schema_bytes > MAX_MAPPED_SCHEMA_BYTES {
                 return Err(format!(
                     "mapped-column schema exceeds {MAX_MAPPED_SCHEMA_BYTES}-byte budget"
                 ));
             }
-            schema_bytes = next_schema_bytes;
-            seen.insert(property.clone());
-            names.push(property);
+            self.schema_bytes = next_schema_bytes;
+            self.seen.insert(property.clone());
+            self.names.push(property);
         }
+        Ok(())
     }
-    Ok(names)
+
+    pub(crate) fn into_columns(self) -> Vec<String> {
+        self.names
+    }
+}
+
+pub fn mapped_columns_iter<I, R>(records: I) -> Result<Vec<String>, String>
+where
+    I: IntoIterator<Item = R>,
+    R: Borrow<EvtxRecord>,
+{
+    let mut accumulator = MappedColumnAccumulator::default();
+    for item in records {
+        accumulator.observe(item.borrow())?;
+    }
+    Ok(accumulator.into_columns())
 }
 
 pub fn mapped_columns(records: &[EvtxRecord]) -> Result<Vec<String>, String> {

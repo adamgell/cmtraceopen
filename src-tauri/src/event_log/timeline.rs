@@ -8,12 +8,22 @@
 
 use cmtraceopen_parser::models::log_entry::LogEntry;
 use cmtraceopen_parser::unified_timeline::{
-    bundle_from_source, correlate_timeline, from_log_entry, merge, timeline_sort_key, TimelineItem,
+    bundle_from_source, correlate_origins, from_log_entry, merge, origin_sort_cmp, TimelineItem,
     TimelineOrigin, TimelineSeverity, UnifiedTimeline, UnplacedItem, UnplacedReason,
 };
 
 use super::event_node::extract_event_identity;
 use super::models::{EvtxLevel, EvtxOriginKind, EvtxRecord};
+
+const MAX_TIMELINE_CORRELATION_ORIGINS: usize = 25_000;
+const TIMELINE_CORRELATION_PROJECTION_SOURCE: &str = "timeline-correlation-projection";
+pub(crate) const MAX_TIMELINE_MESSAGE_BYTES: usize = 8 * 1024;
+const MAX_TIMELINE_MESSAGE_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_SERIALIZED_TIMELINE_ITEM_BYTES: usize = 128 * 1024;
+const MAX_TIMELINE_IDENTITY_TEXT_BYTES: usize = 256;
+const MAX_TIMELINE_IDENTITY_CONFLICTS: usize = 4;
+pub(crate) const TIMELINE_ITEM_PROJECTION_SOURCE: &str = "timeline-item-projection";
+pub(crate) const TIMELINE_MESSAGE_PROJECTION_SOURCE: &str = "timeline-message-projection";
 ///
 /// `EvtxRecord` stores a decoded level rather than the raw `System/Level` value, so this maps the
 /// decoded form. Information is the resting state, matching how the decoder treats a level it does
@@ -27,6 +37,137 @@ fn severity_of(level: EvtxLevel) -> TimelineSeverity {
         EvtxLevel::Verbose => TimelineSeverity::Verbose,
         EvtxLevel::Information => TimelineSeverity::Info,
     }
+}
+
+fn compact_text_digest(value: &str) -> String {
+    let mut first = 2_166_136_261_u32;
+    let mut second = first ^ 0x9e37_79b9;
+    for &byte in value.as_bytes() {
+        first = (first ^ u32::from(byte)).wrapping_mul(16_777_619);
+        second = (second ^ u32::from(byte ^ 0xa5)).wrapping_mul(16_777_619);
+    }
+    format!("{first:08x}{second:08x}")
+}
+
+fn compact_timeline_text(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value.to_string(), false);
+    }
+    let suffix = format!(
+        "...[{} bytes; digest={}]",
+        value.len(),
+        compact_text_digest(value)
+    );
+    let prefix_budget = max_bytes.saturating_sub(suffix.len());
+    let mut prefix_end = prefix_budget.min(value.len());
+    while prefix_end > 0 && !value.is_char_boundary(prefix_end) {
+        prefix_end -= 1;
+    }
+    (format!("{}{}", &value[..prefix_end], suffix), true)
+}
+
+fn compact_optional_timeline_text(value: &mut Option<String>) -> bool {
+    let Some(current) = value.as_deref() else {
+        return false;
+    };
+    let (compacted, changed) = compact_timeline_text(current, MAX_TIMELINE_IDENTITY_TEXT_BYTES);
+    if changed {
+        *value = Some(compacted);
+    }
+    changed
+}
+
+fn compact_timeline_origin(origin: &mut TimelineOrigin) -> bool {
+    let mut changed = false;
+    match origin {
+        TimelineOrigin::Log {
+            file,
+            component,
+            source,
+            machine,
+            bundle,
+            ..
+        } => {
+            for value in [file, source] {
+                let (compacted, value_changed) =
+                    compact_timeline_text(value, MAX_TIMELINE_IDENTITY_TEXT_BYTES);
+                if value_changed {
+                    *value = compacted;
+                    changed = true;
+                }
+            }
+            changed |= compact_optional_timeline_text(component);
+            changed |= compact_optional_timeline_text(machine);
+            changed |= compact_optional_timeline_text(bundle);
+        }
+        TimelineOrigin::Event {
+            stable_id,
+            source,
+            machine,
+            bundle,
+            channel,
+            provider,
+            activity_id,
+            related_activity_id,
+            session_id,
+            device_id,
+            user_id,
+            process_start_time,
+            identity_conflicts,
+            record_id_text,
+            ..
+        } => {
+            for value in [stable_id, source, channel, provider] {
+                let (compacted, value_changed) =
+                    compact_timeline_text(value, MAX_TIMELINE_IDENTITY_TEXT_BYTES);
+                if value_changed {
+                    *value = compacted;
+                    changed = true;
+                }
+            }
+            for value in [
+                machine,
+                bundle,
+                activity_id,
+                related_activity_id,
+                session_id,
+                device_id,
+                user_id,
+                process_start_time,
+                record_id_text,
+            ] {
+                changed |= compact_optional_timeline_text(value);
+            }
+            if identity_conflicts.len() > MAX_TIMELINE_IDENTITY_CONFLICTS {
+                identity_conflicts.truncate(MAX_TIMELINE_IDENTITY_CONFLICTS);
+                changed = true;
+            }
+            for conflict in identity_conflicts {
+                let (compacted, value_changed) =
+                    compact_timeline_text(conflict, MAX_TIMELINE_IDENTITY_TEXT_BYTES);
+                if value_changed {
+                    *conflict = compacted;
+                    changed = true;
+                }
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn compact_timeline_item(item: &mut TimelineItem) -> bool {
+    let (message, message_changed) =
+        compact_timeline_text(&item.message, MAX_TIMELINE_MESSAGE_BYTES);
+    if message_changed {
+        item.message = message;
+    }
+    let origin_changed = compact_timeline_origin(&mut item.origin);
+    message_changed || origin_changed
+}
+
+fn compact_unplaced_item(item: &mut UnplacedItem) -> bool {
+    compact_timeline_origin(&mut item.origin)
 }
 fn missing_record_digest(record: &EvtxRecord) -> String {
     let mut first = 2_166_136_261_u32;
@@ -92,12 +233,22 @@ fn stable_event_id_with_occurrence(record: &EvtxRecord, occurrence: usize) -> St
     if usable_record_id_text(record).is_some() || record_id(record).is_some() {
         return base;
     }
-    format!("{base}-{occurrence}")
+    format!("{}-{occurrence}", stable_missing_event_base(record))
 }
+
+fn stable_missing_event_base(record: &EvtxRecord) -> String {
+    compact_timeline_text(
+        &stable_event_id(record),
+        MAX_TIMELINE_IDENTITY_TEXT_BYTES.saturating_sub(32),
+    )
+    .0
+}
+
 fn stable_event_base_from_id(stable_id: &str) -> &str {
     if stable_id.contains("|missing") {
         stable_id
             .rsplit_once('-')
+            .filter(|(_, suffix)| suffix.bytes().all(|byte| byte.is_ascii_digit()))
             .map(|(base, _)| base)
             .unwrap_or(stable_id)
     } else {
@@ -240,7 +391,7 @@ fn from_event_with_origin(
     Ok(TimelineItem {
         timestamp_ms: parsed_timestamp_epoch(record).unwrap_or(0),
         severity: severity_of(record.level),
-        message: record.message.clone(),
+        message: compact_timeline_text(&record.message, MAX_TIMELINE_MESSAGE_BYTES).0,
         origin,
     })
 }
@@ -252,7 +403,7 @@ fn origin_with_occurrence(
 ) -> TimelineOrigin {
     if usable_record_id_text(record).is_none() && record_id(record).is_none() {
         if let TimelineOrigin::Event { stable_id, .. } = &mut origin {
-            *stable_id = format!("{}-{occurrence}", stable_event_id(record));
+            *stable_id = format!("{}-{occurrence}", stable_missing_event_base(record));
         }
     }
     origin
@@ -269,20 +420,28 @@ fn ordered_records(records: &[EvtxRecord]) -> Vec<OrderedRecord<'_>> {
         .iter()
         .map(|record| {
             let origin = origin_of(record, 0);
-            let sort_key = timeline_sort_key(
-                parsed_timestamp_epoch(record).unwrap_or(0),
-                severity_of(record.level),
-                &record.message,
-                &origin,
-            );
-            (record, origin, sort_key)
+            let timestamp = parsed_timestamp_epoch(record).unwrap_or(0);
+            let severity = severity_of(record.level);
+            (record, origin, timestamp, severity)
         })
         .collect();
-    ordered.sort_by(|left, right| left.2.cmp(&right.2));
+    // Stable two-pass sorting preserves the canonical `(timestamp, origin, message, severity)`
+    // ordering without caching a second owned copy of every message.
+    ordered.sort_by(|left, right| {
+        left.0
+            .message
+            .cmp(&right.0.message)
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    ordered.sort_by(|left, right| {
+        left.2
+            .cmp(&right.2)
+            .then_with(|| origin_sort_cmp(&left.1, &right.1))
+    });
     let mut occurrence_by_key = std::collections::HashMap::new();
     ordered
         .into_iter()
-        .map(|(record, origin, _)| {
+        .map(|(record, origin, _, _)| {
             let key = stable_event_id(record);
             let occurrence = occurrence_by_key.entry(key).or_insert(0);
             let current = *occurrence;
@@ -296,34 +455,363 @@ fn ordered_records(records: &[EvtxRecord]) -> Vec<OrderedRecord<'_>> {
         .collect()
 }
 
-/// Recomputes correlation from stable origin fields after each merge or append.
-fn refresh_correlations(timeline: &mut UnifiedTimeline) {
-    let (edges, gaps) = correlate_timeline(&timeline.items, &timeline.unplaced);
+fn carries_meaningful_correlation_identity(origin: &TimelineOrigin) -> bool {
+    match origin {
+        TimelineOrigin::Log { .. } => false,
+        TimelineOrigin::Event {
+            activity_id,
+            related_activity_id,
+            session_id,
+            device_id,
+            user_id,
+            process_start_time,
+            identity_conflicts,
+            ..
+        } => {
+            activity_id.is_some()
+                || related_activity_id.is_some()
+                || session_id.is_some()
+                || device_id.is_some()
+                || user_id.is_some()
+                || process_start_time.is_some()
+                || !identity_conflicts.is_empty()
+        }
+        // Future origin variants are conservatively admitted to the bounded projection so they
+        // cannot silently lose correlation semantics.
+        _ => true,
+    }
+}
+
+struct CorrelationOriginProjection<'a> {
+    origins: Vec<&'a TimelineOrigin>,
+    relevant_origin_count: usize,
+}
+
+impl CorrelationOriginProjection<'_> {
+    fn omitted_origin_count(&self) -> usize {
+        self.relevant_origin_count
+            .saturating_sub(self.origins.len())
+    }
+}
+
+fn select_correlation_origins<'a>(
+    origins: impl IntoIterator<Item = &'a TimelineOrigin>,
+    limit: usize,
+) -> CorrelationOriginProjection<'a> {
+    let mut projection = CorrelationOriginProjection {
+        origins: Vec::with_capacity(limit.min(1_024)),
+        relevant_origin_count: 0,
+    };
+    for origin in origins {
+        if !carries_meaningful_correlation_identity(origin) {
+            continue;
+        }
+        projection.relevant_origin_count += 1;
+        if projection.origins.len() < limit {
+            projection.origins.push(origin);
+        }
+    }
+    projection
+}
+
+/// Recomputes correlation from the bounded set of origins carrying cross-record identity.
+///
+/// Provider/channel/record identity alone is unique row provenance, not a cross-record
+/// correlation candidate. Skipping those ordinary origins is neutral and keeps an all-channel
+/// timeline from materializing hundreds of thousands of owned correlation observations.
+fn refresh_correlations_with_limit(timeline: &mut UnifiedTimeline, limit: usize) {
+    let projection = select_correlation_origins(
+        timeline
+            .items
+            .iter()
+            .map(|item| &item.origin)
+            .chain(timeline.unplaced.iter().map(|item| &item.origin)),
+        limit,
+    );
+    let omitted_origin_count = projection.omitted_origin_count();
+    let retained_origin_count = projection.origins.len();
+    let relevant_origin_count = projection.relevant_origin_count;
+    let (edges, mut gaps) = correlate_origins(projection.origins);
+    if omitted_origin_count > 0 {
+        gaps.push(cmtraceopen_parser::unified_timeline::TimelineCoverageGap {
+            source: TIMELINE_CORRELATION_PROJECTION_SOURCE.to_string(),
+            reason: format!(
+                "correlation input limit reached; {omitted_origin_count} of {relevant_origin_count} meaningfully correlatable timeline origins were omitted after retaining {retained_origin_count}"
+            ),
+        });
+    }
     timeline.edges = edges;
     timeline.coverage_gaps = gaps;
 }
 
+fn refresh_correlations(timeline: &mut UnifiedTimeline) {
+    refresh_correlations_with_limit(timeline, MAX_TIMELINE_CORRELATION_ORIGINS);
+}
+
+enum PendingEventItem {
+    Placed(TimelineItem),
+    Unplaced(UnplacedItem),
+}
+
+struct PendingEvent {
+    sort_timestamp: i64,
+    sort_severity: TimelineSeverity,
+    missing_record_base: Option<String>,
+    item: PendingEventItem,
+}
+
+impl PendingEvent {
+    fn message(&self) -> &str {
+        match &self.item {
+            PendingEventItem::Placed(item) => &item.message,
+            // Unplaced events do not render a message. For missing-record identities, the stable
+            // base already includes the message digest; severity remains the final compact tie.
+            PendingEventItem::Unplaced(_) => "",
+        }
+    }
+
+    fn origin(&self) -> &TimelineOrigin {
+        match &self.item {
+            PendingEventItem::Placed(item) => &item.origin,
+            PendingEventItem::Unplaced(item) => &item.origin,
+        }
+    }
+}
+
+/// Incremental, compact input for a timeline that is sorted and correlated exactly once.
+///
+/// Event records can arrive over several bounded IPC calls. The builder immediately projects each
+/// record to the fields the timeline needs and does not retain raw XML or EventData. Missing-record
+/// occurrence suffixes are assigned only after all chunks have arrived, preserving the same stable
+/// identities as a one-shot build regardless of chunk boundaries.
+pub(crate) struct TimelineBuilder {
+    log_placed: Vec<TimelineItem>,
+    log_unplaced: Vec<UnplacedItem>,
+    events: Vec<PendingEvent>,
+    placed_event_count: usize,
+    placed_log_count: usize,
+    unplaced_count: usize,
+    bounded_projection_item_count: usize,
+    message_preview_byte_limit: usize,
+    retained_message_preview_bytes: usize,
+    projected_message_count: usize,
+    projected_message_original_bytes: usize,
+    projected_message_bytes: usize,
+}
+
+impl Default for TimelineBuilder {
+    fn default() -> Self {
+        Self {
+            log_placed: Vec::new(),
+            log_unplaced: Vec::new(),
+            events: Vec::new(),
+            placed_event_count: 0,
+            placed_log_count: 0,
+            unplaced_count: 0,
+            bounded_projection_item_count: 0,
+            message_preview_byte_limit: MAX_TIMELINE_MESSAGE_PREVIEW_BYTES,
+            retained_message_preview_bytes: 0,
+            projected_message_count: 0,
+            projected_message_original_bytes: 0,
+            projected_message_bytes: 0,
+        }
+    }
+}
+
+impl TimelineBuilder {
+    fn retain_or_project_message(&mut self, item: &mut TimelineItem, original_message: &str) {
+        if self
+            .retained_message_preview_bytes
+            .saturating_add(item.message.len())
+            <= self.message_preview_byte_limit
+        {
+            self.retained_message_preview_bytes = self
+                .retained_message_preview_bytes
+                .saturating_add(item.message.len());
+            return;
+        }
+        let projected = format!(
+            "Message available in event grid/log view [{} bytes; digest={}]",
+            original_message.len(),
+            compact_text_digest(original_message),
+        );
+        self.projected_message_count += 1;
+        self.projected_message_original_bytes = self
+            .projected_message_original_bytes
+            .saturating_add(original_message.len());
+        self.projected_message_bytes = self.projected_message_bytes.saturating_add(projected.len());
+        item.message = projected;
+    }
+
+    pub(crate) fn push_log_entry(&mut self, entry: &LogEntry) {
+        match from_log_entry(entry) {
+            Ok(mut item) => {
+                if compact_timeline_item(&mut item) {
+                    self.bounded_projection_item_count += 1;
+                }
+                self.retain_or_project_message(&mut item, &entry.message);
+                self.placed_log_count += 1;
+                self.log_placed.push(item);
+            }
+            Err(mut item) => {
+                if compact_unplaced_item(&mut item) {
+                    self.bounded_projection_item_count += 1;
+                }
+                self.unplaced_count += 1;
+                self.log_unplaced.push(*item);
+            }
+        }
+    }
+
+    pub(crate) fn push_event_record(&mut self, record: &EvtxRecord) {
+        let mut origin = origin_of(record, 0);
+        let origin_was_compacted = compact_timeline_origin(&mut origin);
+        let sort_timestamp = parsed_timestamp_epoch(record).unwrap_or(0);
+        let sort_severity = severity_of(record.level);
+        let missing_record_base = (matches!(record.origin_kind, EvtxOriginKind::Event)
+            && usable_record_id_text(record).is_none()
+            && record_id(record).is_none())
+        .then(|| stable_missing_event_base(record));
+        let message_was_compacted = record.message.len() > MAX_TIMELINE_MESSAGE_BYTES;
+        let item = match from_event_with_origin(record, origin) {
+            Ok(mut item) => {
+                let item_was_compacted = compact_timeline_item(&mut item);
+                if origin_was_compacted || message_was_compacted || item_was_compacted {
+                    self.bounded_projection_item_count += 1;
+                }
+                self.retain_or_project_message(&mut item, &record.message);
+                match record.origin_kind {
+                    EvtxOriginKind::Event => self.placed_event_count += 1,
+                    EvtxOriginKind::Log => self.placed_log_count += 1,
+                }
+                PendingEventItem::Placed(item)
+            }
+            Err(mut item) => {
+                let item_was_compacted = compact_unplaced_item(&mut item);
+                if origin_was_compacted || item_was_compacted {
+                    self.bounded_projection_item_count += 1;
+                }
+                self.unplaced_count += 1;
+                PendingEventItem::Unplaced(*item)
+            }
+        };
+        self.events.push(PendingEvent {
+            sort_timestamp,
+            sort_severity,
+            missing_record_base,
+            item,
+        });
+    }
+
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
+        (
+            self.placed_event_count,
+            self.placed_log_count,
+            self.unplaced_count,
+        )
+    }
+
+    pub(crate) fn finish(mut self) -> UnifiedTimeline {
+        self.events.sort_by(|left, right| {
+            left.message()
+                .cmp(right.message())
+                .then_with(|| left.sort_severity.cmp(&right.sort_severity))
+        });
+        self.events.sort_by(|left, right| {
+            left.sort_timestamp
+                .cmp(&right.sort_timestamp)
+                .then_with(|| origin_sort_cmp(left.origin(), right.origin()))
+        });
+        let mut occurrence_by_key = std::collections::HashMap::new();
+        let mut placed = self.log_placed;
+        let mut unplaced = self.log_unplaced;
+
+        for mut pending in self.events {
+            if let Some(base) = pending.missing_record_base {
+                let occurrence = occurrence_by_key.entry(base.clone()).or_insert(0usize);
+                let origin = match &mut pending.item {
+                    PendingEventItem::Placed(item) => &mut item.origin,
+                    PendingEventItem::Unplaced(item) => &mut item.origin,
+                };
+                if let TimelineOrigin::Event { stable_id, .. } = origin {
+                    *stable_id = format!("{base}-{}", *occurrence);
+                }
+                *occurrence += 1;
+            }
+            match pending.item {
+                PendingEventItem::Placed(item) => placed.push(item),
+                PendingEventItem::Unplaced(item) => unplaced.push(item),
+            }
+        }
+
+        let mut timeline = merge(placed, unplaced);
+        refresh_correlations(&mut timeline);
+        if self.bounded_projection_item_count > 0 {
+            timeline.coverage_gaps.push(
+                cmtraceopen_parser::unified_timeline::TimelineCoverageGap {
+                    source: TIMELINE_ITEM_PROJECTION_SOURCE.to_string(),
+                    reason: format!(
+                        "timeline item projection limit reached; {} timeline items had oversized list-view fields compacted while full records remained available in the event grid",
+                        self.bounded_projection_item_count
+                    ),
+                },
+            );
+        }
+        if self.projected_message_count > 0 {
+            timeline.coverage_gaps.push(
+                cmtraceopen_parser::unified_timeline::TimelineCoverageGap {
+                    source: TIMELINE_MESSAGE_PROJECTION_SOURCE.to_string(),
+                    reason: format!(
+                        "timeline message preview budget reached; {} messages totaling {} original bytes were projected to {} bytes after retaining {} preview bytes within the {}-byte budget",
+                        self.projected_message_count,
+                        self.projected_message_original_bytes,
+                        self.projected_message_bytes,
+                        self.retained_message_preview_bytes,
+                        self.message_preview_byte_limit,
+                    ),
+                },
+            );
+        }
+        timeline
+    }
+
+    #[cfg(test)]
+    fn retained_message_bytes(&self) -> usize {
+        self.events.iter().map(|event| event.message().len()).sum()
+    }
+
+    #[cfg(test)]
+    fn retained_sort_metadata_bytes(&self) -> usize {
+        self.events
+            .iter()
+            .map(|event| {
+                event
+                    .missing_record_base
+                    .as_ref()
+                    .map(String::len)
+                    .unwrap_or_default()
+                    + std::mem::size_of::<i64>()
+                    + std::mem::size_of::<TimelineSeverity>()
+            })
+            .sum()
+    }
+
+    #[cfg(test)]
+    fn retained_message_preview_bytes(&self) -> usize {
+        self.retained_message_preview_bytes
+    }
+}
+
 /// Builds one timeline from parsed log entries and events.
 pub fn build(entries: &[LogEntry], records: &[EvtxRecord]) -> UnifiedTimeline {
-    let mut placed = Vec::with_capacity(entries.len() + records.len());
-    let mut unplaced = Vec::new();
-
+    let mut builder = TimelineBuilder::default();
     for entry in entries {
-        match from_log_entry(entry) {
-            Ok(item) => placed.push(item),
-            Err(reason) => unplaced.push(*reason),
-        }
+        builder.push_log_entry(entry);
     }
-    for OrderedRecord { record, origin, .. } in ordered_records(records) {
-        match from_event_with_origin(record, origin) {
-            Ok(item) => placed.push(item),
-            Err(item) => unplaced.push(*item),
-        }
+    for record in records {
+        builder.push_event_record(record);
     }
-
-    let mut timeline = merge(placed, unplaced);
-    refresh_correlations(&mut timeline);
-    timeline
+    builder.finish()
 }
 
 /// Appends new log and event records while preserving existing placed and unplaced items.
@@ -355,7 +843,11 @@ pub fn append(timeline: &mut UnifiedTimeline, entries: &[LogEntry], records: &[E
         occurrence,
     } in ordered_records(records)
     {
-        let base = stable_event_id(record);
+        let base = if usable_record_id_text(record).is_none() && record_id(record).is_none() {
+            stable_missing_event_base(record)
+        } else {
+            stable_event_id(record)
+        };
         let offset = existing_occurrences.get(&base).copied().unwrap_or_default();
         let origin = origin_with_occurrence(origin, record, occurrence + offset);
         match from_event_with_origin(record, origin) {
@@ -675,6 +1167,194 @@ mod tests {
     }
 
     #[test]
+    fn chunked_builder_matches_one_shot_order_and_missing_identities() {
+        let mut later = record(3_000, "same", EvtxLevel::Information);
+        later.event_record_id = 0;
+        let mut earlier = later.clone();
+        earlier.timestamp_epoch = 1_000;
+        let mut middle = later.clone();
+        middle.timestamp_epoch = 2_000;
+        let records = vec![later, earlier, middle];
+        let entries = vec![entry(Some(1_500), "log")];
+
+        let expected = build(&entries, &records);
+        let mut builder = TimelineBuilder::default();
+        builder.push_event_record(&records[0]);
+        builder.push_log_entry(&entries[0]);
+        builder.push_event_record(&records[1]);
+        builder.push_event_record(&records[2]);
+
+        assert_eq!(builder.finish(), expected);
+    }
+
+    #[test]
+    fn chunked_builder_retains_one_large_message_copy_and_compact_sort_metadata() {
+        let message = "large-message".repeat(15_000);
+        let event = record(1_000, &message, EvtxLevel::Information);
+        let mut builder = TimelineBuilder::default();
+
+        builder.push_event_record(&event);
+
+        assert!(builder.retained_message_bytes() <= MAX_TIMELINE_MESSAGE_BYTES);
+        assert!(builder.retained_message_bytes() < message.len());
+        assert!(
+            builder.retained_sort_metadata_bytes() < 4_096,
+            "sort metadata must not contain another full message"
+        );
+        let timeline = builder.finish();
+        assert_eq!(timeline.items.len(), 1);
+        assert!(timeline.items[0].message.len() <= MAX_TIMELINE_MESSAGE_BYTES);
+        assert!(timeline.items[0].message.contains("digest="));
+    }
+
+    #[test]
+    fn oversized_identity_fields_are_compacted_below_the_single_item_budget() {
+        let huge = "\u{0001}".repeat(256 * 1024);
+        let mut event = record(1_000, &huge, EvtxLevel::Information);
+        event.source_label = huge.clone();
+        event.channel = huge.clone();
+        event.provider = huge.clone();
+        event.computer = huge.clone();
+        event.activity_id = Some(huge.clone());
+        event.related_activity_id = Some(huge.clone());
+        event.session_id = Some(huge.clone());
+        event.device_id = Some(huge.clone());
+        event.user_id = Some(huge.clone());
+        event.process_start_time = Some(huge);
+
+        let timeline = build(&[], &[event]);
+
+        assert!(
+            serde_json::to_vec(&timeline.items[0]).unwrap().len()
+                <= MAX_SERIALIZED_TIMELINE_ITEM_BYTES
+        );
+        const {
+            assert!(MAX_SERIALIZED_TIMELINE_ITEM_BYTES * 30 <= 4 * 1024 * 1024);
+        }
+        assert_eq!(
+            timeline
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.source == TIMELINE_ITEM_PROJECTION_SOURCE)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn four_hundred_thousand_provider_only_origins_skip_correlation_neutrally() {
+        let event = record(1_000, "ordinary", EvtxLevel::Information);
+        let origin = origin_of(&event, 0);
+
+        let projection = select_correlation_origins(
+            (0..400_000).map(|_| &origin),
+            MAX_TIMELINE_CORRELATION_ORIGINS,
+        );
+
+        assert_eq!(projection.relevant_origin_count, 0);
+        assert_eq!(projection.origins.len(), 0);
+        assert_eq!(projection.omitted_origin_count(), 0);
+    }
+
+    #[test]
+    fn epic_all_channel_volume_retains_rows_with_bounded_message_previews() {
+        const RECORD_COUNT: usize = 404_769;
+        let message = "x".repeat(MAX_TIMELINE_MESSAGE_BYTES);
+        let mut event = record(1, &message, EvtxLevel::Information);
+        let mut builder = TimelineBuilder::default();
+
+        for index in 0..RECORD_COUNT {
+            let record_id = index as u64 + 1;
+            event.timestamp_epoch = index as i64 + 1;
+            event.event_record_id = record_id;
+            event.event_record_id_text = Some(record_id.to_string());
+            builder.push_event_record(&event);
+        }
+
+        assert_eq!(builder.counts(), (RECORD_COUNT, 0, 0));
+        assert!(builder.retained_message_preview_bytes() <= MAX_TIMELINE_MESSAGE_PREVIEW_BYTES);
+        assert!(builder.projected_message_count > 0);
+        assert!(builder.retained_sort_metadata_bytes() < RECORD_COUNT * 64);
+        let projected_count = builder.projected_message_count;
+        let projected_original_bytes = builder.projected_message_original_bytes;
+        let projected_bytes = builder.projected_message_bytes;
+        let retained_preview_bytes = builder.retained_message_preview_bytes;
+
+        let timeline = builder.finish();
+
+        assert_eq!(timeline.items.len(), RECORD_COUNT);
+        let message_gap = timeline
+            .coverage_gaps
+            .iter()
+            .filter(|gap| gap.source == TIMELINE_MESSAGE_PROJECTION_SOURCE)
+            .collect::<Vec<_>>();
+        assert_eq!(message_gap.len(), 1);
+        assert_eq!(
+            message_gap[0].reason,
+            format!(
+                "timeline message preview budget reached; {projected_count} messages totaling {projected_original_bytes} original bytes were projected to {projected_bytes} bytes after retaining {retained_preview_bytes} preview bytes within the {MAX_TIMELINE_MESSAGE_PREVIEW_BYTES}-byte budget"
+            )
+        );
+    }
+
+    #[test]
+    fn same_timestamp_volume_uses_fixed_origin_sort_metadata() {
+        const RECORD_COUNT: usize = 50_000;
+        let mut event = record(1_000, "ordinary", EvtxLevel::Information);
+        let mut builder = TimelineBuilder::default();
+
+        for index in (0..RECORD_COUNT).rev() {
+            let record_id = index as u64 + 1;
+            event.event_record_id = record_id;
+            event.event_record_id_text = Some(record_id.to_string());
+            builder.push_event_record(&event);
+        }
+
+        assert_eq!(builder.counts(), (RECORD_COUNT, 0, 0));
+        assert!(builder.retained_sort_metadata_bytes() < RECORD_COUNT * 64);
+
+        let timeline = builder.finish();
+        assert_eq!(timeline.items.len(), RECORD_COUNT);
+        assert!(timeline.items.windows(2).all(|pair| {
+            origin_sort_cmp(&pair[0].origin, &pair[1].origin) != std::cmp::Ordering::Greater
+        }));
+    }
+
+    #[test]
+    fn genuinely_correlatable_overflow_is_one_exact_grouped_gap() {
+        let records = (1..=3)
+            .map(|id| {
+                let mut event = record(id, "correlatable", EvtxLevel::Information);
+                event.event_record_id = id as u64;
+                event.event_record_id_text = Some(id.to_string());
+                event.activity_id = Some("{shared-activity}".to_string());
+                event
+            })
+            .collect::<Vec<_>>();
+        let mut timeline = build(&[], &records);
+
+        refresh_correlations_with_limit(&mut timeline, 2);
+
+        let projection_gap = timeline
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.source == TIMELINE_CORRELATION_PROJECTION_SOURCE)
+            .expect("one grouped correlation projection gap");
+        assert_eq!(
+            projection_gap.reason,
+            "correlation input limit reached; 1 of 3 meaningfully correlatable timeline origins were omitted after retaining 2"
+        );
+        assert_eq!(
+            timeline
+                .coverage_gaps
+                .iter()
+                .filter(|gap| gap.source == TIMELINE_CORRELATION_PROJECTION_SOURCE)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn appending_identical_missing_id_keeps_occurrence_identity_distinct() {
         let mut event = record(1_000, "same", EvtxLevel::Information);
         event.event_record_id = 0;
@@ -691,7 +1371,7 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1]);
         assert!(ids.iter().any(|id| id.ends_with("-0")));
-        assert!(ids.iter().any(|id| id.ends_with("-1")));
+        assert!(ids.iter().any(|id| id.ends_with("-1")), "{ids:?}");
     }
 
     #[test]
@@ -898,6 +1578,25 @@ mod tests {
             timeline.edges[0].coverage.state,
             cmtraceopen_parser::unified_timeline::TimelineCorrelationCoverageState::Covered
         );
+    }
+
+    #[test]
+    fn bounded_projection_preserves_exact_user_identity_correlation() {
+        let mut first = record(1_000, "first", EvtxLevel::Information);
+        first.event_record_id = 1;
+        first.event_record_id_text = Some("1".into());
+        first.user_id = Some("user-identity".into());
+        let mut second = record(2_000, "second", EvtxLevel::Information);
+        second.event_record_id = 2;
+        second.event_record_id_text = Some("2".into());
+        second.user_id = Some("user-identity".into());
+
+        let timeline = build(&[], &[first, second]);
+
+        assert!(timeline.edges.iter().any(|edge| {
+            edge.key.kind
+                == cmtraceopen_parser::unified_timeline::TimelineCorrelationKeyKind::UserId
+        }));
     }
 
     #[test]

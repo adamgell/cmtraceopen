@@ -5,7 +5,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { formatCoverageGap, summarizeCoverageGaps } from "./evtx-coverage";
 const MAX_DISPLAYED_ARCHIVE_MEMBERS = 4_096;
-const MAX_DISPLAYED_COVERAGE_GAPS = 256;
+const MAX_DISPLAYED_COVERAGE_GAPS = 100;
 /**
  * Shows what is missing from the loaded events.
  *
@@ -98,31 +98,33 @@ export function EvtxCoverageBanner() {
           </div>
           {!collapsed && (
             <>
-              <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-                {displayedGaps.map((gap, index) => (
-                  <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
-                    {gap}
-                  </li>
-                ))}
-              </ul>
-              {omittedGaps > 0 && (
-                <div>{`<coverage gaps: ${omittedGaps} omitted by display limit>`}</div>
-              )}
-              {archiveMemberMessages.length > 0 && (
-                <details>
-                  <summary>Archive member provenance ({archiveMembers.length})</summary>
-                  <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
-                    {archiveMemberMessages.map((member, index) => (
-                      <li
-                        key={`archive-member-${index}:${member}`}
-                        style={{ wordBreak: "break-word" }}
-                      >
-                        {member}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
+              <div style={{ maxHeight: "200px", overflowY: "auto" }}>
+                <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                  {displayedGaps.map((gap, index) => (
+                    <li key={`${index}:${gap}`} style={{ wordBreak: "break-word" }}>
+                      {gap}
+                    </li>
+                  ))}
+                </ul>
+                {omittedGaps > 0 && (
+                  <div>{`<coverage gaps: ${omittedGaps} omitted by display limit>`}</div>
+                )}
+                {archiveMemberMessages.length > 0 && (
+                  <details>
+                    <summary>Archive member provenance ({archiveMembers.length})</summary>
+                    <ul style={{ margin: 0, paddingInlineStart: "20px" }}>
+                      {archiveMemberMessages.map((member, index) => (
+                        <li
+                          key={`archive-member-${index}:${member}`}
+                          style={{ wordBreak: "break-word" }}
+                        >
+                          {member}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
             </>
           )}
         </>

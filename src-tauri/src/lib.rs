@@ -434,7 +434,13 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_clear_channel,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_export_records,
+            event_log::export_session::evtx_create_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_append_export_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_finalize_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_close_export_session,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
             #[cfg(feature = "event-log")]
@@ -452,9 +458,19 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_packaged_provider_databases,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_build_unified_timeline,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_diagnose_records,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_create_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_append_analysis_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_finalize_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_query_analysis_timeline,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_diagnose_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_close_analysis_session,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

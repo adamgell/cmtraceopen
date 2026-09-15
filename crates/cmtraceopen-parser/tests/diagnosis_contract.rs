@@ -135,6 +135,7 @@ fn coverage_states_are_non_assertive_findings() {
         CoverageState::Skipped,
         CoverageState::Unsupported,
         CoverageState::Malformed,
+        CoverageState::ProviderDescriptionUnavailable,
     ] {
         let finding = finding_for_coverage(
             "autopilot",
@@ -587,8 +588,8 @@ fn successful_message_without_mdm_status_remains_a_coverage_gap() {
 }
 
 #[test]
-fn unsupported_event_family_is_a_coverage_gap_not_a_failure() {
-    let mut entry = event_entry("Unknown provider operation failed");
+fn unsupported_event_family_is_neutral() {
+    let mut entry = event_entry("Unknown provider operation failed with 0x80070005");
     entry.channel = EventLogChannel::Other("Application".into());
     entry.channel_display = "Application".into();
     entry.provider = "Unknown provider".into();
@@ -597,14 +598,44 @@ fn unsupported_event_family_is_a_coverage_gap_not_a_failure() {
         diagnosis.family,
         cmtraceopen_parser::diagnosis::EventFamily::Other
     );
-    assert!(diagnosis
-        .findings
-        .iter()
-        .any(|finding| finding.class == FindingClass::CoverageGap));
-    assert!(diagnosis
-        .findings
-        .iter()
-        .all(|finding| finding.class != FindingClass::ConfirmedFailure));
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
+}
+
+#[test]
+fn unsupported_event_family_with_failure_and_success_language_is_neutral() {
+    let mut entry =
+        event_entry("Unknown provider operation failed and then completed with 0x80070005");
+    entry.channel = EventLogChannel::Other("Application".into());
+    entry.channel_display = "Application".into();
+    entry.provider = "Unknown provider".into();
+    let diagnosis = adapt_event_entry(entry);
+
+    assert_eq!(
+        diagnosis.family,
+        cmtraceopen_parser::diagnosis::EventFamily::Other
+    );
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
+}
+
+#[test]
+fn unsupported_event_family_with_failed_status_and_success_language_is_neutral() {
+    let mut entry = event_entry("Unknown provider operation completed with 0x80070005");
+    entry.channel = EventLogChannel::Other("System".into());
+    entry.channel_display = "System".into();
+    entry.provider = "Unknown provider".into();
+    let diagnosis = adapt_event_entry_with_data(entry, &["Status=Failed".into()]);
+
+    assert_eq!(
+        diagnosis.family,
+        cmtraceopen_parser::diagnosis::EventFamily::Other
+    );
+    assert!(diagnosis.findings.is_empty());
+    assert_eq!(diagnosis.evidence.len(), 1);
+    assert!(!diagnosis.error_tokens.is_empty());
 }
 
 #[test]

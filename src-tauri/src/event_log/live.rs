@@ -1,5 +1,7 @@
 #[cfg(target_os = "windows")]
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::{HashSet, VecDeque};
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
@@ -14,19 +16,28 @@ use std::thread;
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
-use super::event_node::{extract_system_fields, parse_event_xml};
+#[cfg(any(target_os = "windows", test))]
+use super::event_node::{extract_event_data, extract_system_fields, parse_event_xml};
+#[cfg(target_os = "windows")]
+use super::models::{ChannelSourceType, EvtxClearResult, EvtxClearStatus, EvtxTailStatus};
+use super::models::{EvtxChannelInfo, EvtxCoverageGap, EvtxField, EvtxRecord};
+#[cfg(any(target_os = "windows", test))]
 use super::models::{
-    ChannelSourceType, EvtxChannelInfo, EvtxClearResult, EvtxClearStatus, EvtxLiveMode, EvtxRecord,
-    EvtxTailBatch, EvtxTailStatus,
+    EvtxCoverageGapKind, EvtxLiveMode, EvtxTailBatch, ProviderMessageCoverage, ProviderMessageStage,
 };
-use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
+#[cfg(any(target_os = "windows", test))]
+use super::parser::DescriptionOutcome;
+use super::provider_db::ProviderStore;
+#[cfg(target_os = "windows")]
+use cmtraceopen_parser::event_query::build_query;
+use cmtraceopen_parser::event_query::EventQueryFilter;
 use cmtraceopen_parser::eventmap::MapRegistry;
 
 #[cfg(target_os = "windows")]
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
-use windows::core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR};
+use windows::core::{Error, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext,
@@ -42,7 +53,7 @@ use windows::Win32::System::EventLog::{
 /// Each call is a round trip to the Event Log service, so this is the dominant cost of a scan.
 /// FullEventLogView hardcodes 1, paying one round trip per event. The API accepts up to 1024;
 /// 256 keeps the per-call array modest while cutting round trips by that factor.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const EVENT_FETCH_BATCH: usize = 256;
 
 /// Smallest batch to fall back to before treating the channel as unreadable.
@@ -70,6 +81,273 @@ pub struct ChannelScan {
     pub delivered: usize,
     /// Operator-facing explanations of what is missing. Empty means the channel was read whole.
     pub gaps: Vec<String>,
+    /// Description failures for records that were still delivered successfully.
+    pub provider_gaps: Vec<EvtxCoverageGap>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeProviderFailure {
+    stage: ProviderMessageStage,
+    error_code: u32,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Default)]
+struct MessageRenderOutcome {
+    message: Option<String>,
+    provider_gaps: Vec<EvtxCoverageGap>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct TailDelivery {
+    record: EvtxRecord,
+    provider_gaps: Vec<EvtxCoverageGap>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl TailDelivery {
+    fn into_pending_parts(self) -> (EvtxRecord, Vec<String>) {
+        let gaps = self.provider_gaps.iter().map(format_provider_gap).collect();
+        (self.record, gaps)
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct PollingTailProjection {
+    records: Vec<EvtxRecord>,
+    coverage_gaps: Vec<String>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl PollingTailProjection {
+    fn is_empty(&self) -> bool {
+        self.records.is_empty() && self.coverage_gaps.is_empty()
+    }
+
+    fn into_batch(self, request_id: &str, channel: &str, sequence: u64) -> EvtxTailBatch {
+        EvtxTailBatch {
+            request_id: request_id.to_string(),
+            channel: channel.to_string(),
+            sequence,
+            mode: EvtxLiveMode::Polling,
+            records: self.records,
+            coverage_gaps: self.coverage_gaps,
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ProviderGapKey {
+    Native(String, ProviderMessageStage),
+    Other(String, EvtxCoverageGapKind, String),
+}
+
+/// Distinct provider failures remembered for one active tail.
+///
+/// A tail can remain active indefinitely. Keeping four times the 256-entry delivery diagnostic
+/// budget suppresses recurring provider noise across batches without letting that lifetime turn
+/// the deduplication index into an unbounded cache.
+#[cfg(any(target_os = "windows", test))]
+const MAX_PROVIDER_GAP_DEDUP_ENTRIES: usize = 1024;
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct ProviderGapDedup {
+    seen: HashSet<ProviderGapKey>,
+    /// Present only for persistent tails; finite scans retain every key until the scan ends.
+    tail_insertion_order: Option<VecDeque<ProviderGapKey>>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl ProviderGapDedup {
+    fn exact_scan() -> Self {
+        Self {
+            seen: HashSet::new(),
+            tail_insertion_order: None,
+        }
+    }
+
+    fn persistent_tail() -> Self {
+        Self {
+            seen: HashSet::new(),
+            tail_insertion_order: Some(VecDeque::new()),
+        }
+    }
+
+    fn keep(&mut self, gap: &EvtxCoverageGap) -> bool {
+        let key = match &gap.provider_message {
+            Some(context) => {
+                ProviderGapKey::Native(context.provider.trim().to_lowercase(), context.stage)
+            }
+            None => ProviderGapKey::Other(gap.source.clone(), gap.kind, gap.reason.clone()),
+        };
+        if !self.seen.insert(key.clone()) {
+            return false;
+        }
+        if let Some(insertion_order) = &mut self.tail_insertion_order {
+            insertion_order.push_back(key);
+            if self.seen.len() > MAX_PROVIDER_GAP_DEDUP_ENTRIES {
+                let oldest = insertion_order
+                    .pop_front()
+                    .expect("a newly inserted provider gap has an insertion-order entry");
+                self.seen.remove(&oldest);
+            }
+        }
+        true
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn project_tail_delivery(
+    record: EvtxRecord,
+    provider_gaps: Vec<EvtxCoverageGap>,
+    dedup: &mut ProviderGapDedup,
+) -> TailDelivery {
+    TailDelivery {
+        record,
+        provider_gaps: provider_gaps
+            .into_iter()
+            .filter(|gap| dedup.keep(gap))
+            .collect(),
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn project_polling_tail_scan(
+    scan: ChannelScan,
+    dedup: &mut ProviderGapDedup,
+) -> PollingTailProjection {
+    let mut coverage_gaps = scan.gaps;
+    for gap in scan.provider_gaps {
+        if dedup.keep(&gap) {
+            push_bounded_tail_coverage_gap(&mut coverage_gaps, format_provider_gap(&gap));
+        }
+    }
+    PollingTailProjection {
+        records: scan.records,
+        coverage_gaps,
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn provider_message_gap(
+    source: &str,
+    provider: &str,
+    stage: ProviderMessageStage,
+    error_code: u32,
+) -> EvtxCoverageGap {
+    let reason = format!(
+        "provider message for {provider} could not be rendered at {} (Windows error \
+         {error_code}); raw event data is shown instead",
+        stage.api_name()
+    );
+    let mut gap = EvtxCoverageGap::new(source, EvtxCoverageGapKind::Provider, reason);
+    gap.provider_message = Some(Box::new(ProviderMessageCoverage {
+        provider: provider.to_string(),
+        stage,
+        error_code,
+    }));
+    gap
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn provider_database_gap(source: &str, provider: &str, error: String) -> EvtxCoverageGap {
+    EvtxCoverageGap::new(
+        source,
+        EvtxCoverageGapKind::Provider,
+        format!(
+            "provider database lookup failed for {provider}: {error}; native message formatting \
+             was attempted"
+        ),
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn provider_database_channel<'a>(
+    system_channel: Option<&'a str>,
+    queried_channel: &'a str,
+) -> &'a str {
+    system_channel.unwrap_or(queried_channel)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn select_provider_message(
+    described: Result<Option<DescriptionOutcome>, String>,
+    source: &str,
+    provider: &str,
+    native: impl FnOnce() -> Result<Option<String>, NativeProviderFailure>,
+) -> MessageRenderOutcome {
+    let mut provider_gaps = match described {
+        Ok(Some(DescriptionOutcome::Rendered(message))) => {
+            return MessageRenderOutcome {
+                message: Some(message),
+                provider_gaps: Vec::new(),
+            };
+        }
+        Err(error) => vec![provider_database_gap(source, provider, error)],
+        Ok(None)
+        | Ok(Some(DescriptionOutcome::MissingInsertions(_)))
+        | Ok(Some(DescriptionOutcome::ChannelMetadataUnavailable { .. })) => Vec::new(),
+    };
+    let message = match native() {
+        Ok(message) => message,
+        Err(failure) => {
+            provider_gaps.push(provider_message_gap(
+                source,
+                provider,
+                failure.stage,
+                failure.error_code,
+            ));
+            None
+        }
+    };
+    MessageRenderOutcome {
+        message,
+        provider_gaps,
+    }
+}
+
+/// Uses the event's own longest data value when Windows cannot open metadata for an
+/// unregistered publisher. Some Windows components write complete human-readable descriptions
+/// into Application event data under ad-hoc source names. In that case the description is present
+/// in the event itself, so reporting it as unavailable is both noisy and inaccurate.
+#[cfg(any(target_os = "windows", test))]
+fn recover_unregistered_provider_message(outcome: &mut MessageRenderOutcome, fields: &[EvtxField]) {
+    if outcome.message.is_some() {
+        return;
+    }
+    let has_unregistered_publisher_failure = outcome.provider_gaps.iter().any(|gap| {
+        gap.provider_message.as_deref().is_some_and(|failure| {
+            failure.stage == ProviderMessageStage::OpenPublisherMetadata && failure.error_code == 2
+        })
+    });
+    if !has_unregistered_publisher_failure {
+        return;
+    }
+    let Some(message) = fields
+        .iter()
+        .map(|field| field.value.trim())
+        .filter(|value| !value.is_empty())
+        .max_by_key(|value| value.chars().count())
+    else {
+        return;
+    };
+
+    outcome.message = Some(message.to_string());
+    outcome.provider_gaps.retain(|gap| {
+        !gap.provider_message.as_deref().is_some_and(|failure| {
+            failure.stage == ProviderMessageStage::OpenPublisherMetadata && failure.error_code == 2
+        })
+    });
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn format_provider_gap(gap: &EvtxCoverageGap) -> String {
+    format!("{}: {}", gap.source, gap.reason)
 }
 
 // ── RAII handle wrapper ─────────────────────────────────────────────────────
@@ -240,9 +518,10 @@ fn enumerate_channels_for_session(
 pub fn query_channel(
     channel: &str,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
-    query_channel_with_progress(channel, maps, max_events, |_, _| {})
+    query_channel_with_progress(channel, maps, providers, max_events, |_, _| {})
 }
 
 /// Queries a channel with server-side filtering.
@@ -254,12 +533,14 @@ pub fn query_channel_filtered(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
     query_channel_inner(
         channel,
         filter,
         maps,
+        providers,
         max_events,
         None,
         "Live",
@@ -273,6 +554,7 @@ pub fn query_channel_filtered(
 pub fn query_channel_with_progress(
     channel: &str,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -280,6 +562,7 @@ pub fn query_channel_with_progress(
         channel,
         &EventQueryFilter::default(),
         maps,
+        providers,
         max_events,
         None,
         "Live",
@@ -294,6 +577,7 @@ pub fn query_channel_filtered_with_progress(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -301,6 +585,7 @@ pub fn query_channel_filtered_with_progress(
         channel,
         filter,
         maps,
+        providers,
         max_events,
         None,
         "Live",
@@ -320,6 +605,7 @@ pub fn query_channel_streamed(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
@@ -328,6 +614,7 @@ pub fn query_channel_streamed(
         channel,
         filter,
         maps,
+        providers,
         max_events,
         None,
         "Live",
@@ -338,11 +625,13 @@ pub fn query_channel_streamed(
 
 /// Queries one channel from a remote computer using the current Windows credentials.
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 pub fn query_remote_channel_streamed(
     machine: &str,
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
@@ -353,6 +642,7 @@ pub fn query_remote_channel_streamed(
         channel,
         filter,
         maps,
+        providers,
         max_events,
         Some(session.raw()),
         &source_label,
@@ -378,6 +668,7 @@ fn query_channel_inner(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
+    providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
     session: Option<EVT_HANDLE>,
     source_label: &str,
@@ -418,8 +709,9 @@ fn query_channel_inner(
     let mut unrenderable = 0usize;
     let mut first_render_error = None;
     let mut message_failures = 0usize;
-    let mut metadata_failures = HashSet::<String>::new();
     let mut gaps = Vec::new();
+    let mut provider_gaps = Vec::new();
+    let mut provider_gap_dedup = ProviderGapDedup::exact_scan();
     let mut batch = EVENT_FETCH_BATCH;
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
@@ -537,46 +829,59 @@ fn query_channel_inner(
                 }
             };
             let system = extract_system_fields(&parsed);
+            let event_fields = extract_event_data(&parsed);
 
             // Only attempted when the event named a provider. Asking the service for the metadata
             // of a publisher the event never named would fail once per event and cache the failure
             // under a name no provider has.
-            let rendered_message = match system.provider.as_deref() {
-                Some(provider) => match format_event_message(
-                    event_handle.raw(),
-                    provider,
-                    session,
-                    &mut publisher_metadata,
-                ) {
-                    Ok(message) => message,
-                    Err(error) => {
-                        message_failures += 1;
-                        if metadata_failures.insert(provider.to_string()) {
-                            push_bounded_tail_coverage_gap(
-                                &mut gaps,
-                                format!(
-                                    "{coverage_channel}: event message could not be formatted ({})",
-                                    format_source_error("EvtFormatMessage", &error, remote)
-                                ),
-                            );
-                        }
-                        log::warn!(
-                            "event=evtx_metadata_failed channel=\"{channel}\" error=\"{}\"",
-                            format_source_error("EvtFormatMessage", &error, remote)
-                        );
-                        None
-                    }
-                },
-                None => None,
+            let mut message_outcome = match system.provider.as_deref() {
+                Some(provider) => {
+                    let provider_channel =
+                        provider_database_channel(system.channel.as_deref(), channel);
+                    let described = providers
+                        .read()
+                        .map_err(|_| "provider store lock was poisoned".to_string())
+                        .and_then(|store| {
+                            super::parser::describe_event(
+                                &store,
+                                provider,
+                                provider_channel,
+                                system.event_id.unwrap_or(0),
+                                system.version,
+                                &event_fields.insertions,
+                            )
+                        });
+                    select_provider_message(described, &coverage_channel, provider, || {
+                        format_event_message(
+                            event_handle.raw(),
+                            provider,
+                            session,
+                            &mut publisher_metadata,
+                        )
+                    })
+                }
+                None => MessageRenderOutcome::default(),
             };
+            recover_unregistered_provider_message(&mut message_outcome, &event_fields.fields);
+            for gap in message_outcome.provider_gaps.iter() {
+                message_failures += 1;
+                if provider_gap_dedup.keep(gap) {
+                    log::warn!(
+                        "event=evtx_provider_message_gap channel=\"{channel}\" diagnostic=\"{}\"",
+                        gap.reason
+                    );
+                    provider_gaps.push(gap.clone());
+                }
+            }
 
             let mut record = super::rendered::record_from_parts(
                 &parsed,
                 system,
+                event_fields,
                 &xml,
                 channel,
                 maps,
-                rendered_message.as_deref(),
+                message_outcome.message.as_deref(),
             );
             record.source_label = source_label.to_string();
             batch_records.push(record);
@@ -619,14 +924,16 @@ fn query_channel_inner(
         );
     }
     log::info!(
-        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} gaps={}",
+        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} record_gaps={} provider_gaps={}",
         records.len(),
-        gaps.len()
+        gaps.len(),
+        provider_gaps.len()
     );
     Ok(ChannelScan {
         records,
         delivered: produced,
         gaps,
+        provider_gaps,
     })
 }
 
@@ -635,16 +942,16 @@ const POLL_INTERVAL: Duration = Duration::from_millis(750);
 
 #[cfg(target_os = "windows")]
 const SUBSCRIPTION_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const MAX_TAIL_COVERAGE_GAPS: usize = 256;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const TAIL_COVERAGE_SUMMARY_PREFIX: &str = "<live tail coverage>: ";
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const TAIL_COVERAGE_SUMMARY_SUFFIX: &str = " additional live tail diagnostics were coalesced";
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn push_bounded_tail_coverage_gap(gaps: &mut Vec<String>, gap: String) {
     if gaps.len() < MAX_TAIL_COVERAGE_GAPS - 1 {
         gaps.push(gap);
@@ -674,14 +981,14 @@ fn push_bounded_tail_coverage_gap(gaps: &mut Vec<String>, gap: String) {
     );
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 #[derive(Default)]
 struct PendingTailBatch {
     records: Vec<EvtxRecord>,
     coverage_gaps: Vec<String>,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 impl PendingTailBatch {
     fn is_full(&self) -> bool {
         self.records.len() >= EVENT_FETCH_BATCH
@@ -691,8 +998,11 @@ impl PendingTailBatch {
         self.is_full()
     }
 
-    fn push_record(&mut self, record: EvtxRecord) -> bool {
+    fn push_rendered(&mut self, record: EvtxRecord, gaps: Vec<String>) -> bool {
         self.records.push(record);
+        for gap in gaps {
+            push_bounded_tail_coverage_gap(&mut self.coverage_gaps, gap);
+        }
         self.is_ready()
     }
 
@@ -717,7 +1027,7 @@ struct TailBatcher {
 
 #[cfg(target_os = "windows")]
 impl TailBatcher {
-    fn push_record(&self, record: EvtxRecord) {
+    fn push_rendered(&self, record: EvtxRecord, gaps: Vec<String>) {
         loop {
             let mut pending = self
                 .pending
@@ -728,7 +1038,7 @@ impl TailBatcher {
                 self.flush();
                 continue;
             }
-            let should_flush = pending.push_record(record);
+            let should_flush = pending.push_rendered(record, gaps);
             drop(pending);
             if should_flush {
                 self.flush();
@@ -802,8 +1112,10 @@ struct TailContext {
     source_label: String,
     session: Option<EVT_HANDLE>,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
+    providers: Arc<std::sync::RwLock<ProviderStore>>,
     batcher: Arc<TailBatcher>,
     publisher_metadata: Mutex<HashMap<String, PublisherMetadata>>,
+    provider_gap_dedup: Mutex<ProviderGapDedup>,
 }
 
 #[cfg(target_os = "windows")]
@@ -901,8 +1213,92 @@ fn emit_tail_event(app: &AppHandle, stored_gaps: &Mutex<Vec<String>>, mut batch:
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+struct TailRenderState<'a, Metadata> {
+    channel: &'a str,
+    source_label: &'a str,
+    maps: &'a std::sync::RwLock<MapRegistry>,
+    providers: &'a std::sync::RwLock<ProviderStore>,
+    publisher_metadata: &'a std::sync::Mutex<Metadata>,
+    provider_gap_dedup: &'a std::sync::Mutex<ProviderGapDedup>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn render_tail_xml<Metadata>(
+    xml: &str,
+    state: TailRenderState<'_, Metadata>,
+    native: impl FnOnce(&mut Metadata, &str) -> Result<Option<String>, NativeProviderFailure>,
+) -> Result<TailDelivery, String> {
+    let TailRenderState {
+        channel,
+        source_label,
+        maps,
+        providers,
+        publisher_metadata,
+        provider_gap_dedup,
+    } = state;
+    let parsed =
+        parse_event_xml(xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
+    let system = extract_system_fields(&parsed);
+    let event_fields = extract_event_data(&parsed);
+    let mut message_outcome = match system.provider.as_deref() {
+        Some(provider) => {
+            let coverage_source = source_label
+                .strip_prefix("Remote: ")
+                .map(|machine| format!("{machine}/{channel}"))
+                .unwrap_or_else(|| channel.to_string());
+            let provider_channel = provider_database_channel(system.channel.as_deref(), channel);
+            let described = providers
+                .read()
+                .map_err(|_| "provider store lock was poisoned".to_string())
+                .and_then(|store| {
+                    super::parser::describe_event(
+                        &store,
+                        provider,
+                        provider_channel,
+                        system.event_id.unwrap_or(0),
+                        system.version,
+                        &event_fields.insertions,
+                    )
+                });
+            let outcome = select_provider_message(described, &coverage_source, provider, || {
+                let mut metadata = publisher_metadata
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                native(&mut metadata, provider)
+            });
+            outcome
+        }
+        None => MessageRenderOutcome::default(),
+    };
+    recover_unregistered_provider_message(&mut message_outcome, &event_fields.fields);
+    let mut record = {
+        let maps = maps
+            .read()
+            .map_err(|_| "event map registry lock was poisoned".to_string())?;
+        super::rendered::record_from_parts(
+            &parsed,
+            system,
+            event_fields,
+            xml,
+            channel,
+            &maps,
+            message_outcome.message.as_deref(),
+        )
+    };
+    record.source_label = source_label.to_string();
+    let mut dedup = provider_gap_dedup
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(project_tail_delivery(
+        record,
+        message_outcome.provider_gaps,
+        &mut dedup,
+    ))
+}
+
 #[cfg(target_os = "windows")]
-fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<EvtxRecord, String> {
+fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<TailDelivery, String> {
     let xml = render_event_xml(event).map_err(|error| {
         format_source_error(
             "EvtRender",
@@ -910,43 +1306,18 @@ fn render_tail_event(context: &TailContext, event: EVT_HANDLE) -> Result<EvtxRec
             context.source_label.starts_with("Remote:"),
         )
     })?;
-    let parsed =
-        parse_event_xml(&xml).map_err(|error| format!("event XML could not be parsed: {error}"))?;
-    let system = extract_system_fields(&parsed);
-    let rendered_message = match system.provider.as_deref() {
-        Some(provider) => {
-            let mut metadata = context
-                .publisher_metadata
-                .lock()
-                .map_err(|_| "publisher metadata lock was poisoned".to_string())?;
-            format_event_message(event, provider, context.session, &mut metadata).map_err(
-                |error| {
-                    format_source_error(
-                        "EvtFormatMessage",
-                        &error,
-                        context.source_label.starts_with("Remote:"),
-                    )
-                },
-            )?
-        }
-        None => None,
-    };
-    let mut record = {
-        let maps = context
-            .maps
-            .read()
-            .map_err(|_| "event map registry lock was poisoned".to_string())?;
-        super::rendered::record_from_parts(
-            &parsed,
-            system,
-            &xml,
-            &context.channel,
-            &maps,
-            rendered_message.as_deref(),
-        )
-    };
-    record.source_label = context.source_label.clone();
-    Ok(record)
+    render_tail_xml(
+        &xml,
+        TailRenderState {
+            channel: &context.channel,
+            source_label: &context.source_label,
+            maps: &context.maps,
+            providers: &context.providers,
+            publisher_metadata: &context.publisher_metadata,
+            provider_gap_dedup: &context.provider_gap_dedup,
+        },
+        |metadata, provider| format_event_message(event, provider, context.session, metadata),
+    )
 }
 
 #[cfg(target_os = "windows")]
@@ -965,7 +1336,10 @@ unsafe extern "system" fn evt_subscribe_callback(
             let _ = EvtClose(event);
         }
         match result {
-            Ok(record) => context.batcher.push_record(record),
+            Ok(delivery) => {
+                let (record, gaps) = delivery.into_pending_parts();
+                context.batcher.push_rendered(record, gaps);
+            }
             Err(error) => context
                 .batcher
                 .push_gap(format!("{}: {error}", context.channel)),
@@ -1062,12 +1436,14 @@ fn polling_record_identity(record: &EvtxRecord) -> (String, u64) {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 fn start_polling_tail(
     app: AppHandle,
     request_id: String,
     channel: String,
     filter: EventQueryFilter,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
+    providers: Arc<std::sync::RwLock<ProviderStore>>,
     remote_session: Option<(OwnedEvtHandle, String)>,
     fallback_gap: String,
 ) -> Result<EvtxTailStatus, String> {
@@ -1077,6 +1453,7 @@ fn start_polling_tail(
     let worker_stop = Arc::clone(&stop);
     let worker_sequence = Arc::clone(&sequence);
     let worker_coverage_gaps = Arc::clone(&coverage_gaps);
+    let worker_providers = Arc::clone(&providers);
     let worker_request = request_id.clone();
     let worker_channel = channel.clone();
     let worker_fallback_gap = fallback_gap.clone();
@@ -1090,12 +1467,14 @@ fn start_polling_tail(
     let worker = thread::spawn(move || {
         let mut seen = HashSet::<(String, u64)>::new();
         let mut seen_order = VecDeque::<(String, u64)>::new();
+        let mut provider_gap_dedup = ProviderGapDedup::persistent_tail();
         let mut first_poll = true;
         while !worker_stop.load(Ordering::Acquire) {
             let outcome = query_channel_inner(
                 &worker_channel,
                 &filter,
                 &maps.read().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                &worker_providers,
                 Some(EVENT_FETCH_BATCH as u64),
                 worker_session,
                 &worker_source_label,
@@ -1104,10 +1483,9 @@ fn start_polling_tail(
             );
 
             match outcome {
-                Ok(scan) => {
+                Ok(mut scan) => {
                     let saturated = scan.delivered >= EVENT_FETCH_BATCH;
-                    let mut records = scan.records;
-                    records.retain(|record| {
+                    scan.records.retain(|record| {
                         let identity = polling_record_identity(record);
                         if seen.insert(identity.clone()) {
                             seen_order.push_back(identity);
@@ -1124,10 +1502,10 @@ fn start_polling_tail(
                             seen.remove(&identity);
                         }
                     }
-                    let mut gaps = scan.gaps;
+                    let mut projected = project_polling_tail_scan(scan, &mut provider_gap_dedup);
                     if saturated {
                         push_bounded_tail_coverage_gap(
-                            &mut gaps,
+                            &mut projected.coverage_gaps,
                             format!(
                                 "{}: the polling window returned its full {EVENT_FETCH_BATCH}-record \
                                  batch; events written between polls may be missing",
@@ -1136,23 +1514,22 @@ fn start_polling_tail(
                         );
                     }
                     if first_poll && !worker_fallback_gap.is_empty() {
-                        push_bounded_tail_coverage_gap(&mut gaps, worker_fallback_gap.clone());
+                        push_bounded_tail_coverage_gap(
+                            &mut projected.coverage_gaps,
+                            worker_fallback_gap.clone(),
+                        );
                     }
-                    merge_tail_coverage_gaps(worker_coverage_gaps.as_ref(), &mut gaps);
+                    merge_tail_coverage_gaps(
+                        worker_coverage_gaps.as_ref(),
+                        &mut projected.coverage_gaps,
+                    );
                     first_poll = false;
-                    if !records.is_empty() || !gaps.is_empty() {
+                    if !projected.is_empty() {
                         let sequence_number = worker_sequence.fetch_add(1, Ordering::AcqRel);
                         emit_tail_event(
                             &app,
                             worker_coverage_gaps.as_ref(),
-                            EvtxTailBatch {
-                                request_id: worker_request.clone(),
-                                channel: worker_channel.clone(),
-                                sequence: sequence_number,
-                                mode: EvtxLiveMode::Polling,
-                                records,
-                                coverage_gaps: gaps,
-                            },
+                            projected.into_batch(&worker_request, &worker_channel, sequence_number),
                         );
                     }
                 }
@@ -1223,11 +1600,13 @@ pub fn start_channel_tail(
     channel: String,
     filter: EventQueryFilter,
     maps: Arc<std::sync::RwLock<MapRegistry>>,
+    providers: Arc<std::sync::RwLock<ProviderStore>>,
     remote_machine: Option<String>,
 ) -> Result<EvtxTailStatus, String> {
     let _ = stop_channel_tail(&request_id, &channel);
     let fallback_app = app.clone();
     let fallback_maps = maps.clone();
+    let fallback_providers = providers.clone();
     let remote_session = remote_machine
         .as_deref()
         .map(open_remote_session)
@@ -1259,8 +1638,10 @@ pub fn start_channel_tail(
         source_label,
         session: session_handle,
         maps,
+        providers,
         batcher: Arc::clone(&batcher),
         publisher_metadata: Mutex::new(HashMap::new()),
+        provider_gap_dedup: Mutex::new(ProviderGapDedup::persistent_tail()),
     });
     let context_ptr = (&*context) as *const TailContext as *const c_void;
     let callback: EVT_SUBSCRIBE_CALLBACK = Some(evt_subscribe_callback);
@@ -1321,6 +1702,7 @@ pub fn start_channel_tail(
                 channel,
                 filter,
                 fallback_maps,
+                fallback_providers,
                 remote_session,
                 fallback_gap,
             )
@@ -1361,6 +1743,7 @@ pub fn stop_channel_tail(request_id: &str, channel: &str) -> Result<EvtxTailStat
         coverage_gaps,
     })
 }
+#[cfg(target_os = "windows")]
 fn tail_key(request_id: &str, channel: &str) -> String {
     format!("{request_id}\u{0}{channel}")
 }
@@ -1449,6 +1832,7 @@ pub fn enumerate_remote_channels(_machine: &str) -> Result<Vec<EvtxChannelInfo>,
 pub fn query_channel_with_progress(
     _channel: &str,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -1459,6 +1843,7 @@ pub fn query_channel_with_progress(
 pub fn query_channel(
     _channel: &str,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
@@ -1469,6 +1854,7 @@ pub fn query_channel_filtered(
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
 ) -> Result<ChannelScan, String> {
     Err("Live event log queries are only available on Windows.".to_string())
@@ -1479,6 +1865,7 @@ pub fn query_channel_filtered_with_progress(
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<ChannelScan, String> {
@@ -1489,6 +1876,7 @@ pub fn query_channel_streamed(
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
     _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
@@ -1497,11 +1885,13 @@ pub fn query_channel_streamed(
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(clippy::too_many_arguments)]
 pub fn query_remote_channel_streamed(
     _machine: &str,
     _channel: &str,
     _filter: &EventQueryFilter,
     _maps: &MapRegistry,
+    _providers: &std::sync::RwLock<ProviderStore>,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
     _on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
@@ -1549,8 +1939,7 @@ fn render_event_xml(event_handle: EVT_HANDLE) -> Result<String, Error> {
 #[cfg(target_os = "windows")]
 enum PublisherMetadata {
     Open(OwnedEvtHandle),
-    Missing,
-    Failed(u32),
+    Failed(NativeProviderFailure),
 }
 
 #[cfg(target_os = "windows")]
@@ -1559,17 +1948,19 @@ fn format_event_message(
     provider_name: &str,
     session: Option<EVT_HANDLE>,
     cache: &mut HashMap<String, PublisherMetadata>,
-) -> Result<Option<String>, Error> {
+) -> Result<Option<String>, NativeProviderFailure> {
     if !cache.contains_key(provider_name) {
         let provider = HSTRING::from(provider_name);
         let metadata =
             match unsafe { EvtOpenPublisherMetadata(session, &provider, PCWSTR::null(), 0, 0) } {
                 Ok(handle) => PublisherMetadata::Open(OwnedEvtHandle::new(handle)),
-                Err(error) if is_publisher_metadata_not_found(&error) => PublisherMetadata::Missing,
                 Err(error) => {
-                    let code = win32_code(&error);
-                    cache.insert(provider_name.to_string(), PublisherMetadata::Failed(code));
-                    return Err(error);
+                    let failure = publisher_metadata_failure(&error);
+                    cache.insert(
+                        provider_name.to_string(),
+                        PublisherMetadata::Failed(failure),
+                    );
+                    return Err(failure);
                 }
             };
         cache.insert(provider_name.to_string(), metadata);
@@ -1577,10 +1968,7 @@ fn format_event_message(
 
     let metadata = match cache.get(provider_name) {
         Some(PublisherMetadata::Open(metadata)) => metadata,
-        Some(PublisherMetadata::Missing) => return Ok(None),
-        Some(PublisherMetadata::Failed(code)) => {
-            return Err(Error::from_hresult(HRESULT::from_win32(*code)))
-        }
+        Some(PublisherMetadata::Failed(failure)) => return Err(*failure),
         None => unreachable!("publisher metadata cache insertion failed"),
     };
     let mut buffer_used = 0u32;
@@ -1608,9 +1996,26 @@ fn format_event_message(
             Err(e) if is_insufficient_buffer(&e) => {
                 buffer.resize(buffer_used.max(buffer.len() as u32 * 2) as usize, 0);
             }
-            Err(e) if is_not_found(&e) || is_message_not_found(&e) => return Ok(None),
-            Err(e) => return Err(e),
+            Err(error) => {
+                return Err(event_message_failure(&error));
+            }
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn publisher_metadata_failure(error: &Error) -> NativeProviderFailure {
+    NativeProviderFailure {
+        stage: ProviderMessageStage::OpenPublisherMetadata,
+        error_code: win32_code(error),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn event_message_failure(error: &Error) -> NativeProviderFailure {
+    NativeProviderFailure {
+        stage: ProviderMessageStage::FormatMessage,
+        error_code: win32_code(error),
     }
 }
 
@@ -1694,27 +2099,493 @@ fn is_insufficient_buffer(error: &Error) -> bool {
 // `ERROR_NO_MORE_ITEMS` and `RPC_S_INVALID_BOUND` are recognised in `super::fetch`, which owns the
 // decision they feed and is tested on every platform rather than only on this one.
 
-#[cfg(target_os = "windows")]
-fn is_not_found(error: &Error) -> bool {
-    win32_code(error) == 1168
-}
+#[cfg(test)]
+mod portable_tests {
+    use std::cell::Cell;
 
-#[cfg(target_os = "windows")]
-fn is_message_not_found(error: &Error) -> bool {
-    win32_code(error) == 15027
-}
+    use super::super::models::{
+        EvtxCoverageGapKind, EvtxLevel, EvtxOriginKind, ProviderMessageStage,
+    };
+    use super::super::parser::DescriptionOutcome;
+    use super::*;
 
-#[cfg(target_os = "windows")]
-fn is_publisher_metadata_not_found(error: &Error) -> bool {
-    // ERROR_EVT_PUBLISHER_METADATA_NOT_FOUND means this provider has no message table.
-    // ERROR_EVT_CHANNEL_NOT_FOUND (15007) and other failures must remain visible.
-    win32_code(error) == 15002
+    #[test]
+    fn provider_gap_preserves_remote_source_stage_code_and_stable_text() {
+        let gap = provider_message_gap(
+            "remote-host/ForwardedEvents",
+            "Example.Provider",
+            ProviderMessageStage::OpenPublisherMetadata,
+            2,
+        );
+
+        assert_eq!(gap.source, "remote-host/ForwardedEvents");
+        assert_eq!(gap.kind, EvtxCoverageGapKind::Provider);
+        assert_eq!(
+            *gap.provider_message.expect("typed provider context"),
+            super::super::models::ProviderMessageCoverage {
+                provider: "Example.Provider".to_string(),
+                stage: ProviderMessageStage::OpenPublisherMetadata,
+                error_code: 2,
+            }
+        );
+        assert_eq!(
+            gap.reason,
+            "provider message for Example.Provider could not be rendered at \
+             EvtOpenPublisherMetadata (Windows error 2); raw event data is shown instead"
+        );
+    }
+
+    #[test]
+    fn forwarded_event_uses_its_own_system_channel_for_provider_database_selection() {
+        assert_eq!(
+            provider_database_channel(Some("Original/Operational"), "ForwardedEvents"),
+            "Original/Operational"
+        );
+        assert_eq!(
+            provider_database_channel(None, "Application"),
+            "Application"
+        );
+    }
+
+    #[test]
+    fn provider_message_context_serializes_as_typed_camel_case_wire_data() {
+        let gap = provider_message_gap(
+            "Application",
+            "Example.Provider",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        );
+        let json = serde_json::to_value(&gap).expect("provider gap serializes");
+
+        assert_eq!(json["providerMessage"]["provider"], "Example.Provider");
+        assert_eq!(json["providerMessage"]["stage"], "formatMessage");
+        assert_eq!(json["providerMessage"]["errorCode"], 15027);
+        assert!(serde_json::to_value(EvtxCoverageGap::new(
+            "offline.evtx",
+            EvtxCoverageGapKind::Provider,
+            "offline provider description unavailable",
+        ))
+        .expect("offline gap serializes")
+        .get("providerMessage")
+        .is_none());
+    }
+
+    #[test]
+    fn complete_database_description_wins_without_calling_native() {
+        let native_calls = Cell::new(0);
+        let outcome = select_provider_message(
+            Ok(Some(DescriptionOutcome::Rendered(
+                "database message".to_string(),
+            ))),
+            "Application",
+            "Example.Provider",
+            || {
+                native_calls.set(native_calls.get() + 1);
+                Ok(Some("native message".to_string()))
+            },
+        );
+
+        assert_eq!(outcome.message.as_deref(), Some("database message"));
+        assert!(outcome.provider_gaps.is_empty());
+        assert_eq!(native_calls.get(), 0);
+    }
+
+    #[test]
+    fn database_miss_falls_through_to_native_without_warning() {
+        let native_calls = Cell::new(0);
+        let outcome = select_provider_message(Ok(None), "Application", "Example.Provider", || {
+            native_calls.set(native_calls.get() + 1);
+            Ok(Some("native message".to_string()))
+        });
+
+        assert_eq!(outcome.message.as_deref(), Some("native message"));
+        assert!(outcome.provider_gaps.is_empty());
+        assert_eq!(native_calls.get(), 1);
+    }
+
+    #[test]
+    fn incomplete_database_description_is_healed_by_native_success() {
+        let outcome = select_provider_message(
+            Ok(Some(DescriptionOutcome::MissingInsertions(vec![2]))),
+            "Application",
+            "Example.Provider",
+            || Ok(Some("native message".to_string())),
+        );
+
+        assert_eq!(outcome.message.as_deref(), Some("native message"));
+        assert!(outcome.provider_gaps.is_empty());
+    }
+
+    #[test]
+    fn database_lookup_error_stays_visible_while_native_is_attempted() {
+        let native_calls = Cell::new(0);
+        let outcome = select_provider_message(
+            Err("provider database payload is corrupt".to_string()),
+            "Application",
+            "Example.Provider",
+            || {
+                native_calls.set(native_calls.get() + 1);
+                Ok(Some("native message".to_string()))
+            },
+        );
+
+        assert_eq!(outcome.message.as_deref(), Some("native message"));
+        assert_eq!(native_calls.get(), 1);
+        assert_eq!(outcome.provider_gaps.len(), 1);
+        assert_eq!(outcome.provider_gaps[0].kind, EvtxCoverageGapKind::Provider);
+        assert!(outcome.provider_gaps[0].provider_message.is_none());
+        assert!(outcome.provider_gaps[0]
+            .reason
+            .contains("provider database lookup failed for Example.Provider"));
+    }
+
+    #[test]
+    fn native_description_failure_projects_record_and_typed_diagnostic_to_tail_queue() {
+        let outcome = select_provider_message(Ok(None), "Application", "Example.Provider", || {
+            Err(NativeProviderFailure {
+                stage: ProviderMessageStage::FormatMessage,
+                error_code: 15027,
+            })
+        });
+        let mut dedup = ProviderGapDedup::persistent_tail();
+        let projected = project_tail_delivery(
+            test_record("raw fallback"),
+            outcome.provider_gaps,
+            &mut dedup,
+        );
+
+        assert_eq!(projected.record.message, "raw fallback");
+        assert_eq!(projected.provider_gaps.len(), 1);
+        assert_eq!(
+            projected.provider_gaps[0]
+                .provider_message
+                .as_ref()
+                .map(|context| (context.stage, context.error_code)),
+            Some((ProviderMessageStage::FormatMessage, 15027))
+        );
+        let (queued_record, queued_gaps) = projected.into_pending_parts();
+        assert_eq!(queued_record.message, "raw fallback");
+        assert_eq!(
+            queued_gaps,
+            vec![
+                "Application: provider message for Example.Provider could not be rendered at \
+                 EvtFormatMessage (Windows error 15027); raw event data is shown instead"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn unregistered_windows_source_uses_its_embedded_human_description() {
+        let mut outcome = select_provider_message(
+            Ok(None),
+            "Application",
+            "Microsoft-Windows-AppXDeploymentServer/Operational",
+            || {
+                Err(NativeProviderFailure {
+                    stage: ProviderMessageStage::OpenPublisherMetadata,
+                    error_code: 2,
+                })
+            },
+        );
+        let fields = vec![
+            EvtxField {
+                name: "Data1".into(),
+                value: "MSIXDeployment".into(),
+            },
+            EvtxField {
+                name: "Data2".into(),
+                value: "DeleteMachineFolder".into(),
+            },
+            EvtxField {
+                name: "Data3".into(),
+                value: "Package cleanup completed and the machine folder was removed.".into(),
+            },
+        ];
+
+        recover_unregistered_provider_message(&mut outcome, &fields);
+
+        assert_eq!(
+            outcome.message.as_deref(),
+            Some("Package cleanup completed and the machine folder was removed.")
+        );
+        assert!(outcome.provider_gaps.is_empty());
+    }
+
+    #[test]
+    fn missing_provider_metadata_without_event_data_remains_a_gap() {
+        let mut outcome = select_provider_message(Ok(None), "Application", "Empty.Source", || {
+            Err(NativeProviderFailure {
+                stage: ProviderMessageStage::OpenPublisherMetadata,
+                error_code: 2,
+            })
+        });
+
+        recover_unregistered_provider_message(&mut outcome, &[]);
+
+        assert!(outcome.message.is_none());
+        assert_eq!(outcome.provider_gaps.len(), 1);
+    }
+
+    #[test]
+    fn poisoned_optional_metadata_still_projects_parsed_record_and_native_diagnostic() {
+        let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+  <System>
+    <Provider Name='Example.Provider'/>
+    <EventID>7</EventID>
+    <Level>4</Level>
+    <TimeCreated SystemTime='2026-08-11T12:00:00.000000000Z'/>
+    <EventRecordID>4242</EventRecordID>
+    <Channel>Application</Channel>
+    <Computer>HOST-A</Computer>
+  </System>
+  <EventData><Data Name='Payload'>raw fallback</Data></EventData>
+</Event>"#;
+        let maps = std::sync::RwLock::new(MapRegistry::new());
+        let providers = std::sync::RwLock::new(ProviderStore::default());
+        let metadata = std::sync::Mutex::new(());
+        let dedup = std::sync::Mutex::new(ProviderGapDedup::persistent_tail());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = metadata.lock().expect("metadata lock starts healthy");
+            panic!("poison optional publisher metadata");
+        }));
+        assert!(poisoned.is_err());
+        assert!(metadata.is_poisoned());
+
+        let delivery = render_tail_xml(
+            xml,
+            TailRenderState {
+                channel: "Application",
+                source_label: "Live",
+                maps: &maps,
+                providers: &providers,
+                publisher_metadata: &metadata,
+                provider_gap_dedup: &dedup,
+            },
+            |_, _| {
+                Err(NativeProviderFailure {
+                    stage: ProviderMessageStage::FormatMessage,
+                    error_code: 15027,
+                })
+            },
+        )
+        .expect("optional renderer state must not discard a parsed record");
+        let (record, diagnostics) = delivery.into_pending_parts();
+
+        assert_eq!(record.event_record_id, 4242);
+        assert_eq!(record.provider, "Example.Provider");
+        assert_eq!(record.message, "Payload: raw fallback");
+        assert_eq!(record.source_label, "Live");
+        assert_eq!(
+            diagnostics,
+            vec![
+                "Application: provider message for Example.Provider could not be rendered at \
+                 EvtFormatMessage (Windows error 15027); raw event data is shown instead"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn polling_scan_projects_record_and_provider_gap_into_tail_batch() {
+        let gap = provider_message_gap(
+            "Application",
+            "Example.Provider",
+            ProviderMessageStage::OpenPublisherMetadata,
+            15002,
+        );
+        let scan = ChannelScan {
+            records: vec![test_record("raw fallback")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: vec![gap],
+        };
+        let mut dedup = ProviderGapDedup::persistent_tail();
+
+        let projected = project_polling_tail_scan(scan, &mut dedup);
+        assert!(!projected.is_empty());
+        let batch = projected.into_batch("tail-request", "Application", 7);
+
+        assert_eq!(batch.request_id, "tail-request");
+        assert_eq!(batch.channel, "Application");
+        assert_eq!(batch.sequence, 7);
+        assert_eq!(batch.mode, super::super::models::EvtxLiveMode::Polling);
+        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records[0].message, "raw fallback");
+        assert_eq!(
+            batch.coverage_gaps,
+            vec![
+                "Application: provider message for Example.Provider could not be rendered at \
+                 EvtOpenPublisherMetadata (Windows error 15002); raw event data is shown instead"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_gap_dedup_normalizes_provider_and_keeps_stages_distinct() {
+        let mut dedup = ProviderGapDedup::persistent_tail();
+        let first = provider_message_gap(
+            "Application",
+            "Example.Provider",
+            ProviderMessageStage::OpenPublisherMetadata,
+            2,
+        );
+        let repeated = provider_message_gap(
+            "Application",
+            " example.provider ",
+            ProviderMessageStage::OpenPublisherMetadata,
+            15002,
+        );
+        let distinct_stage = provider_message_gap(
+            "Application",
+            "EXAMPLE.PROVIDER",
+            ProviderMessageStage::FormatMessage,
+            2,
+        );
+
+        assert!(dedup.keep(&first));
+        assert_eq!(dedup.seen.len(), 1);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1)
+        );
+        assert!(!dedup.keep(&repeated));
+        assert_eq!(dedup.seen.len(), 1);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1)
+        );
+        assert!(dedup.keep(&distinct_stage));
+        assert_eq!(dedup.seen.len(), 2);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn finite_scan_dedup_rejects_first_key_after_tail_cap_plus_one_distinct_keys() {
+        let mut dedup = ProviderGapDedup::exact_scan();
+        let first = provider_message_gap(
+            "Application",
+            "Example.Provider.0",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        );
+        assert!(dedup.keep(&first));
+        for index in 1..=MAX_PROVIDER_GAP_DEDUP_ENTRIES {
+            let gap = provider_message_gap(
+                "Application",
+                &format!("Example.Provider.{index}"),
+                ProviderMessageStage::FormatMessage,
+                15027,
+            );
+            assert!(dedup.keep(&gap));
+        }
+
+        assert!(!dedup.keep(&first));
+        assert_eq!(dedup.seen.len(), MAX_PROVIDER_GAP_DEDUP_ENTRIES + 1);
+    }
+
+    #[test]
+    fn provider_gap_dedup_evicts_oldest_entry_at_hard_bound() {
+        let mut dedup = ProviderGapDedup::persistent_tail();
+        for index in 0..=1024 {
+            let gap = provider_message_gap(
+                "Application",
+                &format!("Example.Provider.{index}"),
+                ProviderMessageStage::FormatMessage,
+                15027,
+            );
+            assert!(dedup.keep(&gap));
+        }
+
+        assert_eq!(dedup.seen.len(), 1024);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1024)
+        );
+        assert!(dedup.keep(&provider_message_gap(
+            "Application",
+            "Example.Provider.0",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        )));
+        assert!(!dedup.keep(&provider_message_gap(
+            "Application",
+            "Example.Provider.1024",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        )));
+        assert_eq!(dedup.seen.len(), 1024);
+        assert_eq!(
+            dedup.tail_insertion_order.as_ref().map(VecDeque::len),
+            Some(1024)
+        );
+    }
+
+    #[test]
+    fn subscription_batch_keeps_boundary_record_and_provider_diagnostic_together() {
+        let mut pending = PendingTailBatch::default();
+        for _ in 0..EVENT_FETCH_BATCH - 1 {
+            assert!(!pending.push_rendered(test_record("raw fallback"), Vec::new()));
+        }
+        let gap = provider_message_gap(
+            "Application",
+            "Example.Provider",
+            ProviderMessageStage::FormatMessage,
+            15027,
+        );
+
+        assert!(
+            pending.push_rendered(test_record("raw fallback"), vec![format_provider_gap(&gap)],)
+        );
+        let (records, gaps) = pending.take();
+
+        assert_eq!(records.len(), EVENT_FETCH_BATCH);
+        assert_eq!(gaps, vec![format_provider_gap(&gap)]);
+    }
+
+    fn test_record(message: &str) -> EvtxRecord {
+        EvtxRecord {
+            id: 0,
+            event_record_id: 7,
+            event_record_id_text: Some("7".to_string()),
+            timestamp: String::new(),
+            timestamp_epoch: 0,
+            provider: "Example.Provider".to_string(),
+            channel: "Application".to_string(),
+            event_id: 7,
+            level: EvtxLevel::Information,
+            computer: "HOST".to_string(),
+            message: message.to_string(),
+            event_data: Vec::new(),
+            raw_xml: "<Event/>".to_string(),
+            source_label: "Live".to_string(),
+            origin_kind: EvtxOriginKind::Event,
+            task: None,
+            opcode: None,
+            process_id: None,
+            activity_id: None,
+            related_activity_id: None,
+            session_id: None,
+            device_id: None,
+            user_id: None,
+            process_start_time: None,
+            thread_id: None,
+            user_sid: None,
+            keywords: None,
+            mapped: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
 #[cfg(target_os = "windows")]
 mod tests {
     use super::*;
+    use windows::core::HRESULT;
 
     #[test]
     fn live_query_application() {
@@ -1723,7 +2594,8 @@ mod tests {
         let has_app = channels.iter().any(|c| c.name == "Application");
         println!("Has Application channel: {has_app}");
 
-        let records = query_channel("Application", &MapRegistry::new(), Some(3))
+        let providers = std::sync::RwLock::new(ProviderStore::default());
+        let records = query_channel("Application", &MapRegistry::new(), &providers, Some(3))
             .expect("query should work")
             .records;
         println!("Application records: {}", records.len());
@@ -1743,23 +2615,35 @@ mod tests {
         assert!(format_remote_code("EvtRender", 5).contains("access denied"));
         assert!(format_remote_code("EvtOpenPublisherMetadata", 53)
             .contains("remote source unavailable"));
-        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(
-            HRESULT::from_win32(5)
-        )));
-        assert!(!is_publisher_metadata_not_found(&Error::from_hresult(
-            HRESULT::from_win32(15007)
-        )));
-        assert!(is_publisher_metadata_not_found(&Error::from_hresult(
-            HRESULT::from_win32(15002)
-        )));
     }
     #[test]
     fn cached_publisher_metadata_failure_is_reused_without_rpc() {
-        let mut cache = HashMap::from([("provider".to_string(), PublisherMetadata::Failed(5))]);
+        let mut cache = HashMap::from([(
+            "provider".to_string(),
+            PublisherMetadata::Failed(NativeProviderFailure {
+                stage: ProviderMessageStage::OpenPublisherMetadata,
+                error_code: 5,
+            }),
+        )]);
         let error = format_event_message(EVT_HANDLE(0), "provider", None, &mut cache)
             .expect_err("cached metadata failure must remain an error");
-        assert_eq!(win32_code(&error), 5);
+        assert_eq!(error.stage, ProviderMessageStage::OpenPublisherMetadata);
+        assert_eq!(error.error_code, 5);
         assert_eq!(cache.len(), 1);
+    }
+    #[test]
+    fn native_error_codes_keep_the_api_stage_that_produced_them() {
+        for code in [2, 15002] {
+            let failure =
+                publisher_metadata_failure(&Error::from_hresult(HRESULT::from_win32(code)));
+            assert_eq!(failure.stage, ProviderMessageStage::OpenPublisherMetadata);
+            assert_eq!(failure.error_code, code);
+        }
+        for code in [2, 15027] {
+            let failure = event_message_failure(&Error::from_hresult(HRESULT::from_win32(code)));
+            assert_eq!(failure.stage, ProviderMessageStage::FormatMessage);
+            assert_eq!(failure.error_code, code);
+        }
     }
     #[test]
     fn stopping_an_unknown_tail_returns_an_error() {
@@ -1836,11 +2720,10 @@ mod tests {
         let mut pending = PendingTailBatch::default();
         for event_record_id in 0..EVENT_FETCH_BATCH {
             assert!(!pending.is_full());
-            let should_flush = pending.push_record(identity_test_record(
-                event_record_id as u64,
-                None,
-                "<Event/>",
-            ));
+            let should_flush = pending.push_rendered(
+                identity_test_record(event_record_id as u64, None, "<Event/>"),
+                Vec::new(),
+            );
             assert_eq!(should_flush, event_record_id + 1 == EVENT_FETCH_BATCH);
         }
 
@@ -1857,11 +2740,10 @@ mod tests {
         let mut pending = PendingTailBatch::default();
         for event_record_id in 0..EVENT_FETCH_BATCH {
             assert!(!pending.is_full());
-            pending.push_record(identity_test_record(
-                event_record_id as u64,
-                None,
-                "<Event/>",
-            ));
+            pending.push_rendered(
+                identity_test_record(event_record_id as u64, None, "<Event/>"),
+                Vec::new(),
+            );
         }
 
         assert!(pending.is_full());
@@ -1870,7 +2752,7 @@ mod tests {
         assert_eq!(records.len(), EVENT_FETCH_BATCH);
         assert!(gaps.is_empty());
         assert!(!pending.is_full());
-        assert!(!pending.push_record(next_record));
+        assert!(!pending.push_rendered(next_record, Vec::new()));
         assert_eq!(pending.records.len(), 1);
     }
 
@@ -1971,10 +2853,15 @@ mod live_service_tests {
         MapRegistry::new()
     }
 
+    fn no_providers() -> std::sync::RwLock<ProviderStore> {
+        std::sync::RwLock::new(ProviderStore::default())
+    }
+
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn an_unfiltered_query_returns_records() {
-        let scan = query_channel(CHANNEL, &no_maps(), Some(50)).expect("query succeeds");
+        let scan =
+            query_channel(CHANNEL, &no_maps(), &no_providers(), Some(50)).expect("query succeeds");
         let records = scan.records;
         assert!(
             !records.is_empty(),
@@ -2003,6 +2890,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             None,
         )
         .expect("1 hour query succeeds")
@@ -2017,6 +2905,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             None,
         )
         .expect("30 day query succeeds")
@@ -2042,6 +2931,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             Some(200),
         )
         .expect("level query succeeds")
@@ -2070,6 +2960,7 @@ mod live_service_tests {
                 ..Default::default()
             },
             &no_maps(),
+            &no_providers(),
             Some(50),
         )
         .expect("query succeeds")
@@ -2085,10 +2976,15 @@ mod live_service_tests {
     #[test]
     #[ignore = "requires a live Windows Event Log service with events"]
     fn system_fields_are_populated_from_real_events() {
-        let records =
-            query_channel_filtered(CHANNEL, &EventQueryFilter::default(), &no_maps(), Some(200))
-                .expect("query succeeds")
-                .records;
+        let records = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter::default(),
+            &no_maps(),
+            &no_providers(),
+            Some(200),
+        )
+        .expect("query succeeds")
+        .records;
 
         assert!(!records.is_empty());
         assert!(
@@ -2148,6 +3044,7 @@ mod live_service_tests {
             CHANNEL,
             &EventQueryFilter::default(),
             &no_maps(),
+            &no_providers(),
             Some(10),
             |_, _| {},
             |batch| {
@@ -2196,6 +3093,7 @@ mod live_service_tests {
                 CHANNEL,
                 &EventQueryFilter::default(),
                 &no_maps(),
+                &no_providers(),
                 Some(10),
                 |_, _| {},
                 |batch| {

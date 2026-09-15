@@ -6,7 +6,6 @@
  * placed.
  */
 
-import type { EvtxRecord } from "./types";
 import type { LogEntry, LogSource, PlatformKind } from "../../types/log";
 import type { SourceOpenMode } from "../../lib/tab-snapshot-cache";
 
@@ -137,18 +136,6 @@ export interface TimelineCoverageGap {
   reason: string;
 }
 
-/**
- * Reserved source identity for the bounded aggregate marker emitted when correlation gaps are
- * truncated. Unlike an origin-backed gap, this marker must survive event-row filtering.
- */
-export const CORRELATION_GAP_AGGREGATE_SOURCE = "correlation";
-/** Reserved source identity for malformed EventRecordID coverage emitted by diagnosis. */
-export const EVENT_RECORD_IDENTITY_GAP_SOURCE = "event-record-identity";
-
-export function isAggregateCoverageGap(gap: TimelineCoverageGap): boolean {
-  return gap.source === CORRELATION_GAP_AGGREGATE_SOURCE;
-}
-
 export interface TimelineCorrelationEdge {
   id: string;
   fromId: string;
@@ -167,9 +154,8 @@ export interface TimelineCorrelationEdge {
 export interface UnifiedTimeline {
   items: TimelineItem[];
   unplaced: UnplacedItem[];
-  /** Defaulted by Rust for older producers that do not emit correlation edges. */
-  edges?: TimelineCorrelationEdge[];
-  coverageGaps?: TimelineCoverageGap[];
+  edges: TimelineCorrelationEdge[];
+  coverageGaps: TimelineCoverageGap[];
 }
 
 type TimelineRecord = Record<string, unknown>;
@@ -445,12 +431,7 @@ function decodeUnplacedItem(value: unknown, path: string): UnplacedItem {
   };
 }
 
-/**
- * Decodes the value crossing the Tauri boundary into the shape consumed by the timeline UI.
- *
- * Optional correlation fields remain omitted when older backend producers omit them. Edge arrays
- * retain their Rust defaults when an individual edge omits the serde-defaulted fields.
- */
+/** Decodes the current Tauri timeline contract into the shape consumed by the UI. */
 export function assertUnifiedTimelineShape(value: unknown): UnifiedTimeline {
   const timeline = timelineRecord(value, "timeline");
   const items = timelineArray(timeline.items, "items").map((item, index) =>
@@ -459,242 +440,21 @@ export function assertUnifiedTimelineShape(value: unknown): UnifiedTimeline {
   const unplaced = timelineArray(timeline.unplaced, "unplaced").map(
     (item, index) => decodeUnplacedItem(item, `unplaced[${index}]`),
   );
-  const edges =
-    timeline.edges === undefined
-      ? undefined
-      : timelineArray(timeline.edges, "edges").map((edge, index) =>
-          decodeTimelineEdge(edge, `edges[${index}]`),
-        );
-  const coverageGaps =
-    timeline.coverageGaps === undefined
-      ? undefined
-      : timelineArray(timeline.coverageGaps, "coverageGaps").map((gap, index) =>
-          decodeTimelineCoverageGap(gap, `coverageGaps[${index}]`),
-        );
+  const edges = timelineArray(timeline.edges, "edges").map((edge, index) =>
+    decodeTimelineEdge(edge, `edges[${index}]`),
+  );
+  const coverageGaps = timelineArray(
+    timeline.coverageGaps,
+    "coverageGaps",
+  ).map((gap, index) =>
+    decodeTimelineCoverageGap(gap, `coverageGaps[${index}]`),
+  );
   return {
     items,
     unplaced,
-    ...(edges === undefined ? {} : { edges }),
-    ...(coverageGaps === undefined ? {} : { coverageGaps }),
+    edges,
+    coverageGaps,
   };
-}
-
-function missingRecordDigest(record: EvtxRecord): string {
-  const input = `${record.timestampEpoch}|${record.eventId}|${record.provider}|${record.message}|${record.rawXml}`;
-  let first = 2_166_136_261;
-  let second = (first ^ 0x9e37_79b9) >>> 0;
-  for (const byte of utf8Encoder.encode(input)) {
-    first = Math.imul(first ^ byte, 16_777_619) >>> 0;
-    second = Math.imul(second ^ (byte ^ 0xa5), 16_777_619) >>> 0;
-  }
-  return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`;
-}
-
-function eventIdentityPrefix(record: EvtxRecord): string {
-  const source = `source${utf8Encoder.encode(record.sourceLabel).length}:${record.sourceLabel}`;
-  const machineValue = record.computer.trim();
-  const machine = `machine${utf8Encoder.encode(machineValue).length}:${machineValue}|`;
-  const channel = `channel${utf8Encoder.encode(record.channel).length}:${record.channel}`;
-  return `${source}|${machine}${channel}`;
-}
-
-function exactNonzeroDecimalText(value: string | null | undefined): string | null {
-  const text = value?.trim();
-  if (!text || !/^\d+$/.test(text)) return null;
-  try {
-    return BigInt(text) === 0n ? null : text;
-  } catch {
-    return null;
-  }
-}
-
-function exactRecordIdText(record: EvtxRecord): string | null {
-  return exactNonzeroDecimalText(record.eventRecordIdText);
-}
-
-function hasUnsafeEventRecordIdentity(
-  origin: Extract<TimelineOrigin, { kind: "event" }>,
-): boolean {
-  return (
-    origin.recordId !== 0 &&
-    !Number.isSafeInteger(origin.recordId) &&
-    exactNonzeroDecimalText(origin.recordIdText) === null
-  );
-}
-
-function stableRecordBase(record: EvtxRecord): string {
-  const prefix = eventIdentityPrefix(record);
-  const exactId = exactRecordIdText(record);
-  if (exactId !== null) {
-    return `${prefix}|record${exactId}`;
-  }
-  if (record.eventRecordId !== 0) {
-    return Number.isSafeInteger(record.eventRecordId)
-      ? `${prefix}|record${record.eventRecordId}`
-      : `${prefix}|record`;
-  }
-  return `${prefix}|missing${missingRecordDigest(record)}`;
-}
-
-export function stableRecordIdentity(record: EvtxRecord): string {
-  return stableRecordBase(record);
-}
-
-export function stableRecordIdentityMap(
-  records: readonly EvtxRecord[],
-): Map<EvtxRecord, string> {
-  const decorated = records.map((record) => ({
-    record,
-    base: stableRecordBase(record),
-  }));
-  const occurrences = new Map<string, number>();
-  const keys = new Map<EvtxRecord, string>();
-  for (const { record, base } of decorated) {
-    if (record.eventRecordId !== 0 || exactRecordIdText(record) !== null) {
-      keys.set(record, base);
-      continue;
-    }
-    const occurrence = occurrences.get(base) ?? 0;
-    occurrences.set(base, occurrence + 1);
-    keys.set(record, `${base}-${occurrence}`);
-  }
-  return keys;
-}
-
-/**
- * Filters a cached backend timeline to the records currently visible in the event list.
- *
- * Provenance/activity is parsed once when the raw record set changes; channel, level, Event ID,
- * and search transitions only select from that cached result and never resend raw XML to Tauri.
- */
-export function filterTimelineToRecords(
-  timeline: UnifiedTimeline,
-  records: EvtxRecord[],
-  allRecords: EvtxRecord[] = records,
-): UnifiedTimeline {
-  const canonicalKeys = stableRecordIdentityMap(allRecords);
-  const keys = new Set(
-    records.map(
-      (record) => canonicalKeys.get(record) ?? stableRecordBase(record),
-    ),
-  );
-  const unsafePrefixes = new Set(
-    records
-      .filter(
-        (record) =>
-          record.eventRecordId !== 0 &&
-          exactRecordIdText(record) === null &&
-          !Number.isSafeInteger(record.eventRecordId),
-      )
-      .map((record) => canonicalKeys.get(record) ?? stableRecordBase(record)),
-  );
-  const unsafeOriginCounts = new Map<string, number>();
-  for (const item of [...timeline.items, ...timeline.unplaced]) {
-    if (item.origin.kind !== "event") continue;
-    if (!hasUnsafeEventRecordIdentity(item.origin)) continue;
-    const marker = item.origin.stableId.lastIndexOf("|record");
-    if (marker < 0) continue;
-    const prefix = item.origin.stableId.replace(/record\d+$/, "record");
-    unsafeOriginCounts.set(prefix, (unsafeOriginCounts.get(prefix) ?? 0) + 1);
-  }
-  const ambiguousUnsafePrefixes = new Map(
-    [...unsafeOriginCounts].filter(
-      ([prefix, count]) => unsafePrefixes.has(prefix) && count > 1,
-    ),
-  );
-  const keep = (origin: TimelineOrigin) => {
-    if (origin.kind === "log") return true;
-    if (keys.has(origin.stableId)) return true;
-    const marker = origin.stableId.lastIndexOf("|record");
-    const prefix = origin.stableId.replace(/record\d+$/, "record");
-    return (
-      marker >= 0 &&
-      hasUnsafeEventRecordIdentity(origin) &&
-      unsafePrefixes.has(prefix) &&
-      unsafeOriginCounts.get(prefix) === 1
-    );
-  };
-  const items = timeline.items.filter((item) => keep(item.origin));
-  const unplaced = timeline.unplaced.filter((item) => keep(item.origin));
-  const visibleOriginIds = new Set(
-    [...items, ...unplaced].map((item) => timelineOriginId(item.origin)),
-  );
-  const edges = (timeline.edges ?? []).flatMap((edge) => {
-    const fromVisible = visibleOriginIds.has(edge.fromId);
-    const visibleEndpointId = fromVisible
-      ? edge.fromId
-      : edge.toId !== null && visibleOriginIds.has(edge.toId)
-        ? edge.toId
-        : null;
-    if (visibleEndpointId === null) return [];
-
-    const hiddenEndpointId =
-      edge.toId !== null && !visibleOriginIds.has(edge.toId)
-        ? edge.toId
-        : !fromVisible
-          ? edge.fromId
-          : null;
-    const hasHiddenEndpoint = hiddenEndpointId !== null;
-    if (
-      hasHiddenEndpoint &&
-      edge.strength !== "ambiguous" &&
-      edge.coverage.state !== "gap"
-    ) {
-      return [];
-    }
-
-    const candidateIds = edge.candidateIds.filter((candidate) =>
-      visibleOriginIds.has(candidate),
-    );
-    const evidence = edge.evidence.filter((entry) =>
-      visibleOriginIds.has(entry.originId),
-    );
-    const hiddenReferences = [
-      ...(hiddenEndpointId === null ? [] : [hiddenEndpointId]),
-      ...edge.candidateIds.filter(
-        (candidate) => !visibleOriginIds.has(candidate),
-      ),
-      ...edge.evidence
-        .filter((entry) => !visibleOriginIds.has(entry.originId))
-        .map((entry) => entry.originId),
-    ];
-    const hiddenCorrelation = hasHiddenEndpoint || hiddenReferences.length > 0;
-    const coverage =
-      hiddenCorrelation &&
-      (edge.strength === "ambiguous" || edge.coverage.state === "gap")
-        ? {
-            state: "gap" as const,
-            gap: {
-              source: visibleEndpointId,
-              reason: "correlation candidates are outside the current filter",
-            },
-          }
-        : edge.coverage;
-    return [
-      {
-        ...edge,
-        fromId: visibleEndpointId,
-        toId: hasHiddenEndpoint ? null : edge.toId,
-        candidateIds,
-        evidence,
-        coverage,
-      },
-    ];
-  });
-  const coverageGaps = [
-    ...(timeline.coverageGaps ?? []).filter(
-      (gap) =>
-        isAggregateCoverageGap(gap) ||
-        gap.source === EVENT_RECORD_IDENTITY_GAP_SOURCE ||
-        gap.source.length === 0 ||
-        visibleOriginIds.has(gap.source),
-    ),
-    ...[...ambiguousUnsafePrefixes].map(([prefix, count]) => ({
-      source: EVENT_RECORD_IDENTITY_GAP_SOURCE,
-      reason: `unsafe EventRecordID identity is ambiguous: ${count} timeline origins share ${prefix} and cannot be matched uniquely`,
-    })),
-  ];
-  return { items, unplaced, edges, coverageGaps };
 }
 
 export const TIMELINE_SEVERITY_RANK: Record<TimelineSeverity, number> = {

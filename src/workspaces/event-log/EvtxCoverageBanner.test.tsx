@@ -69,10 +69,10 @@ describe("EvtxCoverageBanner archive provenance", () => {
     render(<EvtxCoverageBanner />);
 
     expect(screen.getByText("258 gaps in this view")).toBeInTheDocument();
-    expect(screen.getAllByRole("listitem")).toHaveLength(256);
-    expect(screen.getByText("source-255: coverage gap 255")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(100);
+    expect(screen.getByText("source-99: coverage gap 99")).toBeInTheDocument();
     expect(
-      screen.getByText("<coverage gaps: 2 omitted by display limit>"),
+      screen.getByText("<coverage gaps: 158 omitted by display limit>"),
     ).toBeInTheDocument();
     expect(screen.queryByText("source-257: coverage gap 257")).not.toBeInTheDocument();
   });
