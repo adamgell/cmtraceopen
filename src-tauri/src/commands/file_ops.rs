@@ -512,6 +512,18 @@ pub fn get_initial_file_paths(
     Ok(paths)
 }
 
+/// Returns the file paths a second launch handed to the window that is running.
+///
+/// The running window claims them when it mounts and when it is told a launch
+/// arrived, because a second launch can be detected before the window is
+/// listening. Claiming takes and clears, so a path is opened once.
+#[tauri::command]
+pub fn take_second_launch_paths(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, crate::error::AppError> {
+    state.take_second_launch_paths()
+}
+
 /// Returns the validated app-owned workspace requested at startup.
 ///
 /// This is intentionally separate from positional file paths so an internal

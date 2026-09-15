@@ -1018,6 +1018,17 @@ export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand("get_initial_file_paths");
 }
 
+/**
+ * Takes the file paths a second launch handed to the running window.
+ *
+ * The paths wait in the backend until claimed, so a launch detected before the
+ * window was listening is still opened when the window claims. Claiming clears
+ * them, so an announced launch cannot be opened twice.
+ */
+export async function takeSecondLaunchPaths(): Promise<string[]> {
+  return invokeCommand("take_second_launch_paths");
+}
+
 export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
   return invokeCommand("get_initial_workspace");
 }
@@ -1761,6 +1772,7 @@ const COMMAND_DECODERS = {
       evidenceFilePath: isNullableCommandString,
     }),
   get_initial_file_paths: decodeStringArrayResponse,
+  take_second_launch_paths: decodeStringArrayResponse,
   get_initial_workspace: decodeNullableWorkspaceIdResponse,
   get_app_elevation_state: (value, commandName) =>
     decodeRecordResponse<AppElevationState>(value, commandName, {

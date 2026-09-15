@@ -27,6 +27,8 @@ pub mod process_util;
 pub mod sccm;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
+#[cfg(desktop)]
+mod single_instance;
 mod state;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
@@ -43,10 +45,10 @@ use tauri::Manager;
 const ESP_STARTUP_WORKSPACE: &str = "esp-diagnostics";
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct InitialLaunchArguments {
-    file_paths: Vec<String>,
-    workspace: Option<String>,
-    elevation_restore: Option<String>,
+pub(crate) struct InitialLaunchArguments {
+    pub(crate) file_paths: Vec<String>,
+    pub(crate) workspace: Option<String>,
+    pub(crate) elevation_restore: Option<String>,
 }
 
 /// Parses app-owned startup options separately from positional file paths.
@@ -59,7 +61,7 @@ struct InitialLaunchArguments {
 /// An option that fails validation is dropped rather than demoted to a file
 /// path, so a malformed `--elevation-restore=` can never be opened as evidence
 /// and never suppresses a legitimate positional open.
-fn parse_initial_launch_arguments(
+pub(crate) fn parse_initial_launch_arguments(
     arguments: impl IntoIterator<Item = String>,
 ) -> InitialLaunchArguments {
     let mut launch = InitialLaunchArguments::default();
@@ -142,6 +144,19 @@ pub fn run() {
     }));
 
     let builder = tauri::Builder::default();
+
+    // A second launch — a file-association double-click or a path on the command
+    // line — opens in this window instead of starting a second one. It is
+    // registered first so the duplicate is detected while the app is still being
+    // built, before the window `tauri.conf.json` declares exists. An elevated
+    // relaunch replaces this process rather than joining it, so it never
+    // registers the plugin: see `single_instance::is_replacement_launch`.
+    #[cfg(desktop)]
+    let builder = if single_instance::is_replacement_launch(&initial_launch) {
+        builder
+    } else {
+        builder.plugin(single_instance::plugin())
+    };
 
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
@@ -284,6 +299,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::take_second_launch_paths,
             commands::file_ops::get_initial_workspace,
             commands::elevation::get_app_elevation_state,
             commands::elevation::restart_as_administrator,
