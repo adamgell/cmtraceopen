@@ -105,6 +105,26 @@ describe("channels the service reports as switched off", () => {
     expect([...useEvtxStore.getState().selectedChannels]).toEqual(["UnprobedChannel"]);
   });
 
+  it("does not mark a channel from an entry that has no state field", () => {
+    // The field arrived with this change, so an entry written before it carries no state, and the
+    // picker is where an operator would first see it treated as switched off. Absence follows the
+    // same rule `unknown` does: listed, unmarked, selectable.
+    useEvtxStore.setState({
+      channels: [{ name: "LegacyChannel", eventCount: 3, sourceType: "live" }],
+      selectedChannels: new Set<string>(),
+      loadedChannels: new Set<string>(),
+    });
+
+    render(<ChannelPicker />);
+    revealServiceChannels();
+
+    expect(rowFor("LegacyChannel")).not.toHaveTextContent("disabled");
+
+    fireEvent.click(checkboxFor("LegacyChannel"));
+
+    expect(useEvtxStore.getState().selectedChannels.has("LegacyChannel")).toBe(true);
+  });
+
   it("leaves a switched-off channel out of Select all", () => {
     render(<ChannelPicker />);
 

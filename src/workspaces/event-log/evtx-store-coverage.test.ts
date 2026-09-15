@@ -2377,6 +2377,32 @@ describe("channel eligibility", () => {
     ]);
   });
 
+  it("treats an entry with no state field at all as one that can hold events", () => {
+    // The field arrived with this change, so an entry written before it carries no state. Absence is
+    // `unknown`, not `disabled`: read through a truthiness test this entry would be dropped from the
+    // selection, which is the collapse the three states exist to prevent. Asserted on an entry that
+    // simply has no field, rather than on the `??` that normalizes it.
+    useEvtxStore.setState({
+      channels: [
+        channel("Application", "enabled"),
+        { name: "LegacyChannel", eventCount: 3, sourceType: "live" },
+      ],
+      selectedChannels: new Set<string>(),
+    });
+
+    useEvtxStore.getState().selectAllChannels();
+
+    expect([...useEvtxStore.getState().selectedChannels].sort()).toEqual([
+      "Application",
+      "LegacyChannel",
+    ]);
+
+    useEvtxStore.setState({ selectedChannels: new Set<string>() });
+    useEvtxStore.getState().toggleChannel("LegacyChannel");
+
+    expect([...useEvtxStore.getState().selectedChannels]).toEqual(["LegacyChannel"]);
+  });
+
   it("does not add a switched-off channel through its own control", () => {
     // The picker is not the only way into the selection, so the rule belongs where the selection
     // changes. An unknown channel is still selectable. A channel already in the selection outlives
@@ -2432,6 +2458,9 @@ describe("channel eligibility", () => {
       "System",
     ]);
     expect(useEvtxStore.getState().coverageGaps).toEqual([]);
+    // The channel whose configuration was never answered was read, so it loaded: a successful
+    // acquisition is successful evidence, and the uncertainty contributed no gap of its own.
+    expect(useEvtxStore.getState().loadedChannels.has("System")).toBe(true);
     // Still listed: the channel is part of the machine's configuration, and the picker is where an
     // operator sees that. Excluded from acquisition is not the same as hidden.
     expect(useEvtxStore.getState().channels.map((info) => info.name)).toEqual([
