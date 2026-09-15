@@ -178,6 +178,12 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const [exportState, setExportState] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const exportAbortRef = useRef<AbortController | null>(null);
+  // The save dialog is awaited before the export session exists, so the abort controller cannot be
+  // the guard: it stays null while the operator is choosing a file, and two selections made before
+  // the first dialog resolves would both pass a check against it. This ref is set synchronously
+  // before the dialog opens and cleared in `finally`, so it covers the dialog and the session
+  // together, and a thrown dialog error cannot leave it set.
+  const exportPendingRef = useRef(false);
   useEffect(
     () => () => {
       exportAbortRef.current?.abort();
@@ -229,7 +235,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
   const exportVisible = async (format: (typeof EVTX_EXPORT_FORMATS)[number]) => {
-    if (exportAbortRef.current !== null) return;
+    if (exportPendingRef.current) return;
     const state = useEvtxStore.getState();
     const visibleColumns = state.columnConfig.order;
     const records = sortRecords(
@@ -252,6 +258,9 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
       setExportState("Nothing to export");
       return;
     }
+    // Claimed before the dialog opens: this is the whole point of the ref, since everything after
+    // it is asynchronous and a second selection can arrive while the operator is still choosing.
+    exportPendingRef.current = true;
     try {
       const destination = await save({
         defaultPath: `events.${format.extension}`,
@@ -286,6 +295,7 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
         );
       }
     } finally {
+      exportPendingRef.current = false;
       exportAbortRef.current = null;
       setIsExporting(false);
     }

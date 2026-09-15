@@ -31,7 +31,7 @@
 - Modify: `src/workspaces/event-log/EventLogWorkspace.tsx`
 - Modify: `src/workspaces/event-log/EventLogWorkspace.integration.test.tsx`
 
-### Steps
+### Task 1 steps
 
 - [ ] Extend `EventDiagnosisPanel.test.tsx` with failing contracts that assert the panel is collapsed
   initially, does not render the summary-wide `Evidence:` paragraph, renders one copy of an
@@ -57,7 +57,7 @@
 - [ ] Inspect the diff for duplicate rendering, stale-timeline races, and inaccessible disclosure
   behavior; commit the task.
 
-### Acceptance
+### Task 1 acceptance
 
 - The collapsed diagnosis occupies only its header and overview.
 - Expanding it cannot grow beyond the bounded internal viewport.
@@ -75,7 +75,7 @@
 - Modify: `crates/cmtraceopen-parser/tests/diagnosis_contract.rs`
 - Test: unit tests in `crates/cmtraceopen-parser/src/unified_timeline/mod.rs`
 
-### Steps
+### Task 2 steps
 
 - [ ] Replace the existing unsupported-family contract with a failing test named
   `unsupported_event_family_is_neutral` that requires `EventFamily::Other`, zero findings, retained
@@ -96,7 +96,7 @@
 - [ ] Run `cargo fmt --check --manifest-path crates/cmtraceopen-parser/Cargo.toml`, inspect the diff,
   and commit the task.
 
-### Acceptance
+### Task 2 acceptance
 
 - Ordinary unrelated Application/System events do not inflate finding or coverage totals.
 - No-key observations remain visible in the timeline without implying missing evidence.
@@ -120,7 +120,7 @@
 - Test: existing provider-description tests in `src-tauri/src/event_log/parser.rs`
 - Test: `src/workspaces/event-log/evtx-coverage.test.ts`
 
-### Steps
+### Task 3 steps
 
 - [ ] Add portable failing helper tests for a provider gap that assert channel/provider source,
   `EvtxCoverageGapKind::Provider`, exact stage, error code, and stable operator text.
@@ -168,7 +168,7 @@
 - [ ] Inspect the diff for record loss, string parsing, provider-stage mislabeling, or unbounded
   diagnostics; commit the task.
 
-### Acceptance
+### Task 3 acceptance
 
 - Successfully delivered records are not counted as parse failures because their description DLL
   is missing.
@@ -182,7 +182,7 @@
 
 ## Task 4: Aggregate verification and Windows ARM64 validation
 
-### Steps
+### Task 4 steps
 
 - [ ] Run all changed frontend tests, `npm test`, `npx tsc --noEmit`, and `npm run frontend:build`.
 - [ ] Run the focused Rust suites, parser workspace tests, Tauri event-log tests, format checks,
@@ -200,7 +200,7 @@
 - [ ] Record only privacy-bounded screenshots and command summaries; do not export raw Event Log
   evidence from the VM.
 
-### Acceptance
+### Task 4 acceptance
 
 - Portable gates and native ARM64 build/tests pass on the reviewed commit.
 - The live Event Viewer is usable without scrolling through a raw evidence wall.

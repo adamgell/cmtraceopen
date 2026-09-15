@@ -1239,17 +1239,20 @@ fn access_analysis_session(
     Some(session)
 }
 
-fn find_session(
-    state: &AppState,
+/// Looks a session up in the registry it is given.
+///
+/// Taking the registry rather than the whole app state lets a blocking task own the lookup: the
+/// access bookkeeping prunes stale sessions, so the lock can drop a session's buffers before it
+/// releases. Every caller that runs on the async executor goes through `spawn_blocking` first.
+fn find_session_in(
+    sessions: &Mutex<EventLogAnalysisSessionRegistry>,
     session_id: &str,
 ) -> Result<SharedEventLogAnalysisSession, String> {
     validate_session_id(session_id)?;
-    let mut sessions = state
-        .event_log_analysis_sessions
+    let mut guard = sessions
         .lock()
         .map_err(|_| "event-log analysis session registry lock was poisoned".to_string())?;
-    let now = Instant::now();
-    access_analysis_session(&mut sessions, session_id, now)
+    access_analysis_session(&mut guard, session_id, Instant::now())
         .ok_or_else(|| "event-log analysis session was not found".to_string())
 }
 
@@ -1280,9 +1283,9 @@ pub async fn evtx_append_analysis_chunk(
     entries: Vec<EventLogAnalysisLogEntryInput>,
     state: tauri::State<'_, AppState>,
 ) -> Result<EventLogAnalysisSessionStatus, String> {
-    let session = find_session(&state, &session_id)?;
+    let sessions = Arc::clone(&state.event_log_analysis_sessions);
     tokio::task::spawn_blocking(move || {
-        session
+        find_session_in(&sessions, &session_id)?
             .lock()
             .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
             .append_inputs(records, entries)
@@ -1296,9 +1299,9 @@ pub async fn evtx_finalize_analysis_session(
     session_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<EventLogAnalysisSessionStatus, String> {
-    let session = find_session(&state, &session_id)?;
+    let sessions = Arc::clone(&state.event_log_analysis_sessions);
     tokio::task::spawn_blocking(move || {
-        session
+        find_session_in(&sessions, &session_id)?
             .lock()
             .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
             .finalize()
@@ -1314,9 +1317,9 @@ pub async fn evtx_query_analysis_timeline(
     limit: u32,
     state: tauri::State<'_, AppState>,
 ) -> Result<EventLogAnalysisTimelinePage, String> {
-    let session = find_session(&state, &session_id)?;
+    let sessions = Arc::clone(&state.event_log_analysis_sessions);
     tokio::task::spawn_blocking(move || {
-        session
+        find_session_in(&sessions, &session_id)?
             .lock()
             .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
             .page(offset, limit)
@@ -1333,13 +1336,20 @@ pub async fn evtx_diagnose_analysis_session(
 ) -> Result<DiagnosisSummary, String> {
     let coverage_gaps = coverage_gaps.unwrap_or_default();
     validate_diagnosis_coverage_gaps(&coverage_gaps)?;
-    let snapshot = find_session(&state, &session_id)?
-        .lock()
-        .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
-        .diagnosis_snapshot()?;
-    tokio::task::spawn_blocking(move || snapshot.summarize(coverage_gaps))
-        .await
-        .map_err(|error| format!("event-log analysis diagnosis task failed: {error}"))
+    // Everything below the handle clone belongs off the async executor: the registry lookup runs the
+    // stale-session prune, and the snapshot clones the bounded event projection, the text findings
+    // and the identity findings. Only the handles are taken here, before the first await.
+    let sessions = Arc::clone(&state.event_log_analysis_sessions);
+    tokio::task::spawn_blocking(move || {
+        let snapshot = find_session_in(&sessions, &session_id)?
+            .lock()
+            .map_err(|_| "event-log analysis session lock was poisoned".to_string())?
+            .diagnosis_snapshot()?;
+        // The session guard was released with the statement above, so the summary runs without it.
+        Ok(snapshot.summarize(coverage_gaps))
+    })
+    .await
+    .map_err(|error| format!("event-log analysis diagnosis task failed: {error}"))?
 }
 
 #[tauri::command]

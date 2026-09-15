@@ -304,6 +304,14 @@ impl EventLogExportSession {
                 self.format,
                 &destination,
                 &mapped_columns,
+                // Revalidated at publication time, not only when this session was created. The first
+                // pass checks the sources it read, but nothing there can know what the destination
+                // resolves to by the moment the staged file replaces it: a link, an alias or a later
+                // path change can point it at an opened source or manifest. This pass closes that
+                // window immediately before the atomic replacement, so it is not redundant decoding
+                // to be optimised away. Removing it needs a measured replacement that still resolves
+                // the destination at commit time; the check is held by
+                // `publication_revalidates_record_sources_instead_of_trusting_creation_identity`.
                 move || {
                     validate_export_publication(
                         &mut validation_spool,

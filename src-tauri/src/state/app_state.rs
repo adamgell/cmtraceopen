@@ -67,8 +67,12 @@ pub struct AppState {
     #[cfg(feature = "event-log")]
     pub provider_store: Arc<RwLock<ProviderStore>>,
     /// Backend-owned, chunk-fed timeline/diagnosis snapshots keyed by opaque session id.
+    ///
+    /// Held the same way as [`event_log_export_sessions`](Self::event_log_export_sessions) so a
+    /// blocking task can take the registry for itself: looking a session up runs the stale-session
+    /// prune, which drops the buffers of whatever it evicts.
     #[cfg(feature = "event-log")]
-    pub(crate) event_log_analysis_sessions: Mutex<EventLogAnalysisSessionRegistry>,
+    pub(crate) event_log_analysis_sessions: Arc<Mutex<EventLogAnalysisSessionRegistry>>,
     /// Backend-owned, bounded-transport GUI export sessions keyed by opaque session id.
     #[cfg(feature = "event-log")]
     pub(crate) event_log_export_sessions: Arc<Mutex<EventLogExportSessionRegistry>>,
@@ -100,7 +104,7 @@ impl AppState {
             #[cfg(feature = "event-log")]
             provider_store: Arc::new(RwLock::new(ProviderStore::default())),
             #[cfg(feature = "event-log")]
-            event_log_analysis_sessions: Mutex::new(HashMap::new()),
+            event_log_analysis_sessions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "event-log")]
             event_log_export_sessions: Arc::new(Mutex::new(HashMap::new())),
         }

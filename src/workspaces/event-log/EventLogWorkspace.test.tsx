@@ -1123,6 +1123,145 @@ describe("EventLogWorkspace fixtures", () => {
     expect(screen.getByRole("button", { name: "Hide Raw XML" })).toBeInTheDocument();
     expect(screen.getByText(/<EventID>1000<\/EventID>/)).toBeInTheDocument();
   });
+
+  // The export control has two asynchronous phases before an abort controller exists: the save
+  // dialog, and the session the dialog's answer unlocks. These tests drive the real control so the
+  // guard is judged by what an operator can make happen, not by reading the ref.
+  const selectExportFormat = async (label: string) => {
+    fireEvent.click(
+      screen.getByTitle("Export the events currently shown, using the same filters as the list"),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: label }));
+  };
+
+  // The shared dialog mock is not reset between tests in this file, and these tests judge the guard
+  // by how many dialogs were opened, so each one starts from a clean history.
+  const dialogMock = () => {
+    const dialog = vi.mocked(save);
+    dialog.mockReset();
+    return dialog;
+  };
+
+  it("opens one save dialog when a second export is asked for before the first resolves", async () => {
+    seedEventLog();
+    const dialog = Promise.withResolvers<string | null>();
+    dialogMock().mockImplementation(() => dialog.promise);
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    await selectExportFormat("JSON");
+    await selectExportFormat("JSON");
+
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      dialog.resolve(null);
+    });
+  });
+
+  it("allows another export after the save dialog is dismissed", async () => {
+    seedEventLog();
+    dialogMock().mockResolvedValue(null);
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    await selectExportFormat("JSON");
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    await selectExportFormat("JSON");
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("allows another export after the save dialog itself fails", async () => {
+    seedEventLog();
+    dialogMock()
+      .mockRejectedValueOnce(new Error("dialog unavailable"))
+      .mockResolvedValue(null);
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    await selectExportFormat("JSON");
+    await waitFor(() =>
+      expect(screen.getByText("Export failed: dialog unavailable")).toBeInTheDocument(),
+    );
+
+    await selectExportFormat("JSON");
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("completes an export after an earlier attempt failed", async () => {
+    seedEventLog();
+    dialogMock()
+      .mockRejectedValueOnce(new Error("dialog unavailable"))
+      .mockResolvedValue("/tmp/events.json");
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "evtx_create_export_session") {
+        return {
+          sessionId: "retry-export",
+          nextSequence: 0,
+          receivedRecords: 0,
+          receivedBytes: 0,
+          expectedRecords: args?.expectedRecords,
+        };
+      }
+      if (command === "evtx_append_export_chunk") {
+        const payload = atob(args?.payloadBase64 as string);
+        return {
+          sessionId: "retry-export",
+          nextSequence: (args?.sequence as number) + 1,
+          receivedRecords: payload.split("\n").length - 1,
+          receivedBytes: payload.length,
+          expectedRecords: 1,
+        };
+      }
+      if (command === "evtx_finalize_export_session") {
+        return { sessionId: "retry-export", records: 1, bytes: 128 };
+      }
+      if (command === "load_markers") return null;
+      return undefined;
+    });
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    await selectExportFormat("JSON");
+    await waitFor(() =>
+      expect(screen.getByText("Export failed: dialog unavailable")).toBeInTheDocument(),
+    );
+
+    await selectExportFormat("JSON");
+
+    await waitFor(() => expect(screen.getByText(/^Exported /)).toBeInTheDocument());
+  });
+
+  it("keeps a running export as the only one, with the control unavailable while it runs", async () => {
+    seedEventLog();
+    dialogMock().mockResolvedValue("/tmp/events.json");
+    let sessions = 0;
+    const held = Promise.withResolvers<never>();
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "evtx_create_export_session") {
+        sessions += 1;
+        // Held open: the export never finishes, which is the state the guard exists for.
+        return held.promise;
+      }
+      if (command === "load_markers") return null;
+      return undefined;
+    });
+    render(<EvtxFilterBar nowEpoch={Date.now()} />);
+
+    await selectExportFormat("JSON");
+    await waitFor(() => expect(sessions).toBe(1));
+    await waitFor(() =>
+      expect(
+        screen.getByTitle("Export the events currently shown, using the same filters as the list"),
+      ).toBeDisabled(),
+    );
+
+    fireEvent.click(
+      screen.getByTitle("Export the events currently shown, using the same filters as the list"),
+    );
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(sessions).toBe(1);
+  });
 });
 
 describe("Event Log Viewer preview badge", () => {

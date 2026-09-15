@@ -458,8 +458,6 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_packaged_provider_databases,
             #[cfg(feature = "event-log")]
-            #[cfg(feature = "event-log")]
-            #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_create_analysis_session,
             #[cfg(feature = "event-log")]
             event_log::analysis_session::evtx_append_analysis_chunk,
