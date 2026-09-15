@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { useUiStore, getAvailableWorkspaces, isIntuneWorkspace } from "./ui-store";
 
 describe("ui-store", () => {
@@ -184,6 +184,52 @@ describe("ui-store", () => {
 
       useUiStore.getState().switchTab(0);
       expect(useUiStore.getState().activeTabIndex).toBe(0);
+    });
+  });
+
+  describe("log load view visibility", () => {
+    beforeEach(() => {
+      useUiStore.setState({ currentPlatform: "macos" });
+    });
+
+    afterEach(() => {
+      useUiStore.setState({
+        currentPlatform: useUiStore.getInitialState().currentPlatform,
+      });
+    });
+
+    it("keeps the macOS JAMF workspace active when a log opens from its log list", () => {
+      useUiStore.getState().setActiveWorkspace("macos-jamf");
+
+      // Selecting a file in the workspace's own log list loads it and opens a
+      // tab; AppShell's active-tab effect then asks for the log view.
+      useUiStore.getState().openTab("/var/log/jamf/install.log", "install.log");
+      useUiStore.getState().ensureLogViewVisible("tab-switch");
+
+      const state = useUiStore.getState();
+      expect(state.activeTabIndex).toBe(0);
+      expect(state.openTabs[0].filePath).toBe("/var/log/jamf/install.log");
+      expect(state.activeWorkspace).toBe("macos-jamf");
+      expect(state.activeView).toBe("macos-jamf");
+    });
+
+    it("still hands logs from other workspaces to the Log workspace", () => {
+      useUiStore.getState().setActiveWorkspace("macos-diag");
+
+      useUiStore.getState().openTab("/var/log/jamf/install.log", "install.log");
+      useUiStore.getState().ensureLogViewVisible("tab-switch");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
+    });
+
+    it("still leaves the macOS JAMF workspace on an explicit switch", () => {
+      useUiStore.getState().setActiveWorkspace("macos-jamf");
+
+      useUiStore
+        .getState()
+        .ensureWorkspaceVisible("log", "toolbar.workspace-select");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
     });
   });
 
