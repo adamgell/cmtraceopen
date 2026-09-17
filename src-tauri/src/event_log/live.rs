@@ -47,12 +47,14 @@ use windows::core::{Error, HSTRING, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtChannelConfigEnabled, EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent,
-    EvtGetChannelConfigProperty, EvtNext, EvtOpenChannelConfig, EvtOpenPublisherMetadata,
-    EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
-    EvtQueryTolerateQueryErrors, EvtRender, EvtRenderEventXml, EvtRpcLogin, EvtRpcLoginAuthDefault,
-    EvtSubscribe, EvtSubscribeActionDeliver, EvtSubscribeActionError, EvtSubscribeToFutureEvents,
-    EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EVT_HANDLE, EVT_RPC_LOGIN,
-    EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EVT_VARIANT,
+    EvtGetChannelConfigProperty, EvtGetQueryInfo, EvtNext, EvtOpenChannelConfig,
+    EvtOpenPublisherMetadata, EvtOpenSession, EvtQuery, EvtQueryChannelPath, EvtQueryNames,
+    EvtQueryReverseDirection, EvtQueryStatuses, EvtQueryTolerateQueryErrors, EvtRender,
+    EvtRenderEventXml, EvtRpcLogin, EvtRpcLoginAuthDefault, EvtSubscribe,
+    EvtSubscribeActionDeliver, EvtSubscribeActionError, EvtSubscribeToFutureEvents,
+    EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EvtVarTypeString, EvtVarTypeUInt32,
+    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EVT_VARIANT,
+    EVT_VARIANT_TYPE_ARRAY,
 };
 
 /// Event handles fetched per `EvtNext` call.
@@ -109,8 +111,221 @@ enum QueryStatusInspection {
 #[cfg(any(target_os = "windows", test))]
 fn append_query_status_gaps(scan: &mut ChannelScan, inspection: &QueryStatusInspection) {
     match inspection {
-        QueryStatusInspection::Available(_statuses) => {}
-        QueryStatusInspection::Unavailable { path: _path, detail: _detail } => {}
+        QueryStatusInspection::Available(statuses) => {
+            for status in statuses.iter().filter(|status| status.status != 0) {
+                push_bounded_tail_coverage_gap(
+                    &mut scan.gaps,
+                    format!(
+                        "{}: the Event Log service {}",
+                        status.path,
+                        describe_query_status(status.status)
+                    ),
+                );
+            }
+        }
+        QueryStatusInspection::Unavailable { path, detail } => {
+            push_bounded_tail_coverage_gap(
+                &mut scan.gaps,
+                format!(
+                    "{path}: query status could not be inspected after EvtQuery; channel completeness is unknown ({detail})"
+                ),
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn describe_query_status(status: u32) -> String {
+    match status {
+        5 => "refused the channel query (Windows error 5: Access is denied)".to_string(),
+        1314 => "refused the channel query (Windows error 1314: A required privilege is not held by the client)".to_string(),
+        code => format!("reported a channel query failure (Windows error {code})"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+const EVT_VARIANT_ARRAY_TYPE_MASK: u32 = EVT_VARIANT_TYPE_ARRAY;
+
+#[cfg(target_os = "windows")]
+fn query_info_variant(
+    query_handle: EVT_HANDLE,
+    property_id: windows::Win32::System::EventLog::EVT_QUERY_PROPERTY_ID,
+) -> Result<Vec<u8>, Error> {
+    let mut buffer = vec![0u8; std::mem::size_of::<EVT_VARIANT>()];
+    loop {
+        let mut used = 0u32;
+        let result = unsafe {
+            EvtGetQueryInfo(
+                query_handle,
+                property_id,
+                buffer.len() as u32,
+                Some(buffer.as_mut_ptr().cast::<EVT_VARIANT>()),
+                &mut used,
+            )
+        };
+        match result {
+            Ok(()) => {
+                buffer.truncate(used as usize);
+                return Ok(buffer);
+            }
+            Err(error) if is_insufficient_buffer(&error) && used > buffer.len() as u32 => {
+                buffer.resize(used as usize, 0);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn inspect_query_statuses(
+    query_handle: EVT_HANDLE,
+    coverage_channel: &str,
+    remote_machine: Option<&str>,
+    remote: bool,
+) -> QueryStatusInspection {
+    let names = match query_info_variant(query_handle, EvtQueryNames) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            return QueryStatusInspection::Unavailable {
+                path: coverage_channel.to_string(),
+                detail: format_source_error("EvtGetQueryInfo(EvtQueryNames)", &error, remote),
+            };
+        }
+    };
+    let statuses = match query_info_variant(query_handle, EvtQueryStatuses) {
+        Ok(buffer) => buffer,
+        Err(error) => {
+            return QueryStatusInspection::Unavailable {
+                path: coverage_channel.to_string(),
+                detail: format_source_error("EvtGetQueryInfo(EvtQueryStatuses)", &error, remote),
+            };
+        }
+    };
+    match decode_query_path_statuses(&names, &statuses, coverage_channel, remote_machine) {
+        Ok(statuses) => QueryStatusInspection::Available(statuses),
+        Err(detail) => QueryStatusInspection::Unavailable {
+            path: coverage_channel.to_string(),
+            detail,
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn decode_query_path_statuses(
+    names_buffer: &[u8],
+    statuses_buffer: &[u8],
+    coverage_channel: &str,
+    remote_machine: Option<&str>,
+) -> Result<Vec<QueryPathStatus>, String> {
+    let names = unsafe { decode_query_name_array(names_buffer)? };
+    let statuses = unsafe { decode_query_status_array(statuses_buffer)? };
+    if names.len() != statuses.len() {
+        return Err(format!(
+            "EvtGetQueryInfo returned {} query paths but {} statuses",
+            names.len(),
+            statuses.len()
+        ));
+    }
+    if names.is_empty() && statuses.is_empty() {
+        return Ok(vec![QueryPathStatus {
+            path: coverage_channel.to_string(),
+            status: 0,
+        }]);
+    }
+    Ok(names
+        .into_iter()
+        .zip(statuses)
+        .map(|(path, status)| QueryPathStatus {
+            path: qualify_query_status_path(&path, coverage_channel, remote_machine),
+            status,
+        })
+        .collect())
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn decode_query_name_array(buffer: &[u8]) -> Result<Vec<String>, String> {
+    let variant = first_query_info_variant(buffer)?;
+    let expected = (EvtVarTypeString.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
+    if variant.Type != expected {
+        return Err(format!(
+            "EvtGetQueryInfo(EvtQueryNames) returned unexpected variant type {}",
+            variant.Type
+        ));
+    }
+    let count = variant.Count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let names = variant.Anonymous.StringArr;
+    if names.is_null() {
+        return Err("EvtGetQueryInfo(EvtQueryNames) returned a null string array".to_string());
+    }
+    Ok(std::slice::from_raw_parts(names, count)
+        .iter()
+        .map(|value| pwstr_to_string(*value))
+        .collect())
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn decode_query_status_array(buffer: &[u8]) -> Result<Vec<u32>, String> {
+    let variant = first_query_info_variant(buffer)?;
+    let expected = (EvtVarTypeUInt32.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
+    if variant.Type != expected {
+        return Err(format!(
+            "EvtGetQueryInfo(EvtQueryStatuses) returned unexpected variant type {}",
+            variant.Type
+        ));
+    }
+    let count = variant.Count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let statuses = variant.Anonymous.UInt32Arr;
+    if statuses.is_null() {
+        return Err("EvtGetQueryInfo(EvtQueryStatuses) returned a null status array".to_string());
+    }
+    Ok(std::slice::from_raw_parts(statuses, count).to_vec())
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn first_query_info_variant(buffer: &[u8]) -> Result<&EVT_VARIANT, String> {
+    if buffer.len() < std::mem::size_of::<EVT_VARIANT>() {
+        return Err("EvtGetQueryInfo returned an undersized property buffer".to_string());
+    }
+    Ok(&*(buffer.as_ptr().cast::<EVT_VARIANT>()))
+}
+
+#[cfg(target_os = "windows")]
+fn qualify_query_status_path(
+    path: &str,
+    coverage_channel: &str,
+    remote_machine: Option<&str>,
+) -> String {
+    let trimmed = path.trim();
+    let local_path = if trimmed.is_empty() {
+        coverage_channel
+    } else {
+        trimmed
+    };
+    match remote_machine {
+        Some(machine) if local_path.starts_with(&format!("{machine}/")) => local_path.to_string(),
+        Some(machine) if !local_path.contains('/') => format!("{machine}/{local_path}"),
+        _ => local_path.to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pwstr_to_string(value: PWSTR) -> String {
+    let raw = value.0;
+    if raw.is_null() {
+        return String::new();
+    }
+    let mut len = 0usize;
+    unsafe {
+        while *raw.add(len) != 0 {
+            len += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(raw, len))
     }
 }
 
@@ -789,6 +1004,12 @@ fn query_channel_inner(
     let mut provider_gaps = Vec::new();
     let mut provider_gap_dedup = ProviderGapDedup::exact_scan();
     let mut batch = EVENT_FETCH_BATCH;
+    let query_statuses = inspect_query_statuses(
+        query_handle.raw(),
+        &coverage_channel,
+        source_label.strip_prefix("Remote: "),
+        remote,
+    );
     // Counted separately from `records`, which a streaming caller empties as it goes. Using the
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
     // batch and read the channel forever.
@@ -999,18 +1220,20 @@ fn query_channel_inner(
             "event=evtx_live_query_gap channel=\"{channel}\" message_failures={message_failures}"
         );
     }
-    log::info!(
-        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} record_gaps={} provider_gaps={}",
-        records.len(),
-        gaps.len(),
-        provider_gaps.len()
-    );
-    Ok(ChannelScan {
+    let mut scan = ChannelScan {
         records,
         delivered: produced,
         gaps,
         provider_gaps,
-    })
+    };
+    append_query_status_gaps(&mut scan, &query_statuses);
+    log::info!(
+        "event=evtx_live_query_done channel=\"{channel}\" records={} unparsable={unparsable} unrenderable={unrenderable} record_gaps={} provider_gaps={}",
+        scan.records.len(),
+        scan.gaps.len(),
+        scan.provider_gaps.len()
+    );
+    Ok(scan)
 }
 
 #[cfg(target_os = "windows")]
