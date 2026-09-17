@@ -93,6 +93,28 @@ pub struct ChannelScan {
 }
 
 #[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueryPathStatus {
+    path: String,
+    status: u32,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QueryStatusInspection {
+    Available(Vec<QueryPathStatus>),
+    Unavailable { path: String, detail: String },
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn append_query_status_gaps(scan: &mut ChannelScan, inspection: &QueryStatusInspection) {
+    match inspection {
+        QueryStatusInspection::Available(_statuses) => {}
+        QueryStatusInspection::Unavailable { path: _path, detail: _detail } => {}
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeProviderFailure {
     stage: ProviderMessageStage,
@@ -2599,6 +2621,128 @@ mod portable_tests {
 
         assert_eq!(records.len(), EVENT_FETCH_BATCH);
         assert_eq!(gaps, vec![format_provider_gap(&gap)]);
+    }
+
+    #[test]
+    fn tolerated_access_failure_becomes_a_channel_coverage_gap() {
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![QueryPathStatus {
+                path: "Security".to_string(),
+                status: 5,
+            }]),
+        );
+
+        assert_eq!(scan.records.len(), 0);
+        assert!(
+            scan.gaps
+                .iter()
+                .any(|gap| gap.contains("Security") && gap.contains("Windows error 5")),
+            "tolerated access-denied query status must stay visible as coverage"
+        );
+    }
+
+    #[test]
+    fn readable_empty_channel_stays_gap_free() {
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![QueryPathStatus {
+                path: "Application".to_string(),
+                status: 0,
+            }]),
+        );
+
+        assert_eq!(scan.records.len(), 0);
+        assert!(scan.gaps.is_empty());
+    }
+
+    #[test]
+    fn query_status_inspection_failure_does_not_claim_completeness() {
+        let mut scan = ChannelScan {
+            records: vec![test_record("kept record")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Unavailable {
+                path: "Application".to_string(),
+                detail: "EvtGetQueryInfo(EvtQueryStatuses): Windows error 122".to_string(),
+            },
+        );
+
+        assert_eq!(scan.records.len(), 1);
+        assert!(
+            scan.gaps.iter().any(|gap| {
+                gap.contains("Application")
+                    && gap.contains("query status")
+                    && gap.contains("Windows error 122")
+            }),
+            "missing query-status inspection must become explicit coverage uncertainty"
+        );
+    }
+
+    #[test]
+    fn partial_evidence_keeps_delivered_records_alongside_gap() {
+        let mut scan = ChannelScan {
+            records: vec![test_record("kept record")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![QueryPathStatus {
+                path: "Security".to_string(),
+                status: 5,
+            }]),
+        );
+
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.records[0].message, "kept record");
+        assert!(!scan.gaps.is_empty());
+    }
+
+    #[test]
+    fn remote_query_status_gap_uses_machine_and_channel_label() {
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![QueryPathStatus {
+                path: "HOST-A/Security".to_string(),
+                status: 5,
+            }]),
+        );
+
+        assert!(
+            scan.gaps
+                .iter()
+                .any(|gap| gap.contains("HOST-A/Security") && !gap.contains(": Security")),
+            "remote gaps must identify machine/channel"
+        );
     }
 
     fn test_record(message: &str) -> EvtxRecord {
