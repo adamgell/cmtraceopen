@@ -906,7 +906,10 @@ fn reduce_profile(
                 evidence.push(observation.evidence_ref());
                 retrieved = true;
                 raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                push_link(&mut available_success_links, observation.activity_id.as_deref());
+                push_link(
+                    &mut available_success_links,
+                    observation.activity_id.as_deref(),
+                );
             }
             AutopilotSignal::ProfileStateChanged => {
                 evidence.push(observation.evidence_ref());
@@ -924,7 +927,10 @@ fn reduce_profile(
                 ) {
                     applied = true;
                     raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                    push_link(&mut available_success_links, observation.activity_id.as_deref());
+                    push_link(
+                        &mut available_success_links,
+                        observation.activity_id.as_deref(),
+                    );
                 }
                 if token.is_some() {
                     last_state_token = token;
@@ -934,7 +940,10 @@ fn reduce_profile(
                 evidence.push(observation.evidence_ref());
                 applied = true;
                 raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                push_link(&mut available_success_links, observation.activity_id.as_deref());
+                push_link(
+                    &mut available_success_links,
+                    observation.activity_id.as_deref(),
+                );
             }
             AutopilotSignal::NoAssignedProfile => {
                 evidence.push(observation.evidence_ref());
@@ -990,7 +999,8 @@ fn reduce_profile(
         error = error.or_else(|| section.error.clone());
     }
 
-    let candidate = reconcile_candidate(raised, negative, &negative_links, &available_success_links);
+    let candidate =
+        reconcile_candidate(raised, negative, &negative_links, &available_success_links);
 
     AutopilotProfileState {
         profile_id: single_value(observations, "profileId"),

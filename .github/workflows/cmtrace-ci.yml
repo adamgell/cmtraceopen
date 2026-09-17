@@ -11,10 +11,63 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
+  source-quality:
+    name: Source Quality (fmt / wasm / whitespace)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pinned Rust quality toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Parser wasm portability
+        run: cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+
+      - name: Changed-range whitespace
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$BEFORE_SHA"
+          fi
+
+          if [[ ! "$base" =~ ^[0-9a-f]{40}$ ]] || [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          if git rev-parse --verify "${base}^" >/dev/null 2>&1; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --check "$base...HEAD"
+            else
+              git diff --check "$base..HEAD"
+            fi
+          else
+            git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          fi
+
   check:
     name: Check & Test (Rust)
     runs-on: ubuntu-latest
@@ -166,7 +219,12 @@ jobs:
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
       - name: Release script tests
-        run: node --test .github/scripts/updater-manifest.test.mjs .github/scripts/nightly-channel.test.mjs .github/scripts/installer-policy.test.mjs
+        run: >-
+          node --test
+          .github/scripts/updater-manifest.test.mjs
+          .github/scripts/nightly-channel.test.mjs
+          .github/scripts/installer-policy.test.mjs
+          .github/scripts/source-quality-workflow.test.mjs
 
       - name: npm security audit
         run: npm audit --audit-level=high

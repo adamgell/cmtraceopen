@@ -1067,7 +1067,9 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.finding_id)
             .collect();
-        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}:{DT}:unknown")));
+        assert!(ids.contains(&format!(
+            "win32-installer-reported-failure:{APP}:{DT}:unknown"
+        )));
         assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}:{DT}:unknown")));
     }
 
@@ -1116,9 +1118,7 @@ mod tests {
             );
         }
         // The masking must not have destroyed the diagnostic keys.
-        assert!(findings
-            .iter()
-            .any(|finding| finding.summary.contains(APP)));
+        assert!(findings.iter().any(|finding| finding.summary.contains(APP)));
     }
 
     #[test]

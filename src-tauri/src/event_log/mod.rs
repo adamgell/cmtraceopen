@@ -1,10 +1,10 @@
 pub mod commands;
 pub mod event_node;
 pub mod export;
+pub mod fetch;
 pub mod maps;
 pub mod models;
 pub mod parser;
-pub mod fetch;
 pub mod provider_db;
 pub mod rendered;
 pub mod timeline;
