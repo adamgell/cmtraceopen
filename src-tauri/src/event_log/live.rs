@@ -219,6 +219,16 @@ fn decode_query_path_statuses(
 ) -> Result<Vec<QueryPathStatus>, String> {
     let names = unsafe { decode_query_name_array(names_buffer)? };
     let statuses = unsafe { decode_query_status_array(statuses_buffer)? };
+    decode_query_path_status_list(names, statuses, coverage_channel, remote_machine)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn decode_query_path_status_list(
+    names: Vec<String>,
+    statuses: Vec<u32>,
+    coverage_channel: &str,
+    remote_machine: Option<&str>,
+) -> Result<Vec<QueryPathStatus>, String> {
     if names.len() != statuses.len() {
         return Err(format!(
             "EvtGetQueryInfo returned {} query paths but {} statuses",
@@ -227,10 +237,10 @@ fn decode_query_path_statuses(
         ));
     }
     if names.is_empty() && statuses.is_empty() {
-        return Ok(vec![QueryPathStatus {
-            path: coverage_channel.to_string(),
-            status: 0,
-        }]);
+        return Err(
+            "EvtGetQueryInfo returned no query paths or statuses; channel completeness is unknown"
+                .to_string(),
+        );
     }
     Ok(names
         .into_iter()
@@ -2941,6 +2951,41 @@ mod portable_tests {
         assert_eq!(scan.records.len(), 1);
         assert_eq!(scan.records[0].message, "kept record");
         assert!(!scan.gaps.is_empty());
+    }
+
+    #[test]
+    fn empty_query_status_decode_becomes_unavailable_and_keeps_delivered_records() {
+        let inspection =
+            match decode_query_path_status_list(Vec::new(), Vec::new(), "Application", None) {
+                Ok(statuses) => QueryStatusInspection::Available(statuses),
+                Err(detail) => QueryStatusInspection::Unavailable {
+                    path: "Application".to_string(),
+                    detail,
+                },
+            };
+        let mut scan = ChannelScan {
+            records: vec![test_record("kept record")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(&mut scan, &inspection);
+
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.records[0].message, "kept record");
+        assert!(matches!(
+            inspection,
+            QueryStatusInspection::Unavailable { .. }
+        ));
+        assert!(
+            scan.gaps.iter().any(|gap| {
+                gap.contains("Application")
+                    && gap.contains("channel completeness is unknown")
+                    && gap.contains("EvtGetQueryInfo returned no query paths or statuses")
+            }),
+            "empty query-status data must stay visible as unknown completeness"
+        );
     }
 
     #[test]
