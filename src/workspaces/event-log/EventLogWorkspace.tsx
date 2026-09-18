@@ -53,17 +53,28 @@ interface EventLogAnalysisPump {
   publishedSessionId: string | null;
 }
 
+function hasSameRecordMembership(
+  left: readonly EvtxRecord[],
+  right: readonly EvtxRecord[],
+): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      right.every((record, index) => record === left[index]))
+  );
+}
+
 function useStableRecordMembership(records: EvtxRecord[]): EvtxRecord[] {
-  const stableRecordsRef = useRef(records);
-  const stableRecords = stableRecordsRef.current;
-  if (stableRecords === records) return stableRecords;
-  if (
-    stableRecords.length !== records.length ||
-    records.some((record, index) => record !== stableRecords[index])
-  ) {
-    stableRecordsRef.current = records;
-  }
-  return stableRecordsRef.current;
+  const [stableRecords, setStableRecords] = useState(records);
+  const stableMembership = hasSameRecordMembership(stableRecords, records);
+
+  useEffect(() => {
+    if (!stableMembership) {
+      setStableRecords(records);
+    }
+  }, [records, stableMembership]);
+
+  return stableMembership ? stableRecords : records;
 }
 
 export function EventLogWorkspace() {

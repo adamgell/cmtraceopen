@@ -34,6 +34,8 @@ const LEVEL_ORDER: Record<EvtxLevel, number> = {
   Verbose: 4,
 };
 
+const evtxRecordRowKeyCache = new WeakMap<EvtxRecord, string>();
+
 function compareRecords(
   a: EvtxRecord,
   b: EvtxRecord,
@@ -60,11 +62,21 @@ function compareRecords(
   }
   return direction === "asc" ? cmp : -cmp;
 }
+
+function cachedEventRowKey(record: EvtxRecord): string {
+  const cached = evtxRecordRowKeyCache.get(record);
+  if (cached) return cached;
+
+  const key = `event:${evtxMarkerKey(record)}`;
+  evtxRecordRowKeyCache.set(record, key);
+  return key;
+}
+
 function evtxRowKeys(rows: readonly EvtxRow[]): string[] {
   const occurrencesByFingerprint = new Map<string, number>();
   return rows.map((row) => {
     if (row.kind === "group") return `group:${row.key}`;
-    const key = `event:${evtxMarkerKey(row.record)}`;
+    const key = cachedEventRowKey(row.record);
     if (isEvtxMarkerAddressable(row.record)) return key;
 
     const occurrence = occurrencesByFingerprint.get(key) ?? 0;

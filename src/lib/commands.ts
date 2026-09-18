@@ -1942,9 +1942,7 @@ function decodeEventLogAnalysisTimelinePage(
 }
 
 export async function createEventLogAnalysisSession(): Promise<EventLogAnalysisSessionStatus> {
-  return decodeEventLogAnalysisSessionStatus(
-    await invokeCommand("evtx_create_analysis_session"),
-  );
+  return invokeCommand("evtx_create_analysis_session");
 }
 
 export async function appendEventLogAnalysisChunk(
@@ -1952,21 +1950,17 @@ export async function appendEventLogAnalysisChunk(
   records: EventLogAnalysisRecordInput[] = [],
   entries: EventLogAnalysisLogEntryInput[] = [],
 ): Promise<EventLogAnalysisSessionStatus> {
-  return decodeEventLogAnalysisSessionStatus(
-    await invokeCommand("evtx_append_analysis_chunk", {
-      sessionId,
-      records: transportDiagnosisRecords(records),
-      entries,
-    }),
-  );
+  return invokeCommand("evtx_append_analysis_chunk", {
+    sessionId,
+    records: transportDiagnosisRecords(records),
+    entries,
+  });
 }
 
 export async function finalizeEventLogAnalysisSession(
   sessionId: string,
 ): Promise<EventLogAnalysisSessionStatus> {
-  return decodeEventLogAnalysisSessionStatus(
-    await invokeCommand("evtx_finalize_analysis_session", { sessionId }),
-  );
+  return invokeCommand("evtx_finalize_analysis_session", { sessionId });
 }
 
 export async function queryEventLogAnalysisTimeline(
@@ -1974,13 +1968,11 @@ export async function queryEventLogAnalysisTimeline(
   offset: number,
   limit: number,
 ): Promise<EventLogAnalysisTimelinePage> {
-  return decodeEventLogAnalysisTimelinePage(
-    await invokeCommand("evtx_query_analysis_timeline", {
-      sessionId,
-      offset,
-      limit,
-    }),
-  );
+  return invokeCommand("evtx_query_analysis_timeline", {
+    sessionId,
+    offset,
+    limit,
+  });
 }
 
 export const EVENT_LOG_DIAGNOSIS_COVERAGE_FIELD_BYTE_LIMIT = 4 * 1024;
@@ -2094,13 +2086,10 @@ export async function diagnoseEventLogAnalysisSession(
   coverageGaps: EvtxCoverageGap[] = [],
 ): Promise<DiagnosisSummary> {
   const commandName = "evtx_diagnose_analysis_session";
-  return decodeDiagnosisSummary(
-    await invokeCommand(commandName, {
-      sessionId,
-      coverageGaps: diagnosisCoverageGapsForTransport(coverageGaps),
-    }),
-    commandName,
-  );
+  return invokeCommand(commandName, {
+    sessionId,
+    coverageGaps: diagnosisCoverageGapsForTransport(coverageGaps),
+  });
 }
 
 export async function closeEventLogAnalysisSession(

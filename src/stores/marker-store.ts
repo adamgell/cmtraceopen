@@ -681,13 +681,16 @@ export const useMarkerStore = create<MarkerState>((set, get) => {
       let changed = false;
       const mutationBaseline = get().markersByFile.get(filePath);
       set((state) => {
+        const existingFileMap = state.markersByFile.get(filePath);
+        if (!existingFileMap) return {};
+
+        const matchedEntry = findMarkerEntry(existingFileMap, lineId, identity);
+        if (!matchedEntry) return {};
+
         const next = new Map(state.markersByFile);
-        const fileMap = new Map(next.get(filePath) ?? []);
-        const existingEntry = findMarkerEntry(fileMap, lineId, identity);
-        if (existingEntry) {
-          fileMap.delete(existingEntry[0]);
-          changed = true;
-        }
+        const fileMap = new Map(existingFileMap);
+        fileMap.delete(matchedEntry[0]);
+        changed = true;
         next.set(filePath, fileMap);
         return { markersByFile: next };
       });

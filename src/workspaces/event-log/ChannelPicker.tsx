@@ -213,6 +213,15 @@ export function ChannelPicker() {
   }, [confirmClear]);
 
   useEffect(() => {
+    if (clearingChannel !== null) return;
+    const target = clearTargetRef.current;
+    if (target === null || loadedChannels.has(target)) return;
+    clearTargetRef.current = null;
+    setClearTarget(null);
+    setClearError(null);
+  }, [clearingChannel, loadedChannels]);
+
+  useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!resizeRef.current) return;
       setSidebarWidth(

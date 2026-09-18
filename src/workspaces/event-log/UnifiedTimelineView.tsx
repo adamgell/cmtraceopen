@@ -111,6 +111,18 @@ export function retainTimelinePageCache(
   return retained;
 }
 
+function timelinePageCachesEqual(
+  left: TimelinePageCache,
+  right: TimelinePageCache,
+): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+  for (const [offset, segment] of left) {
+    if (right.get(offset) !== segment) return false;
+  }
+  return true;
+}
+
 export function timelinePageCacheRowCount(cache: TimelinePageCache): number {
   let count = 0;
   for (const segment of cache.values()) count += segment.items.length;
@@ -316,7 +328,7 @@ export function UnifiedTimelineView({
       retentionWindow,
       { first: firstVirtualIndex, last: lastVirtualIndex },
     );
-    if (retained !== loadedPagesRef.current) {
+    if (!timelinePageCachesEqual(retained, loadedPagesRef.current)) {
       loadedPagesRef.current = retained;
       setLoadedPages(retained);
     }
@@ -399,8 +411,10 @@ export function UnifiedTimelineView({
           currentWindow,
           visibleRangeRef.current,
         );
-        loadedPagesRef.current = retained;
-        setLoadedPages(retained);
+        if (!timelinePageCachesEqual(retained, loadedPagesRef.current)) {
+          loadedPagesRef.current = retained;
+          setLoadedPages(retained);
+        }
         setFailedPage(null);
         retryAttemptsRef.current.delete(`${generation}:${offset}`);
         const visibleRange = visibleRangeRef.current;

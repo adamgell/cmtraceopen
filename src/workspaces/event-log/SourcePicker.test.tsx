@@ -95,10 +95,10 @@ describe("SourcePicker remote source", () => {
     useEvtxStore.setState({ remoteMachine: "old-host" });
     render(<SourcePicker />);
 
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="Remote computer name"]');
-    fireEvent.change(input!, { target: { value: "new-host" } });
+    const input = screen.getByLabelText("Remote computer name");
+    fireEvent.change(input, { target: { value: "new-host" } });
     useEvtxStore.setState({ remoteMachine: "failed-host" });
-    await waitFor(() => expect(input?.value).toBe("new-host"));
+    await waitFor(() => expect(input).toHaveValue("new-host"));
   });
 
   it("resumes persisted remote-target synchronization after a successful enumeration", async () => {
@@ -209,12 +209,9 @@ describe("SourcePicker remote source", () => {
     });
 
     render(<SourcePicker />);
-    const input = document.querySelector('input[aria-label="Remote computer name"]');
-    fireEvent.change(input!, { target: { value: "lab-host" } });
-    const remoteButton = Array.from(document.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Remote computer")
-    );
-    fireEvent.click(remoteButton!);
+    const input = screen.getByLabelText("Remote computer name");
+    fireEvent.change(input, { target: { value: "lab-host" } });
+    fireEvent.click(screen.getByText("Remote computer", { selector: "button" }));
 
     await waitFor(() => {
       expect(document.body.textContent).toContain("lab-host/Application: access denied");

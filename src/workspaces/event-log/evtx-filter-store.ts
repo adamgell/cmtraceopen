@@ -112,10 +112,13 @@ export const useSavedFilterStore = create<SavedFilterState>()(
       migrate: (persisted, version) => migratePersistedSavedFilters(persisted, version),
       // Zustand only calls migrate when the stored version differs. Current-version data still
       // crosses an untrusted localStorage boundary, so validate it before merging state too.
-      merge: (persisted, current) => ({
-        ...current,
-        ...migratePersistedSavedFilters(persisted, 2),
-      }),
+      merge: (persisted, current) =>
+        persisted == null
+          ? current
+          : {
+              ...current,
+              ...migratePersistedSavedFilters(persisted, 2),
+            },
       onRehydrateStorage: () => (_state, error) => {
         if (!error) return;
         try {

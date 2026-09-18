@@ -218,22 +218,27 @@ function seedEventLog() {
 function recordGridRows(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>("[data-evtx-marker-key]"));
 }
+
+function resetVirtualizerState() {
+  virtualizerState.measured.length = 0;
+  virtualizerState.items.length = 0;
+  virtualizerState.initialItems.length = 0;
+  virtualizerState.measuredSizes.clear();
+  virtualizerState.visibleCount = null;
+  virtualizerState.measureCalls = 0;
+  virtualizerState.cacheResetCalls = 0;
+  virtualizerState.resizeObserverCalls = 0;
+  virtualizerState.resizeItemCalls = 0;
+  virtualizerState.scrollToIndex.mockClear();
+  virtualizerState.resizedSizes.clear();
+  virtualizerState.totalSize = 0;
+}
+
 describe("event-viewer shared font metrics", () => {
   beforeEach(() => {
     configureInvoke();
     useEvtxStore.getState().reset();
-    virtualizerState.measured.length = 0;
-    virtualizerState.items.length = 0;
-    virtualizerState.initialItems.length = 0;
-    virtualizerState.measuredSizes.clear();
-    virtualizerState.visibleCount = null;
-    virtualizerState.measureCalls = 0;
-    virtualizerState.cacheResetCalls = 0;
-    virtualizerState.resizeObserverCalls = 0;
-    virtualizerState.resizeItemCalls = 0;
-    virtualizerState.scrollToIndex.mockClear();
-    virtualizerState.resizedSizes.clear();
-    virtualizerState.totalSize = 0;
+    resetVirtualizerState();
     useUiStore.getState().resetLogAccessibilityPreferences();
   });
 
@@ -790,6 +795,7 @@ describe("EventLogWorkspace fixtures", () => {
     invoke.mockReset();
     configureInvoke();
     useEvtxStore.getState().reset();
+    resetVirtualizerState();
   });
 
   afterEach(() => {
@@ -1265,6 +1271,13 @@ describe("EventLogWorkspace fixtures", () => {
 });
 
 describe("Event Log Viewer preview badge", () => {
+  beforeEach(() => {
+    configureInvoke();
+    useEvtxStore.getState().reset();
+    resetVirtualizerState();
+    useUiStore.getState().resetLogAccessibilityPreferences();
+  });
+
   it("registry labels the workspace as preview", () => {
     expect(eventLogWorkspace.label).toBe("Event Log Viewer (Preview)");
     expect(eventLogWorkspace.statusLabel).toBe("Event Log (Preview)");
