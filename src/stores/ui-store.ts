@@ -535,6 +535,19 @@ export const useUiStore = create<UiState>()(
         });
       },
       ensureLogViewVisible: (trigger) => {
+        const activeWorkspace = get().activeWorkspace;
+        const workspace = getWorkspace(activeWorkspace);
+
+        if (workspace.capabilities?.keepsViewOnLogLoad) {
+          // This workspace shows the log it loaded itself, so a log load that
+          // started in it stays there. Explicit navigation still switches.
+          console.info("[ui-store] keeping workspace visible for log load", {
+            trigger,
+            workspace: activeWorkspace,
+          });
+          return;
+        }
+
         get().ensureWorkspaceVisible("log", trigger);
       },
       toggleInfoPane: () =>
