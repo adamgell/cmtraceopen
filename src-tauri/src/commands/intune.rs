@@ -132,9 +132,7 @@ impl GuidDiagLog {
     /// Split from [`create_file`](Self::create_file) so the exclusive-open behaviour can be
     /// exercised against a path that already exists, which is the case that matters and which a
     /// test calling the composed function cannot reach.
-    fn create_file_at(
-        path: std::path::PathBuf,
-    ) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+    fn create_file_at(path: std::path::PathBuf) -> std::io::Result<(std::path::PathBuf, fs::File)> {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
 
@@ -1270,10 +1268,7 @@ fn is_summary_signal_event(event: &IntuneEvent) -> bool {
 /// The regex-based extractor is the higher-fidelity source, so an extracted
 /// stat always wins for its content id; synthesis fills in only the ids the
 /// extractor produced nothing for. Returns how many records were added.
-fn merge_synthesized_downloads(
-    downloads: &mut Vec<DownloadStat>,
-    events: &[IntuneEvent],
-) -> usize {
+fn merge_synthesized_downloads(downloads: &mut Vec<DownloadStat>, events: &[IntuneEvent]) -> usize {
     let extracted_ids: std::collections::HashSet<String> = downloads
         .iter()
         .map(|download| download.content_id.clone())
@@ -1631,7 +1626,11 @@ mod guid_diag_tests {
         // not the sequence existed, because successive clock reads happen to differ.
         let paths: std::collections::HashSet<_> =
             (0..256).map(|_| GuidDiagLog::trace_path_for(42)).collect();
-        assert_eq!(paths.len(), 256, "one clock tick must still give distinct paths");
+        assert_eq!(
+            paths.len(),
+            256,
+            "one clock tick must still give distinct paths"
+        );
     }
 
     #[test]

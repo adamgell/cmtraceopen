@@ -1,6 +1,20 @@
 import { memo, useMemo, useRef, useState, useEffect, useCallback } from "react";
-import { Button, Input, tokens } from "@fluentui/react-components";
-import { useEvtxStore } from "./evtx-store";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Input,
+  Select,
+  tokens,
+} from "@fluentui/react-components";
+import { getLogListMetrics } from "../../lib/log-accessibility";
+import { useModalOwnership } from "../../hooks/use-modal-ownership";
+import { useUiStore } from "../../stores/ui-store";
+import { channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -101,6 +115,29 @@ const DEFAULT_SIDEBAR_WIDTH = 300;
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function ChannelPicker() {
+  const tailMode = useEvtxStore((s) => s.tailMode);
+  const startLiveTail = useEvtxStore((s) => s.startLiveTail);
+  const stopLiveTail = useEvtxStore((s) => s.stopLiveTail);
+  const clearChannel = useEvtxStore((s) => s.clearChannel);
+  const [clearTarget, setClearTarget] = useState<string | null>(null);
+  const clearTargetRef = useRef<string | null>(null);
+  const clearInFlightRef = useRef<string | null>(null);
+  const clearSelectRef = useRef<HTMLSelectElement | null>(null);
+  const clearStatusRef = useRef<HTMLDivElement | null>(null);
+  const clearAlertRef = useRef<HTMLDivElement | null>(null);
+  const channelFilterRef = useRef<HTMLInputElement | null>(null);
+  const restoreClearFocusRef = useRef(false);
+  const clearWorkflowOwnsFocusRef = useRef(false);
+  const clearExternalFocusTargetRef = useRef<HTMLElement | null>(null);
+  const clearDialogWasOpenRef = useRef(false);
+  const clearDialogSubmittedRef = useRef(false);
+  const [clearingChannel, setClearingChannel] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const ownsClearConfirmation = useModalOwnership(
+    "eventLogChannelClear",
+    confirmClear,
+  );
+  const [clearError, setClearError] = useState<string | null>(null);
   const channels = useEvtxStore((s) => s.channels);
   const selectedChannels = useEvtxStore((s) => s.selectedChannels);
   const toggleChannel = useEvtxStore((s) => s.toggleChannel);
@@ -111,11 +148,78 @@ export function ChannelPicker() {
   const loadSelectedChannels = useEvtxStore((s) => s.loadSelectedChannels);
   const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
   const isLoading = useEvtxStore((s) => s.isLoading);
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+  const smallFontSize = Math.max(9, metrics.fontSize - 3);
 
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["Windows Logs"]));
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => {
+    if (clearingChannel !== null) {
+      clearStatusRef.current?.focus();
+      return;
+    }
+    if (!restoreClearFocusRef.current) return;
+    restoreClearFocusRef.current = false;
+    clearExternalFocusTargetRef.current = null;
+    if (clearError !== null) {
+      clearAlertRef.current?.focus();
+    } else {
+      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
+    }
+  }, [clearingChannel, clearError]);
+
+  useEffect(() => {
+    if (clearingChannel === null) {
+      const previousTarget = clearExternalFocusTargetRef.current;
+      clearExternalFocusTargetRef.current = null;
+      if (
+        previousTarget !== null &&
+        !previousTarget.isConnected &&
+        document.activeElement === document.body &&
+        useUiStore.getState().modalOwner === null
+      ) {
+        channelFilterRef.current?.focus();
+      }
+      return;
+    }
+
+    const rememberExternalFocus = (event: FocusEvent) => {
+      if (
+        event.target instanceof HTMLElement &&
+        event.target !== clearStatusRef.current
+      ) {
+        clearExternalFocusTargetRef.current = event.target;
+      }
+    };
+    document.addEventListener("focusin", rememberExternalFocus);
+    return () => document.removeEventListener("focusin", rememberExternalFocus);
+  }, [clearingChannel]);
+
+  useEffect(() => {
+    if (confirmClear) {
+      clearDialogWasOpenRef.current = true;
+      return;
+    }
+    if (!clearDialogWasOpenRef.current) return;
+    clearDialogWasOpenRef.current = false;
+    if (!clearDialogSubmittedRef.current) {
+      (clearSelectRef.current ?? channelFilterRef.current)?.focus();
+    }
+    clearDialogSubmittedRef.current = false;
+  }, [confirmClear]);
+
+  useEffect(() => {
+    if (clearingChannel !== null) return;
+    const target = clearTargetRef.current;
+    if (target === null || loadedChannels.has(target)) return;
+    clearTargetRef.current = null;
+    setClearTarget(null);
+    setClearError(null);
+  }, [clearingChannel, loadedChannels]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -186,17 +290,29 @@ export function ChannelPicker() {
           }}
         >
           <Input
+            ref={channelFilterRef}
             value={search}
             onChange={(_, data) => setSearch(data.value)}
             placeholder="Filter channels..."
             size="small"
+            input={{ style: { fontSize: `${metrics.fontSize}px` } }}
             style={{ width: "100%" }}
           />
           <div style={{ display: "flex", gap: "4px" }}>
-            <Button size="small" appearance="subtle" onClick={selectAllChannels}>
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={selectAllChannels}
+              style={{ fontSize: `${metrics.fontSize}px` }}
+            >
               Select all
             </Button>
-            <Button size="small" appearance="subtle" onClick={deselectAllChannels}>
+            <Button
+              size="small"
+              appearance="subtle"
+              onClick={deselectAllChannels}
+              style={{ fontSize: `${metrics.fontSize}px` }}
+            >
               Deselect all
             </Button>
           </div>
@@ -208,7 +324,7 @@ export function ChannelPicker() {
                   appearance="primary"
                   disabled={isLoading}
                   onClick={loadSelectedChannels}
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, fontSize: `${metrics.fontSize}px` }}
                 >
                   {isLoading ? "Loading..." : `Load ${unloadedSelectedCount}`}
                 </Button>
@@ -219,15 +335,172 @@ export function ChannelPicker() {
                 disabled={isLoading}
                 onClick={refreshLoadedChannels}
                 title="Reload all loaded channels"
+                style={{ fontSize: `${metrics.fontSize}px` }}
               >
                 Refresh
               </Button>
             </div>
           )}
+          {sourceMode === "live" && loadedChannels.size > 0 && (
+            <>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <Button
+                  size="small"
+                  appearance={tailMode ? "secondary" : "subtle"}
+                  disabled={isLoading}
+                  onClick={() => {
+                    void (tailMode ? stopLiveTail() : startLiveTail());
+                  }}
+                  style={{ fontSize: `${metrics.fontSize}px` }}
+                >
+                  {tailMode ? "Stop live tail" : "Start live tail"}
+                </Button>
+                {tailMode && (
+                  <span
+                    aria-label={`Live tail mode: ${tailMode}`}
+                    style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground3 }}
+                  >
+                    {tailMode}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <Select
+                  ref={clearSelectRef}
+                  aria-label="Channel to clear"
+                  value={clearTarget ?? ""}
+                  disabled={clearingChannel !== null}
+                  onChange={(_, data) => {
+                    const channel = data.value || null;
+                    clearTargetRef.current = channel;
+                    setClearTarget(channel);
+                    setClearError(null);
+                  }}
+                  style={{ flex: 1, minWidth: 0, fontSize: `${metrics.fontSize}px` }}
+                >
+                  <option value="">Select channel to clear…</option>
+                  {[...loadedChannels].sort().map((channel) => (
+                    <option key={channel} value={channel}>
+                      {channel}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  disabled={!clearTarget || isLoading || clearingChannel !== null}
+                  onClick={() => {
+                    if (!clearTarget) return;
+                    clearDialogSubmittedRef.current = false;
+                    setClearError(null);
+                    setConfirmClear(true);
+                  }}
+                  style={{ fontSize: `${metrics.fontSize}px` }}
+                >
+                  Clear
+                </Button>
+              </div>
+              {clearingChannel !== null && (
+                <div
+                  ref={clearStatusRef}
+                  role="status"
+                  tabIndex={-1}
+                  onFocus={() => {
+                    clearWorkflowOwnsFocusRef.current = true;
+                  }}
+                  onBlur={() => {
+                    clearWorkflowOwnsFocusRef.current = false;
+                  }}
+                  style={{ fontSize: `${smallFontSize}px` }}
+                >
+                  Clearing {clearingChannel}…
+                </div>
+              )}
+              {clearError && (
+                <div
+                  ref={clearAlertRef}
+                  role="alert"
+                  tabIndex={-1}
+                  style={{
+                    color: tokens.colorPaletteRedForeground1,
+                    fontSize: `${smallFontSize}px`,
+                  }}
+                >
+                  {clearError}
+                </div>
+              )}
+            </>
+          )}
         </div>
+        <Dialog
+          open={ownsClearConfirmation}
+          onOpenChange={(_, data) => {
+            setConfirmClear(data.open);
+            if (data.open) setClearError(null);
+          }}
+        >
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Clear event channel?</DialogTitle>
+              <DialogContent>
+                This permanently removes every event currently stored in{" "}
+                <strong>{clearingChannel ?? clearTarget}</strong>. The action requires an
+                already elevated application and cannot be undone.
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={() => {
+                    if (!clearTarget || clearInFlightRef.current !== null) return;
+                    const channel = clearTarget;
+                    clearDialogSubmittedRef.current = true;
+                    clearWorkflowOwnsFocusRef.current = true;
+                    clearExternalFocusTargetRef.current = null;
+                    clearInFlightRef.current = channel;
+                    setClearingChannel(channel);
+                    setClearError(null);
+                    setConfirmClear(false);
+                    const releasePendingClear = () => {
+                      if (clearInFlightRef.current !== channel) return false;
+                      restoreClearFocusRef.current = clearWorkflowOwnsFocusRef.current;
+                      clearWorkflowOwnsFocusRef.current = false;
+                      clearInFlightRef.current = null;
+                      setClearingChannel(null);
+                      return clearTargetRef.current === channel;
+                    };
+                    void clearChannel(channel, true)
+                      .then((result) => {
+                        if (!releasePendingClear()) return;
+                        if (result.status === "cleared") {
+                          clearTargetRef.current = null;
+                          setClearTarget(null);
+                          setClearError(null);
+                        } else if ("detail" in result) {
+                          setClearError(result.detail);
+                        } else {
+                          setClearError(
+                            result.status === "cancelled"
+                              ? "Clear was cancelled."
+                              : `${channel} is already empty.`
+                          );
+                        }
+                      })
+                      .catch((error: unknown) => {
+                        if (!releasePendingClear()) return;
+                        setClearError(error instanceof Error ? error.message : String(error));
+                      });
+                  }}
+                >
+                  Clear channel
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {/* Tree */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", fontSize: "12px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "2px 0", fontSize: `${metrics.fontSize}px` }}>
           {filteredChannels ? (
             // Flat search results
             filteredChannels.map((ch) => (
@@ -239,6 +512,8 @@ export function ChannelPicker() {
                 loaded={loadedChannels.has(ch.name)}
                 onToggle={() => toggleChannel(ch.name)}
                 depth={0}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
             ))
           ) : (
@@ -249,6 +524,8 @@ export function ChannelPicker() {
                 expanded={expanded.has("Windows Logs")}
                 onToggle={() => toggleExpand("Windows Logs")}
                 depth={0}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
               {expanded.has("Windows Logs") &&
                 windowsLogs.map((ch) => (
@@ -260,6 +537,8 @@ export function ChannelPicker() {
                     loaded={loadedChannels.has(ch.name)}
                     onToggle={() => toggleChannel(ch.name)}
                     depth={1}
+                    rowHeight={metrics.rowHeight}
+                    smallFontSize={smallFontSize}
                   />
                 ))}
 
@@ -270,6 +549,8 @@ export function ChannelPicker() {
                 onToggle={() => toggleExpand("AppServices")}
                 depth={0}
                 count={countLeaves(serviceTree)}
+                rowHeight={metrics.rowHeight}
+                smallFontSize={smallFontSize}
               />
               {expanded.has("AppServices") && (
                 <TreeNodeView
@@ -280,6 +561,8 @@ export function ChannelPicker() {
                   selectedChannels={selectedChannels}
                   loadedChannels={loadedChannels}
                   toggleChannel={toggleChannel}
+                  rowHeight={metrics.rowHeight}
+                  smallFontSize={smallFontSize}
                 />
               )}
             </>
@@ -287,7 +570,7 @@ export function ChannelPicker() {
           {filteredChannels && filteredChannels.length === 0 && (
             <div
               style={{
-                fontSize: "12px",
+                fontSize: `${smallFontSize}px`,
                 color: tokens.colorNeutralForeground4,
                 padding: "12px 8px",
                 textAlign: "center",
@@ -328,6 +611,8 @@ function TreeNodeView({
   selectedChannels,
   loadedChannels,
   toggleChannel,
+  rowHeight,
+  smallFontSize,
 }: {
   node: TreeNode;
   depth: number;
@@ -336,6 +621,8 @@ function TreeNodeView({
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
   toggleChannel: (name: string) => void;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
   const children = getSortedChildren(node);
 
@@ -357,6 +644,8 @@ function TreeNodeView({
               loaded={loadedChannels.has(child.channel.name)}
               onToggle={() => toggleChannel(child.channel!.name)}
               depth={depth}
+              rowHeight={rowHeight}
+              smallFontSize={smallFontSize}
             />
           );
         }
@@ -374,6 +663,8 @@ function TreeNodeView({
               selected={child.channel ? selectedChannels.has(child.channel.name) : undefined}
               loaded={child.channel ? loadedChannels.has(child.channel.name) : undefined}
               onChannelToggle={child.channel ? () => toggleChannel(child.channel!.name) : undefined}
+              rowHeight={rowHeight}
+              smallFontSize={smallFontSize}
             />
             {isExpanded && (
               <TreeNodeView
@@ -384,6 +675,8 @@ function TreeNodeView({
                 selectedChannels={selectedChannels}
                 loadedChannels={loadedChannels}
                 toggleChannel={toggleChannel}
+                rowHeight={rowHeight}
+                smallFontSize={smallFontSize}
               />
             )}
           </div>
@@ -402,6 +695,8 @@ const ChannelLeaf = memo(function ChannelLeaf({
   loaded,
   onToggle,
   depth,
+  rowHeight,
+  smallFontSize,
 }: {
   name: string;
   channel: EvtxChannelInfo;
@@ -409,7 +704,10 @@ const ChannelLeaf = memo(function ChannelLeaf({
   loaded: boolean;
   onToggle: () => void;
   depth: number;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
+  const selectable = channelCanHoldEvents(channel);
   return (
     <label
       style={{
@@ -418,7 +716,7 @@ const ChannelLeaf = memo(function ChannelLeaf({
         gap: "4px",
         paddingLeft: `${4 + depth * 16}px`,
         paddingRight: "4px",
-        height: "22px",
+        height: `${rowHeight}px`,
         cursor: "pointer",
         color: tokens.colorNeutralForeground1,
         whiteSpace: "nowrap",
@@ -430,11 +728,25 @@ const ChannelLeaf = memo(function ChannelLeaf({
         type="checkbox"
         checked={selected}
         onChange={onToggle}
+        disabled={!selectable}
         style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
       />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+      {!selectable && (
+        // Listed and marked rather than hidden: the channel exists, it is simply not recording, and
+        // that is why Select all leaves it out. Nothing in it is missing from the view.
+        <span
+          style={{
+            fontSize: `${smallFontSize}px`,
+            color: tokens.colorNeutralForeground4,
+            flexShrink: 0,
+          }}
+        >
+          disabled
+        </span>
+      )}
       {loaded && channel.eventCount > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})
         </span>
       )}
@@ -452,6 +764,8 @@ const FolderRow = memo(function FolderRow({
   selected,
   loaded,
   onChannelToggle,
+  rowHeight,
+  smallFontSize,
 }: {
   label: string;
   expanded: boolean;
@@ -462,7 +776,12 @@ const FolderRow = memo(function FolderRow({
   selected?: boolean;
   loaded?: boolean;
   onChannelToggle?: () => void;
+  rowHeight: number;
+  smallFontSize: number;
 }) {
+  // A folder row that carries a channel is a channel row, and the same rule governs its control.
+  // A folder with no channel of its own has nothing to judge and keeps its disclosure only.
+  const selectable = channel === undefined || channelCanHoldEvents(channel);
   return (
     <div
       style={{
@@ -471,13 +790,15 @@ const FolderRow = memo(function FolderRow({
         gap: "4px",
         paddingLeft: `${4 + depth * 16}px`,
         paddingRight: "4px",
-        height: "22px",
+        height: `${rowHeight}px`,
         whiteSpace: "nowrap",
       }}
     >
       <button
         type="button"
         onClick={onToggle}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+        aria-expanded={expanded}
         style={{
           width: "14px",
           flexShrink: 0,
@@ -485,7 +806,7 @@ const FolderRow = memo(function FolderRow({
           border: "none",
           cursor: "pointer",
           padding: 0,
-          fontSize: "8px",
+          fontSize: `${Math.max(8, smallFontSize - 2)}px`,
           color: tokens.colorNeutralForeground3,
           display: "flex",
           alignItems: "center",
@@ -499,6 +820,8 @@ const FolderRow = memo(function FolderRow({
           type="checkbox"
           checked={selected ?? false}
           onChange={onChannelToggle}
+          disabled={!selectable}
+          aria-label={`Select ${channel?.name ?? label}`}
           style={{ cursor: "pointer", margin: 0, flexShrink: 0 }}
         />
       )}
@@ -515,13 +838,18 @@ const FolderRow = memo(function FolderRow({
       >
         {label}
       </span>
+      {channel !== undefined && !selectable && (
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+          disabled
+        </span>
+      )}
       {count != null && count > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           {count}
         </span>
       )}
       {loaded && channel && channel.eventCount > 0 && (
-        <span style={{ fontSize: "10px", color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
+        <span style={{ fontSize: `${smallFontSize}px`, color: tokens.colorNeutralForeground4, flexShrink: 0 }}>
           ({channel.eventCount})
         </span>
       )}

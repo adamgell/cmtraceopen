@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -19,6 +20,9 @@ const scriptPath = fileURLToPath(
 );
 const workflowPath = fileURLToPath(
   new URL("../.github/workflows/cmtrace-ci.yml", import.meta.url),
+);
+const resolveMtPath = fileURLToPath(
+  new URL("./resolve-windows-sdk-mt.ps1", import.meta.url),
 );
 const runbookPath = fileURLToPath(
   new URL("../docs/esp-diagnostics-windows-vm-acceptance.md", import.meta.url),
@@ -74,6 +78,88 @@ function run(root, releaseRoot, environment = {}) {
     },
   });
 }
+
+test("selects the newest semantic Windows SDK x64 manifest tool", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-"));
+  const expected = join(root, "10.0.26100.0", "x64", "mt.exe");
+  writeFixture(join(root, "10.0.9999.0", "x64", "mt.exe"), "older");
+  writeFixture(expected, "newer");
+  writeFixture(join(root, "10.0.30000.0", "x86", "mt.exe"), "wrong architecture");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    "pwsh",
+    ["-NoLogo", "-NoProfile", "-File", resolveMtPath, "-SdkBinRoot", root],
+    { encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), expected);
+});
+
+test("an explicit Windows SDK root takes precedence over PATH", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-explicit-"));
+  const pathRoot = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-path-"));
+  const expected = join(root, "10.0.26100.0", "x64", "mt.exe");
+  const pathTool = join(pathRoot, "mt.exe");
+  writeFixture(expected, "sdk");
+  writeFixture(pathTool, "path");
+  chmodSync(pathTool, 0o755);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.after(() => rmSync(pathRoot, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    "pwsh",
+    ["-NoLogo", "-NoProfile", "-File", resolveMtPath, "-SdkBinRoot", root],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${pathRoot}${delimiter}${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), expected);
+});
+
+test("Windows SDK enumeration errors retain their original diagnostic", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-denied-"));
+  const harness = join(root, "probe.ps1");
+  writeFixture(
+    harness,
+    `param([string] $Resolver, [string] $SdkRoot)
+function global:Get-ChildItem {
+    [CmdletBinding()]
+    param([string] $LiteralPath, [switch] $Directory)
+    Write-Error "SDK_ENUMERATION_INCOMPLETE"
+}
+& $Resolver -SdkBinRoot $SdkRoot
+`,
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    "pwsh",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-File",
+      harness,
+      "-Resolver",
+      resolveMtPath,
+      "-SdkRoot",
+      root,
+    ],
+    { encoding: "utf8" },
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /SDK_ENUMERATION_INCOMPLETE/);
+  assert.doesNotMatch(output, /mt\.exe was not found under/);
+});
 
 test("writes exact-head Windows executable and installer provenance", (t) => {
   const { bundleRoot, releaseRoot, root } = createWorkspace(t);
@@ -259,6 +345,8 @@ test("workflow records provenance after package verification and uploads it", ()
     workflow,
     /src-tauri\/target\/\$\{\{ matrix\.target \}\}\/release\/bundle\/provenance\/windows-build-provenance\.json/,
   );
+  assert.match(workflow, /\$mtPath = & \.\/scripts\/resolve-windows-sdk-mt\.ps1/);
+  assert.doesNotMatch(workflow, /Sort-Object FullName -Descending/);
 });
 
 test("Windows acceptance selects one schema-v2 installer by hash", () => {
