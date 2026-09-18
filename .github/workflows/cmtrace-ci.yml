@@ -7,6 +7,11 @@ on:
     # Long-lived integration branches must be listed explicitly: a PR whose base
     # is absent here runs no jobs at all, silently, and still reports mergeable.
     branches: [main, codex/parser-family-skeleton]
+  # A pull request opened by a workflow with GITHUB_TOKEN does not trigger
+  # workflows, so the release publishers that open one kick the checks against
+  # their branch explicitly. This is the documented event that still creates a
+  # run when it is created by GITHUB_TOKEN.
+  workflow_dispatch:
 
 permissions:
   contents: read
