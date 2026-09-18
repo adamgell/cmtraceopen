@@ -43,7 +43,6 @@ use cmtraceopen_parser::eventmap::MapRegistry;
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
-#[cfg(any(target_os = "windows", test))]
 use windows::core::PWSTR;
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HSTRING, PCWSTR};
@@ -58,7 +57,7 @@ use windows::Win32::System::EventLog::{
     EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EVT_HANDLE, EVT_RPC_LOGIN,
     EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION,
 };
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtVarTypeString, EvtVarTypeUInt32, EVT_VARIANT, EVT_VARIANT_TYPE_ARRAY,
 };
@@ -149,7 +148,7 @@ fn describe_query_status(status: u32) -> String {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 const EVT_VARIANT_ARRAY_TYPE_MASK: u32 = EVT_VARIANT_TYPE_ARRAY;
 
 #[cfg(target_os = "windows")]
@@ -216,7 +215,7 @@ fn inspect_query_statuses(
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn decode_query_path_statuses(
     names_buffer: &[u8],
     statuses_buffer: &[u8],
@@ -258,7 +257,7 @@ fn decode_query_path_status_list(
         .collect())
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 unsafe fn decode_query_name_array(buffer: &[u8]) -> Result<Vec<String>, String> {
     let variant = first_query_info_variant(buffer)?;
     let expected = (EvtVarTypeString.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
@@ -282,7 +281,7 @@ unsafe fn decode_query_name_array(buffer: &[u8]) -> Result<Vec<String>, String> 
         .collect())
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 unsafe fn decode_query_status_array(buffer: &[u8]) -> Result<Vec<u32>, String> {
     let variant = first_query_info_variant(buffer)?;
     let expected = (EvtVarTypeUInt32.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
@@ -303,7 +302,7 @@ unsafe fn decode_query_status_array(buffer: &[u8]) -> Result<Vec<u32>, String> {
     Ok(std::slice::from_raw_parts(statuses, count).to_vec())
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 unsafe fn first_query_info_variant(buffer: &[u8]) -> Result<&EVT_VARIANT, String> {
     if buffer.len() < std::mem::size_of::<EVT_VARIANT>() {
         return Err("EvtGetQueryInfo returned an undersized property buffer".to_string());
@@ -330,7 +329,7 @@ fn qualify_query_status_path(
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn pwstr_to_string(value: PWSTR) -> String {
     let raw = value.0;
     if raw.is_null() {
@@ -2417,6 +2416,7 @@ fn is_insufficient_buffer(error: &Error) -> bool {
 #[cfg(test)]
 mod portable_tests {
     use std::cell::Cell;
+    #[cfg(target_os = "windows")]
     use std::slice;
 
     use super::super::models::{
@@ -2424,14 +2424,17 @@ mod portable_tests {
     };
     use super::super::parser::DescriptionOutcome;
     use super::*;
+    #[cfg(target_os = "windows")]
     use windows::Win32::System::EventLog::EVT_VARIANT_0;
 
+    #[cfg(target_os = "windows")]
     struct QueryNameArrayBuffer {
         bytes: Vec<u8>,
         _names: Vec<Vec<u16>>,
         _pointers: Vec<PWSTR>,
     }
 
+    #[cfg(target_os = "windows")]
     impl QueryNameArrayBuffer {
         fn new(names: &[&str], variant_type: u32) -> Self {
             let mut encoded = names
@@ -2464,11 +2467,13 @@ mod portable_tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
     struct QueryStatusArrayBuffer {
         bytes: Vec<u8>,
         _statuses: Vec<u32>,
     }
 
+    #[cfg(target_os = "windows")]
     impl QueryStatusArrayBuffer {
         fn new(statuses: &[u32], variant_type: u32) -> Self {
             let mut values = statuses.to_vec();
@@ -2493,14 +2498,17 @@ mod portable_tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn query_name_array_variant_type() -> u32 {
         (EvtVarTypeString.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK
     }
 
+    #[cfg(target_os = "windows")]
     fn query_status_array_variant_type() -> u32 {
         (EvtVarTypeUInt32.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK
     }
 
+    #[cfg(target_os = "windows")]
     fn inspect_decoded_query_statuses(
         names_buffer: &[u8],
         statuses_buffer: &[u8],
@@ -2562,6 +2570,7 @@ mod portable_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn query_status_decoder_accepts_equally_sized_name_and_status_arrays() {
         let names = QueryNameArrayBuffer::new(
@@ -2597,6 +2606,7 @@ mod portable_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn query_status_decoder_rejects_mismatched_name_and_status_counts() {
         let names = QueryNameArrayBuffer::new(
@@ -2617,6 +2627,7 @@ mod portable_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn query_status_decoder_rejects_unexpected_name_variant_type() {
         let names = QueryNameArrayBuffer::new(&["Security"], query_status_array_variant_type());
@@ -2637,6 +2648,7 @@ mod portable_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn query_status_decoder_rejects_unexpected_status_variant_type() {
         let names = QueryNameArrayBuffer::new(&["Security"], query_name_array_variant_type());
