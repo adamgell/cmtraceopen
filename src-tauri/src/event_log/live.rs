@@ -43,7 +43,10 @@ use cmtraceopen_parser::eventmap::MapRegistry;
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
-use windows::core::{Error, HSTRING, PCWSTR, PWSTR};
+#[cfg(any(target_os = "windows", test))]
+use windows::core::PWSTR;
+#[cfg(target_os = "windows")]
+use windows::core::{Error, HSTRING, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtChannelConfigEnabled, EvtClearLog, EvtClose, EvtFormatMessage, EvtFormatMessageEvent,
@@ -52,9 +55,12 @@ use windows::Win32::System::EventLog::{
     EvtQueryReverseDirection, EvtQueryStatuses, EvtQueryTolerateQueryErrors, EvtRender,
     EvtRenderEventXml, EvtRpcLogin, EvtRpcLoginAuthDefault, EvtSubscribe,
     EvtSubscribeActionDeliver, EvtSubscribeActionError, EvtSubscribeToFutureEvents,
-    EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EvtVarTypeString, EvtVarTypeUInt32,
-    EVT_HANDLE, EVT_RPC_LOGIN, EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION, EVT_VARIANT,
-    EVT_VARIANT_TYPE_ARRAY,
+    EvtSubscribeTolerateQueryErrors, EvtVarTypeBoolean, EVT_HANDLE, EVT_RPC_LOGIN,
+    EVT_SUBSCRIBE_CALLBACK, EVT_SUBSCRIBE_NOTIFY_ACTION,
+};
+#[cfg(any(target_os = "windows", test))]
+use windows::Win32::System::EventLog::{
+    EvtVarTypeString, EvtVarTypeUInt32, EVT_VARIANT, EVT_VARIANT_TYPE_ARRAY,
 };
 
 /// Event handles fetched per `EvtNext` call.
@@ -143,7 +149,7 @@ fn describe_query_status(status: u32) -> String {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const EVT_VARIANT_ARRAY_TYPE_MASK: u32 = EVT_VARIANT_TYPE_ARRAY;
 
 #[cfg(target_os = "windows")]
@@ -210,7 +216,7 @@ fn inspect_query_statuses(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn decode_query_path_statuses(
     names_buffer: &[u8],
     statuses_buffer: &[u8],
@@ -252,7 +258,7 @@ fn decode_query_path_status_list(
         .collect())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 unsafe fn decode_query_name_array(buffer: &[u8]) -> Result<Vec<String>, String> {
     let variant = first_query_info_variant(buffer)?;
     let expected = (EvtVarTypeString.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
@@ -276,7 +282,7 @@ unsafe fn decode_query_name_array(buffer: &[u8]) -> Result<Vec<String>, String> 
         .collect())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 unsafe fn decode_query_status_array(buffer: &[u8]) -> Result<Vec<u32>, String> {
     let variant = first_query_info_variant(buffer)?;
     let expected = (EvtVarTypeUInt32.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK;
@@ -297,7 +303,7 @@ unsafe fn decode_query_status_array(buffer: &[u8]) -> Result<Vec<u32>, String> {
     Ok(std::slice::from_raw_parts(statuses, count).to_vec())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 unsafe fn first_query_info_variant(buffer: &[u8]) -> Result<&EVT_VARIANT, String> {
     if buffer.len() < std::mem::size_of::<EVT_VARIANT>() {
         return Err("EvtGetQueryInfo returned an undersized property buffer".to_string());
@@ -305,7 +311,7 @@ unsafe fn first_query_info_variant(buffer: &[u8]) -> Result<&EVT_VARIANT, String
     Ok(&*(buffer.as_ptr().cast::<EVT_VARIANT>()))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn qualify_query_status_path(
     path: &str,
     coverage_channel: &str,
@@ -324,7 +330,7 @@ fn qualify_query_status_path(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn pwstr_to_string(value: PWSTR) -> String {
     let raw = value.0;
     if raw.is_null() {
@@ -2411,12 +2417,124 @@ fn is_insufficient_buffer(error: &Error) -> bool {
 #[cfg(test)]
 mod portable_tests {
     use std::cell::Cell;
+    use std::slice;
 
     use super::super::models::{
         EvtxCoverageGapKind, EvtxLevel, EvtxOriginKind, ProviderMessageStage,
     };
     use super::super::parser::DescriptionOutcome;
     use super::*;
+    use windows::Win32::System::EventLog::EVT_VARIANT_0;
+
+    struct QueryNameArrayBuffer {
+        bytes: Vec<u8>,
+        _names: Vec<Vec<u16>>,
+        _pointers: Vec<PWSTR>,
+    }
+
+    impl QueryNameArrayBuffer {
+        fn new(names: &[&str], variant_type: u32) -> Self {
+            let mut encoded = names
+                .iter()
+                .map(|name| name.encode_utf16().chain(Some(0)).collect::<Vec<u16>>())
+                .collect::<Vec<_>>();
+            let mut pointers = encoded
+                .iter_mut()
+                .map(|name| PWSTR(name.as_mut_ptr()))
+                .collect::<Vec<_>>();
+            let variant = EVT_VARIANT {
+                Anonymous: EVT_VARIANT_0 {
+                    StringArr: pointers.as_mut_ptr(),
+                },
+                Count: names.len() as u32,
+                Type: variant_type,
+            };
+            let bytes = unsafe {
+                slice::from_raw_parts(
+                    (&variant as *const EVT_VARIANT).cast::<u8>(),
+                    std::mem::size_of::<EVT_VARIANT>(),
+                )
+            }
+            .to_vec();
+            Self {
+                bytes,
+                _names: encoded,
+                _pointers: pointers,
+            }
+        }
+    }
+
+    struct QueryStatusArrayBuffer {
+        bytes: Vec<u8>,
+        _statuses: Vec<u32>,
+    }
+
+    impl QueryStatusArrayBuffer {
+        fn new(statuses: &[u32], variant_type: u32) -> Self {
+            let mut values = statuses.to_vec();
+            let variant = EVT_VARIANT {
+                Anonymous: EVT_VARIANT_0 {
+                    UInt32Arr: values.as_mut_ptr(),
+                },
+                Count: statuses.len() as u32,
+                Type: variant_type,
+            };
+            let bytes = unsafe {
+                slice::from_raw_parts(
+                    (&variant as *const EVT_VARIANT).cast::<u8>(),
+                    std::mem::size_of::<EVT_VARIANT>(),
+                )
+            }
+            .to_vec();
+            Self {
+                bytes,
+                _statuses: values,
+            }
+        }
+    }
+
+    fn query_name_array_variant_type() -> u32 {
+        (EvtVarTypeString.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK
+    }
+
+    fn query_status_array_variant_type() -> u32 {
+        (EvtVarTypeUInt32.0 as u32) | EVT_VARIANT_ARRAY_TYPE_MASK
+    }
+
+    fn inspect_decoded_query_statuses(
+        names_buffer: &[u8],
+        statuses_buffer: &[u8],
+        coverage_channel: &str,
+        remote_machine: Option<&str>,
+    ) -> QueryStatusInspection {
+        match decode_query_path_statuses(
+            names_buffer,
+            statuses_buffer,
+            coverage_channel,
+            remote_machine,
+        ) {
+            Ok(statuses) => QueryStatusInspection::Available(statuses),
+            Err(detail) => QueryStatusInspection::Unavailable {
+                path: coverage_channel.to_string(),
+                detail,
+            },
+        }
+    }
+
+    fn inspect_query_status_list(
+        names: Vec<String>,
+        statuses: Vec<u32>,
+        coverage_channel: &str,
+        remote_machine: Option<&str>,
+    ) -> QueryStatusInspection {
+        match decode_query_path_status_list(names, statuses, coverage_channel, remote_machine) {
+            Ok(statuses) => QueryStatusInspection::Available(statuses),
+            Err(detail) => QueryStatusInspection::Unavailable {
+                path: coverage_channel.to_string(),
+                detail,
+            },
+        }
+    }
 
     #[test]
     fn provider_gap_preserves_remote_source_stage_code_and_stable_text() {
@@ -2441,6 +2559,128 @@ mod portable_tests {
             gap.reason,
             "provider message for Example.Provider could not be rendered at \
              EvtOpenPublisherMetadata (Windows error 2); raw event data is shown instead"
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_accepts_equally_sized_name_and_status_arrays() {
+        let names = QueryNameArrayBuffer::new(
+            &["Security", "", "ForwardedEvents"],
+            query_name_array_variant_type(),
+        );
+        let statuses =
+            QueryStatusArrayBuffer::new(&[0, 5, 1314], query_status_array_variant_type());
+
+        let inspection = inspect_decoded_query_statuses(
+            &names.bytes,
+            &statuses.bytes,
+            "Application",
+            Some("HOST-A"),
+        );
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Available(vec![
+                QueryPathStatus {
+                    path: "HOST-A/Security".to_string(),
+                    status: 0,
+                },
+                QueryPathStatus {
+                    path: "HOST-A/Application".to_string(),
+                    status: 5,
+                },
+                QueryPathStatus {
+                    path: "HOST-A/ForwardedEvents".to_string(),
+                    status: 1314,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_rejects_mismatched_name_and_status_counts() {
+        let names = QueryNameArrayBuffer::new(
+            &["Security", "Application"],
+            query_name_array_variant_type(),
+        );
+        let statuses = QueryStatusArrayBuffer::new(&[0], query_status_array_variant_type());
+
+        let inspection =
+            inspect_decoded_query_statuses(&names.bytes, &statuses.bytes, "Security", None);
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: "EvtGetQueryInfo returned 2 query paths but 1 statuses".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_rejects_unexpected_name_variant_type() {
+        let names = QueryNameArrayBuffer::new(&["Security"], query_status_array_variant_type());
+        let statuses = QueryStatusArrayBuffer::new(&[0], query_status_array_variant_type());
+
+        let inspection =
+            inspect_decoded_query_statuses(&names.bytes, &statuses.bytes, "Security", None);
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: format!(
+                    "EvtGetQueryInfo(EvtQueryNames) returned unexpected variant type {}",
+                    query_status_array_variant_type()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_rejects_unexpected_status_variant_type() {
+        let names = QueryNameArrayBuffer::new(&["Security"], query_name_array_variant_type());
+        let statuses = QueryStatusArrayBuffer::new(&[0], query_name_array_variant_type());
+
+        let inspection =
+            inspect_decoded_query_statuses(&names.bytes, &statuses.bytes, "Security", None);
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: format!(
+                    "EvtGetQueryInfo(EvtQueryStatuses) returned unexpected variant type {}",
+                    query_name_array_variant_type()
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_rejects_names_without_statuses() {
+        let inspection =
+            inspect_query_status_list(vec!["Security".to_string()], Vec::new(), "Security", None);
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: "EvtGetQueryInfo returned 1 query paths but 0 statuses".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn query_status_decoder_rejects_statuses_without_names() {
+        let inspection = inspect_query_status_list(Vec::new(), vec![5], "Security", Some("HOST-A"));
+
+        assert_eq!(
+            inspection,
+            QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: "EvtGetQueryInfo returned 0 query paths but 1 statuses".to_string(),
+            }
         );
     }
 
@@ -2883,6 +3123,42 @@ mod portable_tests {
     }
 
     #[test]
+    fn multiple_query_path_statuses_only_report_failed_paths() {
+        let mut scan = ChannelScan {
+            records: Vec::new(),
+            delivered: 0,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Available(vec![
+                QueryPathStatus {
+                    path: "Application".to_string(),
+                    status: 0,
+                },
+                QueryPathStatus {
+                    path: "Security".to_string(),
+                    status: 5,
+                },
+                QueryPathStatus {
+                    path: "System".to_string(),
+                    status: 1314,
+                },
+            ]),
+        );
+
+        assert_eq!(
+            scan.gaps,
+            vec![
+                "Security: the Event Log service refused the channel query (Windows error 5: Access is denied)".to_string(),
+                "System: the Event Log service refused the channel query (Windows error 1314: A required privilege is not held by the client)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn readable_empty_channel_stays_gap_free() {
         let mut scan = ChannelScan {
             records: Vec::new(),
@@ -2928,6 +3204,33 @@ mod portable_tests {
                     && gap.contains("Windows error 122")
             }),
             "missing query-status inspection must become explicit coverage uncertainty"
+        );
+    }
+
+    #[test]
+    fn query_names_inspection_failure_keeps_delivered_records() {
+        let mut scan = ChannelScan {
+            records: vec![test_record("kept record")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Unavailable {
+                path: "Application".to_string(),
+                detail: "EvtGetQueryInfo(EvtQueryNames): Windows error 122".to_string(),
+            },
+        );
+
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.records[0].message, "kept record");
+        assert_eq!(
+            scan.gaps,
+            vec![
+                "Application: query status could not be inspected after EvtQuery; channel completeness is unknown (EvtGetQueryInfo(EvtQueryNames): Windows error 122)".to_string(),
+            ]
         );
     }
 
@@ -2985,6 +3288,36 @@ mod portable_tests {
                     && gap.contains("EvtGetQueryInfo returned no query paths or statuses")
             }),
             "empty query-status data must stay visible as unknown completeness"
+        );
+    }
+
+    #[test]
+    fn status_inspection_failure_adds_only_one_generic_gap() {
+        let mut scan = ChannelScan {
+            records: vec![test_record("kept record")],
+            delivered: 1,
+            gaps: Vec::new(),
+            provider_gaps: Vec::new(),
+        };
+
+        append_query_status_gaps(
+            &mut scan,
+            &QueryStatusInspection::Unavailable {
+                path: "Security".to_string(),
+                detail: "EvtGetQueryInfo(EvtQueryStatuses): Windows error 5".to_string(),
+            },
+        );
+
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(
+            scan.gaps,
+            vec![
+                "Security: query status could not be inspected after EvtQuery; channel completeness is unknown (EvtGetQueryInfo(EvtQueryStatuses): Windows error 5)".to_string(),
+            ]
+        );
+        assert!(
+            !scan.gaps[0].contains("refused the channel query"),
+            "inspection failures must not fabricate a second access-denied gap"
         );
     }
 
