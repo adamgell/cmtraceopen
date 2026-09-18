@@ -124,7 +124,7 @@ function New-CollectorBundleId {
 
     $safeDeviceName = ConvertTo-SafeFileName -Value $DeviceName
     $nonce = [Guid]::NewGuid().ToString('N').ToLowerInvariant()
-    $timestamp = (Get-Date).ToString(
+        $timestamp = (Get-Date).ToUniversalTime().ToString(
         'yyyyMMdd-HHmmss',
         [System.Globalization.CultureInfo]::InvariantCulture
     )
