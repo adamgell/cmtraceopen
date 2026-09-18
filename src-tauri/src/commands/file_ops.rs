@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use super::bundle_ops::{
-    collect_files_recursive, detect_evidence_bundle_metadata, unsafe_ancestor_reason,
-    unsafe_entry_reason,
+    collect_files_recursive, detect_evidence_bundle_metadata, inspect_entry_metadata,
+    unsafe_ancestor_reason,
 };
 use super::known_sources::KnownSourcePathKind;
 use crate::intune::models::EvidenceBundleMetadata;
@@ -638,7 +638,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
     }
     for entry in candidates {
         let entry_path = entry.path();
-        let unsafe_reason = match unsafe_entry_reason(&entry_path) {
+        let inspected_entry = match inspect_entry_metadata(fs::symlink_metadata(&entry_path)) {
             Ok(value) => value,
             Err(error) => {
                 push_folder_error(
@@ -650,7 +650,7 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
                 continue;
             }
         };
-        if let Some(reason) = unsafe_reason {
+        if let Some(reason) = inspected_entry.unsafe_reason {
             push_folder_error(
                 &mut child_errors,
                 &mut diagnostic_limit_reached,
@@ -659,22 +659,11 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
             );
             continue;
         }
-        let metadata = match fs::symlink_metadata(&entry_path) {
-            Ok(value) => value,
-            Err(error) => {
-                push_folder_error(
-                    &mut child_errors,
-                    &mut diagnostic_limit_reached,
-                    &entry_path,
-                    &format!("child metadata could not be read: {error}"),
-                );
-                continue;
-            }
-        };
+        let metadata = inspected_entry.metadata;
         entries.push(FolderEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: normalize_path_string(&entry_path),
-            is_dir: metadata.is_dir(),
+            is_dir: inspected_entry.is_dir,
             size_bytes: if metadata.is_file() {
                 Some(metadata.len())
             } else {

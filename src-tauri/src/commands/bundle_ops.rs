@@ -190,6 +190,25 @@ const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum size of an individual file included in batch aggregate parsing.
 const BUNDLE_BATCH_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
+const UNSAFE_ENTRY_REASON: &str = "symbolic link or reparse point is not followed";
+
+pub(crate) struct InspectedEntryMetadata {
+    pub metadata: fs::Metadata,
+    pub unsafe_reason: Option<&'static str>,
+    pub is_dir: bool,
+}
+
+pub(crate) fn inspect_entry_metadata(
+    metadata: std::io::Result<fs::Metadata>,
+) -> std::io::Result<InspectedEntryMetadata> {
+    let metadata = metadata?;
+    Ok(InspectedEntryMetadata {
+        unsafe_reason: unsafe_entry_metadata(&metadata).then_some(UNSAFE_ENTRY_REASON),
+        is_dir: metadata.is_dir(),
+        metadata,
+    })
+}
+
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -298,23 +317,7 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                 break 'walk;
             }
             let entry_path = entry.path();
-            let reason = match unsafe_entry_reason(&entry_path) {
-                Ok(reason) => reason,
-                Err(error) => {
-                    push_collection_error(
-                        &mut child_errors,
-                        &mut truncated,
-                        &entry_path,
-                        &error.to_string(),
-                    );
-                    continue;
-                }
-            };
-            if let Some(reason) = reason {
-                push_collection_error(&mut child_errors, &mut truncated, &entry_path, reason);
-                continue;
-            }
-            let metadata = match fs::symlink_metadata(&entry_path) {
+            let inspected_entry = match inspect_entry_metadata(fs::symlink_metadata(&entry_path)) {
                 Ok(value) => value,
                 Err(error) => {
                     push_collection_error(
@@ -326,7 +329,12 @@ pub(crate) fn collect_files_recursive(root: &Path) -> RecursiveCollection {
                     continue;
                 }
             };
-            if metadata.is_dir() {
+            if let Some(reason) = inspected_entry.unsafe_reason {
+                push_collection_error(&mut child_errors, &mut truncated, &entry_path, reason);
+                continue;
+            }
+            let metadata = inspected_entry.metadata;
+            if inspected_entry.is_dir {
                 stack.push(entry_path);
                 continue;
             }
@@ -453,14 +461,6 @@ fn unsafe_entry_metadata(metadata: &fs::Metadata) -> bool {
     // traversal entries such as symbolic links and mount points without refusing non-traversal
     // reparse points (for example, cloud-file placeholders).
     metadata.file_type().is_symlink()
-}
-
-pub(crate) fn unsafe_entry_reason(path: &Path) -> std::io::Result<Option<&'static str>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if unsafe_entry_metadata(&metadata) {
-        return Ok(Some("symbolic link or reparse point is not followed"));
-    }
-    Ok(None)
 }
 
 pub(crate) fn detect_evidence_bundle_metadata(path: &Path) -> Option<EvidenceBundleMetadata> {

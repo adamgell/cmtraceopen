@@ -361,10 +361,6 @@ fn parsed_timestamp_epoch(record: &EvtxRecord) -> Option<i64> {
         .ok()
 }
 
-fn timestamp_is_present(record: &EvtxRecord) -> bool {
-    parsed_timestamp_epoch(record).is_some()
-}
-
 /// Converts one event, or reports why it has no position.
 pub fn from_event(record: &EvtxRecord) -> Result<TimelineItem, Box<UnplacedItem>> {
     from_event_with_occurrence(record, 0)
@@ -377,23 +373,31 @@ fn from_event_with_occurrence(
     from_event_with_origin(record, origin_of(record, occurrence))
 }
 
-fn from_event_with_origin(
+fn from_event_with_timestamp(
     record: &EvtxRecord,
     origin: TimelineOrigin,
+    timestamp_ms: Option<i64>,
 ) -> Result<TimelineItem, Box<UnplacedItem>> {
-    if !timestamp_is_present(record) {
+    let Some(timestamp_ms) = timestamp_ms else {
         return Err(Box::new(UnplacedItem {
             origin,
             reason: UnplacedReason::MissingTimestamp,
         }));
-    }
+    };
 
     Ok(TimelineItem {
-        timestamp_ms: parsed_timestamp_epoch(record).unwrap_or(0),
+        timestamp_ms,
         severity: severity_of(record.level),
         message: compact_timeline_text(&record.message, MAX_TIMELINE_MESSAGE_BYTES).0,
         origin,
     })
+}
+
+fn from_event_with_origin(
+    record: &EvtxRecord,
+    origin: TimelineOrigin,
+) -> Result<TimelineItem, Box<UnplacedItem>> {
+    from_event_with_timestamp(record, origin, parsed_timestamp_epoch(record))
 }
 
 fn origin_with_occurrence(
@@ -666,14 +670,15 @@ impl TimelineBuilder {
     pub(crate) fn push_event_record(&mut self, record: &EvtxRecord) {
         let mut origin = origin_of(record, 0);
         let origin_was_compacted = compact_timeline_origin(&mut origin);
-        let sort_timestamp = parsed_timestamp_epoch(record).unwrap_or(0);
+        let parsed_timestamp = parsed_timestamp_epoch(record);
+        let sort_timestamp = parsed_timestamp.unwrap_or(0);
         let sort_severity = severity_of(record.level);
         let missing_record_base = (matches!(record.origin_kind, EvtxOriginKind::Event)
             && usable_record_id_text(record).is_none()
             && record_id(record).is_none())
         .then(|| stable_missing_event_base(record));
         let message_was_compacted = record.message.len() > MAX_TIMELINE_MESSAGE_BYTES;
-        let item = match from_event_with_origin(record, origin) {
+        let item = match from_event_with_timestamp(record, origin, parsed_timestamp) {
             Ok(mut item) => {
                 let item_was_compacted = compact_timeline_item(&mut item);
                 if origin_was_compacted || message_was_compacted || item_was_compacted {

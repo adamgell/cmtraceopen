@@ -151,6 +151,28 @@ fn describe_query_status(status: u32) -> String {
 #[cfg(target_os = "windows")]
 const EVT_VARIANT_ARRAY_TYPE_MASK: u32 = EVT_VARIANT_TYPE_ARRAY;
 
+#[cfg(any(target_os = "windows", test))]
+const MAX_QUERY_INFO_VARIANT_BYTES: usize = crate::intune::eventlog_win32::MAX_LIVE_EVENT_XML_BYTES;
+
+#[cfg(any(target_os = "windows", test))]
+fn next_query_info_buffer_len(current_bytes: usize, required_bytes: u32) -> Result<usize, String> {
+    let required_bytes = required_bytes as usize;
+    if required_bytes > MAX_QUERY_INFO_VARIANT_BYTES {
+        return Err(format!(
+            "EvtGetQueryInfo returned a {required_bytes}-byte property buffer, exceeding the {MAX_QUERY_INFO_VARIANT_BYTES}-byte Event Log size limit"
+        ));
+    }
+    let next_bytes = required_bytes
+        .max(current_bytes.saturating_mul(2))
+        .min(MAX_QUERY_INFO_VARIANT_BYTES);
+    if next_bytes <= current_bytes {
+        return Err(format!(
+            "EvtGetQueryInfo could not grow its property buffer within the {MAX_QUERY_INFO_VARIANT_BYTES}-byte Event Log size limit"
+        ));
+    }
+    Ok(next_bytes)
+}
+
 #[cfg(target_os = "windows")]
 fn query_info_variant(
     query_handle: EVT_HANDLE,
@@ -174,7 +196,9 @@ fn query_info_variant(
                 return Ok(buffer);
             }
             Err(error) if is_insufficient_buffer(&error) && used > buffer.len() as u32 => {
-                buffer.resize(used as usize, 0);
+                let next_len = next_query_info_buffer_len(buffer.len(), used)
+                    .map_err(|detail| Error::new(error.code(), detail))?;
+                buffer.resize(next_len, 0);
             }
             Err(error) => return Err(error),
         }
@@ -2694,6 +2718,21 @@ mod portable_tests {
                 detail: "EvtGetQueryInfo returned 0 query paths but 1 statuses".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn query_info_buffer_limit_rejects_oversized_service_claims_before_resize() {
+        let error = next_query_info_buffer_len(
+            std::mem::size_of::<u32>(),
+            u32::try_from(MAX_QUERY_INFO_VARIANT_BYTES + 1).expect("oversized test value fits"),
+        )
+        .expect_err("oversized query-info buffers must be rejected");
+
+        assert!(error.contains(&format!(
+            "{}-byte Event Log size limit",
+            MAX_QUERY_INFO_VARIANT_BYTES
+        )));
+        assert!(error.contains(&(MAX_QUERY_INFO_VARIANT_BYTES + 1).to_string()));
     }
 
     #[test]

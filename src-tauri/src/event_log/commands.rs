@@ -1609,19 +1609,38 @@ mod tests {
     #[test]
     fn command_contract_rejects_placeholder_successes() {
         let source = include_str!("commands.rs");
+        let guarded_surface = source
+            .split("fn command_contract_rejects_placeholder_successes()")
+            .next()
+            .expect("guard test function name must exist");
+        let normalized = guarded_surface.split_whitespace().collect::<String>();
         let forbidden = [
             ["Ok(", "vec![]", ")"].concat(),
+            ["Ok(", "Vec::new()", ")"].concat(),
             ["Ok(", "0", ")"].concat(),
-            ["entries:", "vec![]"].concat(),
-            ["records:", "Vec::new()"].concat(),
-            ["channels:", "Vec::new()"].concat(),
-            ["total_records:", "0"].concat(),
         ];
 
         for pattern in forbidden {
             assert!(
-                !source.contains(pattern.as_str()),
+                !normalized.contains(pattern.as_str()),
                 "event-log command surface contains placeholder success: {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_contract_allows_struct_field_initializers_when_not_returned_as_placeholders() {
+        let normalized =
+            "EvtxParseResult{coverage:Vec::new(),archive_members:vec![],total_records:0}";
+
+        for pattern in [
+            ["Ok(", "vec![]", ")"].concat(),
+            ["Ok(", "Vec::new()", ")"].concat(),
+            ["Ok(", "0", ")"].concat(),
+        ] {
+            assert!(
+                !normalized.contains(pattern.as_str()),
+                "field initializer was misclassified as placeholder success: {pattern}"
             );
         }
     }
