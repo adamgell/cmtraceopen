@@ -21,6 +21,9 @@ pub enum EvtxCoverageGapKind {
     Xml,
     Provider,
     Limit,
+    /// The operator stopped an in-flight live channel read. The records fetched before the stop
+    /// are real and are shown; the rest of the channel was deliberately not read.
+    Cancelled,
 }
 
 /// Native Windows API stage that could not produce a provider message.

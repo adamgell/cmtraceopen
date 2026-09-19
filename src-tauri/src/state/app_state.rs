@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
+#[cfg(feature = "event-log")]
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;
@@ -76,6 +78,14 @@ pub struct AppState {
     /// Backend-owned, bounded-transport GUI export sessions keyed by opaque session id.
     #[cfg(feature = "event-log")]
     pub(crate) event_log_export_sessions: Arc<Mutex<EventLogExportSessionRegistry>>,
+    /// Cancellation flags for in-flight live channel queries, keyed by request id.
+    ///
+    /// A query registers its flag before the read starts and removes it when the read settles, so
+    /// the registry holds at most one entry per in-flight request. Held behind an `Arc` like the
+    /// session registries so a command can take a cheap handle into a blocking task and still
+    /// clean its entry up afterwards.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_query_cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl AppState {
@@ -107,6 +117,8 @@ impl AppState {
             event_log_analysis_sessions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "event-log")]
             event_log_export_sessions: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "event-log")]
+            event_log_query_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

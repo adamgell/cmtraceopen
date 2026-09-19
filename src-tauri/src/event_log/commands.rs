@@ -10,6 +10,11 @@ use super::models::{
 use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
 #[cfg(target_os = "windows")]
+use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "windows")]
 use serde::Serialize;
 #[cfg(target_os = "windows")]
 use tauri::Emitter;
@@ -134,6 +139,22 @@ impl QueryAggregation {
                 .map(super::live::format_provider_gap),
         );
         self.coverage_gaps.extend(scan.provider_gaps);
+        if scan.cancelled {
+            // A deliberately stopped read is a partial read and must say so with the count the
+            // operator already saw. Reported under its own kind so the frontend can tell a stop
+            // from a failure and leave the channel available for a fresh Load.
+            let reason = format!(
+                "operator stopped the load after {} events were fetched (the channel may hold more)",
+                scan.delivered
+            );
+            self.error_messages
+                .push(format!("{coverage_source}: {reason}"));
+            self.coverage_gaps.push(EvtxCoverageGap::new(
+                coverage_source.to_string(),
+                EvtxCoverageGapKind::Cancelled,
+                reason,
+            ));
+        }
         self.records.extend(scan.records);
     }
 }
@@ -214,6 +235,7 @@ fn query_source_channel(
     maps: &cmtraceopen_parser::eventmap::MapRegistry,
     providers: &std::sync::RwLock<super::provider_db::ProviderStore>,
     max_events: Option<u64>,
+    is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<super::models::EvtxRecord>) -> Result<(), String>,
 ) -> Result<super::live::ChannelScan, String> {
@@ -225,6 +247,7 @@ fn query_source_channel(
             maps,
             providers,
             max_events,
+            is_cancelled,
             on_progress,
             on_batch,
         ),
@@ -234,6 +257,7 @@ fn query_source_channel(
             maps,
             providers,
             max_events,
+            is_cancelled,
             on_progress,
             on_batch,
         ),
@@ -255,7 +279,18 @@ async fn query_channels_impl(
     {
         let registry = state.event_maps.clone();
         let providers = state.provider_store.clone();
-        tokio::task::spawn_blocking(move || {
+        // Registered before the read starts so a cancel arriving at any point during the read can
+        // find it, and removed after the read settles so a cancel for a finished request stays a
+        // no-op instead of growing the registry without bound.
+        let is_cancelled = Arc::new(AtomicBool::new(false));
+        state
+            .event_log_query_cancels
+            .lock()
+            .map_err(|_| "event log cancel registry lock was poisoned".to_string())?
+            .insert(request_id.clone(), is_cancelled.clone());
+        let cancels = state.event_log_query_cancels.clone();
+        let cleanup_request_id = request_id.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
 
             let maps = registry
@@ -284,6 +319,7 @@ async fn query_channels_impl(
                         &maps,
                         &providers,
                         max_events,
+                        &is_cancelled,
                         |fetched, _| {
                             let _ = app_ref.emit(
                                 "evtx-query-progress",
@@ -416,7 +452,11 @@ async fn query_channels_impl(
             })
         })
         .await
-        .map_err(|error| format!("Task join error: {error}"))?
+        .map_err(|error| format!("Task join error: {error}"));
+        if let Ok(mut registry) = cancels.lock() {
+            registry.remove(&cleanup_request_id);
+        }
+        outcome?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -467,6 +507,24 @@ pub async fn evtx_query_remote_channels(
         request_id,
     )
     .await
+}
+
+/// Stops an in-flight live channel query. Idempotent: a request that already finished has no entry
+/// and the call still succeeds, so a stop that races the read settling is harmless.
+#[tauri::command]
+pub fn evtx_cancel_channel_query(
+    request_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    validate_request_id(&request_id)?;
+    let registry = state
+        .event_log_query_cancels
+        .lock()
+        .map_err(|_| "event log cancel registry lock was poisoned".to_string())?;
+    if let Some(flag) = registry.get(&request_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 /// Start a live tail for one channel. Windows prefers EvtSubscribe and reports polling only when
@@ -1350,11 +1408,52 @@ pub(crate) fn diagnosis_coverage_state(
         EvtxCoverageGapKind::Provider => {
             cmtraceopen_parser::diagnosis::CoverageState::ProviderDescriptionUnavailable
         }
+        // A stop is a deliberate bound the operator applied, so the events beyond it are not shown
+        // the same way a capped read hides them. It is not a failure and not an absence.
+        EvtxCoverageGapKind::Cancelled => cmtraceopen_parser::diagnosis::CoverageState::Capped,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancelled_scan_reports_the_stop_without_claiming_a_full_read() {
+        // A stop is a deliberate bound the operator applied. The scan still carries what it
+        // fetched, and the aggregation must say the read was stopped rather than letting the
+        // partial result read as the whole channel or as a failure to read it.
+        let record = diagnosis_record(super::super::models::EvtxOriginKind::Event, "raw fallback");
+        let mut aggregation = super::QueryAggregation::default();
+        aggregation.absorb_scan(
+            "Security",
+            super::super::live::ChannelScan {
+                records: vec![record],
+                delivered: 42,
+                gaps: Vec::new(),
+                provider_gaps: Vec::new(),
+                cancelled: true,
+            },
+        );
+
+        assert_eq!(aggregation.records.len(), 1);
+        assert_eq!(aggregation.parse_errors, 0);
+        assert_eq!(aggregation.coverage_gaps.len(), 1);
+        assert_eq!(
+            aggregation.coverage_gaps[0].kind,
+            super::super::models::EvtxCoverageGapKind::Cancelled
+        );
+        assert_eq!(
+            aggregation.error_messages,
+            vec![
+                "Security: operator stopped the load after 42 events were fetched (the channel may hold more)"
+                    .to_string()
+            ]
+        );
+        assert_eq!(
+            super::diagnosis_coverage_state(aggregation.coverage_gaps[0].kind),
+            cmtraceopen_parser::diagnosis::CoverageState::Capped
+        );
+    }
+
     #[test]
     fn provider_gaps_do_not_count_as_record_loss_but_record_gaps_do() {
         let record = diagnosis_record(super::super::models::EvtxOriginKind::Event, "raw fallback");
@@ -1372,6 +1471,7 @@ mod tests {
                 delivered: 1,
                 gaps: Vec::new(),
                 provider_gaps: vec![provider_gap.clone()],
+                cancelled: false,
             },
         );
 
@@ -1397,6 +1497,7 @@ mod tests {
                         .to_string(),
                 ],
                 provider_gaps: Vec::new(),
+                cancelled: false,
             },
         );
 

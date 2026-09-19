@@ -14,7 +14,7 @@ import {
 import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import { useUiStore } from "../../stores/ui-store";
-import { channelCanHoldEvents, useEvtxStore } from "./evtx-store";
+import { cancelActiveLoad, channelCanHoldEvents, useEvtxStore } from "./evtx-store";
 import type { EvtxChannelInfo } from "./types";
 
 // ── Tree data structure ─────────────────────────────────────────────────────
@@ -318,16 +318,27 @@ export function ChannelPicker() {
           </div>
           {sourceMode === "live" && (
             <div style={{ display: "flex", gap: "4px" }}>
-              {unloadedSelectedCount > 0 && (
+              {isLoading ? (
                 <Button
                   size="small"
                   appearance="primary"
-                  disabled={isLoading}
-                  onClick={loadSelectedChannels}
+                  onClick={() => void cancelActiveLoad()}
+                  title="Stop the running channel load and keep what has arrived so far"
                   style={{ flex: 1, fontSize: `${metrics.fontSize}px` }}
                 >
-                  {isLoading ? "Loading..." : `Load ${unloadedSelectedCount}`}
+                  Stop load
                 </Button>
+              ) : (
+                unloadedSelectedCount > 0 && (
+                  <Button
+                    size="small"
+                    appearance="primary"
+                    onClick={loadSelectedChannels}
+                    style={{ flex: 1, fontSize: `${metrics.fontSize}px` }}
+                  >
+                    Load {unloadedSelectedCount}
+                  </Button>
+                )
               )}
               <Button
                 size="small"
