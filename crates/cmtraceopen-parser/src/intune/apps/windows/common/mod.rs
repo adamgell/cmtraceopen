@@ -8,4 +8,6 @@
 mod redaction;
 
 pub use redaction::{redact_field_value, redact_text, sid_occurrences};
-pub(crate) use redaction::{caseless_equal, find_ignore_case, fold_with_offsets, FoldedChar};
+pub(crate) use redaction::{
+    caseless_equal, caseless_key, find_ignore_case, fold_with_offsets, FoldedChar,
+};

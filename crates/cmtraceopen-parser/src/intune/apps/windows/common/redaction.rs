@@ -844,6 +844,37 @@ pub(crate) fn caseless_equal(left: &str, right: &str) -> bool {
             .all(|(left, right)| folded_chars_equal(left.folded, right.folded))
 }
 
+/// One spelling that exactly the values [`caseless_equal`] calls equal share.
+///
+/// A lane that files identities in a map needs a key, and a key that folds
+/// differently from the comparison is how one identity reaches two tokens:
+/// Autopilot keyed on `to_lowercase` while the scrub compared with the rule
+/// above, and `Σ` against final `ς` -- equal here, two different lowercase
+/// letters there -- minted two tokens for one device. This function is the
+/// comparison written as a string, so map lookup and match cannot disagree.
+///
+/// Each folded character becomes its uppercase expansion, and a separator marks
+/// where one character's expansion ends. Both parts are load-bearing: the
+/// uppercase expansion is what settles the final sigma, and the separator is what
+/// keeps `ß` -- one folded character expanding to `SS` -- apart from `SS`, two
+/// folded characters each expanding to `S`. That makes the key equal exactly when
+/// the comparison is: same number of folded characters, each expanding to the
+/// same uppercase.
+pub(crate) fn caseless_key(value: &str) -> String {
+    /// A control character no case mapping can produce, so it cannot collide
+    /// with an expansion and needs no escaping.
+    const SEPARATOR: char = '\u{1}';
+
+    let mut key = String::with_capacity(value.len());
+    for (index, character) in fold_with_offsets(value).into_iter().enumerate() {
+        if index > 0 {
+            key.push(SEPARATOR);
+        }
+        key.extend(character.folded.to_uppercase());
+    }
+    key
+}
+
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
     if value.len() > MAX_REDACTION_INPUT_BYTES {
@@ -1109,9 +1140,36 @@ pub fn redact_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_entity_value, find_ignore_case, fold_with_offsets, preserve_token_mask_tail,
-        redact_field_value, redact_text, sid_occurrences,
+        caseless_equal, caseless_key, decode_entity_value, find_ignore_case, fold_with_offsets,
+        preserve_token_mask_tail, redact_field_value, redact_text, sid_occurrences,
     };
+
+    /// The key agrees with the comparison it stands in for.
+    ///
+    /// Both lanes file identities in maps keyed by [`caseless_key`] and match
+    /// them with [`caseless_equal`]. A key that folded differently is how one
+    /// identity reached two tokens -- Autopilot keyed on `to_lowercase`, and final
+    /// `ς` against `Σ` is where those two disagree. The pairs below are the ones
+    /// the crate's own rules pin, on both sides of that line.
+    #[test]
+    fn the_caseless_key_agrees_with_the_caseless_comparison() {
+        for (left, right) in [
+            ("\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example", "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example"),
+            ("\u{130}STANBUL-PC", "i\u{307}stanbul-pc"),
+            ("PC-\u{C9}LODIE", "pc-\u{E9}lodie"),
+            ("CONTOSO\\User", "contoso\\user"),
+        ] {
+            assert!(caseless_equal(left, right), "{left} and {right}");
+            assert_eq!(caseless_key(left), caseless_key(right), "{left} and {right}");
+        }
+
+        // One folded character whose case mapping is a sequence is not two
+        // characters, and neither is a ligature the letters it stands for.
+        for (left, right) in [("Stra\u{DF}e.Example", "strasse.example"), ("\u{FB00}", "ff")] {
+            assert!(!caseless_equal(left, right), "{left} and {right}");
+            assert_ne!(caseless_key(left), caseless_key(right), "{left} and {right}");
+        }
+    }
 
     /// A match consumes whole source characters at both ends.
     ///

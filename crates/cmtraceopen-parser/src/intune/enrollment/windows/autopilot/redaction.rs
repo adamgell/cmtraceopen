@@ -50,7 +50,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::intune::apps::windows::common::{find_ignore_case, fold_with_offsets, FoldedChar};
+use crate::intune::apps::windows::common::{caseless_key, find_ignore_case, fold_with_offsets, FoldedChar};
 use crate::intune::evidence::{IntuneFinding, IntuneNamedValue};
 
 use super::models::*;
@@ -105,16 +105,18 @@ fn stable_token(kind: &str, value: &str) -> String {
 /// Mask one whole value, normalizing case and surrounding space first so the
 /// same identifier always produces the same token.
 ///
-/// Case folding is `to_lowercase`, not `to_ascii_lowercase`: an identity can
-/// carry a non-ASCII letter (a display name, an IDN-style domain), and a log
-/// line is free to spell it in another case. This is the one canonical form for
-/// one identity -- the literal table keys on exactly the same fold -- so a
-/// typed value and its differently-cased variant cannot end up with two tokens.
+/// The canonical form is the grammar's [`caseless_key`], not `to_lowercase`: an
+/// identity can carry a non-ASCII letter, and lowercasing alone does not fold
+/// every pair the lane's own matching treats as one. `Σ` lowercases to `σ` while
+/// final `ς` keeps its own shape, so a device spelled one way in a typed field
+/// and the other way in a log line minted two tokens for one device. This is the
+/// same key the literal table files a value under, so a typed value and every
+/// caseless spelling of it cannot end up with two tokens.
 fn mask_value(value: &str) -> String {
     if is_token(value) {
         return value.to_owned();
     }
-    stable_token(VALUE_KIND, &value.trim().to_lowercase())
+    stable_token(VALUE_KIND, &caseless_key(value.trim()))
 }
 
 fn upn_re() -> &'static Regex {
@@ -246,17 +248,32 @@ fn sensitive_value_key(name: &str) -> bool {
 /// that is both shaped and masked correlates as well.
 #[derive(Default)]
 struct MaskedLiterals {
-    /// Unicode-lowercased literal to the token its typed field carries.
+    /// [`caseless_key`] of the literal to the needle the scrub matches with and
+    /// the token its typed field carries.
     ///
-    /// Case folding is `to_lowercase`, not `to_ascii_lowercase`: a device name
-    /// or display name can carry a non-ASCII letter, and a log line is free to
-    /// spell it in another case.
-    tokens: BTreeMap<String, String>,
+    /// The key is the grammar's canonical form rather than `to_lowercase`, so the
+    /// table holds one entry per identity the lane's own matching treats as one.
+    /// Two keys would mean two tokens for one identity: the typed fields carry
+    /// the token of their own spelling while a narrative mention matches both
+    /// entries and is replaced by whichever the scan reaches first.
+    ///
+    /// The needle stays the folded spelling (`to_lowercase`) because
+    /// [`find_ignore_case`] compares it one folded character at a time against
+    /// the folded text. It is the first spelling classified, and any
+    /// caseless-equal spelling matches it -- including the final sigma, which the
+    /// comparison settles on the uppercase expansion.
+    literals: BTreeMap<String, MaskedLiteral>,
+}
+
+/// One classified literal: what the scrub matches, and what it replaces with.
+struct MaskedLiteral {
+    needle: String,
+    token: String,
 }
 
 impl MaskedLiterals {
     fn new(values: BTreeSet<String>) -> Self {
-        let mut tokens = BTreeMap::new();
+        let mut literals = BTreeMap::new();
         for value in values {
             let value = value.trim();
             // A mask is not identity, and skipping it is half of what keeps the
@@ -274,22 +291,25 @@ impl MaskedLiterals {
             if value.len() < MIN_SCRUBBED_LITERAL_BYTES {
                 continue;
             }
-            // The key is the same canonical form `mask_value` hashes, so the
-            // table and the typed fields cannot disagree about the token: one
-            // identity folds to one spelling, which mints one token.
-            let literal = value.to_lowercase();
-            let token = stable_token(VALUE_KIND, &literal);
-            tokens.insert(literal, token);
+            // The key is the form `mask_value` hashes, so the table and the
+            // typed fields cannot disagree about the token: one identity folds to
+            // one spelling, which mints one token.
+            literals.entry(caseless_key(value)).or_insert(MaskedLiteral {
+                needle: value.to_lowercase(),
+                token: mask_value(value),
+            });
         }
-        Self { tokens }
+        Self { literals }
     }
 
     /// The token this value carries as a typed field, if the export masks it.
     ///
-    /// Folded the same way the scrub folds, so a shaped rule does not depend on
-    /// how the text happened to be cased either.
+    /// Asked with the same key the table was built with, so a shaped rule does
+    /// not depend on how the text happened to be cased either.
     fn masked_token(&self, value: &str) -> Option<String> {
-        self.tokens.get(&value.trim().to_lowercase()).cloned()
+        self.literals
+            .get(&caseless_key(value.trim()))
+            .map(|literal| literal.token.clone())
     }
 
     /// Replace every occurrence of a masked literal with that literal's token.
@@ -298,7 +318,7 @@ impl MaskedLiterals {
     /// tenant domain scrubbed on its own cannot break the mail-address match on
     /// a UPN that contains it, which would leak the local part.
     fn scrub(&self, value: &str) -> String {
-        if self.tokens.is_empty() {
+        if self.literals.is_empty() {
             return value.to_owned();
         }
 
@@ -325,15 +345,16 @@ impl MaskedLiterals {
         cursor: usize,
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
-        for (literal, token) in &self.tokens {
-            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
+        for literal in self.literals.values() {
+            let Some((start, end)) = find_ignore_case(haystack, &literal.needle, folded, cursor)
+            else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
                 start < best_start || (start == best_start && end > best_end)
             });
             if replaces {
-                best = Some((start, end, token.as_str()));
+                best = Some((start, end, literal.token.as_str()));
             }
         }
         best
@@ -650,5 +671,33 @@ mod tests {
             format!("{token} met {token}")
         );
         assert_eq!(literals.scrub("unrelated narrative"), "unrelated narrative");
+    }
+
+    /// One device spelled two ways in one export reaches one token.
+    ///
+    /// `Σ` and final `ς` are caseless-equal to the matcher -- the comparison
+    /// settles them on the uppercase `Σ` -- but they are two different lowercase
+    /// letters, so a table keyed by `to_lowercase` held two entries: the typed
+    /// field carrying one spelling minted its own token, and a narrative mention
+    /// of the other matched both entries and was replaced by one of the two.
+    #[test]
+    fn a_final_sigma_spelling_reaches_the_capital_sigma_token() {
+        const CAPITAL: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
+        const NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
+
+        let literals = MaskedLiterals::new(BTreeSet::from([
+            CAPITAL.to_owned(),
+            NARRATIVE.to_owned(),
+        ]));
+        let token = mask_value(CAPITAL);
+
+        assert_eq!(literals.literals.len(), 1, "one identity, one entry");
+        assert_eq!(mask_value(NARRATIVE), token, "one identity, one token");
+        assert_eq!(literals.masked_token(NARRATIVE), Some(token.clone()));
+        assert_eq!(literals.scrub(&format!("device {CAPITAL}")), format!("device {token}"));
+        assert_eq!(
+            literals.scrub(&format!("device {NARRATIVE}")),
+            format!("device {token}")
+        );
     }
 }
