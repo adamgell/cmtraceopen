@@ -781,6 +781,16 @@ pub(crate) fn find_ignore_case(
     let first = folded.partition_point(|folded_char| folded_char.source_start < from);
     for (index, folded_char) in folded.iter().enumerate().skip(first) {
         let start = folded_char.source_start;
+        // A match has to consume whole source characters at both ends. Folding
+        // is one-to-many (`İ` lowercases to `i` plus U+0307), and the comparison
+        // steps one folded character per side, so a window can otherwise line up
+        // against part of a character: the literal `PC-i` reaches the narrative's
+        // `PC-İ` and masks a spelling the rules above call a different identity.
+        // Starting mid-character is the same defect read the other way, and the
+        // entries of one source character share its `source_start`.
+        if index > 0 && folded[index - 1].source_start == start {
+            continue;
+        }
         // The value spelled exactly as it was typed, which needs no folding and
         // keeps the scan proportional to a memchr when nothing differs in case.
         if haystack[start..].starts_with(literal) {
@@ -789,10 +799,15 @@ pub(crate) fn find_ignore_case(
         let Some(window) = folded.get(index..index + expected.len()) else {
             break;
         };
-        let matched = window
-            .iter()
-            .zip(&expected)
-            .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
+        let last = index + window.len() - 1;
+        let ends_a_source_character = folded
+            .get(last + 1)
+            .is_none_or(|next| next.source_start != window[window.len() - 1].source_start);
+        let matched = ends_a_source_character
+            && window
+                .iter()
+                .zip(&expected)
+                .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
         if matched {
             return Some((start, window[window.len() - 1].source_end));
         }
@@ -1094,9 +1109,37 @@ pub fn redact_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_entity_value, preserve_token_mask_tail, redact_field_value, redact_text,
-        sid_occurrences,
+        decode_entity_value, find_ignore_case, fold_with_offsets, preserve_token_mask_tail,
+        redact_field_value, redact_text, sid_occurrences,
     };
+
+    /// A match consumes whole source characters at both ends.
+    ///
+    /// Folding is one-to-many: `İ` lowercases to `i` plus U+0307, which is the
+    /// very shape the dotted-I rule depends on. The comparison steps one folded
+    /// character per side, so without the boundary the literal `device-i` reaches
+    /// that spelling and masks it with another value's token.
+    #[test]
+    fn a_match_does_not_start_or_end_inside_a_folded_character() {
+        let value = "DEVICE-\u{130}";
+        let folded = fold_with_offsets(value);
+
+        assert_eq!(
+            find_ignore_case(value, "device-i", &folded, 0),
+            None,
+            "a window that stops inside the fold of `İ` is not a match"
+        );
+        assert_eq!(
+            find_ignore_case(value, "\u{307}", &folded, 0),
+            None,
+            "a window that starts inside the fold of `İ` is not a match"
+        );
+        assert_eq!(
+            find_ignore_case(value, "device-i\u{307}", &folded, 0),
+            Some((0, value.len())),
+            "the spelling the fold writes out is the same identity"
+        );
+    }
 
     #[test]
     fn a_typed_value_reaches_one_token_and_a_second_pass_leaves_it_alone() {
