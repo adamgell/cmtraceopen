@@ -10,6 +10,21 @@
 //! produces the same token and two records that mentioned the same user still
 //! visibly mention the same user. The projection is idempotent: replacement
 //! tokens cannot themselves match a rule.
+//!
+//! A parenthesized placeholder is never a value. Every analyzer in this crate
+//! renders an absent value as a parenthesized word -- `(missing)`, `(unknown)`,
+//! `(none)`, `(no UPN)` -- and those renders are prose about the absence, not
+//! text the capture contained. The labelled-field rules therefore do not let a
+//! value begin with `(`: masking `TenantId: (missing)` mints an identity the
+//! capture never held, and the dsregcmd export printed `TenantId: [tenant:...]`
+//! as the evidence *for* its "TenantId is missing" diagnostic. No Windows
+//! identifier begins with `(`, so the guard costs no real value.
+//!
+//! A value branch's first character class excludes whitespace for the same
+//! reason: the `\s*` before it is optional, so a class that allowed whitespace
+//! would match the placeholder past that `\s*` on backtracking and defeat the
+//! guard. The leading whitespace still belongs to the field, which the greedy
+//! `\s*` consumes first.
 
 const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
 const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
@@ -102,7 +117,7 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?P<pre>^|[^\[])(?P<property>(?:\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*=\s*|\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*))(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)"#,
+            r#"(?P<pre>^|[^\[])(?P<property>(?:\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*=\s*|\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*))(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n(][^\s\r\n]*)"#,
 
         )
         .expect("msi property regex must compile")
@@ -156,7 +171,7 @@ fn sensitive_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|credentialdata)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|credentialdata)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\s,;}\]<>]*)"#,
 
         )
         .expect("sensitive field redaction pattern must compile")
@@ -166,7 +181,7 @@ fn credential_data_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\bCredentialData\s*["']?\s*[:=]\s*)(?P<value>\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\bCredentialData\s*["']?\s*[:=]\s*)(?P<value>\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\r\n,;}\]<>]*)"#,
         )
         .expect("credential data field regex must compile")
     })
@@ -487,7 +502,7 @@ fn account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<pre>^|[^\[])(?P<field>(?:\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*=\s*|\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*))(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+[^\r\n,;\x22<>]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)"#,
+            r#"(?i)(?P<pre>^|[^\[])(?P<field>(?:\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*=\s*|\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*))(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+[^\r\n,;\x22<>]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[(][^,;\r\n\x22<>]*)"#,
         )
         .expect("account field regex must compile")
     })
@@ -498,7 +513,7 @@ fn nested_account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<pre>\[)(?P<field>\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n,;\x22<>]+)"#,
+            r#"(?i)(?P<pre>\[)(?P<field>\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n,;\x22<>(][^\r\n,;\x22<>]*)"#,
         )
         .expect("nested account field regex must compile")
     })
@@ -518,7 +533,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>]+)"#,
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>(][^\s,;\r\n\x22<>]*)"#,
 
         )
         .expect("host field regex must compile")
@@ -546,7 +561,7 @@ fn tenant_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\s,;}\]<>]*)"#,
         )
         .expect("tenant field regex must compile")
     })
@@ -649,6 +664,215 @@ fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
         projected.push_str(&stable_token(kind, rest_trimmed));
         return Some(projected);
     }
+}
+
+/// Mask a value that is sensitive because of *which field it is*, not because of
+/// any shape the value has.
+///
+/// [`redact_text`] can only mask what it recognizes from shape, and some of the
+/// strongest identifiers have none: a device id, a certificate thumbprint or a
+/// bare tenant domain is indistinguishable from any other opaque word. A lane
+/// that knows a field holds one of those has nothing to match on, so this is
+/// the entry point for the typed case — it keeps the derivation here, where the
+/// one minter and (when they land) the keying and the analysis scope live,
+/// rather than letting each lane mint its own. `kind` is the caller's own
+/// vocabulary and is the domain separator between one kind of identifier and
+/// another.
+///
+/// A value that is already a replacement token is returned unchanged, so
+/// projecting an already-projected value is a no-op.
+pub fn redact_field_value(kind: &str, value: &str) -> String {
+    if already_masked(value) {
+        return value.to_string();
+    }
+    stable_token(kind, value)
+}
+
+/// One character of a case-folded view of some source text, and the byte range
+/// of the source character it came from.
+///
+/// Folding can turn one character into several (`İ` lowercases to `i` plus
+/// U+0307), so a folded view cannot be sliced: an offset into it would not
+/// address the same text as an offset into the source. Every folded character
+/// therefore carries the source range it came from, and a match reports the
+/// range its first and last characters cover.
+pub(crate) struct FoldedChar {
+    folded: char,
+    source_start: usize,
+    source_end: usize,
+}
+
+/// Case-fold `value` for caseless matching, keeping every folded character tied
+/// to the source range it came from.
+///
+/// This is the one caseless rule in the crate, and the two lanes that own a
+/// caseless identity both call it: the Autopilot export
+/// (`intune::enrollment::windows::autopilot::redaction`) and the dsregcmd
+/// projection (`dsregcmd::redaction`). The fold is `to_lowercase` -- not
+/// `to_ascii_lowercase`, because an identity can carry a non-ASCII letter --
+/// and it is the same fold at every level: the key a lane files an identity
+/// under, the token that key mints, and the match [`find_ignore_case`]
+/// performs. [`folded_chars_equal`] adds the second accept path, `to_uppercase`
+/// equality, which is what reaches Greek's final sigma (`Σ` and `ς` both
+/// uppercase to `Σ` while their lowercase forms differ).
+pub(crate) fn fold_with_offsets(value: &str) -> Vec<FoldedChar> {
+    let mut folded = Vec::with_capacity(value.len());
+    for (source_start, source) in value.char_indices() {
+        let source_end = source_start + source.len_utf8();
+        for folded_char in source.to_lowercase() {
+            folded.push(FoldedChar {
+                folded: folded_char,
+                source_start,
+                source_end,
+            });
+        }
+    }
+    folded
+}
+
+/// The next occurrence of `literal` in the folded view of `haystack`, at or
+/// after the source byte offset `from`, as the source byte range it covers.
+///
+/// Called by the two lanes that scrub classified literals out of free text --
+/// the Autopilot export and the dsregcmd projection -- each folding the text
+/// once per scrub with [`fold_with_offsets`] and sharing that one view across
+/// every literal it holds.
+///
+/// Both sides are compared one folded character per side per step, so a
+/// character that folds to several still lines up: a typed `İSTANBUL-PC` folds
+/// to `i`, U+0307, `stanbul-pc`, and the narrative spelling `İstanbul-PC` folds
+/// to exactly that same sequence. `literal` is a literal-table key, so it
+/// arrives already folded, and the caller folds `haystack` once per call rather
+/// than once per literal. A match reports offsets into `haystack` itself, never
+/// into the folded view, which lowercasing may have resized.
+///
+/// Out of reach, and deliberately so, are the spellings the fold does not
+/// reproduce:
+///
+/// * the Turkic dotless `i` never equals `İ`: default folding yields `i` plus
+///   U+0307, and only Unicode's Turkic mapping drops the dot;
+/// * one-to-many spellings such as `ß` against `SS`, or a ligature against the
+///   letters it stands for, cannot line up at all, because each step consumes
+///   one folded character per side;
+/// * the same letter in another *normalization form* does not match. A typed
+///   precomposed `PC-ÉLODIE` folds to `pc-élodie`, while a narrative spelling of
+///   `PC-E` plus U+0301 folds to `e`, U+0301 and fails at that position, so that
+///   spelling stays visible.
+///
+/// Normalizing would close the last of those, and is not done: it rewrites the
+/// narrative on its way into the export, which is a behaviour change with its
+/// own trade-offs rather than a free win. Tests in both lanes pin these gaps so
+/// they stay decisions on record.
+pub(crate) fn find_ignore_case(
+    haystack: &str,
+    literal: &str,
+    folded: &[FoldedChar],
+    from: usize,
+) -> Option<(usize, usize)> {
+    let expected: Vec<char> = literal.chars().collect();
+    if expected.is_empty() {
+        return None;
+    }
+    // Folded characters are in source order, so everything before `from` is a
+    // prefix of the slice: skip it in one binary search rather than walking it
+    // character by character. Both lanes call this once per literal per record,
+    // pointed at what their previous match consumed, so rescanning the consumed
+    // prefix is what made a long narrative quadratic in its literal count.
+    let first = folded.partition_point(|folded_char| folded_char.source_start < from);
+    for (index, folded_char) in folded.iter().enumerate().skip(first) {
+        let start = folded_char.source_start;
+        // A match has to consume whole source characters at both ends. Folding
+        // is one-to-many (`İ` lowercases to `i` plus U+0307), and the comparison
+        // steps one folded character per side, so a window can otherwise line up
+        // against part of a character: the literal `PC-i` reaches the narrative's
+        // `PC-İ` and masks a spelling the rules above call a different identity.
+        // Starting mid-character is the same defect read the other way, and the
+        // entries of one source character share its `source_start`.
+        if index > 0 && folded[index - 1].source_start == start {
+            continue;
+        }
+        // The value spelled exactly as it was typed, which needs no folding and
+        // keeps the scan proportional to a memchr when nothing differs in case.
+        if haystack[start..].starts_with(literal) {
+            return Some((start, start + literal.len()));
+        }
+        let Some(window) = folded.get(index..index + expected.len()) else {
+            break;
+        };
+        let last = index + window.len() - 1;
+        let ends_a_source_character = folded
+            .get(last + 1)
+            .is_none_or(|next| next.source_start != window[window.len() - 1].source_start);
+        let matched = ends_a_source_character
+            && window
+                .iter()
+                .zip(&expected)
+                .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
+        if matched {
+            return Some((start, window[window.len() - 1].source_end));
+        }
+    }
+    None
+}
+
+/// Whether two folded characters are the same letter in another case.
+///
+/// Comparing only lowercase forms misses the final sigma: `Σ` folds to `σ`,
+/// while `ς` keeps its own shape. Both uppercase to `Σ`, so the uppercase
+/// expansions settle it.
+fn folded_chars_equal(left: char, right: char) -> bool {
+    left == right || left.to_uppercase().eq(right.to_uppercase())
+}
+
+/// Whether two strings are the same text in any case.
+///
+/// The membership convenience both lanes use to decide that two spellings are
+/// one identity -- dsregcmd's classified-identity table and the Autopilot
+/// literal table -- so a table can never hold two entries that
+/// [`find_ignore_case`] would treat as one identity. Expressed over the same
+/// fold: the two folded views must be the same sequence of folded characters,
+/// one folded character per side, so `İ` equals the `i` plus U+0307 it
+/// lowercases to, and a pair whose case mapping changes length (`ß` against
+/// `SS`) is not equal.
+pub(crate) fn caseless_equal(left: &str, right: &str) -> bool {
+    let left = fold_with_offsets(left);
+    let right = fold_with_offsets(right);
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(&right)
+            .all(|(left, right)| folded_chars_equal(left.folded, right.folded))
+}
+
+/// One spelling that exactly the values [`caseless_equal`] calls equal share.
+///
+/// A lane that files identities in a map needs a key, and a key that folds
+/// differently from the comparison is how one identity reaches two tokens:
+/// Autopilot keyed on `to_lowercase` while the scrub compared with the rule
+/// above, and `Σ` against final `ς` -- equal here, two different lowercase
+/// letters there -- minted two tokens for one device. This function is the
+/// comparison written as a string, so map lookup and match cannot disagree.
+///
+/// Each folded character becomes its uppercase expansion, and a separator marks
+/// where one character's expansion ends. Both parts are load-bearing: the
+/// uppercase expansion is what settles the final sigma, and the separator is what
+/// keeps `ß` -- one folded character expanding to `SS` -- apart from `SS`, two
+/// folded characters each expanding to `S`. That makes the key equal exactly when
+/// the comparison is: same number of folded characters, each expanding to the
+/// same uppercase.
+pub(crate) fn caseless_key(value: &str) -> String {
+    /// A control character no case mapping can produce, so it cannot collide
+    /// with an expansion and needs no escaping.
+    const SEPARATOR: char = '\u{1}';
+
+    let mut key = String::with_capacity(value.len());
+    for (index, character) in fold_with_offsets(value).into_iter().enumerate() {
+        if index > 0 {
+            key.push(SEPARATOR);
+        }
+        key.extend(character.folded.to_uppercase());
+    }
+    key
 }
 
 /// Mask the sensitive spans inside a free-text value.
@@ -915,7 +1139,85 @@ pub fn redact_text(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{decode_entity_value, preserve_token_mask_tail, redact_text, sid_occurrences};
+    use super::{
+        caseless_equal, caseless_key, decode_entity_value, find_ignore_case, fold_with_offsets,
+        preserve_token_mask_tail, redact_field_value, redact_text, sid_occurrences,
+    };
+
+    /// The key agrees with the comparison it stands in for.
+    ///
+    /// Both lanes file identities in maps keyed by [`caseless_key`] and match
+    /// them with [`caseless_equal`]. A key that folded differently is how one
+    /// identity reached two tokens -- Autopilot keyed on `to_lowercase`, and final
+    /// `ς` against `Σ` is where those two disagree. The pairs below are the ones
+    /// the crate's own rules pin, on both sides of that line.
+    #[test]
+    fn the_caseless_key_agrees_with_the_caseless_comparison() {
+        for (left, right) in [
+            ("\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example", "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example"),
+            ("\u{130}STANBUL-PC", "i\u{307}stanbul-pc"),
+            ("PC-\u{C9}LODIE", "pc-\u{E9}lodie"),
+            ("CONTOSO\\User", "contoso\\user"),
+        ] {
+            assert!(caseless_equal(left, right), "{left} and {right}");
+            assert_eq!(caseless_key(left), caseless_key(right), "{left} and {right}");
+        }
+
+        // One folded character whose case mapping is a sequence is not two
+        // characters, and neither is a ligature the letters it stands for.
+        for (left, right) in [("Stra\u{DF}e.Example", "strasse.example"), ("\u{FB00}", "ff")] {
+            assert!(!caseless_equal(left, right), "{left} and {right}");
+            assert_ne!(caseless_key(left), caseless_key(right), "{left} and {right}");
+        }
+    }
+
+    /// A match consumes whole source characters at both ends.
+    ///
+    /// Folding is one-to-many: `İ` lowercases to `i` plus U+0307, which is the
+    /// very shape the dotted-I rule depends on. The comparison steps one folded
+    /// character per side, so without the boundary the literal `device-i` reaches
+    /// that spelling and masks it with another value's token.
+    #[test]
+    fn a_match_does_not_start_or_end_inside_a_folded_character() {
+        let value = "DEVICE-\u{130}";
+        let folded = fold_with_offsets(value);
+
+        assert_eq!(
+            find_ignore_case(value, "device-i", &folded, 0),
+            None,
+            "a window that stops inside the fold of `İ` is not a match"
+        );
+        assert_eq!(
+            find_ignore_case(value, "\u{307}", &folded, 0),
+            None,
+            "a window that starts inside the fold of `İ` is not a match"
+        );
+        assert_eq!(
+            find_ignore_case(value, "device-i\u{307}", &folded, 0),
+            Some((0, value.len())),
+            "the spelling the fold writes out is the same identity"
+        );
+    }
+
+    #[test]
+    fn a_typed_value_reaches_one_token_and_a_second_pass_leaves_it_alone() {
+        let device_id = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+        let masked = redact_field_value("device", device_id);
+
+        assert_eq!(masked, redact_field_value("device", device_id));
+        assert_eq!(masked, redact_field_value("device", &masked));
+        assert_ne!(masked, device_id);
+    }
+
+    #[test]
+    fn one_kind_cannot_reach_another_kinds_token_for_the_same_value() {
+        let value = "contoso.onmicrosoft.com";
+
+        assert_ne!(
+            redact_field_value("tenant", value),
+            redact_field_value("host", value)
+        );
+    }
 
     #[test]
     fn numeric_entities_decode_only_within_a_bounded_prefix() {
@@ -1245,6 +1547,36 @@ mod tests {
             redacted.contains(app),
             "correlation keys must survive: {redacted:?}"
         );
+    }
+
+    /// An absent value is the analyzer's own prose, not capture content, so a
+    /// labelled field whose value is one of this crate's placeholders keeps it.
+    /// Masking it minted an identity for a value that was never captured, and
+    /// the dsregcmd export printed one as the evidence for the diagnostic that
+    /// reports the value missing.
+    #[test]
+    fn a_placeholder_value_is_not_an_identifier() {
+        for line in [
+            "TenantId: (missing)",
+            "DeviceId: (missing)",
+            "ComputerName: (unknown)",
+            "RunAsUser: (none)",
+            "serialNumber: (unknown)",
+            "CredentialData: (none)",
+        ] {
+            assert_eq!(redact_text(line), line, "{line}");
+        }
+    }
+
+    /// The same field shapes still mask a value that is really there, so the
+    /// placeholder rule narrows the grammar rather than disarming it.
+    #[test]
+    fn a_labelled_value_is_still_masked_beside_a_placeholder() {
+        let tenant = "99999999-8888-4777-8666-555555555555";
+        let redacted = redact_text(&format!("TenantId: (missing) DeviceId: {tenant}"));
+
+        assert!(!redacted.contains(tenant), "got {redacted:?}");
+        assert!(redacted.contains("TenantId: (missing)"), "got {redacted:?}");
     }
 
     // ── Grammar tests moved from `win32::redaction` ─────────────────────────

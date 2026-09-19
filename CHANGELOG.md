@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **Updater manifest publisher**: The `publish-updater-manifest` job in both release workflows called its local action without checking the repository out first, so it died at load time with `Can't find 'action.yml'` and `latest.json` was never published by that path — the job had never once succeeded. Both callers now check out, and a workflow-contract test fails naming any job that runs a local action without doing so.
+- **DsRegCmd export boundary (#556)**: The analysis the workspace receives is now a redacted projection, so the JSON summary, the rendered summary and the raw status text copied from the workspace no longer carry the tenant id, tenant domain, device id, thumbprint, user principal name or user SID. The unprojected form is reachable only from `analyze_text_preserving_local_values`, which the rules evaluate against inside the crate.
 
 ### Build & CI
 
