@@ -3,7 +3,11 @@ use std::path::PathBuf;
 #[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
 #[cfg(feature = "event-log")]
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::AtomicBool;
+/// Named only by [`EventLogQueryCancel::in_flight`], which carries the same
+/// predicate.
+#[cfg(all(feature = "event-log", any(target_os = "windows", test)))]
+use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;
@@ -42,6 +46,16 @@ pub struct OpenFile {
 #[cfg(feature = "event-log")]
 pub(crate) struct EventLogQueryCancel {
     pub flag: AtomicBool,
+    /// How many per-channel reads still hold this entry.
+    ///
+    /// Only the registering path counts: `acquire_query_cancel` and
+    /// `release_query_cancel` live behind the same predicate, because only the
+    /// Windows query path ever inserts an entry (every other platform answers
+    /// `evtx_query_channels` with "only available on Windows" and so has nothing
+    /// to hold an entry open). Gated with them rather than feature-gated alone,
+    /// which left the field unread — and the `dead_code` lint fatal — on every
+    /// non-Windows build.
+    #[cfg(any(target_os = "windows", test))]
     pub in_flight: AtomicUsize,
 }
 
