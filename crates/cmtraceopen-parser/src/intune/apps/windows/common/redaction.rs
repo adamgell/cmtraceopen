@@ -651,6 +651,166 @@ fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
     }
 }
 
+/// Mask a value that is sensitive because of *which field it is*, not because of
+/// any shape the value has.
+///
+/// [`redact_text`] can only mask what it recognizes from shape, and some of the
+/// strongest identifiers have none: a device id, a certificate thumbprint or a
+/// bare tenant domain is indistinguishable from any other opaque word. A lane
+/// that knows a field holds one of those has nothing to match on, so this is
+/// the entry point for the typed case — it keeps the derivation here, where the
+/// one minter and (when they land) the keying and the analysis scope live,
+/// rather than letting each lane mint its own. `kind` is the caller's own
+/// vocabulary and is the domain separator between one kind of identifier and
+/// another.
+///
+/// A value that is already a replacement token is returned unchanged, so
+/// projecting an already-projected value is a no-op.
+pub fn redact_field_value(kind: &str, value: &str) -> String {
+    if already_masked(value) {
+        return value.to_string();
+    }
+    stable_token(kind, value)
+}
+
+/// One character of a case-folded view of some source text, and the byte range
+/// of the source character it came from.
+///
+/// Folding can turn one character into several (`İ` lowercases to `i` plus
+/// U+0307), so a folded view cannot be sliced: an offset into it would not
+/// address the same text as an offset into the source. Every folded character
+/// therefore carries the source range it came from, and a match reports the
+/// range its first and last characters cover.
+pub(crate) struct FoldedChar {
+    folded: char,
+    source_start: usize,
+    source_end: usize,
+}
+
+/// Case-fold `value` for caseless matching, keeping every folded character tied
+/// to the source range it came from.
+///
+/// This is the one caseless rule in the crate, and the two lanes that own a
+/// caseless identity both call it: the Autopilot export
+/// (`intune::enrollment::windows::autopilot::redaction`) and the dsregcmd
+/// projection (`dsregcmd::redaction`). The fold is `to_lowercase` -- not
+/// `to_ascii_lowercase`, because an identity can carry a non-ASCII letter --
+/// and it is the same fold at every level: the key a lane files an identity
+/// under, the token that key mints, and the match [`find_ignore_case`]
+/// performs. [`folded_chars_equal`] adds the second accept path, `to_uppercase`
+/// equality, which is what reaches Greek's final sigma (`Σ` and `ς` both
+/// uppercase to `Σ` while their lowercase forms differ).
+pub(crate) fn fold_with_offsets(value: &str) -> Vec<FoldedChar> {
+    let mut folded = Vec::with_capacity(value.len());
+    for (source_start, source) in value.char_indices() {
+        let source_end = source_start + source.len_utf8();
+        for folded_char in source.to_lowercase() {
+            folded.push(FoldedChar {
+                folded: folded_char,
+                source_start,
+                source_end,
+            });
+        }
+    }
+    folded
+}
+
+/// The next occurrence of `literal` in the folded view of `haystack`, at or
+/// after the source byte offset `from`, as the source byte range it covers.
+///
+/// Called by the two lanes that scrub classified literals out of free text --
+/// the Autopilot export and the dsregcmd projection -- each folding the text
+/// once per scrub with [`fold_with_offsets`] and sharing that one view across
+/// every literal it holds.
+///
+/// Both sides are compared one folded character per side per step, so a
+/// character that folds to several still lines up: a typed `İSTANBUL-PC` folds
+/// to `i`, U+0307, `stanbul-pc`, and the narrative spelling `İstanbul-PC` folds
+/// to exactly that same sequence. `literal` is a literal-table key, so it
+/// arrives already folded, and the caller folds `haystack` once per call rather
+/// than once per literal. A match reports offsets into `haystack` itself, never
+/// into the folded view, which lowercasing may have resized.
+///
+/// Out of reach, and deliberately so, are the spellings the fold does not
+/// reproduce:
+///
+/// * the Turkic dotless `i` never equals `İ`: default folding yields `i` plus
+///   U+0307, and only Unicode's Turkic mapping drops the dot;
+/// * one-to-many spellings such as `ß` against `SS`, or a ligature against the
+///   letters it stands for, cannot line up at all, because each step consumes
+///   one folded character per side;
+/// * the same letter in another *normalization form* does not match. A typed
+///   precomposed `PC-ÉLODIE` folds to `pc-élodie`, while a narrative spelling of
+///   `PC-E` plus U+0301 folds to `e`, U+0301 and fails at that position, so that
+///   spelling stays visible.
+///
+/// Normalizing would close the last of those, and is not done: it rewrites the
+/// narrative on its way into the export, which is a behaviour change with its
+/// own trade-offs rather than a free win. Tests in both lanes pin these gaps so
+/// they stay decisions on record.
+pub(crate) fn find_ignore_case(
+    haystack: &str,
+    literal: &str,
+    folded: &[FoldedChar],
+    from: usize,
+) -> Option<(usize, usize)> {
+    let expected: Vec<char> = literal.chars().collect();
+    if expected.is_empty() {
+        return None;
+    }
+    for (index, folded_char) in folded.iter().enumerate() {
+        let start = folded_char.source_start;
+        if start < from {
+            continue;
+        }
+        // The value spelled exactly as it was typed, which needs no folding and
+        // keeps the scan proportional to a memchr when nothing differs in case.
+        if haystack[start..].starts_with(literal) {
+            return Some((start, start + literal.len()));
+        }
+        let Some(window) = folded.get(index..index + expected.len()) else {
+            break;
+        };
+        let matched = window
+            .iter()
+            .zip(&expected)
+            .all(|(candidate, expected)| folded_chars_equal(candidate.folded, *expected));
+        if matched {
+            return Some((start, window[window.len() - 1].source_end));
+        }
+    }
+    None
+}
+
+/// Whether two folded characters are the same letter in another case.
+///
+/// Comparing only lowercase forms misses the final sigma: `Σ` folds to `σ`,
+/// while `ς` keeps its own shape. Both uppercase to `Σ`, so the uppercase
+/// expansions settle it.
+fn folded_chars_equal(left: char, right: char) -> bool {
+    left == right || left.to_uppercase().eq(right.to_uppercase())
+}
+
+/// Whether two strings are the same text in any case.
+///
+/// The membership convenience both lanes use to decide that two spellings are
+/// one identity -- dsregcmd's classified-identity table and the Autopilot
+/// literal table -- so a table can never hold two entries that
+/// [`find_ignore_case`] would treat as one identity. Expressed over the same
+/// fold: the two folded views must be the same sequence of folded characters,
+/// one folded character per side, so `İ` equals the `i` plus U+0307 it
+/// lowercases to, and a pair whose case mapping changes length (`ß` against
+/// `SS`) is not equal.
+pub(crate) fn caseless_equal(left: &str, right: &str) -> bool {
+    let left = fold_with_offsets(left);
+    let right = fold_with_offsets(right);
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(&right)
+            .all(|(left, right)| folded_chars_equal(left.folded, right.folded))
+}
+
 /// Mask the sensitive spans inside a free-text value.
 pub fn redact_text(value: &str) -> String {
     if value.len() > MAX_REDACTION_INPUT_BYTES {
@@ -915,7 +1075,30 @@ pub fn redact_text(value: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{decode_entity_value, preserve_token_mask_tail, redact_text, sid_occurrences};
+    use super::{
+        decode_entity_value, preserve_token_mask_tail, redact_field_value, redact_text,
+        sid_occurrences,
+    };
+
+    #[test]
+    fn a_typed_value_reaches_one_token_and_a_second_pass_leaves_it_alone() {
+        let device_id = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+        let masked = redact_field_value("device", device_id);
+
+        assert_eq!(masked, redact_field_value("device", device_id));
+        assert_eq!(masked, redact_field_value("device", &masked));
+        assert_ne!(masked, device_id);
+    }
+
+    #[test]
+    fn one_kind_cannot_reach_another_kinds_token_for_the_same_value() {
+        let value = "contoso.onmicrosoft.com";
+
+        assert_ne!(
+            redact_field_value("tenant", value),
+            redact_field_value("host", value)
+        );
+    }
 
     #[test]
     fn numeric_entities_decode_only_within_a_bounded_prefix() {

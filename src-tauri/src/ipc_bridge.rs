@@ -267,6 +267,14 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&result)
         }
 
+        #[cfg(feature = "dsregcmd")]
+        "redact_dsregcmd_status_text" => {
+            let input = req.args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+            ok_json(&crate::commands::dsregcmd::redact_dsregcmd_status_text(
+                input.to_string(),
+            ))
+        }
+
         // ── Unknown / not bridged ───────────────────────────────────────────
         _ => err_json(&format!(
             "debug IPC bridge does not implement command `{}`",

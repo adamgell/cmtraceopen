@@ -1,6 +1,6 @@
 #[cfg(target_os = "windows")]
 use crate::dsregcmd::connectivity;
-use crate::dsregcmd::{analyze_text, registry, rules, DsregcmdAnalysisResult};
+use crate::dsregcmd::{registry, DsregcmdAnalysisResult};
 
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
@@ -54,26 +54,16 @@ pub fn analyze_dsregcmd(
         input.lines().count()
     );
 
-    let mut result = analyze_text(&input)?;
+    // The evidence is read here because this crate owns the I/O; the assembly
+    // and the projection happen in the parser crate, so the value that leaves
+    // this command is the published one and neither the workspace nor a file it
+    // writes can obtain an unprojected analysis to copy (issue #556).
+    let evidence = bundle_path
+        .as_deref()
+        .map(load_bundle_evidence)
+        .unwrap_or_default();
 
-    if let Some(bundle_path) = bundle_path.as_deref() {
-        let bp = Path::new(bundle_path);
-        result.policy_evidence = registry::load_whfb_policy_evidence(bp);
-        result.os_version = registry::load_os_version_evidence(bp);
-        result.proxy_evidence = registry::load_proxy_evidence(bp);
-        result.enrollment_evidence = registry::load_enrollment_evidence(bp);
-        result.active_evidence = load_active_evidence_from_bundle(bp);
-        result.scheduled_task_evidence = load_scheduled_task_evidence_from_bundle(bp);
-        result.event_log_analysis = load_event_log_from_bundle(bp);
-    }
-
-    rules::apply_enrollment_cross_reference(&mut result);
-
-    // Run extended diagnostics (Phase 2, 3, 4) after all evidence is loaded
-    let mut extended = rules::build_extended_diagnostics(&result);
-    extended.append(&mut rules::build_active_diagnostics_rules(&result));
-    extended.append(&mut rules::build_event_log_diagnostics(&result));
-    result.diagnostics.append(&mut extended);
+    let result = crate::dsregcmd::analyze_text_with_evidence(&input, evidence)?;
 
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -82,6 +72,35 @@ pub fn analyze_dsregcmd(
     );
 
     Ok(result)
+}
+
+/// Read every evidence artifact a capture bundle holds.
+fn load_bundle_evidence(bundle_path: &str) -> crate::dsregcmd::DsregcmdBundleEvidence {
+    let bundle = Path::new(bundle_path);
+
+    crate::dsregcmd::DsregcmdBundleEvidence {
+        policy_evidence: registry::load_whfb_policy_evidence(bundle),
+        os_version: registry::load_os_version_evidence(bundle),
+        proxy_evidence: registry::load_proxy_evidence(bundle),
+        enrollment_evidence: registry::load_enrollment_evidence(bundle),
+        active_evidence: load_active_evidence_from_bundle(bundle),
+        scheduled_task_evidence: load_scheduled_task_evidence_from_bundle(bundle),
+        event_log_analysis: load_event_log_from_bundle(bundle),
+    }
+}
+
+/// Project raw `dsregcmd /status` text for an egress path that holds the
+/// capture itself rather than an analysis of it.
+///
+/// The workspace's "copy status text" clipboard path is the one place this lane
+/// publishes the capture text, and the frontend has to hold that text to display
+/// it and to hand it back for analysis, so it cannot be handed a projected copy
+/// to publish instead. Masking at the clipboard call site would be the per-lane
+/// hygiene rule issue #556 rejects; the workspace asks for the projection here
+/// instead, and the projection itself is the crate's.
+#[tauri::command]
+pub fn redact_dsregcmd_status_text(input: String) -> String {
+    crate::dsregcmd::redacted_status_text(&input)
 }
 
 fn load_active_evidence_from_bundle(
@@ -340,6 +359,25 @@ const EVIDENCE_FOLDER_NAME: &str = "evidence";
 #[cfg(target_os = "windows")]
 const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
 
+/// Stage the live capture into its bundle.
+///
+/// The bundle is this lane's working store, not its export: it lives under the
+/// OS temp root (`create_capture_bundle_root`), and every file in it is an input
+/// the analyzer reads back — the captured `dsregcmd /status` text through
+/// `load_dsregcmd_source`, the connectivity, SCP and event-log evidence through
+/// `load_bundle_evidence`, and the same command output again through the ESP
+/// lane's bundle reader. It is written as captured for exactly that reason:
+/// masking it here would change what those readers conclude rather than what
+/// anyone publishes (a projected `User Identity` cannot fire
+/// `builtin-admin-cannot-join`, a projected SCP domain cannot be compared with
+/// the tenant the capture reports, and a projected device id changes the ESP
+/// identity fingerprint). The projection belongs at the boundary that publishes
+/// a value, which for this lane is `analyze_text_with_evidence` and
+/// `redacted_status_text`. The folder is not private, though: its path is handed
+/// to the frontend, the sidebar renders it, and a support engineer can open or
+/// archive it — so any path that hands this bundle, or a file in it, to a user
+/// or another machine must project that content first, and the residual gap is
+/// recorded in the pull request rather than implied away here.
 #[cfg(target_os = "windows")]
 fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::error::AppError> {
     let bundle_path = create_capture_bundle_root()?;
