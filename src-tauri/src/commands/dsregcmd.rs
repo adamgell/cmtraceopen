@@ -45,9 +45,28 @@ pub struct DsregcmdResolvedSource {
 }
 
 #[tauri::command]
-pub fn analyze_dsregcmd(
+pub async fn analyze_dsregcmd(
     input: String,
     bundle_path: Option<String>,
+) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
+    // The whole analysis path is blocking work: plain-text parsing is CPU
+    // bound and the bundle path performs synchronous filesystem walks plus
+    // connectivity and SCP probes. Run it on the blocking pool so the
+    // command thread stays free for every other IPC call while the analysis
+    // is in flight (issue #627).
+    tokio::task::spawn_blocking(move || analyze_dsregcmd_blocking(&input, bundle_path.as_deref()))
+        .await
+        .map_err(|join_error| {
+            crate::error::AppError::Internal(format!(
+                "DsRegCmd analysis worker failed: {}",
+                join_error
+            ))
+        })?
+}
+
+fn analyze_dsregcmd_blocking(
+    input: &str,
+    bundle_path: Option<&str>,
 ) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
     log::info!(
         "event=dsregcmd_analysis_start input_chars={} input_lines={}",
@@ -55,9 +74,9 @@ pub fn analyze_dsregcmd(
         input.lines().count()
     );
 
-    let mut result = analyze_text(&input)?;
+    let mut result = analyze_text(input)?;
 
-    if let Some(bundle_path) = bundle_path.as_deref() {
+    if let Some(bundle_path) = bundle_path {
         let bp = Path::new(bundle_path);
         simulate_bundle_io_delay("bundle-policy-evidence");
         result.policy_evidence = registry::load_whfb_policy_evidence(bp);
@@ -169,8 +188,20 @@ fn load_scheduled_task_evidence_from_bundle(
 }
 
 #[tauri::command]
-pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
-    capture_dsregcmd_impl()
+pub async fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
+    // Live capture shells out to dsregcmd.exe and then stages the bundle,
+    // which exports registry evidence, runs live connectivity and SCP
+    // diagnostics, collects event logs, and shells out again for scheduled
+    // tasks. It is the same blocking class as the bundle analysis readers,
+    // so it moves off the command thread alongside them (issue #627).
+    tokio::task::spawn_blocking(capture_dsregcmd_impl)
+        .await
+        .map_err(|join_error| {
+            crate::error::AppError::Internal(format!(
+                "DsRegCmd capture worker failed: {}",
+                join_error
+            ))
+        })?
 }
 
 #[tauri::command]
@@ -1303,58 +1334,71 @@ mod tests {
         temp_dir
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn bundle_analysis_blocks_the_command_thread_on_slow_storage_before_fix() {
+    #[test]
+    fn bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage() {
         let _env_guard = dsregcmd_test_env_lock()
             .lock()
             .expect("lock dsregcmd env guard");
         let _simulated_io = SimulatedBundleIoEnvGuard::set(150);
         let bundle = build_dsregcmd_bundle_fixture();
-        let spawned_at = Instant::now();
-        let unrelated_task = tokio::spawn(async move { spawned_at.elapsed() });
 
-        let analysis_started = Instant::now();
-        let result = analyze_dsregcmd(
-            DSREGCMD_SAMPLE.to_string(),
-            Some(bundle.path().to_string_lossy().to_string()),
-        )
-        .expect("analyze dsregcmd bundle fixture");
-        let total_analysis_duration = analysis_started.elapsed();
-        let unrelated_latency = unrelated_task.await.expect("join unrelated latency task");
+        // A current-thread runtime models Tauri's serialized command dispatch:
+        // one worker runs everything. Before the seam moved the analysis to
+        // the blocking pool, a synchronous command stalled every other queued
+        // task for the full analysis duration.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        runtime.block_on(async move {
+            let spawned_at = Instant::now();
+            let unrelated_task = tokio::spawn(async move { spawned_at.elapsed() });
 
-        assert!(result.active_evidence.is_some(), "expected active evidence");
-        assert!(
-            result.scheduled_task_evidence.is_some(),
-            "expected scheduled task evidence"
-        );
-        assert!(
-            result.event_log_analysis.is_some(),
-            "expected event log analysis"
-        );
+            let analysis_started = Instant::now();
+            let result = analyze_dsregcmd(
+                DSREGCMD_SAMPLE.to_string(),
+                Some(bundle.path().to_string_lossy().to_string()),
+            )
+            .await
+            .expect("analyze dsregcmd bundle fixture");
+            let total_analysis_duration = analysis_started.elapsed();
+            let unrelated_latency = unrelated_task.await.expect("join unrelated latency task");
 
-        println!(
-            "bundle_analysis_blocks_the_command_thread_on_slow_storage_before_fix total_analysis_ms={} unrelated_task_latency_ms={}",
-            total_analysis_duration.as_millis(),
-            unrelated_latency.as_millis()
-        );
+            assert!(result.active_evidence.is_some(), "expected active evidence");
+            assert!(
+                result.scheduled_task_evidence.is_some(),
+                "expected scheduled task evidence"
+            );
+            assert!(
+                result.event_log_analysis.is_some(),
+                "expected event log analysis"
+            );
 
-        assert!(
-            total_analysis_duration >= Duration::from_millis(7 * 140),
-            "expected simulated bundle analysis to take at least 980ms, saw {:?}",
-            total_analysis_duration
-        );
-        assert!(
-            unrelated_latency >= total_analysis_duration / 2,
-            "expected unrelated task latency to reflect the main-thread stall; total={:?} unrelated={:?}",
-            total_analysis_duration,
-            unrelated_latency
-        );
+            println!(
+                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_task_latency_ms={}",
+                total_analysis_duration.as_millis(),
+                unrelated_latency.as_millis()
+            );
+
+            assert!(
+                total_analysis_duration >= Duration::from_millis(7 * 140),
+                "expected simulated bundle analysis to take at least 980ms, saw {:?}",
+                total_analysis_duration
+            );
+            assert!(
+                unrelated_latency < Duration::from_millis(100),
+                "expected the command thread to stay responsive while the analysis runs off-thread; total={:?} unrelated={:?}",
+                total_analysis_duration,
+                unrelated_latency
+            );
+        });
     }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn capture_command_returns_clear_error_on_unsupported_platform() {
-        let error = capture_dsregcmd().expect_err("expected unsupported platform error");
+        let error = tauri::async_runtime::block_on(capture_dsregcmd())
+            .expect_err("expected unsupported platform error");
         assert!(error.to_string().contains("only supported on Windows"));
     }
 }
