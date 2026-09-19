@@ -39,8 +39,8 @@
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.11.0",
     "@tauri-apps/plugin-window-state": "^2.4.1",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
