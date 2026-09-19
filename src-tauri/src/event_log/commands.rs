@@ -9,10 +9,14 @@ use super::models::{
 };
 use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
+use crate::state::app_state::EventLogQueryCancel;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
 use std::sync::Arc;
-#[cfg(target_os = "windows")]
-use std::sync::atomic::AtomicBool;
+#[cfg(any(target_os = "windows", test))]
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering;
 #[cfg(target_os = "windows")]
 use serde::Serialize;
@@ -279,15 +283,18 @@ async fn query_channels_impl(
     {
         let registry = state.event_maps.clone();
         let providers = state.provider_store.clone();
-        // Registered before the read starts so a cancel arriving at any point during the read can
-        // find it, and removed after the read settles so a cancel for a finished request stays a
-        // no-op instead of growing the registry without bound.
-        let is_cancelled = Arc::new(AtomicBool::new(false));
-        state
-            .event_log_query_cancels
-            .lock()
-            .map_err(|_| "event log cancel registry lock was poisoned".to_string())?
-            .insert(request_id.clone(), is_cancelled.clone());
+        // The frontend invokes this command once per channel with the same request id, so the
+        // entry is shared and refcounted: concurrent per-channel reads reuse one flag, and the
+        // entry leaves the registry only when the last of them settles. A single-entry replace
+        // here would swap the flag out from under an in-flight read, and removing it when one
+        // channel settles would orphan every other worker's cancel.
+        let cancel = {
+            let mut registry = state
+                .event_log_query_cancels
+                .lock()
+                .map_err(|_| "event log cancel registry lock was poisoned".to_string())?;
+            acquire_query_cancel(&mut registry, &request_id)
+        };
         let cancels = state.event_log_query_cancels.clone();
         let cleanup_request_id = request_id.clone();
         let outcome = tokio::task::spawn_blocking(move || {
@@ -319,7 +326,7 @@ async fn query_channels_impl(
                         &maps,
                         &providers,
                         max_events,
-                        &is_cancelled,
+                        &cancel.flag,
                         |fetched, _| {
                             let _ = app_ref.emit(
                                 "evtx-query-progress",
@@ -454,7 +461,7 @@ async fn query_channels_impl(
         .await
         .map_err(|error| format!("Task join error: {error}"));
         if let Ok(mut registry) = cancels.lock() {
-            registry.remove(&cleanup_request_id);
+            release_query_cancel(&mut registry, &cleanup_request_id);
         }
         outcome?
     }
@@ -521,10 +528,55 @@ pub fn evtx_cancel_channel_query(
         .event_log_query_cancels
         .lock()
         .map_err(|_| "event log cancel registry lock was poisoned".to_string())?;
-    if let Some(flag) = registry.get(&request_id) {
-        flag.store(true, Ordering::Relaxed);
+    if let Some(entry) = registry.get(&request_id) {
+        entry.flag.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// Joins or starts the shared cancel entry for `request_id`.
+///
+/// The frontend issues one query invoke per channel under a shared request id, so later invokes
+/// must take the existing entry rather than replace it: a replace would swap the flag out from
+/// under an in-flight read.
+#[cfg(any(target_os = "windows", test))]
+fn acquire_query_cancel(
+    registry: &mut HashMap<String, Arc<EventLogQueryCancel>>,
+    request_id: &str,
+) -> Arc<EventLogQueryCancel> {
+    match registry.get(request_id) {
+        Some(existing) => {
+            existing.in_flight.fetch_add(1, Ordering::Relaxed);
+            existing.clone()
+        }
+        None => {
+            let entry = Arc::new(EventLogQueryCancel {
+                flag: AtomicBool::new(false),
+                in_flight: AtomicUsize::new(1),
+            });
+            registry.insert(request_id.to_string(), entry.clone());
+            entry
+        }
+    }
+}
+
+/// Releases one per-channel invoke's hold on the entry, removing it once the last settles so a
+/// later cancel for a finished request stays a no-op instead of growing the registry.
+#[cfg(any(target_os = "windows", test))]
+fn release_query_cancel(
+    registry: &mut HashMap<String, Arc<EventLogQueryCancel>>,
+    request_id: &str,
+) -> bool {
+    let Some(entry) = registry.get(request_id) else {
+        return true;
+    };
+    // fetch_sub returns the previous count: 1 means this settle was the last.
+    if entry.in_flight.fetch_sub(1, Ordering::Relaxed) == 1 {
+        registry.remove(request_id);
+        true
+    } else {
+        false
+    }
 }
 
 /// Start a live tail for one channel. Windows prefers EvtSubscribe and reports polling only when
@@ -1416,6 +1468,41 @@ pub(crate) fn diagnosis_coverage_state(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn concurrent_channel_invokes_share_one_cancel_flag_until_the_last_settles() {
+        // The frontend sends one query per channel under one request id. The first invoke starts
+        // the entry, later ones reuse it, and the entry survives until the final release — so a
+        // stop can reach every in-flight channel and cannot orphan a worker between settles.
+        let mut registry = std::collections::HashMap::new();
+        let first = super::acquire_query_cancel(&mut registry, "req-1");
+        let second = super::acquire_query_cancel(&mut registry, "req-1");
+        let third = super::acquire_query_cancel(&mut registry, "req-1");
+
+        assert_eq!(registry.len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(std::sync::Arc::ptr_eq(&second, &third));
+
+        first.flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(third.flag.load(std::sync::atomic::Ordering::Relaxed));
+
+        assert!(!super::release_query_cancel(&mut registry, "req-1"));
+        assert!(!super::release_query_cancel(&mut registry, "req-1"));
+        assert_eq!(registry.len(), 1);
+        assert!(super::release_query_cancel(&mut registry, "req-1"));
+        assert!(registry.is_empty());
+
+        // A cancel for a settled request is a no-op, not a fresh entry.
+        assert!(super::release_query_cancel(&mut registry, "req-1"));
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn cancel_for_an_unknown_request_does_not_create_state() {
+        let mut registry = std::collections::HashMap::new();
+        assert!(super::release_query_cancel(&mut registry, "nobody"));
+        assert!(registry.is_empty());
+    }
+
     #[test]
     fn cancelled_scan_reports_the_stop_without_claiming_a_full_read() {
         // A stop is a deliberate bound the operator applied. The scan still carries what it

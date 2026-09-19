@@ -3,7 +3,7 @@ use std::path::PathBuf;
 #[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
 #[cfg(feature = "event-log")]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;
@@ -31,6 +31,18 @@ pub struct OpenFile {
     pub initial_logical_record: Option<InitialLogicalRecord>,
     /// Current byte offset for tail tracking
     pub byte_offset: u64,
+}
+
+/// Cancellation state for one logical live-channel load.
+///
+/// The frontend issues one `evtx_query_channels` invoke per channel, all carrying the same
+/// request id. Every per-channel read must share one flag so a stop reaches all of them, and the
+/// entry must stay registered until the last of them settles, so a stop cannot orphan workers by
+/// landing between two settles.
+#[cfg(feature = "event-log")]
+pub(crate) struct EventLogQueryCancel {
+    pub flag: AtomicBool,
+    pub in_flight: AtomicUsize,
 }
 
 /// Application-wide managed state.
@@ -85,7 +97,7 @@ pub struct AppState {
     /// session registries so a command can take a cheap handle into a blocking task and still
     /// clean its entry up afterwards.
     #[cfg(feature = "event-log")]
-    pub(crate) event_log_query_cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pub(crate) event_log_query_cancels: Arc<Mutex<HashMap<String, Arc<EventLogQueryCancel>>>>,
 }
 
 impl AppState {
