@@ -28,6 +28,7 @@ const COVERAGE_GAP_KINDS: Record<EvtxCoverageGapKind, true> = {
   xml: true,
   provider: true,
   limit: true,
+  cancelled: true,
 };
 const ARCHIVE_MEMBER_KINDS = ["evtx", "text", "registry", "binary"] as const;
 const ARCHIVE_MEMBER_OUTCOMES = [

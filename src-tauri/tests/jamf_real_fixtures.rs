@@ -20,7 +20,16 @@ use app_lib::jamf::self_service::parse_self_service_log_impl;
 use app_lib::macos_diag::profiles::parse_system_profiler_plist;
 
 fn fixture_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("JAMF_DEV_FIXTURES")?);
+    let Some(raw) = std::env::var_os("JAMF_DEV_FIXTURES") else {
+        // Said out loud rather than passing silently. A vacuous pass that reads as a verified one
+        // is the failure this suite exists to catch. Visible with `cargo test -- --nocapture`.
+        eprintln!(
+            "SKIP: JAMF_DEV_FIXTURES is not set, so nothing in this file actually ran. \
+             Point it at an unpacked jamf-dev-fixtures directory to exercise the real parse path."
+        );
+        return None;
+    };
+    let dir = PathBuf::from(raw);
     assert!(
         dir.is_dir(),
         "JAMF_DEV_FIXTURES is set but {} is not a directory",

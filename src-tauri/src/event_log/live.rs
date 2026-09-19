@@ -70,6 +70,12 @@ use windows::Win32::System::EventLog::{
 #[cfg(any(target_os = "windows", test))]
 const EVENT_FETCH_BATCH: usize = 256;
 
+/// Cancellation flag for callers that never cancel. The non-streamed query helpers and the
+/// example scanner read this, so their loops never stop early while the streaming path used by
+/// the application hands each request its own flag.
+#[cfg(target_os = "windows")]
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
 /// Smallest batch to fall back to before treating the channel as unreadable.
 ///
 /// Some channels reject a 256-handle request with `RPC_S_INVALID_BOUND`. Measuring a full scan
@@ -97,6 +103,9 @@ pub struct ChannelScan {
     pub gaps: Vec<String>,
     /// Description failures for records that were still delivered successfully.
     pub provider_gaps: Vec<EvtxCoverageGap>,
+    /// True when the read stopped because the operator cancelled the request. The records and
+    /// counts still describe what was fetched; the channel as a whole was deliberately not read.
+    pub cancelled: bool,
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -874,6 +883,7 @@ pub fn query_channel_filtered(
         max_events,
         None,
         "Live",
+        &NEVER_CANCELLED,
         |_, _| {},
         |_| Ok(()),
     )
@@ -896,6 +906,7 @@ pub fn query_channel_with_progress(
         max_events,
         None,
         "Live",
+        &NEVER_CANCELLED,
         on_progress,
         |_| Ok(()),
     )
@@ -919,6 +930,7 @@ pub fn query_channel_filtered_with_progress(
         max_events,
         None,
         "Live",
+        &NEVER_CANCELLED,
         on_progress,
         |_| Ok(()),
     )
@@ -931,12 +943,14 @@ pub fn query_channel_filtered_with_progress(
 /// rather than losing them; it simply holds the channel in memory as before. A callback error
 /// aborts the query and is returned to the caller.
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 pub fn query_channel_streamed(
     channel: &str,
     filter: &EventQueryFilter,
     maps: &MapRegistry,
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
+    is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
@@ -948,6 +962,7 @@ pub fn query_channel_streamed(
         max_events,
         None,
         "Live",
+        is_cancelled,
         on_progress,
         on_batch,
     )
@@ -963,6 +978,7 @@ pub fn query_remote_channel_streamed(
     maps: &MapRegistry,
     providers: &std::sync::RwLock<ProviderStore>,
     max_events: Option<u64>,
+    is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
@@ -976,6 +992,7 @@ pub fn query_remote_channel_streamed(
         max_events,
         Some(session.raw()),
         &source_label,
+        is_cancelled,
         on_progress,
         on_batch,
     )
@@ -1002,6 +1019,7 @@ fn query_channel_inner(
     max_events: Option<u64>,
     session: Option<EVT_HANDLE>,
     source_label: &str,
+    is_cancelled: &AtomicBool,
     on_progress: impl Fn(usize, Option<usize>),
     mut on_batch: impl FnMut(&mut Vec<EvtxRecord>) -> Result<(), String>,
 ) -> Result<ChannelScan, String> {
@@ -1053,8 +1071,19 @@ fn query_channel_inner(
     // length of a vector the caller is allowed to drain would restart the limit at zero after every
     // batch and read the channel forever.
     let mut produced = 0usize;
+    // Set when the operator cancels the request. The stop is recorded on the scan so the caller
+    // can say so rather than presenting a deliberately partial read as the whole channel.
+    let mut cancelled = false;
 
     while produced < limit {
+        if is_cancelled.load(Ordering::Relaxed) {
+            cancelled = true;
+            log::info!(
+                "event=evtx_live_query_cancelled channel=\"{channel}\" records={produced} \
+                 reason=\"the operator stopped the load\""
+            );
+            break;
+        }
         let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
@@ -1264,6 +1293,7 @@ fn query_channel_inner(
         delivered: produced,
         gaps,
         provider_gaps,
+        cancelled,
     };
     append_query_status_gaps(&mut scan, &query_statuses);
     log::info!(
@@ -1816,6 +1846,7 @@ fn start_polling_tail(
                 Some(EVENT_FETCH_BATCH as u64),
                 worker_session,
                 &worker_source_label,
+                &NEVER_CANCELLED,
                 |_, _| {},
                 |_| Ok(()),
             );
@@ -2999,6 +3030,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: vec![gap],
+            cancelled: false,
         };
         let mut dedup = ProviderGapDedup::persistent_tail();
 
@@ -3154,6 +3186,7 @@ mod portable_tests {
             delivered: 0,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3180,6 +3213,7 @@ mod portable_tests {
             delivered: 0,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3216,6 +3250,7 @@ mod portable_tests {
             delivered: 0,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3237,6 +3272,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3265,6 +3301,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3292,6 +3329,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3322,6 +3360,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(&mut scan, &inspection);
@@ -3349,6 +3388,7 @@ mod portable_tests {
             delivered: 1,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3379,6 +3419,7 @@ mod portable_tests {
             delivered: 0,
             gaps: Vec::new(),
             provider_gaps: Vec::new(),
+            cancelled: false,
         };
 
         append_query_status_gaps(
@@ -3898,6 +3939,7 @@ mod live_service_tests {
             &no_maps(),
             &no_providers(),
             Some(10),
+            &NEVER_CANCELLED,
             |_, _| {},
             |batch| {
                 received.append(batch);
@@ -3947,6 +3989,7 @@ mod live_service_tests {
                 &no_maps(),
                 &no_providers(),
                 Some(10),
+                &NEVER_CANCELLED,
                 |_, _| {},
                 |batch| {
                     received.append(batch);

@@ -16,8 +16,9 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::ptr::{null, null_mut};
+use std::time::Duration;
 #[cfg(target_os = "windows")]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,9 +45,28 @@ pub struct DsregcmdResolvedSource {
 }
 
 #[tauri::command]
-pub fn analyze_dsregcmd(
+pub async fn analyze_dsregcmd(
     input: String,
     bundle_path: Option<String>,
+) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
+    // The whole analysis path is blocking work: plain-text parsing is CPU
+    // bound and the bundle path performs synchronous filesystem walks plus
+    // connectivity and SCP probes. Run it on the blocking pool so the
+    // command thread stays free for every other IPC call while the analysis
+    // is in flight (issue #627).
+    tokio::task::spawn_blocking(move || analyze_dsregcmd_blocking(&input, bundle_path.as_deref()))
+        .await
+        .map_err(|join_error| {
+            crate::error::AppError::Internal(format!(
+                "DsRegCmd analysis worker failed: {}",
+                join_error
+            ))
+        })?
+}
+
+fn analyze_dsregcmd_blocking(
+    input: &str,
+    bundle_path: Option<&str>,
 ) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
     log::info!(
         "event=dsregcmd_analysis_start input_chars={} input_lines={}",
@@ -58,12 +78,13 @@ pub fn analyze_dsregcmd(
     // and the projection happen in the parser crate, so the value that leaves
     // this command is the published one and neither the workspace nor a file it
     // writes can obtain an unprojected analysis to copy (issue #556).
-    let evidence = bundle_path
-        .as_deref()
-        .map(load_bundle_evidence)
-        .unwrap_or_default();
+    //
+    // The readers behind `load_bundle_evidence` are also what the responsiveness
+    // measurement slows down, so each of them keeps its own simulated-I/O hook
+    // (issue #627).
+    let evidence = bundle_path.map(load_bundle_evidence).unwrap_or_default();
 
-    let result = crate::dsregcmd::analyze_text_with_evidence(&input, evidence)?;
+    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence)?;
 
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -75,17 +96,36 @@ pub fn analyze_dsregcmd(
 }
 
 /// Read every evidence artifact a capture bundle holds.
+///
+/// Each artifact has its own reader, and each reader is slowed down on its own
+/// by [`simulate_bundle_io_delay`], so the responsiveness measurement can
+/// attribute a stall to a named reader rather than to "the bundle path".
 fn load_bundle_evidence(bundle_path: &str) -> crate::dsregcmd::DsregcmdBundleEvidence {
     let bundle = Path::new(bundle_path);
 
+    simulate_bundle_io_delay("bundle-policy-evidence");
+    let policy_evidence = registry::load_whfb_policy_evidence(bundle);
+    simulate_bundle_io_delay("bundle-os-version-evidence");
+    let os_version = registry::load_os_version_evidence(bundle);
+    simulate_bundle_io_delay("bundle-proxy-evidence");
+    let proxy_evidence = registry::load_proxy_evidence(bundle);
+    simulate_bundle_io_delay("bundle-enrollment-evidence");
+    let enrollment_evidence = registry::load_enrollment_evidence(bundle);
+    simulate_bundle_io_delay("bundle-active-evidence");
+    let active_evidence = load_active_evidence_from_bundle(bundle);
+    simulate_bundle_io_delay("bundle-scheduled-task-evidence");
+    let scheduled_task_evidence = load_scheduled_task_evidence_from_bundle(bundle);
+    simulate_bundle_io_delay("bundle-event-log-analysis");
+    let event_log_analysis = load_event_log_from_bundle(bundle);
+
     crate::dsregcmd::DsregcmdBundleEvidence {
-        policy_evidence: registry::load_whfb_policy_evidence(bundle),
-        os_version: registry::load_os_version_evidence(bundle),
-        proxy_evidence: registry::load_proxy_evidence(bundle),
-        enrollment_evidence: registry::load_enrollment_evidence(bundle),
-        active_evidence: load_active_evidence_from_bundle(bundle),
-        scheduled_task_evidence: load_scheduled_task_evidence_from_bundle(bundle),
-        event_log_analysis: load_event_log_from_bundle(bundle),
+        policy_evidence,
+        os_version,
+        proxy_evidence,
+        enrollment_evidence,
+        active_evidence,
+        scheduled_task_evidence,
+        event_log_analysis,
     }
 }
 
@@ -102,6 +142,29 @@ fn load_bundle_evidence(bundle_path: &str) -> crate::dsregcmd::DsregcmdBundleEvi
 pub fn redact_dsregcmd_status_text(input: String) -> String {
     crate::dsregcmd::redacted_status_text(&input)
 }
+
+#[cfg(debug_assertions)]
+fn simulate_bundle_io_delay(stage: &str) {
+    let delay_ms = std::env::var("CMTRACE_SIMULATE_BUNDLE_IO_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+
+    if delay_ms == 0 {
+        return;
+    }
+
+    log::debug!(
+        "event=dsregcmd_simulated_bundle_io stage={} delay_ms={}",
+        stage,
+        delay_ms
+    );
+    std::thread::sleep(Duration::from_millis(delay_ms));
+}
+
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+fn simulate_bundle_io_delay(_stage: &str) {}
 
 fn load_active_evidence_from_bundle(
     bundle_path: &Path,
@@ -157,8 +220,20 @@ fn load_scheduled_task_evidence_from_bundle(
 }
 
 #[tauri::command]
-pub fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
-    capture_dsregcmd_impl()
+pub async fn capture_dsregcmd() -> Result<DsregcmdCaptureResult, crate::error::AppError> {
+    // Live capture shells out to dsregcmd.exe and then stages the bundle,
+    // which exports registry evidence, runs live connectivity and SCP
+    // diagnostics, collects event logs, and shells out again for scheduled
+    // tasks. It is the same blocking class as the bundle analysis readers,
+    // so it moves off the command thread alongside them (issue #627).
+    tokio::task::spawn_blocking(capture_dsregcmd_impl)
+        .await
+        .map_err(|join_error| {
+            crate::error::AppError::Internal(format!(
+                "DsRegCmd capture worker failed: {}",
+                join_error
+            ))
+        })?
 }
 
 #[tauri::command]
@@ -420,11 +495,13 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
         ))
     })?;
 
+    simulate_bundle_io_delay("capture-registry-export");
     export_live_registry_evidence(&evidence_registry);
 
     // Phase 3: Active diagnostics (connectivity + SCP)
     let evidence_connectivity = bundle_path.join("evidence").join("connectivity");
     if fs::create_dir_all(&evidence_connectivity).is_ok() {
+        simulate_bundle_io_delay("capture-active-diagnostics");
         let active_evidence = connectivity::run_active_diagnostics();
         if let Ok(json) = serde_json::to_string_pretty(&active_evidence.connectivity_tests) {
             let _ = fs::write(evidence_connectivity.join("endpoint-tests.json"), json);
@@ -437,6 +514,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     }
 
     // Phase 4: Event log collection
+    simulate_bundle_io_delay("capture-event-log-collection");
     let event_log_analysis = crate::dsregcmd::event_logs::collect_dsregcmd_event_logs();
     if let Some(ref analysis) = event_log_analysis {
         let evidence_event_logs = bundle_path.join("evidence").join("event-logs");
@@ -448,6 +526,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     }
 
     // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs)
+    simulate_bundle_io_delay("capture-scheduled-task-evidence");
     let scheduled_task_evidence = collect_enterprise_mgmt_task_guids();
     let evidence_scheduled_tasks = bundle_path.join("evidence").join("scheduled-tasks");
     if fs::create_dir_all(&evidence_scheduled_tasks).is_ok() {
@@ -1125,13 +1204,252 @@ extern "system" {
 
 #[cfg(test)]
 mod tests {
+    use super::analyze_dsregcmd;
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    const DSREGCMD_SAMPLE: &str = r#"
++----------------------------------------------------------------------+
+| Device State                                                         |
++----------------------------------------------------------------------+
+ AzureAdJoined : YES
+ DomainJoined = NO
+ WorkplaceJoined : NO
+ EnterpriseJoined : NO
+ TenantId : 11111111-2222-3333-4444-555555555555
+ DeviceId : abcdefab-1111-2222-3333-abcdefabcdef
+ TenantName : Contoso
+ MdmUrl : https://enrollment.manage.microsoft.com/enrollmentserver/discovery.svc
+ dmComplianceUrl : https://portal.manage.microsoft.com/Compliance
+ AzureAdPrt : YES
+ AzureAdPrtUpdateTime : 2025-03-10 10:00:00.000 UTC
+ Previous Prt Attempt : 2025-03-10 09:55:00.000 UTC
+ Attempt Status : 0xc000006d
+ HTTP status : 401
+ User Context : SYSTEM
+ SessionIsNotRemote : NO
+ AD Connectivity Test : PASS
+ DRS Discovery Test : FAIL [0x801c0021]
+ Client ErrorCode : 0x801c03f2
+ KeySignTest : PASSED
+ AadRecoveryEnabled : NO
+ DeviceCertificateValidity : [ 2025-03-01 00:00:00.000 UTC -- 2025-03-20 00:00:00.000 UTC ]
+"#;
+
+    static DSREGCMD_TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn dsregcmd_test_env_lock() -> &'static Mutex<()> {
+        DSREGCMD_TEST_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct SimulatedBundleIoEnvGuard;
+
+    impl SimulatedBundleIoEnvGuard {
+        fn set(delay_ms: u64) -> Self {
+            std::env::set_var("CMTRACE_SIMULATE_BUNDLE_IO_MS", delay_ms.to_string());
+            Self
+        }
+    }
+
+    impl Drop for SimulatedBundleIoEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("CMTRACE_SIMULATE_BUNDLE_IO_MS");
+        }
+    }
+
+    fn write_bundle_json<T: serde::Serialize>(path: &Path, value: &T) {
+        let json = serde_json::to_string_pretty(value).expect("serialize bundle fixture");
+        std::fs::write(path, json).expect("write bundle fixture");
+    }
+
+    fn build_dsregcmd_bundle_fixture() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let command_output_dir = temp_dir.path().join("evidence").join("command-output");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        let connectivity_dir = temp_dir.path().join("evidence").join("connectivity");
+        let event_logs_dir = temp_dir.path().join("evidence").join("event-logs");
+        let scheduled_tasks_dir = temp_dir.path().join("evidence").join("scheduled-tasks");
+
+        std::fs::create_dir_all(&command_output_dir).expect("create command output dir");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+        std::fs::create_dir_all(&connectivity_dir).expect("create connectivity dir");
+        std::fs::create_dir_all(&event_logs_dir).expect("create event logs dir");
+        std::fs::create_dir_all(&scheduled_tasks_dir).expect("create scheduled tasks dir");
+
+        std::fs::write(
+            temp_dir.path().join("manifest.json"),
+            "{\n  \"manifestPath\": \"manifest.json\"\n}\n",
+        )
+        .expect("write manifest");
+        std::fs::write(
+            command_output_dir.join("dsregcmd-status.txt"),
+            DSREGCMD_SAMPLE,
+        )
+        .expect("write dsregcmd status sample");
+
+        std::fs::write(
+            registry_dir.join("policymanager-device.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\Current\Device\PassportForWork\Policies]
+    "UsePassportForWork"=dword:00000001
+    "DisablePostLogonProvisioning"=dword:00000000
+    "EnablePinRecovery"=dword:00000001
+"#,
+        )
+        .expect("write current registry sample");
+        std::fs::write(
+            registry_dir.join("policymanager-providers.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\Providers\{11111111-1111-1111-1111-111111111111}\default\Device\PassportForWork\Policies]
+    "UsePassportForWork"=dword:00000001
+    "DisablePostLogonProvisioning"=dword:00000000
+"#,
+        )
+        .expect("write provider registry sample");
+        std::fs::write(
+            registry_dir.join("os-version.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion]
+    "CurrentBuild"="22631"
+    "DisplayVersion"="23H2"
+    "ProductName"="Windows 11 Enterprise"
+    "UBR"=dword:00000FA0
+    "EditionID"="Enterprise"
+"#,
+        )
+        .expect("write os version sample");
+        std::fs::write(
+            registry_dir.join("proxy-internet-settings.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings]
+    "ProxyEnable"=dword:00000001
+    "ProxyServer"="http://proxy.contoso.com:8080"
+    "ProxyOverride"="*.contoso.com;localhost"
+    "AutoConfigURL"="http://wpad.contoso.com/wpad.dat"
+"#,
+        )
+        .expect("write proxy sample");
+        std::fs::write(
+            registry_dir.join("enrollments.reg"),
+            r#"Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Enrollments\{11111111-2222-3333-4444-555555555555}]
+    "UPN"="user@contoso.com"
+    "ProviderID"="MS DM Server"
+    "EnrollmentState"=dword:00000001
+"#,
+        )
+        .expect("write enrollment sample");
+
+        let connectivity_tests = vec![crate::dsregcmd::DsregcmdConnectivityResult {
+            endpoint: "https://enterpriseregistration.windows.net".to_string(),
+            reachable: true,
+            status_code: Some(200),
+            latency_ms: Some(42),
+            error_message: None,
+            timestamp: "2026-09-18T00:00:00Z".to_string(),
+        }];
+        write_bundle_json(
+            &connectivity_dir.join("endpoint-tests.json"),
+            &connectivity_tests,
+        );
+        write_bundle_json(
+            &connectivity_dir.join("scp-query.json"),
+            &crate::dsregcmd::DsregcmdScpQueryResult {
+                scp_found: true,
+                tenant_domain: Some("contoso.com".to_string()),
+                azuread_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
+                keywords: vec!["azureADId:11111111-2222-3333-4444-555555555555".to_string()],
+                domain_controller: Some("dc1.contoso.com".to_string()),
+                error: None,
+            },
+        );
+        write_bundle_json(
+            &scheduled_tasks_dir.join("enterprise-mgmt-tasks.json"),
+            &crate::dsregcmd::DsregcmdScheduledTaskEvidence {
+                enterprise_mgmt_guids: vec!["{11111111-2222-3333-4444-555555555555}".to_string()],
+            },
+        );
+        write_bundle_json(
+            &event_logs_dir.join("dsregcmd-events.json"),
+            &crate::intune::models::EventLogAnalysis::default(),
+        );
+
+        temp_dir
+    }
+
+    #[test]
+    fn bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let _simulated_io = SimulatedBundleIoEnvGuard::set(150);
+        let bundle = build_dsregcmd_bundle_fixture();
+
+        // A current-thread runtime models Tauri's serialized command dispatch:
+        // one worker runs everything. Before the seam moved the analysis to
+        // the blocking pool, a synchronous command stalled every other queued
+        // task for the full analysis duration.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        runtime.block_on(async move {
+            let spawned_at = Instant::now();
+            let unrelated_task = tokio::spawn(async move { spawned_at.elapsed() });
+
+            let analysis_started = Instant::now();
+            let result = analyze_dsregcmd(
+                DSREGCMD_SAMPLE.to_string(),
+                Some(bundle.path().to_string_lossy().to_string()),
+            )
+            .await
+            .expect("analyze dsregcmd bundle fixture");
+            let total_analysis_duration = analysis_started.elapsed();
+            let unrelated_latency = unrelated_task.await.expect("join unrelated latency task");
+
+            assert!(result.active_evidence.is_some(), "expected active evidence");
+            assert!(
+                result.scheduled_task_evidence.is_some(),
+                "expected scheduled task evidence"
+            );
+            assert!(
+                result.event_log_analysis.is_some(),
+                "expected event log analysis"
+            );
+
+            println!(
+                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_task_latency_ms={}",
+                total_analysis_duration.as_millis(),
+                unrelated_latency.as_millis()
+            );
+
+            assert!(
+                total_analysis_duration >= Duration::from_millis(7 * 140),
+                "expected simulated bundle analysis to take at least 980ms, saw {:?}",
+                total_analysis_duration
+            );
+            assert!(
+                unrelated_latency < Duration::from_millis(100),
+                "expected the command thread to stay responsive while the analysis runs off-thread; total={:?} unrelated={:?}",
+                total_analysis_duration,
+                unrelated_latency
+            );
+        });
+    }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn capture_command_returns_clear_error_on_unsupported_platform() {
-        let error = capture_dsregcmd().expect_err("expected unsupported platform error");
+        let error = tauri::async_runtime::block_on(capture_dsregcmd())
+            .expect_err("expected unsupported platform error");
         assert!(error.to_string().contains("only supported on Windows"));
     }
 }

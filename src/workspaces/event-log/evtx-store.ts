@@ -808,9 +808,15 @@ function hasUsableChannelData(
   recordCount: number,
   eventCount: number,
   gapCount: number,
-  streamIncomplete: boolean
+  streamIncomplete: boolean,
+  cancelled: boolean
 ): boolean {
-  return !streamIncomplete && (gapCount === 0 || recordCount > 0 || eventCount > 0);
+  // A cancelled load is a deliberately partial read. Its records are real and stay on screen,
+  // but the channel must not count as loaded: the Load button has to stay available for a
+  // fresh full read instead of being replaced by a bounded Refresh.
+  return (
+    !cancelled && !streamIncomplete && (gapCount === 0 || recordCount > 0 || eventCount > 0)
+  );
 }
 function hasStructuredEvtxBasename(value: string, channel: string): boolean {
   const lowerValue = value.toLowerCase();
@@ -1155,7 +1161,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             records.length,
             result.channels.find((c) => c.name === ch)?.eventCount ?? 0,
             gaps.length,
-            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
+            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
+            checked.coverageGaps.some((gap) => gap.kind === "cancelled")
           );
           if (channelHasUsableData) newLoaded.add(ch);
           else newLoaded.delete(ch);
@@ -1432,7 +1439,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
           records.length,
           result.channels.find((c) => c.name === channel)?.eventCount ?? 0,
           reconciliation.gaps.length,
-          reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
+          reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
+          checked.coverageGaps.some((gap) => gap.kind === "cancelled")
         );
         channelUsability.set(channel, channelHasUsableData);
         acknowledgeStreamedRecords(channel, requestId);
@@ -1638,7 +1646,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => {
             records.length,
             result.channels.find((candidate) => candidate.name === channel)?.eventCount ?? 0,
             reconciliation.gaps.length,
-            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall
+            reconciliation.missingSequences.length > 0 || reconciliation.recordShortfall,
+            checked.coverageGaps.some((gap) => gap.kind === "cancelled")
           )
         );
         acknowledgeStreamedRecords(channel, requestId);
@@ -2669,5 +2678,26 @@ export function resetStreamedRecords(channels: string[], requestId: string): voi
     queuedVisibleBatches.delete(streamKey(channel, requestId));
     activeRequestIds.set(channel, requestId);
     createPendingStream(channel, requestId);
+  }
+}
+
+/**
+ * Stops the in-flight live channel query, if one is running.
+ *
+ * The backend flags the current request, its read loop stops between batches, and the query
+ * resolves with the records already fetched plus a `cancelled` coverage gap. The gap keeps the
+ * partial view honest, and a cancelled channel is not marked loaded, so Load stays available for
+ * a fresh full read.
+ *
+ * Idempotent: cancelling a request that has already settled is a no-op on the backend.
+ */
+export async function cancelActiveLoad(): Promise<void> {
+  if (!useEvtxStore.getState().isLoading) return;
+  try {
+    await invoke("evtx_cancel_channel_query", { requestId: activeRequestId });
+  } catch (error) {
+    // A cancel that fails leaves the load running and the operator still holding the stop
+    // control, so a failed stop is logged rather than turned into a failed load.
+    console.warn("[evtx] Failed to cancel active load:", error);
   }
 }

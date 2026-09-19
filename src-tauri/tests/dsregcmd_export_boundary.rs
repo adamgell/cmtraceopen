@@ -49,7 +49,9 @@ const STATUS_CAPTURE: &str = r#"
 "#;
 
 fn ipc_json() -> String {
-    let analysis = analyze_dsregcmd(STATUS_CAPTURE.to_string(), None)
+    // The command is async since the analysis moved to the blocking pool (issue
+    // #627), so the way the frontend reaches it is through the runtime.
+    let analysis = tauri::async_runtime::block_on(analyze_dsregcmd(STATUS_CAPTURE.to_string(), None))
         .expect("the dsregcmd capture analyzes as JSON");
     serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
 }

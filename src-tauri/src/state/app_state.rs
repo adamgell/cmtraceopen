@@ -2,6 +2,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
+#[cfg(feature = "event-log")]
+use std::sync::atomic::AtomicBool;
+/// Named only by [`EventLogQueryCancel::in_flight`], which carries the same
+/// predicate.
+#[cfg(all(feature = "event-log", any(target_os = "windows", test)))]
+use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;
@@ -29,6 +35,28 @@ pub struct OpenFile {
     pub initial_logical_record: Option<InitialLogicalRecord>,
     /// Current byte offset for tail tracking
     pub byte_offset: u64,
+}
+
+/// Cancellation state for one logical live-channel load.
+///
+/// The frontend issues one `evtx_query_channels` invoke per channel, all carrying the same
+/// request id. Every per-channel read must share one flag so a stop reaches all of them, and the
+/// entry must stay registered until the last of them settles, so a stop cannot orphan workers by
+/// landing between two settles.
+#[cfg(feature = "event-log")]
+pub(crate) struct EventLogQueryCancel {
+    pub flag: AtomicBool,
+    /// How many per-channel reads still hold this entry.
+    ///
+    /// Only the registering path counts: `acquire_query_cancel` and
+    /// `release_query_cancel` live behind the same predicate, because only the
+    /// Windows query path ever inserts an entry (every other platform answers
+    /// `evtx_query_channels` with "only available on Windows" and so has nothing
+    /// to hold an entry open). Gated with them rather than feature-gated alone,
+    /// which left the field unread — and the `dead_code` lint fatal — on every
+    /// non-Windows build.
+    #[cfg(any(target_os = "windows", test))]
+    pub in_flight: AtomicUsize,
 }
 
 /// Application-wide managed state.
@@ -76,6 +104,14 @@ pub struct AppState {
     /// Backend-owned, bounded-transport GUI export sessions keyed by opaque session id.
     #[cfg(feature = "event-log")]
     pub(crate) event_log_export_sessions: Arc<Mutex<EventLogExportSessionRegistry>>,
+    /// Cancellation flags for in-flight live channel queries, keyed by request id.
+    ///
+    /// A query registers its flag before the read starts and removes it when the read settles, so
+    /// the registry holds at most one entry per in-flight request. Held behind an `Arc` like the
+    /// session registries so a command can take a cheap handle into a blocking task and still
+    /// clean its entry up afterwards.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_query_cancels: Arc<Mutex<HashMap<String, Arc<EventLogQueryCancel>>>>,
 }
 
 impl AppState {
@@ -107,6 +143,8 @@ impl AppState {
             event_log_analysis_sessions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "event-log")]
             event_log_export_sessions: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "event-log")]
+            event_log_query_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

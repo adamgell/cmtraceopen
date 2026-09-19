@@ -430,6 +430,8 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_remote_channels,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_cancel_channel_query,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_start_tail,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_stop_tail,
