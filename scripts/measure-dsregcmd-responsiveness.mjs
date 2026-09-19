@@ -52,6 +52,16 @@ const samples = Number(readArg("--samples", 5));
 const delayMs = Number(readArg("--delay-ms", 150));
 const bundleArg = readArg("--bundle", null);
 
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("--port must be an integer between 1 and 65535");
+}
+if (!Number.isInteger(samples) || samples < 1) {
+  throw new Error("--samples must be a positive integer");
+}
+if (!Number.isFinite(delayMs) || delayMs <= 0) {
+  throw new Error("--delay-ms must be a positive number");
+}
+
 // ---------------------------------------------------------------------------
 // Synthetic slow-storage bundle (mirrors the Rust unit-test fixture shape)
 // ---------------------------------------------------------------------------
@@ -171,11 +181,21 @@ async function findPageTarget() {
   return page.webSocketDebuggerUrl;
 }
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 class CdpSession {
   constructor(url) {
     this.ws = new WebSocket(url);
     this.nextId = 1;
     this.pending = new Map();
+  }
+
+  rejectPending(error) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    this.pending.clear();
   }
 
   async open() {
@@ -186,11 +206,18 @@ class CdpSession {
     this.ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.id && this.pending.has(message.id)) {
-        const { resolve, reject } = this.pending.get(message.id);
+        const { resolve, reject, timer } = this.pending.get(message.id);
+        clearTimeout(timer);
         this.pending.delete(message.id);
         if (message.error) reject(new Error(message.error.message));
         else resolve(message.result);
       }
+    });
+    this.ws.addEventListener("close", () => {
+      this.rejectPending(new Error("CDP connection closed before the request completed"));
+    });
+    this.ws.addEventListener("error", () => {
+      this.rejectPending(new Error("CDP connection failed before the request completed"));
     });
     await this.call("Runtime.enable");
   }
@@ -198,7 +225,11 @@ class CdpSession {
   call(method, params = {}) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP request ${method} timed out after ${REQUEST_TIMEOUT_MS}ms`));
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
