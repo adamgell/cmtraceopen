@@ -873,7 +873,7 @@ mod tests {
             analyze_text, analyze_text_preserving_local_values, analyze_text_with_evidence,
             models::{DsregcmdAnalysisResult, DsregcmdBundleEvidence},
         },
-        redacted_status_text,
+        redacted_status_text, IdentityLiterals, KIND_HOST, KIND_TENANT,
     };
     use crate::intune::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
@@ -1062,6 +1062,37 @@ mod tests {
             !json(&published).contains("[tenant:"),
             "the export claims a tenant identity the capture never held: {}",
             json(&published)
+        );
+    }
+
+    /// One text reaches one token even when two fields classify it under two
+    /// kinds.
+    ///
+    /// The kind is a property of the *field*; the token is a property of the
+    /// *value*, and a narrative mention carries no field at all. Keying the table
+    /// by kind would leave a mention of `contoso.example` in prose choosing
+    /// between a `[tenant:…]` and a `[host:…]` token with no field to decide it,
+    /// which is the one-identity-two-tokens failure this table exists to prevent.
+    /// So the field that classifies a value first decides its token, and a later
+    /// field holding the same value follows it rather than minting a second.
+    #[test]
+    fn one_text_reaches_one_token_when_two_kinds_classify_it() {
+        let mut literals = IdentityLiterals::default();
+        literals.push("contoso.example", KIND_TENANT);
+        literals.push("contoso.example", KIND_HOST);
+
+        let token = literals
+            .token_for("contoso.example")
+            .expect("the domain was classified");
+        assert_eq!(literals.values.len(), 1, "one text, one entry");
+        assert!(
+            token.starts_with("[tenant:"),
+            "the first classification names the token: {token}"
+        );
+        assert_eq!(
+            literals.token_for("CONTOSO.Example"),
+            Some(token),
+            "another casing follows the same token"
         );
     }
 
