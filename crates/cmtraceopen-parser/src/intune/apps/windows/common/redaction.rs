@@ -10,6 +10,21 @@
 //! produces the same token and two records that mentioned the same user still
 //! visibly mention the same user. The projection is idempotent: replacement
 //! tokens cannot themselves match a rule.
+//!
+//! A parenthesized placeholder is never a value. Every analyzer in this crate
+//! renders an absent value as a parenthesized word -- `(missing)`, `(unknown)`,
+//! `(none)`, `(no UPN)` -- and those renders are prose about the absence, not
+//! text the capture contained. The labelled-field rules therefore do not let a
+//! value begin with `(`: masking `TenantId: (missing)` mints an identity the
+//! capture never held, and the dsregcmd export printed `TenantId: [tenant:...]`
+//! as the evidence *for* its "TenantId is missing" diagnostic. No Windows
+//! identifier begins with `(`, so the guard costs no real value.
+//!
+//! A value branch's first character class excludes whitespace for the same
+//! reason: the `\s*` before it is optional, so a class that allowed whitespace
+//! would match the placeholder past that `\s*` on backtracking and defeat the
+//! guard. The leading whitespace still belongs to the field, which the greedy
+//! `\s*` consumes first.
 
 const REMOVED_OVERSIZE: &str = "[redacted: oversized text omitted]";
 const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
@@ -102,7 +117,7 @@ fn msi_property_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?P<pre>^|[^\[])(?P<property>(?:\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*=\s*|\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*))(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)"#,
+            r#"(?P<pre>^|[^\[])(?P<property>(?:\[(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*=\s*|\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|APISECRET|API_SECRET|ACCESS_TOKEN|ACCESSTOKEN|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET|CREDENTIAL|CREDENTIALS|CREDENTIALDATA)\s*["']?\s*[:=]\s*))(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>\]]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n(][^\s\r\n]*)"#,
 
         )
         .expect("msi property regex must compile")
@@ -156,7 +171,7 @@ fn sensitive_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|credentialdata)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\b(?:serial(?:number)?|device(?:id|serial(?:number)?)|hardware(?:hash|identifier|id|data)|devicehardwaredata|credentialdata)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;}:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\s,;}\]<>]*)"#,
 
         )
         .expect("sensitive field redaction pattern must compile")
@@ -166,7 +181,7 @@ fn credential_data_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\bCredentialData\s*["']?\s*[:=]\s*)(?P<value>\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\bCredentialData\s*["']?\s*[:=]\s*)(?P<value>\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\r\n,;}\]<>]*)"#,
         )
         .expect("credential data field regex must compile")
     })
@@ -487,7 +502,7 @@ fn account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<pre>^|[^\[])(?P<field>(?:\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*=\s*|\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*))(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+[^\r\n,;\x22<>]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[][^,;\r\n\x22<>]*)"#,
+            r#"(?i)(?P<pre>^|[^\[])(?P<field>(?:\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*=\s*|\b(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*))(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+[^\r\n,;\x22<>]*|["'][^"\r\n]*["']|[^\s,;\r\n\x22\[(][^,;\r\n\x22<>]*)"#,
         )
         .expect("account field regex must compile")
     })
@@ -498,7 +513,7 @@ fn nested_account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<pre>\[)(?P<field>\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n,;\x22<>]+)"#,
+            r#"(?i)(?P<pre>\[)(?P<field>\[(?:RunAsUser|RunAsAccount|TargetUserName|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn|SubjectUserName|SubjectDomainName)\s*["']?\s*[:=]\s*)(?P<value>[^\r\n,;\x22<>(][^\r\n,;\x22<>]*)"#,
         )
         .expect("nested account field regex must compile")
     })
@@ -518,7 +533,7 @@ fn host_field_re() -> &'static Regex {
         // after it (`preserve_token_mask_tail`), while a malformed
         // token-lookalike is still masked rather than trusted.
         Regex::new(
-            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>]+)"#,
+            r#"(?i)(?P<field>\b(?:ComputerName|Computer|MachineName|HostName|DeviceName|RemoteHost)\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\r\n\x22<>(][^\s,;\r\n\x22<>]*)"#,
 
         )
         .expect("host field regex must compile")
@@ -546,7 +561,7 @@ fn tenant_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>]+)"#,
+            r#"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*["']?\s*[:=]\s*)(?P<value>\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*(?P<delimiter>[,;])|\[[a-z]+:[0-9a-f]{16}\][^\r\n,;:=\x22<>]*$|\[[a-z]+:[0-9a-f]{16}\]|\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?|\[[^\]\r\n]*\]|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]<>(][^\s,;}\]<>]*)"#,
         )
         .expect("tenant field regex must compile")
     })
@@ -758,11 +773,14 @@ pub(crate) fn find_ignore_case(
     if expected.is_empty() {
         return None;
     }
-    for (index, folded_char) in folded.iter().enumerate() {
+    // Folded characters are in source order, so everything before `from` is a
+    // prefix of the slice: skip it in one binary search rather than walking it
+    // character by character. Both lanes call this once per literal per record,
+    // pointed at what their previous match consumed, so rescanning the consumed
+    // prefix is what made a long narrative quadratic in its literal count.
+    let first = folded.partition_point(|folded_char| folded_char.source_start < from);
+    for (index, folded_char) in folded.iter().enumerate().skip(first) {
         let start = folded_char.source_start;
-        if start < from {
-            continue;
-        }
         // The value spelled exactly as it was typed, which needs no folding and
         // keeps the scan proportional to a memchr when nothing differs in case.
         if haystack[start..].starts_with(literal) {
@@ -1428,6 +1446,36 @@ mod tests {
             redacted.contains(app),
             "correlation keys must survive: {redacted:?}"
         );
+    }
+
+    /// An absent value is the analyzer's own prose, not capture content, so a
+    /// labelled field whose value is one of this crate's placeholders keeps it.
+    /// Masking it minted an identity for a value that was never captured, and
+    /// the dsregcmd export printed one as the evidence for the diagnostic that
+    /// reports the value missing.
+    #[test]
+    fn a_placeholder_value_is_not_an_identifier() {
+        for line in [
+            "TenantId: (missing)",
+            "DeviceId: (missing)",
+            "ComputerName: (unknown)",
+            "RunAsUser: (none)",
+            "serialNumber: (unknown)",
+            "CredentialData: (none)",
+        ] {
+            assert_eq!(redact_text(line), line, "{line}");
+        }
+    }
+
+    /// The same field shapes still mask a value that is really there, so the
+    /// placeholder rule narrows the grammar rather than disarming it.
+    #[test]
+    fn a_labelled_value_is_still_masked_beside_a_placeholder() {
+        let tenant = "99999999-8888-4777-8666-555555555555";
+        let redacted = redact_text(&format!("TenantId: (missing) DeviceId: {tenant}"));
+
+        assert!(!redacted.contains(tenant), "got {redacted:?}");
+        assert!(redacted.contains("TenantId: (missing)"), "got {redacted:?}");
     }
 
     // ── Grammar tests moved from `win32::redaction` ─────────────────────────

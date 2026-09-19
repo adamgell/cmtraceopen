@@ -1039,6 +1039,32 @@ mod tests {
         );
     }
 
+    /// A missing value is reported as missing, not as a masked identity.
+    ///
+    /// The evidence for the `missing-tenant` diagnostic is the analyzer's own
+    /// render of an absent field. If the projection masks that render, the export
+    /// contradicts itself — the rule says the capture held no `TenantId` while
+    /// the evidence shows a tenant token — and it invents an identity the device
+    /// never presented.
+    #[test]
+    fn a_missing_value_is_evidence_of_absence_not_a_masked_identity() {
+        let published = analyze_text(" AzureAdJoined : NO\n DomainJoined : NO\n")
+            .expect("a capture with no tenant or device id analyzes");
+
+        let missing_tenant = published
+            .diagnostics
+            .iter()
+            .find(|issue| issue.id == "missing-tenant")
+            .expect("the missing tenant id is diagnosed");
+
+        assert_eq!(missing_tenant.evidence, vec!["TenantId: (missing)"]);
+        assert!(
+            !json(&published).contains("[tenant:"),
+            "the export claims a tenant identity the capture never held: {}",
+            json(&published)
+        );
+    }
+
     /// `ΣΟΦΟΥΣ.Example` in capitals: `Σ` U+03A3, `Ο` U+039F, `Φ` U+03A6,
     /// `Υ` U+03A5, and a final `Σ` U+03A3 that the narrative renders as `ς`.
     const CAPITAL_SIGMA_IDENTITY: &str =
