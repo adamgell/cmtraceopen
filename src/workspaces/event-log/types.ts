@@ -90,7 +90,8 @@ export type EvtxCoverageGapKind =
   | "record"
   | "xml"
   | "provider"
-  | "limit";
+  | "limit"
+  | "cancelled";
 
 export type ProviderMessageStage = "openPublisherMetadata" | "formatMessage";
 
