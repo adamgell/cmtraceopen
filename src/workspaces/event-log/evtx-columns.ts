@@ -284,7 +284,7 @@ function fixedColumnValue(
     case "eventId":
       return String(record.eventId);
     case "recordId":
-      return String(record.eventRecordId);
+      return record.eventRecordIdText ?? String(record.eventRecordId);
     case "channel":
       return record.channel;
     case "provider":

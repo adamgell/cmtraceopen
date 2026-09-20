@@ -215,6 +215,69 @@ pub fn run() {
                     &commands::app_config::get_available_workspaces(),
                 ));
             }
+            #[cfg(feature = "event-log")]
+            {
+                use tauri::Manager as _;
+
+                // Packaged provider coverage is optional: the manifest is allowed to explain that
+                // no real Windows capture was available. Never replace the active empty store
+                // unless a validated, real database directory loads successfully.
+                match app
+                    .path()
+                    .resource_dir()
+                    .map_err(|error| format!("cannot locate packaged resources: {error}"))
+                    .and_then(|resource_dir| {
+                        event_log::provider_db::packaged_provider_directory(&resource_dir)
+                    }) {
+                    Ok(directory) => {
+                        let mut loaded = event_log::provider_db::ProviderStore::default();
+                        match loaded.load_directory(&directory) {
+                            Ok(outcome)
+                                if event_log::provider_db::packaged_provider_load_is_complete(
+                                    &outcome,
+                                ) =>
+                            {
+                                let state = app.state::<AppState>();
+                                let write_result = state.provider_store.write();
+                                match write_result {
+                                    Ok(mut store) => {
+                                        *store = loaded;
+                                        log::info!(
+                                            "event=packaged_provider_databases_loaded count={}",
+                                            outcome.loaded.len()
+                                        );
+                                    }
+                                    Err(_) => {
+                                        log::warn!(
+                                            "event=packaged_provider_databases_unavailable \
+                                             reason=\"provider store lock was poisoned during startup\""
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(outcome) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable \
+                                     reason=\"packaged provider coverage was incomplete \
+                                     ({} loaded, {} failures)\"",
+                                    outcome.loaded.len(),
+                                    outcome.failures.len()
+                                );
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable directory=\"{}\" error=\"{}\"",
+                                    directory.display(),
+                                    error
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::info!("event=packaged_provider_databases_skipped reason=\"{}\"", error);
+                    }
+                }
+            }
 
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
@@ -252,7 +315,8 @@ pub fn run() {
         })
         .invoke_handler(app_invoke_handler![
             commands::file_association::get_file_association_prompt_status,
-            commands::file_association::associate_log_files_with_app,
+            commands::file_association::register_log_file_handler,
+            commands::file_association::open_windows_default_apps,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
@@ -333,6 +397,8 @@ pub fn run() {
             commands::dsregcmd::capture_dsregcmd,
             #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::load_dsregcmd_source,
+            #[cfg(feature = "dsregcmd")]
+            commands::dsregcmd::redact_dsregcmd_status_text,
             #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_scan_environment,
             #[cfg(feature = "macos-diag")]
@@ -368,11 +434,33 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_parse_files,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_expand_sources,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_parse_manifest,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_enumerate_channels,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_enumerate_remote_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_export_records,
+            event_log::commands::evtx_query_remote_channels,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_cancel_channel_query,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_start_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_stop_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_clear_channel,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_create_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_append_export_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_finalize_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_close_export_session,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
             #[cfg(feature = "event-log")]
@@ -382,7 +470,25 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_provider_databases,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_build_unified_timeline,
+            event_log::commands::evtx_capture_provider_databases,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_import_provider_database,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_export_provider_database,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_load_packaged_provider_databases,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_create_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_append_analysis_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_finalize_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_query_analysis_timeline,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_diagnose_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_close_analysis_session,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

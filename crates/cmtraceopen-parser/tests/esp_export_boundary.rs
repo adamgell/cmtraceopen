@@ -109,12 +109,24 @@ fn the_exported_session_carries_no_identifier_shaped_string() {
         serde_json::from_str(&exported_session_json(&snapshot)).expect("export is JSON");
 
     let shapes = [
-        ("mail address", Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap()),
-        ("security identifier", Regex::new(r"(?i)\bS-1-\d+(?:-\d+){3,}\b").unwrap()),
-        ("MAC address", Regex::new(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b").unwrap()),
+        (
+            "mail address",
+            Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap(),
+        ),
+        (
+            "security identifier",
+            Regex::new(r"(?i)\bS-1-\d+(?:-\d+){3,}\b").unwrap(),
+        ),
+        (
+            "MAC address",
+            Regex::new(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b").unwrap(),
+        ),
         // A dotted quad and a four-part version string are the same shape, so
         // this fixture keeps version strings to three parts on purpose.
-        ("IPv4 address", Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap()),
+        (
+            "IPv4 address",
+            Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap(),
+        ),
     ];
 
     let mut strings = Vec::new();
@@ -459,10 +471,7 @@ fn snapshot_with_planted_identifiers() -> EspDiagnosticsSnapshot {
             evidence: vec![evidence_ref("coverage")],
         }],
         raw_evidence: vec![
-            raw_record(
-                "raw-token",
-                format!("Authorization: Bearer {BEARER_TOKEN}"),
-            ),
+            raw_record("raw-token", format!("Authorization: Bearer {BEARER_TOKEN}")),
             raw_record(
                 "raw-network",
                 format!("client {CLIENT_IPV4} nic {NIC_MAC} joined {TENANT_DOMAIN}"),
@@ -512,7 +521,9 @@ fn provenance() -> EspEvidenceProvenance {
     EspEvidenceProvenance {
         source_kind: EspSourceKind::Registry,
         source_artifact_id: "artifact-registry".to_string(),
-        file_path: Some(format!("C:\\Users\\{PROFILE_USER}\\AppData\\Local\\ime.log")),
+        file_path: Some(format!(
+            "C:\\Users\\{PROFILE_USER}\\AppData\\Local\\ime.log"
+        )),
         line_number: Some(12),
         record_number: None,
         registry: Some(EspRegistryProvenance {

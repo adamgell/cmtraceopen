@@ -449,7 +449,7 @@ export function StatusBar() {
     }
   } else if (activeView === "event-log") {
     leftParts = [
-      "Event Log",
+      uiChromeStatus.viewLabel,
       evtxIsLoading
         ? "Loading..."
         : evtxSourceMode === "live"
@@ -571,16 +571,18 @@ export function StatusBar() {
           : activeView === "sysmon"
             ? "Sysmon Analysis"
             : activeView === "event-log"
-              ? "Event Log"
+              ? uiChromeStatus.viewLabel
               : activeView === "deployment"
                 ? "Software Deployment"
                 : activeView === "macos-diag"
                   ? "macOS Diagnostics"
-                  : activeView === "secureboot"
-                    ? "Secure Boot"
-                    : activeView === "dsregcmd"
-                      ? "dsregcmd"
-                      : activeView;
+                  : activeView === "macos-jamf"
+                    ? "macOS JAMF"
+                    : activeView === "secureboot"
+                      ? "Secure Boot"
+                      : activeView === "dsregcmd"
+                        ? "dsregcmd"
+                        : activeView;
 
   return (
     <div

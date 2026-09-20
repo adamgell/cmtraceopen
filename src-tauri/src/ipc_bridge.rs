@@ -201,13 +201,17 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
 
         "get_file_association_prompt_status" => {
             // Match the real command's response shape so the frontend can
-            // safely read `isAssociated` etc. in dev/browser mode.
+            // safely read `isRegistered` etc. in dev/browser mode.
             ok_json(&serde_json::json!({
                 "supported": false,
                 "shouldPrompt": false,
-                "isAssociated": false,
+                "isRegistered": false,
             }))
         }
+
+        "register_log_file_handler" | "open_windows_default_apps" => err_json(
+            "Windows file association commands require the Tauri runtime and are unavailable through the debug IPC bridge",
+        ),
 
         "get_initial_file_paths" => {
             ok_json(&Vec::<String>::new())
@@ -263,11 +267,19 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&result)
         }
 
-        // ── Unknown / not bridged ───────────────────────────────────────────
-        _ => {
-            log::debug!("ipc_bridge: unknown cmd={} — returning null", req.cmd);
-            r#"{"result":null}"#.to_string()
+        #[cfg(feature = "dsregcmd")]
+        "redact_dsregcmd_status_text" => {
+            let input = req.args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+            ok_json(&crate::commands::dsregcmd::redact_dsregcmd_status_text(
+                input.to_string(),
+            ))
         }
+
+        // ── Unknown / not bridged ───────────────────────────────────────────
+        _ => err_json(&format!(
+            "debug IPC bridge does not implement command `{}`",
+            req.cmd
+        )),
     }
 }
 
@@ -340,5 +352,32 @@ mod tests {
             );
             assert!(value.get("result").is_none());
         }
+    }
+
+    #[test]
+    fn debug_bridge_rejects_native_association_and_unknown_commands() {
+        for command in ["register_log_file_handler", "open_windows_default_apps"] {
+            let response = dispatch(
+                &serde_json::json!({ "cmd": command, "args": {} }).to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                value["error"],
+                "Windows file association commands require the Tauri runtime and are unavailable through the debug IPC bridge"
+            );
+            assert!(value.get("result").is_none());
+        }
+
+        let response = dispatch(
+            &serde_json::json!({ "cmd": "definitely_not_a_command", "args": {} }).to_string(),
+            &state(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            value["error"],
+            "debug IPC bridge does not implement command `definitely_not_a_command`"
+        );
+        assert!(value.get("result").is_none());
     }
 }

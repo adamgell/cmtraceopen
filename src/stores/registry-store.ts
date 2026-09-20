@@ -43,8 +43,8 @@ export const useRegistryStore = create<RegistryState>((set, get) => ({
     const expanded = new Set<string>();
     function expandAll(nodes: RegistryTreeNode[]) {
       for (const node of nodes) {
-        expanded.add(node.fullPath);
         if (node.children.length > 0) {
+          expanded.add(node.fullPath);
           expandAll(node.children);
         }
       }
@@ -56,20 +56,31 @@ export const useRegistryStore = create<RegistryState>((set, get) => ({
   setSelectedKeyPath: (path) => set({ selectedKeyPath: path }),
 
   toggleExpanded: (path) => {
-    const expanded = new Set(get().expandedPaths);
+    const { tree, expandedPaths, selectedKeyPath } = get();
+    const node = findTreeNode(tree, path);
+    if (!node || node.children.length === 0) return;
+
+    const expanded = new Set(expandedPaths);
+    let nextSelectedKeyPath = selectedKeyPath;
     if (expanded.has(path)) {
       expanded.delete(path);
+      if (selectedKeyPath?.startsWith(`${path}\\`)) {
+        nextSelectedKeyPath = path;
+      }
     } else {
       expanded.add(path);
     }
-    set({ expandedPaths: expanded });
+    set({
+      expandedPaths: expanded,
+      selectedKeyPath: nextSelectedKeyPath,
+    });
   },
 
   expandToPath: (path) => {
     const expanded = new Set(get().expandedPaths);
     const parts = path.split("\\");
     let current = "";
-    for (let i = 0; i < parts.length; i++) {
+    for (let i = 0; i < parts.length - 1; i++) {
       current = i === 0 ? parts[i] : current + "\\" + parts[i];
       expanded.add(current);
     }
@@ -114,6 +125,18 @@ export const useRegistryStore = create<RegistryState>((set, get) => ({
     });
   },
 }));
+
+function findTreeNode(
+  nodes: RegistryTreeNode[],
+  path: string,
+): RegistryTreeNode | undefined {
+  for (const node of nodes) {
+    if (node.fullPath === path) return node;
+    const match = findTreeNode(node.children, path);
+    if (match) return match;
+  }
+  return undefined;
+}
 
 function navigateToMatch(state: RegistryState, matchIndex: number) {
   const keyIdx = state.searchMatches[matchIndex];
