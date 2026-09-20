@@ -196,7 +196,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
         with:
           targets: ${{ matrix.rust_target }}
 
@@ -386,6 +386,13 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # A local `uses:` path is resolved from the workspace, so the calling job
+      # must check the repository out before it can name this action at all.
+      # Without this step the job dies with "Can't find 'action.yml'".
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Publish updater manifest
         uses: ./.github/actions/publish-updater-manifest
         with:

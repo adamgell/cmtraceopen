@@ -57,6 +57,23 @@ pub fn test_endpoint_connectivity() -> Vec<DsregcmdConnectivityResult> {
     results
 }
 
+/// The failure to report for a failed SCP query, keeping an earlier `nltest`
+/// failure alongside it.
+///
+/// `nltest` failing is not fatal on its own — the SCP query can succeed without a
+/// domain controller name — so it is carried rather than returned. When the SCP
+/// query *does* fail, both failures belong in the report: dropping `nltest` lost
+/// the evidence of a directory lookup that had already failed.
+///
+/// PowerShell reports an LDAP failure on stdout and still exits successfully, so
+/// the caller reaches this for both exit-status failures and self-reported ones.
+fn scp_failure_message(nltest_error: &Option<String>, scp_failure: &str) -> String {
+    match nltest_error {
+        Some(nltest) => format!("{nltest}; {scp_failure}"),
+        None => scp_failure.to_string(),
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn query_scp() -> DsregcmdScpQueryResult {
     let mut result = DsregcmdScpQueryResult::default();
@@ -131,12 +148,15 @@ try {
                 .collect();
 
             if lines.iter().any(|l| l.contains("SCP_NOT_FOUND")) {
-                result.error = Some("SCP object exists but has no keywords.".to_string());
+                result.error = Some(scp_failure_message(
+                    &nltest_error,
+                    "SCP object exists but has no keywords.",
+                ));
                 return result;
             }
 
             if let Some(error_line) = lines.iter().find(|l| l.starts_with("SCP_ERROR:")) {
-                result.error = Some(error_line.to_string());
+                result.error = Some(scp_failure_message(&nltest_error, error_line));
                 return result;
             }
 
@@ -154,16 +174,16 @@ try {
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            result.error = Some(match nltest_error {
-                Some(nltest) => format!("{nltest}; PowerShell SCP query failed: {stderr}"),
-                None => format!("PowerShell SCP query failed: {stderr}"),
-            });
+            result.error = Some(scp_failure_message(
+                &nltest_error,
+                &format!("PowerShell SCP query failed: {stderr}"),
+            ));
         }
         Err(e) => {
-            result.error = Some(match nltest_error {
-                Some(nltest) => format!("{nltest}; PowerShell not available: {e}"),
-                None => format!("PowerShell not available: {e}"),
-            });
+            result.error = Some(scp_failure_message(
+                &nltest_error,
+                &format!("PowerShell not available: {e}"),
+            ));
         }
     }
 
@@ -184,4 +204,49 @@ pub fn run_active_diagnostics() -> DsregcmdActiveEvidence {
 #[cfg(not(target_os = "windows"))]
 pub fn run_active_diagnostics() -> DsregcmdActiveEvidence {
     DsregcmdActiveEvidence::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scp_failure_message;
+
+    /// PowerShell reports an LDAP failure on stdout and still exits successfully,
+    /// so the `SCP_ERROR:` branch reads as a success to the exit status. An
+    /// `nltest` failure that preceded it was being dropped there, which reported
+    /// a healthy directory alongside a failed SCP query.
+    #[test]
+    fn an_nltest_failure_survives_a_powershell_reported_scp_error() {
+        let nltest = Some(
+            "nltest /dsgetdc: failed (exit code 1): ERROR_NO_SUCH_DOMAIN".to_string(),
+        );
+
+        let message = scp_failure_message(&nltest, "SCP_ERROR: LDAP error 0x20");
+
+        assert!(message.contains("nltest"), "nltest failure kept: {message}");
+        assert!(
+            message.contains("SCP_ERROR: LDAP error 0x20"),
+            "SCP failure kept: {message}"
+        );
+    }
+
+    /// The same for the other self-reported branch, which has the same shape.
+    #[test]
+    fn an_nltest_failure_survives_a_missing_scp_keyword_set() {
+        let nltest = Some("nltest not available: not found".to_string());
+
+        let message = scp_failure_message(&nltest, "SCP object exists but has no keywords.");
+
+        assert!(message.contains("nltest not available"), "{message}");
+        assert!(message.contains("SCP object exists"), "{message}");
+    }
+
+    /// With no `nltest` failure there is nothing to combine, so the SCP failure
+    /// is reported as it is.
+    #[test]
+    fn a_lone_scp_failure_reports_only_itself() {
+        assert_eq!(
+            scp_failure_message(&None, "SCP object exists but has no keywords."),
+            "SCP object exists but has no keywords."
+        );
+    }
 }

@@ -15,7 +15,15 @@ pub use super::extended::{
     build_extended_diagnostics,
 };
 
-pub fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
+/// Evaluate every diagnostic rule against parsed facts and return the analysis.
+///
+/// **Preserving, crate-internal.** The returned analysis carries the identity
+/// values the facts hold, so this is the other way to obtain an unprojected view
+/// of a capture. It is not `pub`: the published entry points
+/// ([`analyze_text`](super::analyze_text) and
+/// [`analyze_text_with_evidence`](super::analyze_text_with_evidence)) call it and
+/// then project (ADR-004 revision 1, Ruling 1).
+pub(crate) fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
     let derived = derive_facts(&facts, raw_input);
     let diagnostics = build_diagnostics(&facts, &derived);
 
@@ -857,6 +865,7 @@ fn build_diagnostics(
 
     if contains_win32_code(&aggregated_errors, 1312)
         || contains_win32_code(&aggregated_errors, 1317)
+        || contains_win32_code(&aggregated_errors, 1355)
     {
         let mut evidence = Vec::new();
         for (label, value) in [
@@ -881,7 +890,10 @@ fn build_diagnostics(
         ] {
             if let Some(value) = value {
                 let lower = value.to_ascii_lowercase();
-                if contains_win32_code(&lower, 1312) || contains_win32_code(&lower, 1317) {
+                if contains_win32_code(&lower, 1312)
+                    || contains_win32_code(&lower, 1317)
+                    || contains_win32_code(&lower, 1355)
+                {
                     evidence.push(format!("{label}: {value}"));
                 }
             }
@@ -892,7 +904,7 @@ fn build_diagnostics(
             IntuneDiagnosticSeverity::Error,
             "dynamic",
             "AD object lookup or logon-session error detected",
-            "The aggregated registration errors contain 1312 (ERROR_NO_SUCH_LOGON_SESSION) or 1317 (ERROR_NO_SUCH_DOMAIN), which point to an AD object lookup or logon-session problem during hybrid join.",
+            "The aggregated registration errors contain 1312 (ERROR_NO_SUCH_LOGON_SESSION), 1317 (ERROR_NO_SUCH_USER) or 1355 (ERROR_NO_SUCH_DOMAIN), which point to an AD object lookup, account or logon-session problem during hybrid join.",
             evidence,
             vec![
                 "Verify the computer account exists and is consistent across domain controllers.".to_string(),
@@ -2156,6 +2168,60 @@ mod tests {
             "exact 1312 token should fire the replication rule"
         );
     }
+
+    /// The rule names the codes it matches, and names them right.
+    ///
+    /// `1317` is `ERROR_NO_SUCH_USER`; `ERROR_NO_SUCH_DOMAIN` is `1355`. The rule
+    /// told a support engineer that 1317 was the domain error, which misdirects
+    /// exactly the person reading their own capture.
+    #[test]
+    fn ad_replication_rule_names_1317_as_a_missing_account() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 1317
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        let issue = analysis
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "ad-replication-issue")
+            .expect("1317 fires the AD lookup rule");
+
+        assert!(
+            issue.summary.contains("1317 (ERROR_NO_SUCH_USER)"),
+            "1317 is the user error: {}",
+            issue.summary
+        );
+        assert!(
+            !issue.summary.contains("1317 (ERROR_NO_SUCH_DOMAIN)"),
+            "1317 is not the domain error: {}",
+            issue.summary
+        );
+    }
+
+    /// The domain case the rule's own next-checks talk about is 1355, so it fires.
+    #[test]
+    fn ad_replication_rule_fires_on_the_domain_code_1355() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server ErrorCode : 1355
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "ad-replication-issue"),
+            "ERROR_NO_SUCH_DOMAIN (1355) should fire the AD lookup rule"
+        );
+    }
+
     #[test]
     fn ad_replication_rule_matches_punctuation_adjacent_tokens() {
         let sample = r#"

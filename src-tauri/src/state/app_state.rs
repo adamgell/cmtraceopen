@@ -2,12 +2,22 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
+#[cfg(feature = "event-log")]
+use std::sync::atomic::AtomicBool;
+/// Named only by [`EventLogQueryCancel::in_flight`], which carries the same
+/// predicate.
+#[cfg(all(feature = "event-log", any(target_os = "windows", test)))]
+use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;
 
 #[cfg(feature = "esp-diagnostics")]
 use crate::esp::session::{EspSessionError, EspSessionManager};
+#[cfg(feature = "event-log")]
+use crate::event_log::analysis_session::EventLogAnalysisSessionRegistry;
+#[cfg(feature = "event-log")]
+use crate::event_log::export_session::EventLogExportSessionRegistry;
 #[cfg(feature = "event-log")]
 use crate::event_log::provider_db::ProviderStore;
 use crate::parser::ResolvedParser;
@@ -25,6 +35,28 @@ pub struct OpenFile {
     pub initial_logical_record: Option<InitialLogicalRecord>,
     /// Current byte offset for tail tracking
     pub byte_offset: u64,
+}
+
+/// Cancellation state for one logical live-channel load.
+///
+/// The frontend issues one `evtx_query_channels` invoke per channel, all carrying the same
+/// request id. Every per-channel read must share one flag so a stop reaches all of them, and the
+/// entry must stay registered until the last of them settles, so a stop cannot orphan workers by
+/// landing between two settles.
+#[cfg(feature = "event-log")]
+pub(crate) struct EventLogQueryCancel {
+    pub flag: AtomicBool,
+    /// How many per-channel reads still hold this entry.
+    ///
+    /// Only the registering path counts: `acquire_query_cancel` and
+    /// `release_query_cancel` live behind the same predicate, because only the
+    /// Windows query path ever inserts an entry (every other platform answers
+    /// `evtx_query_channels` with "only available on Windows" and so has nothing
+    /// to hold an entry open). Gated with them rather than feature-gated alone,
+    /// which left the field unread — and the `dead_code` lint fatal — on every
+    /// non-Windows build.
+    #[cfg(any(target_os = "windows", test))]
+    pub in_flight: AtomicUsize,
 }
 
 /// Application-wide managed state.
@@ -62,6 +94,24 @@ pub struct AppState {
     /// Held the same way and for the same reason as [`event_maps`](Self::event_maps).
     #[cfg(feature = "event-log")]
     pub provider_store: Arc<RwLock<ProviderStore>>,
+    /// Backend-owned, chunk-fed timeline/diagnosis snapshots keyed by opaque session id.
+    ///
+    /// Held the same way as [`event_log_export_sessions`](Self::event_log_export_sessions) so a
+    /// blocking task can take the registry for itself: looking a session up runs the stale-session
+    /// prune, which drops the buffers of whatever it evicts.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_analysis_sessions: Arc<Mutex<EventLogAnalysisSessionRegistry>>,
+    /// Backend-owned, bounded-transport GUI export sessions keyed by opaque session id.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_export_sessions: Arc<Mutex<EventLogExportSessionRegistry>>,
+    /// Cancellation flags for in-flight live channel queries, keyed by request id.
+    ///
+    /// A query registers its flag before the read starts and removes it when the read settles, so
+    /// the registry holds at most one entry per in-flight request. Held behind an `Arc` like the
+    /// session registries so a command can take a cheap handle into a blocking task and still
+    /// clean its entry up afterwards.
+    #[cfg(feature = "event-log")]
+    pub(crate) event_log_query_cancels: Arc<Mutex<HashMap<String, Arc<EventLogQueryCancel>>>>,
 }
 
 impl AppState {
@@ -89,6 +139,12 @@ impl AppState {
             event_maps: Arc::new(RwLock::new(cmtraceopen_parser::eventmap::MapRegistry::new())),
             #[cfg(feature = "event-log")]
             provider_store: Arc::new(RwLock::new(ProviderStore::default())),
+            #[cfg(feature = "event-log")]
+            event_log_analysis_sessions: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "event-log")]
+            event_log_export_sessions: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "event-log")]
+            event_log_query_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

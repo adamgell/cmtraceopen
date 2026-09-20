@@ -1,22 +1,52 @@
 //! Integration test against the real DNS debug log fixture.
-//! Skipped if the fixture file is not present.
+//!
+//! The capture carries real hostnames and query traffic, so it lives outside the repo. Point
+//! `CMTRACE_DNS_DEBUG_FIXTURE` at the log to request it explicitly; a local capture at the
+//! hardcoded developer path also runs when present. Without either, the test passes vacuously and
+//! announces that with an unmistakable banner, so a skipped run can never read as a verified one.
+//!
+//!     CMTRACE_DNS_DEBUG_FIXTURE=~/logs/DNSServer_debug.log cargo test --test dns_debug_real
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+/// Hardcoded convenience path for a developer who keeps the capture in the standard location.
 const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../Logs/dns-fixtures-20260411-203254/DNSServer_debug.log"
 );
 
+/// Resolves the fixture. An explicitly supplied `CMTRACE_DNS_DEBUG_FIXTURE` that is unusable fails
+/// the test; a vacuous run (nothing to read) is announced, never reported as an ordinary pass.
+fn fixture() -> Option<PathBuf> {
+    if let Some(raw) = std::env::var_os("CMTRACE_DNS_DEBUG_FIXTURE") {
+        let path = PathBuf::from(raw);
+        assert!(
+            path.is_file(),
+            "CMTRACE_DNS_DEBUG_FIXTURE is set but {} is not a file",
+            path.display()
+        );
+        return Some(path);
+    }
+    let local = Path::new(FIXTURE_PATH);
+    if local.is_file() {
+        return Some(local.to_path_buf());
+    }
+    eprintln!(
+        "SKIP: CMTRACE_DNS_DEBUG_FIXTURE is not set and the local fixture {} is absent, \
+         so nothing in this file actually ran. Point CMTRACE_DNS_DEBUG_FIXTURE at the captured \
+         debug log to exercise the real DNS debug parse path.",
+        FIXTURE_PATH
+    );
+    None
+}
+
 #[test]
 fn test_real_dns_debug_log() {
-    if !Path::new(FIXTURE_PATH).exists() {
-        eprintln!("Skipping: real DNS fixture not found at {}", FIXTURE_PATH);
-        return;
-    }
+    let Some(path) = fixture() else { return };
 
     let (result, selection) =
-        app_lib::parser::parse_file(FIXTURE_PATH).expect("parse should succeed");
+        app_lib::parser::parse_file(path.to_str().expect("fixture path is valid UTF-8"))
+            .expect("parse should succeed");
 
     // Format detection
     assert_eq!(

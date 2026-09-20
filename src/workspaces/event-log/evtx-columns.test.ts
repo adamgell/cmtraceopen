@@ -144,6 +144,15 @@ describe("columnValue", () => {
     expect(columnValue(r, "processId")).toBe("1234");
     expect(columnValue(r, "keywords")).toBe("0x80");
   });
+  it("preserves a lossless EventRecordID when the numeric field is rounded", () => {
+    const exact = "9007199254740993";
+    const r = record({
+      eventRecordId: Number(exact),
+      eventRecordIdText: exact,
+    });
+    expect(columnValue(r, "recordId")).toBe(exact);
+  });
+
 
   it("renders an absent value as empty rather than zero", () => {
     // Consistent with the record model: 0 would be a value the provider never claimed.

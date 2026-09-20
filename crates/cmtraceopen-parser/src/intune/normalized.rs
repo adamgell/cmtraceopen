@@ -113,8 +113,8 @@ pub struct NormalizedSettingReport {
 mod tests {
     use super::*;
     use crate::intune::evidence::{
-        IntuneAccessState, IntuneEvidenceRef, IntuneParseState, IntuneProvenance, IntuneSensitivity,
-        IntuneSourceKind,
+        IntuneAccessState, IntuneEvidenceRef, IntuneParseState, IntuneProvenance,
+        IntuneSensitivity, IntuneSourceKind,
     };
 
     fn context() -> IntuneObservationContext {

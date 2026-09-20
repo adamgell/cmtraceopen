@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::intune::apps::windows::common::caseless_key;
 use crate::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
     IntuneEvidenceRef, IntuneFindingConfidence, IntuneNamedValue, IntuneObservationContext,
@@ -714,7 +715,8 @@ fn recorded_non_assessable_failure_observations(
 /// conservative direction: `single_value` refuses to pick, it never merges).
 /// Every key exported through `detect_conflicts` must stay in this list so a
 /// redacted conflict cannot report "2 distinct values" over two identically
-/// masked tokens (ADR-004; the export masks the trimmed, lowercased value).
+/// masked tokens (ADR-004; the export masks the whole value and files it under
+/// [`caseless_key`], which is the grouping used here).
 const CASE_INSENSITIVE_VALUE_KEYS: [&str; 11] = [
     "serialNumber",
     "productKeyId",
@@ -735,15 +737,19 @@ const CASE_INSENSITIVE_VALUE_KEYS: [&str; 11] = [
 /// reproducible fact rather than an artifact of iteration order.
 ///
 /// Distinctness is case-insensitive only for the keys in
-/// [`CASE_INSENSITIVE_VALUE_KEYS`]. For those identities, treating two casings
-/// as two values produced a conflict whose export said "2 distinct values"
-/// over two identical tokens, changing the conclusion under redaction
-/// (ADR-004). Each case-folded group is keyed by a deterministic
-/// representative casing -- the lexicographically smallest sighting -- so
-/// permuting the input cannot change the result (ADR-003). Any other key
-/// compares exactly: folding a case-sensitive value such as a Base64 hardware
-/// hash would merge two genuinely different values into one corroborated
-/// identity.
+/// [`CASE_INSENSITIVE_VALUE_KEYS`], and those keys group by the crate's shared
+/// caseless form — the same key the export files an identity under, so the two
+/// cannot disagree about which sightings are one identity. Folding with a
+/// lowercase of this module's own is what left the divergence open: treating
+/// two casings as two values produced a conflict whose export said "2 distinct
+/// values" over two identical tokens, changing the conclusion under redaction
+/// (ADR-004), and `to_ascii_lowercase` still did exactly that for a pair
+/// differing in the case of a non-ASCII letter. Each group is keyed by a
+/// deterministic representative casing -- the lexicographically smallest
+/// sighting -- so permuting the input cannot change the result (ADR-003). Any
+/// other key compares exactly: folding a case-sensitive value such as a Base64
+/// hardware hash would merge two genuinely different values into one
+/// corroborated identity.
 fn distinct_values(
     observations: &[AutopilotObservation],
     key: &str,
@@ -759,7 +765,7 @@ fn distinct_values(
             continue;
         }
         let group_key = if case_insensitive {
-            value.to_ascii_lowercase()
+            caseless_key(value)
         } else {
             value.to_owned()
         };
@@ -906,7 +912,10 @@ fn reduce_profile(
                 evidence.push(observation.evidence_ref());
                 retrieved = true;
                 raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                push_link(&mut available_success_links, observation.activity_id.as_deref());
+                push_link(
+                    &mut available_success_links,
+                    observation.activity_id.as_deref(),
+                );
             }
             AutopilotSignal::ProfileStateChanged => {
                 evidence.push(observation.evidence_ref());
@@ -924,7 +933,10 @@ fn reduce_profile(
                 ) {
                     applied = true;
                     raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                    push_link(&mut available_success_links, observation.activity_id.as_deref());
+                    push_link(
+                        &mut available_success_links,
+                        observation.activity_id.as_deref(),
+                    );
                 }
                 if token.is_some() {
                     last_state_token = token;
@@ -934,7 +946,10 @@ fn reduce_profile(
                 evidence.push(observation.evidence_ref());
                 applied = true;
                 raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
-                push_link(&mut available_success_links, observation.activity_id.as_deref());
+                push_link(
+                    &mut available_success_links,
+                    observation.activity_id.as_deref(),
+                );
             }
             AutopilotSignal::NoAssignedProfile => {
                 evidence.push(observation.evidence_ref());
@@ -990,7 +1005,8 @@ fn reduce_profile(
         error = error.or_else(|| section.error.clone());
     }
 
-    let candidate = reconcile_candidate(raised, negative, &negative_links, &available_success_links);
+    let candidate =
+        reconcile_candidate(raised, negative, &negative_links, &available_success_links);
 
     AutopilotProfileState {
         profile_id: single_value(observations, "profileId"),
@@ -1847,3 +1863,112 @@ fn sorted_unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
         .into_iter()
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One assessable observation carrying a single named value.
+    fn observation(evidence_id: &str, key: &str, value: &str) -> AutopilotObservation {
+        AutopilotObservation {
+            observation_id: evidence_id.to_string(),
+            context: IntuneObservationContext {
+                evidence_ref: IntuneEvidenceRef {
+                    evidence_id: evidence_id.to_string(),
+                    source_artifact_id: "autopilot.json".to_string(),
+                },
+                provenance: IntuneProvenance {
+                    source_kind: IntuneSourceKind::Json,
+                    source_artifact_id: "autopilot.json".to_string(),
+                    file_path: None,
+                    line_number: None,
+                    record_number: None,
+                    registry: None,
+                    event: None,
+                },
+                source_timestamp: None,
+                observed_at_utc: "2026-09-19T00:00:00Z".to_string(),
+                sensitivity: IntuneSensitivity::Sensitive,
+                parse_state: IntuneParseState::Parsed,
+                access_state: IntuneAccessState::Available,
+            },
+            signal: AutopilotSignal::DeviceAlreadyProvisioned,
+            channel: None,
+            provider: None,
+            event_id: None,
+            event_version: None,
+            activity_id: None,
+            section_kind: None,
+            section_outcome: None,
+            error: None,
+            named_data: vec![IntuneNamedValue {
+                name: key.to_string(),
+                value: value.to_string(),
+            }],
+            message: None,
+        }
+    }
+
+    fn grouped(sightings: &[(&str, &str)], key: &str) -> usize {
+        let observations: Vec<AutopilotObservation> = sightings
+            .iter()
+            .map(|(id, value)| observation(id, key, value))
+            .collect();
+
+        distinct_values(&observations, key).len()
+    }
+
+    /// Grouping a case-insensitive key uses the crate's shared caseless form, so
+    /// one identity is one value to the reducer exactly as it is one token to the
+    /// export (issue #629).
+    ///
+    /// `to_ascii_lowercase` left a pair differing in the case of a non-ASCII
+    /// letter as two values, which is the incoherent conflict the rule exists to
+    /// remove: two distinct values whose export shows one identical token. The
+    /// sigma pair is here as well, because it is the case `to_lowercase` alone
+    /// also gets wrong — `Σ` folds to `σ` while final `ς` keeps its own shape —
+    /// so a future rewrite to plain Unicode lowercasing is caught too.
+    #[test]
+    fn a_non_ascii_case_variant_pair_is_one_value() {
+        assert_eq!(
+            grouped(&[("e1", "S\u{c9}RIAL-ABC"), ("e2", "s\u{e9}rial-abc")], "serialNumber"),
+            1,
+            "an accented pair differing only in case is one identity"
+        );
+        assert_eq!(
+            grouped(
+                &[
+                    ("e1", "\u{3a3}\u{39f}\u{3a6}\u{39f}\u{3a5}\u{3a3}-1"),
+                    ("e2", "\u{3c3}\u{3bf}\u{3c6}\u{3bf}\u{3c5}\u{3c2}-1"),
+                ],
+                "serialNumber"
+            ),
+            1,
+            "a final-sigma pair is one identity to the shared form"
+        );
+    }
+
+    /// Every other key still compares exactly, which is the half of this rule a
+    /// fold applied too widely would break: a Base64 hardware hash is
+    /// case-sensitive, and merging two of its values would corroborate two
+    /// genuinely different devices into one identity.
+    #[test]
+    fn a_case_sensitive_key_still_compares_exactly() {
+        assert_eq!(
+            grouped(&[("e1", "AbCdEf"), ("e2", "abcdef")], "hardwareHash"),
+            2,
+            "a case-sensitive key must not fold"
+        );
+        assert_eq!(
+            grouped(&[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABC")], "serialNumber"),
+            1,
+            "the same spelling is one value"
+        );
+        assert_eq!(
+            grouped(&[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABD")], "serialNumber"),
+            2,
+            "a genuinely different value is still two"
+        );
+    }
+}
+

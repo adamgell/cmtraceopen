@@ -29,6 +29,13 @@ export interface WorkspaceCapabilities {
   knownSources?: boolean;
   /** Whether pause/resume tailing is supported. Only the log workspace has this. */
   tailing?: boolean;
+  /**
+   * Whether loading a log keeps this workspace active instead of switching to
+   * the Log workspace. Set on workspaces whose own screen is where the loaded
+   * log belongs; explicit navigation (the workspace picker, or a call site that
+   * switches views itself) still moves the user. Defaults to false.
+   */
+  keepsViewOnLogLoad?: boolean;
 }
 
 export interface WorkspaceDefinition {
