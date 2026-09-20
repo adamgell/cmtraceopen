@@ -7,10 +7,11 @@ pub mod rules;
 
 pub use models::{
     DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
-    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
-    DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
-    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
-    DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight,
+    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts,
+    DsregcmdJoinType, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
+    DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
+    DsregcmdWhfbPolicyEvidence,
 };
 pub use redaction::{redacted_analysis, redacted_status_text};
 

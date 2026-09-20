@@ -24,10 +24,11 @@ pub mod event_logs;
 
 pub use cmtraceopen_parser::dsregcmd::{
     redacted_status_text, DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
-    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry,
-    DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType,
-    DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence,
-    DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight,
+    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts,
+    DsregcmdJoinType, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
+    DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
+    DsregcmdWhfbPolicyEvidence,
 };
 
 pub mod registry;

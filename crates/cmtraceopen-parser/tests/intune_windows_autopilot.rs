@@ -2343,7 +2343,11 @@ fn one_identity_mints_one_token_whatever_case_a_non_ascii_letter_arrives_in() {
         .iter()
         .filter_map(|observation| observation.named("deviceName").map(str::to_owned))
         .collect();
-    assert_eq!(reported.len(), 2, "the fixture reports the device name twice");
+    assert_eq!(
+        reported.len(),
+        2,
+        "the fixture reports the device name twice"
+    );
     assert!(reported[0].starts_with("[redacted:"), "got {}", reported[0]);
     assert_eq!(
         reported[0], reported[1],

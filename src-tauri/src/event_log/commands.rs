@@ -11,15 +11,15 @@ use super::parser::{self, EventLogSourceManifest};
 use crate::state::app_state::AppState;
 #[cfg(any(target_os = "windows", test))]
 use crate::state::app_state::EventLogQueryCancel;
-#[cfg(any(target_os = "windows", test))]
-use std::collections::HashMap;
-#[cfg(any(target_os = "windows", test))]
-use std::sync::Arc;
-#[cfg(any(target_os = "windows", test))]
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::atomic::Ordering;
 #[cfg(target_os = "windows")]
 use serde::Serialize;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+#[cfg(any(target_os = "windows", test))]
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+#[cfg(any(target_os = "windows", test))]
+use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use tauri::Emitter;
 use tauri::{AppHandle, Manager};

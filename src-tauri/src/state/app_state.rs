@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
-use std::sync::Arc;
 #[cfg(feature = "event-log")]
 use std::sync::atomic::AtomicBool;
 /// Named only by [`EventLogQueryCancel::in_flight`], which carries the same
 /// predicate.
 #[cfg(all(feature = "event-log", any(target_os = "windows", test)))]
 use std::sync::atomic::AtomicUsize;
+#[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
+use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(feature = "event-log")]
 use std::sync::RwLock;

@@ -50,7 +50,9 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::intune::apps::windows::common::{caseless_key, find_ignore_case, fold_with_offsets, FoldedChar};
+use crate::intune::apps::windows::common::{
+    caseless_key, find_ignore_case, fold_with_offsets, FoldedChar,
+};
 use crate::intune::evidence::{IntuneFinding, IntuneNamedValue};
 
 use super::models::*;
@@ -294,10 +296,12 @@ impl MaskedLiterals {
             // The key is the form `mask_value` hashes, so the table and the
             // typed fields cannot disagree about the token: one identity folds to
             // one spelling, which mints one token.
-            literals.entry(caseless_key(value)).or_insert(MaskedLiteral {
-                needle: value.to_lowercase(),
-                token: mask_value(value),
-            });
+            literals
+                .entry(caseless_key(value))
+                .or_insert(MaskedLiteral {
+                    needle: value.to_lowercase(),
+                    token: mask_value(value),
+                });
         }
         Self { literals }
     }
@@ -377,10 +381,7 @@ fn redact_export_text(value: &str, literals: &MaskedLiterals) -> String {
 /// masked is decided by a key rather than by the field they sit in;
 /// [`sensitive_value_key`] and [`masked_conflict_literal`] are the shared
 /// decisions for those two.
-fn for_each_masked_value_mut(
-    snapshot: &mut AutopilotSnapshot,
-    mut visit: impl FnMut(&mut String),
-) {
+fn for_each_masked_value_mut(snapshot: &mut AutopilotSnapshot, mut visit: impl FnMut(&mut String)) {
     let identity = &mut snapshot.identity;
     let fields = [
         &mut identity.serial_number,
@@ -664,7 +665,10 @@ mod tests {
         let literals = MaskedLiterals::new(BTreeSet::from(["PC-ÉLODIE".to_owned()]));
         let token = mask_value("PC-ÉLODIE");
 
-        assert_eq!(literals.scrub("device pc-élodie"), format!("device {token}"));
+        assert_eq!(
+            literals.scrub("device pc-élodie"),
+            format!("device {token}")
+        );
         assert_eq!(literals.scrub("PC-ÉLODIE"), token);
         assert_eq!(
             literals.scrub("pc-élodie met PC-ÉLODIE"),
@@ -685,16 +689,17 @@ mod tests {
         const CAPITAL: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
         const NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
 
-        let literals = MaskedLiterals::new(BTreeSet::from([
-            CAPITAL.to_owned(),
-            NARRATIVE.to_owned(),
-        ]));
+        let literals =
+            MaskedLiterals::new(BTreeSet::from([CAPITAL.to_owned(), NARRATIVE.to_owned()]));
         let token = mask_value(CAPITAL);
 
         assert_eq!(literals.literals.len(), 1, "one identity, one entry");
         assert_eq!(mask_value(NARRATIVE), token, "one identity, one token");
         assert_eq!(literals.masked_token(NARRATIVE), Some(token.clone()));
-        assert_eq!(literals.scrub(&format!("device {CAPITAL}")), format!("device {token}"));
+        assert_eq!(
+            literals.scrub(&format!("device {CAPITAL}")),
+            format!("device {token}")
+        );
         assert_eq!(
             literals.scrub(&format!("device {NARRATIVE}")),
             format!("device {token}")
