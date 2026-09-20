@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   assertParseResultShape,
+  formatCoverageGap,
   mergeCoverageGaps,
+  mergeDiagnosisCoverageGaps,
+  mergeStructuredCoverageGaps,
   summarizeCoverageGaps,
 } from "./evtx-coverage";
 
@@ -73,10 +76,305 @@ describe("assertParseResultShape", () => {
     });
     expect(shape.errorMessages).toEqual(["Application: 3 records unreadable"]);
   });
+  it("preserves an omitted or valid totalRecords count", () => {
+    expect(
+      assertParseResultShape({ records: [], channels: [], totalRecords: 0 }).totalRecords
+    ).toBe(0);
+    expect(assertParseResultShape({ records: [], channels: [] }).totalRecords).toBeNull();
+  });
 
-  it("treats absent errorMessages as no gaps rather than a malformed reply", () => {
-    // An older reader that reports nothing is not the same as one this build cannot read.
-    expect(assertParseResultShape({ records: [], channels: [] }).errorMessages).toEqual([]);
+  it("rejects a malformed totalRecords count", () => {
+    for (const totalRecords of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+      expect(() =>
+        assertParseResultShape({ records: [], channels: [], totalRecords })
+      ).toThrow(/totalRecords/);
+    }
+  });
+  it("preserves valid archive member provenance", () => {
+    const sha256 = "a".repeat(64);
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      archiveMembers: [
+        {
+          path: "bundle.zip::Application.evtx",
+          kind: "evtx",
+          sha256,
+          outcome: "parsed",
+        },
+        { path: "bundle.zip::readme.txt", kind: "text", outcome: "unsupported" },
+      ],
+    });
+
+    expect(shape.archiveMembers).toEqual([
+      {
+        path: "bundle.zip::Application.evtx",
+        kind: "evtx",
+        sha256,
+        outcome: "parsed",
+      },
+      { path: "bundle.zip::readme.txt", kind: "text", outcome: "unsupported" },
+    ]);
+  });
+
+  it("rejects malformed archive member provenance instead of dropping it", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        archiveMembers: [
+          {
+            path: "bundle.zip::Application.evtx",
+            kind: "evtx",
+            sha256: "abc123",
+            outcome: "parsed",
+          },
+        ],
+      })
+    ).toThrow(/invalid archive member at index 0/);
+  });
+
+  it("treats omitted optional collections as empty", () => {
+    const shape = assertParseResultShape({ records: [], channels: [] });
+    expect(shape.errorMessages).toEqual([]);
+    expect(shape.coverageGaps).toEqual([]);
+    expect(shape.coverage).toEqual([]);
+  });
+
+  it("rejects a non-array errorMessages field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], errorMessages: "not a list" })
+    ).toThrow(/errorMessages/);
+  });
+
+  it("rejects malformed errorMessages entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        errorMessages: ["real", 42, null],
+      })
+    ).toThrow(/errorMessages at index 1/);
+  });
+
+  it("rejects a non-array coverageGaps field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], coverageGaps: "not a list" })
+    ).toThrow(/coverageGaps/);
+  });
+
+  it("rejects malformed coverageGaps entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          { source: "real.evtx", kind: "file", reason: "unreadable" },
+          { source: "missing-kind", reason: "not a gap" },
+          "legacy text",
+        ],
+      })
+    ).toThrow(/coverageGaps at index 1/);
+  });
+
+  it("preserves typed native provider-message coverage", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        {
+          source: "remote-host/ForwardedEvents",
+          kind: "provider",
+          reason:
+            "provider message for Example.Provider could not be rendered at EvtFormatMessage " +
+            "(Windows error 15027); raw event data is shown instead",
+          providerMessage: {
+            provider: "Example.Provider",
+            stage: "formatMessage",
+            errorCode: 15027,
+          },
+        },
+      ],
+    });
+
+    expect(shape.coverageGaps).toEqual([
+      expect.objectContaining({
+        source: "remote-host/ForwardedEvents",
+        providerMessage: {
+          provider: "Example.Provider",
+          stage: "formatMessage",
+          errorCode: 15027,
+        },
+      }),
+    ]);
+  });
+
+  it.each([
+    ["missing provider", { stage: "formatMessage", errorCode: 15027 }],
+    ["blank provider", { provider: "   ", stage: "formatMessage", errorCode: 15027 }],
+    ["missing stage", { provider: "Example.Provider", errorCode: 15027 }],
+    ["unknown stage", { provider: "Example.Provider", stage: "lookup", errorCode: 15027 }],
+    ["missing code", { provider: "Example.Provider", stage: "openPublisherMetadata" }],
+    ["negative code", { provider: "Example.Provider", stage: "formatMessage", errorCode: -1 }],
+    ["fractional code", { provider: "Example.Provider", stage: "formatMessage", errorCode: 2.5 }],
+    [
+      "unsafe code",
+      {
+        provider: "Example.Provider",
+        stage: "formatMessage",
+        errorCode: Number.MAX_SAFE_INTEGER + 1,
+      },
+    ],
+    [
+      "non-number code",
+      { provider: "Example.Provider", stage: "formatMessage", errorCode: "15027" },
+    ],
+  ])("rejects providerMessage with %s", (_label, providerMessage) => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "Application",
+            kind: "provider",
+            reason: "provider description unavailable",
+            providerMessage,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("rejects native provider context on a non-provider coverage gap", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "Application",
+            kind: "record",
+            reason: "record was lost",
+            providerMessage: {
+              provider: "Example.Provider",
+              stage: "formatMessage",
+              errorCode: 15027,
+            },
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("rejects coverageGaps locations outside the safe integer range", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "oversized.evtx",
+            kind: "chunk",
+            reason: "incomplete chunk",
+            chunkId: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("rejects a non-array coverage field", () => {
+    expect(() =>
+      assertParseResultShape({ records: [], channels: [], coverage: "not a list" })
+    ).toThrow(/coverage/);
+  });
+
+  it("rejects malformed coverage entries with their field and index", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverage: [
+          { kind: "missing", path: "missing.evtx", reason: "not found" },
+          { kind: "unknown", path: "unknown.evtx", reason: "invalid kind" },
+        ],
+      })
+    ).toThrow(/coverage at index 1/);
+  });
+
+  it("rejects coverageGaps eventRecordId outside the safe integer range", () => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "oversized.evtx",
+            kind: "record",
+            reason: "unreadable record",
+            eventRecordId: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("preserves an unsafe coverage-gap record ID through its exact u64 text", () => {
+    const eventRecordIdText = "18446744073709551615";
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverageGaps: [
+        {
+          source: "oversized.evtx",
+          kind: "record",
+          reason: "unreadable record",
+          eventRecordId: Number(eventRecordIdText),
+          eventRecordIdText,
+        },
+      ],
+    });
+
+    expect(shape.coverageGaps).toEqual([
+      expect.objectContaining({ eventRecordIdText }),
+    ]);
+    expect(formatCoverageGap(shape.coverageGaps[0])).toBe(
+      `oversized.evtx record ${eventRecordIdText}: unreadable record`
+    );
+  });
+
+  it.each([
+    ["outside u64", "18446744073709551616", Number("18446744073709551616")],
+    ["non-decimal", "record-42", 42],
+    ["mismatched", "42", Number.MAX_SAFE_INTEGER + 1],
+  ])("rejects %s coverage-gap record ID text", (_label, eventRecordIdText, eventRecordId) => {
+    expect(() =>
+      assertParseResultShape({
+        records: [],
+        channels: [],
+        coverageGaps: [
+          {
+            source: "invalid.evtx",
+            kind: "record",
+            reason: "unreadable record",
+            eventRecordId,
+            eventRecordIdText,
+          },
+        ],
+      })
+    ).toThrow(/coverageGaps at index 0/);
+  });
+
+  it("preserves valid coverage entries", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      coverage: [{ kind: "missing", path: "missing.evtx", reason: "not found" }],
+    });
+    expect(shape.coverage).toEqual([
+      { kind: "missing", path: "missing.evtx", reason: "not found" },
+    ]);
   });
 
   it("rejects a reply whose records are not a list", () => {
@@ -87,13 +385,162 @@ describe("assertParseResultShape", () => {
     expect(() => assertParseResultShape({ channels: [] })).toThrow(/cannot read/);
     expect(() => assertParseResultShape(undefined)).toThrow(/cannot read/);
   });
+});
 
-  it("drops non-string gap entries rather than rendering them", () => {
+describe("structured recovery gaps", () => {
+  it("deduplicates equivalent numeric and zero-padded textual record IDs", () => {
+    const numeric = {
+      source: "dirty.evtx",
+      kind: "record" as const,
+      reason: "unreadable record",
+      eventRecordId: 42,
+    };
+    const textual = {
+      ...numeric,
+      eventRecordIdText: "00042",
+    };
+
+    expect(mergeStructuredCoverageGaps([numeric], [textual])).toEqual([
+      numeric,
+    ]);
+  });
+
+  it("keeps chunk and record provenance in the boundary shape", () => {
     const shape = assertParseResultShape({
       records: [],
       channels: [],
-      errorMessages: ["real", 42, null],
+      coverageGaps: [
+        {
+          source: "dirty.evtx",
+          kind: "chunk",
+          reason: "incomplete chunk",
+          chunkId: 9,
+        },
+        {
+          source: "dirty.evtx",
+          kind: "xml",
+          reason: "malformed XML",
+          eventRecordId: 42,
+        },
+      ],
     });
-    expect(shape.errorMessages).toEqual(["real"]);
+
+    expect(shape.coverageGaps).toEqual([
+      {
+        source: "dirty.evtx",
+        kind: "chunk",
+        reason: "incomplete chunk",
+        chunkId: 9,
+      },
+      {
+        source: "dirty.evtx",
+        kind: "xml",
+        reason: "malformed XML",
+        eventRecordId: 42,
+      },
+    ]);
+  });
+
+  it("keeps distinct native provider stages in the merge key", () => {
+    const base = {
+      source: "Application",
+      kind: "provider" as const,
+      reason: "provider message unavailable",
+      providerMessage: {
+        provider: "Example.Provider",
+        stage: "openPublisherMetadata" as const,
+        errorCode: 2,
+      },
+    };
+    const formatGap = {
+      ...base,
+      providerMessage: {
+        provider: "Example.Provider",
+        stage: "formatMessage" as const,
+        errorCode: 2,
+      },
+    };
+
+    expect(mergeStructuredCoverageGaps([base], [formatGap])).toEqual([base, formatGap]);
+  });
+
+});
+describe("diagnosis coverage gaps", () => {
+  it("merges typed, manifest, legacy, and tail gaps deterministically", () => {
+    expect(
+      mergeDiagnosisCoverageGaps(
+        [{ source: "parser.evtx", kind: "chunk", reason: "incomplete chunk", chunkId: 4 }],
+        [{ kind: "missing", path: "manifest.evtx", reason: "source path does not exist" }],
+        [
+          "Application: live batch 1 was not delivered",
+          "Remote: remote source unavailable",
+          "Parser: malformed XML",
+          "Application: live batch 1 was not delivered",
+        ],
+        ["Tail: 2 records shortfall"]
+      )
+    ).toEqual([
+      { source: "parser.evtx", kind: "chunk", reason: "incomplete chunk", chunkId: 4 },
+      { source: "manifest.evtx", kind: "missing", reason: "source path does not exist" },
+      { source: "Application", kind: "limitReached", reason: "live batch 1 was not delivered" },
+      { source: "Remote", kind: "unsupported", reason: "remote source unavailable" },
+      { source: "Parser", kind: "invalidPattern", reason: "malformed XML" },
+      { source: "Tail", kind: "limitReached", reason: "2 records shortfall" },
+    ]);
+  });
+  it("keeps one canonical typed gap when its formatted copy is also legacy coverage", () => {
+    const typedGap = {
+      source: "parser.evtx",
+      kind: "limit" as const,
+      reason: "reader stopped at 100 events; the source may contain more",
+      eventRecordId: 99,
+    };
+
+    expect(
+      mergeDiagnosisCoverageGaps(
+        [typedGap],
+        [],
+        [
+          "parser.evtx record 99: reader stopped at 100 events; the source may contain more",
+          "Application: live batch 1 was not delivered",
+        ],
+        ["Tail: unrelated live gap"]
+      )
+    ).toEqual([
+      typedGap,
+      { source: "Application", kind: "limitReached", reason: "live batch 1 was not delivered" },
+      { source: "Tail", kind: "record", reason: "unrelated live gap" },
+    ]);
+  });
+
+  it.each([
+    "Application: reader stopped at 100 events; the source may contain more",
+    "Application: stopped after 100 events, the channel could not be read further (EvtNext failed)",
+  ])("classifies backend reader truncation as limitReached: %s", (message) => {
+    expect(mergeDiagnosisCoverageGaps([], [], [message], [])).toEqual([
+      {
+        source: "Application",
+        kind: "limitReached",
+        reason: message.slice("Application: ".length),
+      },
+    ]);
+  });
+
+
+  it("makes the frontend bound explicit instead of silently dropping gaps", () => {
+    const gaps = mergeDiagnosisCoverageGaps(
+      [],
+      [],
+      Array.from({ length: 257 }, (_, index) => `source-${index}: unreadable record`),
+      []
+    );
+    expect(gaps).toHaveLength(256);
+    expect(gaps[gaps.length - 1]).toEqual({
+      source: "frontend-diagnosis",
+      kind: "limitReached",
+      reason:
+        "frontend coverage bound omitted 2 additional gaps; " +
+        "backend diagnosis also enforces an input cap",
+    });
   });
 });

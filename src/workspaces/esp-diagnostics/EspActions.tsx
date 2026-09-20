@@ -16,6 +16,7 @@ import {
   WarningRegular,
 } from "@fluentui/react-icons";
 import { espFlipAppInstalled, espRestoreAppState } from "../../lib/commands";
+import { useModalOwnership } from "../../hooks/use-modal-ownership";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -64,6 +65,10 @@ export function EspActions({ failedApps, graphNames, elevated }: EspActionsProps
   const [confirming, setConfirming] = useState<EspWorkload | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [outcomes, setOutcomes] = useState<Map<string, Outcome>>(new Map());
+  const ownsForceConfirmation = useModalOwnership(
+    "espForceAction",
+    confirming !== null,
+  );
 
   if (failedApps.length === 0) {
     return null;
@@ -263,7 +268,7 @@ export function EspActions({ failedApps, graphNames, elevated }: EspActionsProps
       </ul>
 
       <Dialog
-        open={confirming !== null}
+        open={ownsForceConfirmation}
         onOpenChange={(_, data) => {
           if (!data.open) setConfirming(null);
         }}

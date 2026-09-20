@@ -11,7 +11,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useDsregcmdStore } from "./dsregcmd-store";
 import { DsregcmdEventLogSurface } from "./DsregcmdEventLogSurface";
 import { useAppActions } from "../../hooks/use-app-actions";
-import { writeTextOutputFile } from "../../lib/commands";
+import { redactDsregcmdStatusText, writeTextOutputFile } from "../../lib/commands";
 import {
   formatBool,
   formatConfidenceLabel,
@@ -196,7 +196,11 @@ export function DsregcmdWorkspace() {
     }
 
     try {
-      await writeText(rawInput);
+      // The capture text is the analyzer's input, so it is the one value the
+      // workspace holds unprojected. The projection is asked for rather than
+      // applied here: masking at this call site is the per-lane hygiene rule
+      // issue #556 rejects.
+      await writeText(await redactDsregcmdStatusText(rawInput));
       setExportSuccess("Copied dsregcmd status text to the clipboard.");
     } catch (error) {
       console.error("[dsregcmd] failed to copy raw status", { error });

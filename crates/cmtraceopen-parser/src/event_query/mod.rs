@@ -172,17 +172,11 @@ impl EventQueryFilter {
 /// absorbed the two-bounded time window being costed as one expression rather than two.
 const MAX_EXPRESSIONS_PER_SELECT: usize = 20;
 
-/// The expression count at which the service starts refusing a query.
-///
-/// Measured on Windows 11 build 26200 against `Application` with strict flags: 23 `or`-joined
-/// comparisons are accepted, 24 and every count tried up to 50 are rejected with
-/// `ERROR_EVT_INVALID_QUERY` (15001). Recorded as a constant so the budget above is visibly
-/// derived from a measurement rather than from the documented figure of 32, which is wrong here.
-const MEASURED_REJECTION_POINT: usize = 24;
-
 // The budget must leave room, not merely differ. Checked at compile time so raising it past what
-// the service accepts cannot reach a user.
-const _: () = assert!(MAX_EXPRESSIONS_PER_SELECT < MEASURED_REJECTION_POINT);
+// the service accepts cannot reach a user. The rejection point is 24 expressions: measured on
+// Windows 11 build 26200 against `Application` with strict flags, where 23 `or`-joined comparisons
+// are accepted and 24 through 50 are rejected with `ERROR_EVT_INVALID_QUERY` (15001).
+const _: () = assert!(MAX_EXPRESSIONS_PER_SELECT < 24);
 
 /// Quotes a value as an XPath string literal, choosing a delimiter the value does not contain.
 ///

@@ -17,9 +17,12 @@ BeforeAll {
     $functionNames = @(
         'Get-ObjectPropertyValue',
         'Test-ArrayValue',
+        'ConvertTo-UtcTimestamp',
         'Assert-ProfileRequiredString',
         'Assert-ProfileRequiredArray',
         'Assert-CollectorProfileShape',
+        'ConvertTo-SafeFileName',
+        'New-CollectorBundleId',
         'Join-RelativePath',
         'Get-LocaleMetadataRelativePath',
         'Get-LocaleMetadataLcid',
@@ -80,6 +83,70 @@ BeforeAll {
                 }
             )
         }
+    }
+}
+
+Describe 'New-CollectorBundleId' {
+    It 'emits the canonical collector format with a unique lowercase nonce' {
+        $first = New-CollectorBundleId -DeviceName 'DEVICE-01'
+        $second = New-CollectorBundleId -DeviceName 'DEVICE-01'
+
+        $first | Should -Match '^CMTRACE-\d{8}-\d{6}-DEVICE-01-[0-9a-f]{32}$'
+        $second | Should -Match '^CMTRACE-\d{8}-\d{6}-DEVICE-01-[0-9a-f]{32}$'
+        $second | Should -Not -BeExactly $first
+    }
+
+    It 'uses the invariant Gregorian calendar under a non-Gregorian culture' {
+        $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
+        $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
+        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56)
+        Mock Get-Date {
+            param([string]$Format)
+            if ([string]::IsNullOrEmpty($Format)) {
+                return $testDate
+            }
+            return $testDate.ToString($Format, [System.Globalization.CultureInfo]::CurrentCulture)
+        }
+
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+            [System.Globalization.CultureInfo]::CurrentUICulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+
+            $bundleId = New-CollectorBundleId -DeviceName 'DEVICE-01'
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $originalCulture
+            [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
+        }
+
+        $bundleId | Should -Match '^CMTRACE-20260521-123456-DEVICE-01-[0-9a-f]{32}$'
+    }
+}
+
+Describe 'Get-UtcTimestamp' {
+    It 'serializes UTC with the invariant Gregorian calendar' {
+        $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
+        $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
+        Mock Get-Date {
+            [datetime]::new(2026, 5, 21, 12, 34, 56, [DateTimeKind]::Utc)
+        }
+
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+            [System.Globalization.CultureInfo]::CurrentUICulture =
+                [System.Globalization.CultureInfo]::GetCultureInfo('fa-IR')
+
+            $timestamp = Get-UtcTimestamp
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $originalCulture
+            [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
+        }
+
+        $timestamp | Should -BeExactly '2026-05-21T12:34:56Z'
     }
 }
 

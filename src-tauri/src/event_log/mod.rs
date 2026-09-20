@@ -1,6 +1,10 @@
+pub mod analysis_session;
+pub mod archive;
+pub mod capture;
 pub mod commands;
 pub mod event_node;
 pub mod export;
+pub mod export_session;
 pub mod fetch;
 pub mod maps;
 pub mod models;
@@ -8,8 +12,8 @@ pub mod parser;
 pub mod provider_db;
 pub mod rendered;
 pub mod timeline;
+pub mod writer;
 
-#[cfg(target_os = "windows")]
 pub mod live;
 
 /// Strip control characters from a string, preserving newlines and tabs.
