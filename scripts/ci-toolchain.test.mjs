@@ -46,10 +46,12 @@ function toolchainSteps(contents) {
     // An explicit `toolchain:` input in the step's `with:` block is what tells
     // the two ref families apart.
     const lookahead = lines.slice(index + 1, index + 4).join("\n");
+    const inputMatch = /^\s+toolchain:\s*"?([^"\n]+?)"?\s*$/m.exec(lookahead);
     steps.push({
       sha: match[1],
       comment: (match[2] ?? "").trim(),
-      hasInput: /^\s+toolchain:/m.test(lookahead),
+      hasInput: inputMatch !== null,
+      inputVersion: inputMatch ? inputMatch[1].trim() : null,
       line: index + 1,
     });
   });
@@ -102,6 +104,66 @@ test("every workflow installs the pinned toolchain, or asks for its own", () => 
     [],
     "a step without a `toolchain:` input installs the pinned channel, so it must " +
       "use the pinned ref; a step with one must use a ref that accepts inputs",
+  );
+});
+
+/**
+ * The MSRV job asks for the floor `src-tauri/Cargo.toml` declares. Any other
+ * explicit `toolchain:` input is a second source of truth for the channel, and
+ * a second source of truth is how the Source Quality job came to run rustfmt
+ * from 1.92.0 while every local `cargo fmt` ran the pinned 1.98.1: the ref was
+ * right for a step with an input, so nothing objected to the version.
+ */
+const MSRV_INPUT = "1.88";
+
+test("an explicit toolchain input is the pinned channel or the MSRV floor", () => {
+  const workflows = readdirSync(workflowDir).filter((name) =>
+    /\\.ya?ml$/.test(name),
+  );
+
+  const offenders = [];
+
+  for (const workflow of workflows) {
+    const steps = toolchainSteps(
+      readFileSync(join(workflowDir, workflow), "utf8"),
+    );
+
+    for (const step of steps) {
+      if (step.inputVersion === null) {
+        continue;
+      }
+      if (
+        step.inputVersion !== PINNED_REF.version &&
+        step.inputVersion !== MSRV_INPUT
+      ) {
+        offenders.push(
+          `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floor ${MSRV_INPUT}`,
+        );
+      }
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    "a step must install the pinned channel unless it is the MSRV job",
+  );
+});
+
+test("the guard detects a step pinned to a third channel", () => {
+  const drifted = [
+    "      - name: Setup Rust",
+    `        uses: dtolnay/rust-toolchain@${INPUT_ACCEPTING_REF.sha} # stable`,
+    "        with:",
+    '          toolchain: "1.92.0"',
+  ].join("\n");
+
+  const [step] = toolchainSteps(drifted);
+  assert.equal(step.inputVersion, "1.92.0", "fixture must expose its version");
+  assert.notEqual(
+    step.inputVersion,
+    PINNED_REF.version,
+    "the guard must reject a version that overrides the pin",
   );
 });
 
