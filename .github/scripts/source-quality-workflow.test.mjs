@@ -3,6 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workflowUrl = new URL("../workflows/cmtrace-ci.yml", import.meta.url);
+
+// The toolchain step here must stay byte-for-byte equal to the job below, and
+// the ref must stay the channel `rust-toolchain.toml` pins. It previously named
+// `toolchain: "1.92.0"`, overriding the pin, so this gate ran rustfmt from a
+// channel no developer runs and failed on formatting every local run accepts.
+// `ci-toolchain.test.mjs` guards the refs in workflows; this literal is the
+// other copy, so a channel bump has to move both.
 const expectedSourceQualityJob = `  source-quality:
     name: Source Quality (fmt / wasm / whitespace)
     runs-on: ubuntu-latest
@@ -18,9 +25,8 @@ const expectedSourceQualityJob = `  source-quality:
           persist-credentials: false
 
       - name: Setup pinned Rust quality toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
         with:
-          toolchain: "1.92.0"
           components: rustfmt
           targets: wasm32-unknown-unknown
 

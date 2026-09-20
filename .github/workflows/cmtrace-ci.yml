@@ -32,12 +32,6 @@ jobs:
           persist-credentials: false
 
       - name: Setup pinned Rust quality toolchain
-        # The 1.98.1 ref, matching rust-toolchain.toml and every other job. An
-        # explicit `toolchain:` input here overrode all of that and ran rustfmt
-        # from an older channel, so this job failed the formatting check on
-        # output that `cargo fmt` under the pinned channel considers correct -
-        # the exact "a gate that only one side can see is not a gate" failure
-        # the pin exists to prevent.
         uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
         with:
           components: rustfmt
