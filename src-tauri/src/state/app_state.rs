@@ -74,6 +74,13 @@ pub struct AppState {
     /// relaunch. Consumed on first retrieval; the ticket it names is itself
     /// single-use, so a replayed identifier restores nothing.
     pub initial_elevation_restore: Mutex<Option<String>>,
+    /// File paths a second launch handed over to the window that is running.
+    ///
+    /// A second launch is detected as soon as the app is running, which can be
+    /// before the frontend is listening, so its paths wait here to be claimed
+    /// rather than being announced into an empty room. Claiming takes the whole
+    /// list, so a handed-over path is opened once.
+    pub second_launch_paths: Mutex<Vec<String>>,
     /// Active unified multi-file timelines keyed by timeline id.
     pub timelines: Mutex<HashMap<String, Timeline>>,
     #[cfg(feature = "sccm-diagnostics")]
@@ -130,6 +137,7 @@ impl AppState {
             initial_file_paths: Mutex::new(initial_file_paths),
             initial_workspace: Mutex::new(initial_workspace),
             initial_elevation_restore: Mutex::new(initial_elevation_restore),
+            second_launch_paths: Mutex::new(Vec::new()),
             timelines: Mutex::new(HashMap::new()),
             #[cfg(feature = "sccm-diagnostics")]
             sccm_advanced_capabilities: Mutex::new(SccmAdvancedCapabilityStore::default()),
@@ -146,6 +154,18 @@ impl AppState {
             #[cfg(feature = "event-log")]
             event_log_query_cancels: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Takes the file paths a second launch handed over, clearing them.
+    ///
+    /// The claim is the only way those paths leave the handoff, so a window woken
+    /// about a launch it already claimed cannot open the same file twice.
+    pub fn take_second_launch_paths(&self) -> Result<Vec<String>, crate::error::AppError> {
+        let mut guard = self
+            .second_launch_paths
+            .lock()
+            .map_err(|error| crate::error::AppError::State(error.to_string()))?;
+        Ok(std::mem::take(&mut *guard))
     }
 
     #[cfg(feature = "esp-diagnostics")]
@@ -203,11 +223,13 @@ impl Default for AppState {
     }
 }
 
-#[cfg(all(test, feature = "esp-diagnostics"))]
+#[cfg(test)]
 mod tests {
     use super::AppState;
+    #[cfg(feature = "esp-diagnostics")]
     use crate::esp::session::EspSessionError;
 
+    #[cfg(feature = "esp-diagnostics")]
     #[test]
     fn esp_manager_is_unavailable_until_application_setup_installs_it() {
         let state = AppState::default();
@@ -216,5 +238,24 @@ mod tests {
             Err(EspSessionError::State { message })
                 if message == "ESP diagnostics session manager is not initialized"
         ));
+    }
+
+    #[test]
+    fn a_second_launch_hands_its_paths_over_once() {
+        let state = AppState::default();
+        state
+            .second_launch_paths
+            .lock()
+            .expect("state lock")
+            .push(r"C:\Logs\ime.log".to_string());
+
+        assert_eq!(
+            state.take_second_launch_paths().expect("claim"),
+            [r"C:\Logs\ime.log"],
+        );
+
+        // A window woken twice claims once: the second claim finds nothing, so
+        // the path cannot be opened again from the handoff.
+        assert!(state.take_second_launch_paths().expect("claim").is_empty());
     }
 }

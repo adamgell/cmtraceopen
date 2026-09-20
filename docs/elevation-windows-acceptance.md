@@ -65,7 +65,9 @@ public issue. Never use customer logs.
 3. Confirm the menu action, cancel UAC, and verify the original process remains
    open and usable with its current workspace unchanged.
 4. Repeat the menu action and approve same-account UAC. Verify one elevated
-   child starts and the original process exits only after launch succeeds.
+   child starts and the original process exits only after launch succeeds. The
+   child replaces the process that launched it rather than launching alongside
+   it, so it must never hand its arguments to the still-running window.
 5. Inspect the elevated child's command line. Record only the redacted shape
    `--elevation-restore=<opaque-id> --elevation-workspace=<allowlisted-id>`.
    Fail if it contains a source path, token, filter, serialized session,
