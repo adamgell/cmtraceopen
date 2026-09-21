@@ -296,6 +296,20 @@ export interface DsregcmdResolvedSource {
   evidenceFilePath: string | null;
 }
 
+/**
+ * A capture bundle projected for hand-off (issue #628).
+ *
+ * The working bundle stays raw, because it is what the analyzer reads back.
+ * This is the copy that may be archived or attached: the same files under the
+ * same relative paths, with the tenant id, the tenant and on-premises domains,
+ * the device id, the certificate thumbprint, the user principal name and the
+ * user SID masked.
+ */
+export interface DsregcmdShareableBundle {
+  bundlePath: string;
+  artifactCount: number;
+}
+
 export type DsregcmdSourceKind = "file" | "folder" | "clipboard" | "capture" | "text";
 
 export type DsregcmdSourceDescriptor =

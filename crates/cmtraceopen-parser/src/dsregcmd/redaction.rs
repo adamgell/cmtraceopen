@@ -90,14 +90,14 @@ use crate::intune::models::{
 };
 
 use super::models::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult,
-    DsregcmdDerived, DsregcmdDeviceDetails, DsregcmdDiagnosticFields, DsregcmdDiagnosticInsight,
-    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdFacts, DsregcmdJoinState,
-    DsregcmdManagementDetails, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
-    DsregcmdPostJoinDiagnostics, DsregcmdPreJoinTests, DsregcmdProxyEvidence,
-    DsregcmdRegistrationState, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
-    DsregcmdServiceEndpoints, DsregcmdSsoState, DsregcmdTenantDetails, DsregcmdUserState,
-    DsregcmdWhfbPolicyEvidence,
+    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDeviceDetails, DsregcmdDiagnosticFields,
+    DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdFacts,
+    DsregcmdJoinState, DsregcmdManagementDetails, DsregcmdOsVersionEvidence,
+    DsregcmdPolicyEvidenceValue, DsregcmdPostJoinDiagnostics, DsregcmdPreJoinTests,
+    DsregcmdProxyEvidence, DsregcmdRegistrationState, DsregcmdScheduledTaskEvidence,
+    DsregcmdScpQueryResult, DsregcmdServiceEndpoints, DsregcmdSsoState, DsregcmdTenantDetails,
+    DsregcmdUserState, DsregcmdWhfbPolicyEvidence,
 };
 
 /// The field vocabulary this lane masks with. The shared grammar already emits
@@ -305,10 +305,12 @@ impl Projection {
     /// and a prose mention of one identity to disagree. A value the table does
     /// not hold is one below the scrub floor, and it mints its own.
     fn identity(&self, value: &Option<String>, kind: &str) -> Option<String> {
-        value.as_deref().map(|value| match self.literals.token_for(value) {
-            Some(token) => token.to_string(),
-            None => identity_token(value, kind),
-        })
+        value
+            .as_deref()
+            .map(|value| match self.literals.token_for(value) {
+                Some(token) => token.to_string(),
+                None => identity_token(value, kind),
+            })
     }
 }
 
@@ -368,6 +370,68 @@ pub fn redacted_status_text(input: &str) -> String {
         literals: capture_literals(input),
     }
     .text(input)
+}
+
+/// One text artifact of a capture bundle: where it sits in the bundle, and what
+/// it holds.
+///
+/// A projection input and output at once — the hand-off reads the bundle's
+/// files into these, projects them, and writes them back out under the same
+/// relative paths — which is why the path travels with the text rather than
+/// being re-derived on the way out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DsregcmdBundleArtifact {
+    /// The artifact's path relative to the bundle root.
+    pub relative_path: String,
+    /// The artifact's contents, as the capture wrote them.
+    pub text: String,
+}
+
+/// Project every text artifact of a capture bundle into the form that may leave
+/// the machine.
+///
+/// The bundle itself stays raw and this is the hand-off instead. Masking the
+/// files where they are *stored* would change what the analyzer concludes
+/// rather than what anyone publishes: the captured command output is the
+/// analyzer's input, the evidence files are read back by `load_bundle_evidence`,
+/// and the same command output is read again by the ESP lane's bundle reader.
+/// So the working copy keeps every value the rules read, and this projects the
+/// same files on the way out (issue #628).
+///
+/// The classification is the *analysis* one rather than the capture-text one,
+/// because the bundle carries identifiers the command output does not. The
+/// enrollment UPN, the SCP tenant domain and directory id, and the computer an
+/// event was logged on are read out of evidence files, and the shaped grammar
+/// cannot mask a value it has no label for — a bare GUID in a registry key path
+/// or a JSON field is deliberately left visible, since GUIDs are usually
+/// correlation keys. A literal that never enters the table therefore cannot be
+/// scrubbed, which is why the assembled analysis is built unprojected and its
+/// classification is applied to every artifact's text.
+///
+/// A capture whose command output does not parse has no assembled analysis to
+/// read a classification from, and falls back to the capture text's own: its
+/// evidence then loses whatever the shared grammar recognizes by shape rather
+/// than shipping raw.
+///
+/// The artifacts are taken and returned by value so this performs no I/O — the
+/// caller owns the filesystem, exactly as it does for the analysis path — and
+/// so the projected set is a new value rather than a mutation of the raw one.
+pub fn redacted_bundle_artifacts(
+    capture_text: &str,
+    evidence: DsregcmdBundleEvidence,
+    artifacts: Vec<DsregcmdBundleArtifact>,
+) -> Vec<DsregcmdBundleArtifact> {
+    let projection = Projection {
+        literals: bundle_literals(capture_text, evidence),
+    };
+
+    artifacts
+        .into_iter()
+        .map(|artifact| DsregcmdBundleArtifact {
+            relative_path: artifact.relative_path,
+            text: projection.text(&artifact.text),
+        })
+        .collect()
 }
 
 impl Projection {
@@ -829,6 +893,24 @@ fn capture_literals(capture_output: &str) -> IdentityLiterals {
     literals
 }
 
+/// The identity literals one whole capture contributes.
+///
+/// The assembled analysis already carries every class this lane classifies —
+/// the command output's own facts, the enrollment UPNs, the SCP domain and
+/// directory id, and the event-log computer names — so its classification is
+/// read directly rather than rebuilt beside it. A second collector would be a
+/// second list, and a class added to the analysis would then reach the typed
+/// projection while quietly missing the hand-off.
+///
+/// Output the parser cannot read assembles no analysis to read from, and falls
+/// back to the capture text's own classification.
+fn bundle_literals(capture_text: &str, evidence: DsregcmdBundleEvidence) -> IdentityLiterals {
+    match super::analyze_text_with_evidence_preserving_local_values(capture_text, evidence) {
+        Ok(result) => collect_identity_literals(&result),
+        Err(_) => capture_literals(capture_text),
+    }
+}
+
 fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals) {
     for (value, kind) in [
         (facts.tenant_details.tenant_id.as_deref(), KIND_TENANT),
@@ -871,9 +953,13 @@ mod tests {
     use super::{
         super::{
             analyze_text, analyze_text_preserving_local_values, analyze_text_with_evidence,
-            models::{DsregcmdAnalysisResult, DsregcmdBundleEvidence},
+            models::{
+                DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+                DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScpQueryResult,
+            },
         },
-        redacted_status_text, IdentityLiterals, KIND_HOST, KIND_TENANT,
+        redacted_bundle_artifacts, redacted_status_text, DsregcmdBundleArtifact, IdentityLiterals,
+        KIND_HOST, KIND_TENANT,
     };
     use crate::intune::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
@@ -908,7 +994,10 @@ mod tests {
         ("tenant domain", "contoso.onmicrosoft.com"),
         ("on-premises domain", "corp.contoso.com"),
         ("device id", "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b"),
-        ("certificate thumbprint", "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D"),
+        (
+            "certificate thumbprint",
+            "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D",
+        ),
         ("user principal name", "adele.vance@contoso.onmicrosoft.com"),
     ];
 
@@ -1098,13 +1187,11 @@ mod tests {
 
     /// `ΣΟΦΟΥΣ.Example` in capitals: `Σ` U+03A3, `Ο` U+039F, `Φ` U+03A6,
     /// `Υ` U+03A5, and a final `Σ` U+03A3 that the narrative renders as `ς`.
-    const CAPITAL_SIGMA_IDENTITY: &str =
-        "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
+    const CAPITAL_SIGMA_IDENTITY: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
 
     /// The same name written in lower case with Greek's final sigma: it ends in
     /// `ς` U+03C2, which lowercasing `Σ` never produces.
-    const FINAL_SIGMA_NARRATIVE: &str =
-        "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
+    const FINAL_SIGMA_NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
 
     /// `Σ` and final `ς` are caseless-equal, but they are two different
     /// lowercase letters, so a comparison that only folds down keeps them apart
@@ -1227,6 +1314,261 @@ mod tests {
             projected.contains("strasse.example"),
             "this pair is covered after all; the limitation note and this test need updating: {projected:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The bundle hand-off (issue #628)
+    // -----------------------------------------------------------------------
+
+    const BUNDLE_TENANT_ID: &str = "8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90";
+    const BUNDLE_TENANT_DOMAIN: &str = "contoso.onmicrosoft.com";
+    const BUNDLE_ON_PREMISES_DOMAIN: &str = "corp.contoso.com";
+    const BUNDLE_DEVICE_ID: &str = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+    const BUNDLE_THUMBPRINT: &str = "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D";
+    const BUNDLE_ENROLLMENT_UPN: &str = "bruno.diaz@contoso.onmicrosoft.com";
+    const BUNDLE_ENROLLMENT_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const BUNDLE_EVENT_COMPUTER: &str = "HELPDESK-LAPTOP01.corp.contoso.com";
+
+    /// The tenant id sits in the bundle three times, and only one of them is a
+    /// labelled field: `TenantId :` in the command output, the unlabelled
+    /// registry key path under `JoinInfo`, and the SCP query's directory id.
+    const BUNDLE_TENANT_ID_OCCURRENCES: usize = 3;
+
+    /// Each identifier the hand-off is required to keep out of a shareable
+    /// artefact, with the class it belongs to for the failure message.
+    const BUNDLE_IDENTIFIERS: &[(&str, &str)] = &[
+        ("tenant id", BUNDLE_TENANT_ID),
+        ("tenant domain", BUNDLE_TENANT_DOMAIN),
+        ("on-premises domain", BUNDLE_ON_PREMISES_DOMAIN),
+        ("device id", BUNDLE_DEVICE_ID),
+        ("certificate thumbprint", BUNDLE_THUMBPRINT),
+        ("enrollment user principal name", BUNDLE_ENROLLMENT_UPN),
+        ("event log computer name", BUNDLE_EVENT_COMPUTER),
+        ("user SID", USER_SID),
+    ];
+
+    /// The bundle's command output, carrying one identifier of every class this
+    /// projection masks and the SID spelling that makes the
+    /// built-in-Administrator rule fire from the *raw* working copy.
+    ///
+    /// The join flags are the ones that rule is gated on — it reports only a
+    /// device that did not reach Azure AD Join — so a SID reaching this fixture
+    /// is observable as a verdict rather than as a field.
+    fn bundle_capture() -> String {
+        format!(
+            "\n AzureAdJoined : NO\n \
+             DomainJoined : YES\n \
+             TenantId : {BUNDLE_TENANT_ID}\n \
+             TenantName : {BUNDLE_TENANT_DOMAIN}\n \
+             DomainName : {BUNDLE_ON_PREMISES_DOMAIN}\n \
+             DeviceId : {BUNDLE_DEVICE_ID}\n \
+             Thumbprint : {BUNDLE_THUMBPRINT}\n \
+             User Identity : {USER_SID}\n \
+             User Context : SYSTEM\n"
+        )
+    }
+
+    /// A capture bundle as the hand-off sees it: the command output and every
+    /// evidence file, each still carrying what the capture printed.
+    ///
+    /// The evidence files are where the command output does not reach — the
+    /// enrollment UPN, the SCP tenant domain and directory id, and the computer
+    /// an event was logged on — because the shaped grammar cannot mask a value
+    /// it has no label for, and a bare GUID is deliberately left visible.
+    fn unprojected_bundle_artifacts() -> Vec<DsregcmdBundleArtifact> {
+        vec![
+            DsregcmdBundleArtifact {
+                relative_path: "manifest.json".to_string(),
+                text: "{\n  \"manifestPath\": \"manifest.json\",\n  \"source\": \"live-dsregcmd-capture\"\n}\n"
+                    .to_string(),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/command-output/dsregcmd-status.txt".to_string(),
+                text: bundle_capture(),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/registry/cdj-joininfo.reg".to_string(),
+                text: format!(
+                    "Windows Registry Editor Version 5.00\n\n\
+                     [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CloudDomainJoin\\JoinInfo\\{BUNDLE_TENANT_ID}]\n\
+                     \"UserEmail\"=\"{BUNDLE_ENROLLMENT_UPN}\"\n\
+                     \"IdpDomain\"=\"{BUNDLE_TENANT_DOMAIN}\"\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/registry/enrollments.reg".to_string(),
+                text: format!(
+                    "Windows Registry Editor Version 5.00\n\n\
+                     [HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{{{BUNDLE_ENROLLMENT_GUID}}}]\n\
+                     \"UPN\"=\"{BUNDLE_ENROLLMENT_UPN}\"\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/connectivity/scp-query.json".to_string(),
+                text: format!(
+                    "{{\n  \"scpFound\": true,\n  \"tenantDomain\": \"{BUNDLE_TENANT_DOMAIN}\",\n  \"azureadId\": \"{BUNDLE_TENANT_ID}\",\n  \"domainController\": \"dc1.{BUNDLE_ON_PREMISES_DOMAIN}\"\n}}\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+                text: format!(
+                    "{{\n  \"entries\": [\n    {{\n      \"computer\": \"{BUNDLE_EVENT_COMPUTER}\",\n      \"message\": \"registration failed for {BUNDLE_ENROLLMENT_UPN}\"\n    }}\n  ]\n}}\n"
+                ),
+            },
+        ]
+    }
+
+    /// The typed evidence the same files deserialize into, as the application
+    /// reads it back before analyzing.
+    fn bundle_evidence() -> DsregcmdBundleEvidence {
+        DsregcmdBundleEvidence {
+            enrollment_evidence: Some(DsregcmdEnrollmentEvidence {
+                enrollment_count: 1,
+                enrollments: vec![DsregcmdEnrollmentEntry {
+                    guid: Some(BUNDLE_ENROLLMENT_GUID.to_string()),
+                    upn: Some(BUNDLE_ENROLLMENT_UPN.to_string()),
+                    provider_id: Some("MS DM Server".to_string()),
+                    enrollment_state: Some(1),
+                }],
+            }),
+            active_evidence: Some(DsregcmdActiveEvidence {
+                connectivity_tests: Vec::new(),
+                scp_query: Some(DsregcmdScpQueryResult {
+                    scp_found: true,
+                    tenant_domain: Some(BUNDLE_TENANT_DOMAIN.to_string()),
+                    azuread_id: Some(BUNDLE_TENANT_ID.to_string()),
+                    keywords: Vec::new(),
+                    domain_controller: Some(format!("dc1.{BUNDLE_ON_PREMISES_DOMAIN}")),
+                    error: None,
+                }),
+            }),
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(BUNDLE_EVENT_COMPUTER.to_string()),
+                    message: format!("registration failed for {BUNDLE_ENROLLMENT_UPN}"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        }
+    }
+
+    fn joined_artifact_text(artifacts: &[DsregcmdBundleArtifact]) -> String {
+        artifacts
+            .iter()
+            .map(|artifact| artifact.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The canary: the fixture really does carry each identifier in cleartext
+    /// before the projection, so the hand-off assertion below cannot pass
+    /// vacuously because a value stopped being planted.
+    #[test]
+    fn the_unprojected_bundle_carries_every_identifier_the_hand_off_must_mask() {
+        let raw = joined_artifact_text(&unprojected_bundle_artifacts());
+
+        for (label, marker) in BUNDLE_IDENTIFIERS {
+            assert!(
+                raw.contains(marker),
+                "the bundle fixture no longer carries the {label} ({marker}); the hand-off assertion is vacuous"
+            );
+        }
+        assert_eq!(
+            raw.matches(BUNDLE_TENANT_ID).count(),
+            BUNDLE_TENANT_ID_OCCURRENCES,
+            "the fixture no longer plants the tenant id in all three shapes the hand-off has to cover"
+        );
+    }
+
+    /// The acceptance criteria's first half: the shareable artefact carries no
+    /// cleartext tenant id, domain, device id, thumbprint, user principal name
+    /// or SID — including the occurrences no shaped rule reaches.
+    #[test]
+    fn the_hand_off_keeps_every_identifier_out_of_the_shareable_bundle() {
+        let projected = redacted_bundle_artifacts(
+            &bundle_capture(),
+            bundle_evidence(),
+            unprojected_bundle_artifacts(),
+        );
+        let shareable = joined_artifact_text(&projected);
+
+        for (label, marker) in BUNDLE_IDENTIFIERS {
+            assert!(
+                !shareable.contains(marker),
+                "the shareable bundle leaks the {label} ({marker}): {shareable}"
+            );
+        }
+    }
+
+    /// The acceptance criteria's second half: the analyzer still reaches its
+    /// existing verdicts, because the projection is built *from* the raw values
+    /// at the hand-off rather than written back over the working copy.
+    #[test]
+    fn projecting_the_hand_off_leaves_the_raw_bundle_reaching_its_verdicts() {
+        let analysis = analyze_text_with_evidence(&bundle_capture(), bundle_evidence())
+            .expect("the bundle fixture analyzes");
+
+        assert!(
+            diagnostic_ids(&analysis).contains(&"builtin-admin-cannot-join"),
+            "the SID in the raw capture no longer reaches the built-in-Administrator rule"
+        );
+        assert!(
+            analysis.enrollment_evidence.is_some()
+                && analysis.active_evidence.is_some()
+                && analysis.event_log_analysis.is_some(),
+            "the bundle evidence no longer reaches the analysis"
+        );
+        assert!(
+            !json(&analysis).contains(BUNDLE_ENROLLMENT_UPN),
+            "the published analysis leaks the enrollment user principal name"
+        );
+    }
+
+    /// The hand-off stays usable: every artifact keeps its path, and the bundle
+    /// classification agrees with the capture-text one, so a value classified
+    /// from the command output reaches the token it always reached.
+    #[test]
+    fn the_hand_off_preserves_every_artifact_path_and_one_token_per_identity() {
+        let artifacts = unprojected_bundle_artifacts();
+        let expected_paths: Vec<String> = artifacts
+            .iter()
+            .map(|artifact| artifact.relative_path.clone())
+            .collect();
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts);
+        let actual_paths: Vec<String> = projected
+            .iter()
+            .map(|artifact| artifact.relative_path.clone())
+            .collect();
+        assert_eq!(
+            actual_paths, expected_paths,
+            "an artifact path was rewritten"
+        );
+
+        let shareable = joined_artifact_text(&projected);
+        let from_capture_text = tokens_of_kind(&redacted_status_text(&bundle_capture()), "tenant");
+        assert!(
+            !from_capture_text.is_empty(),
+            "the capture-text projection minted no tenant token; the comparison below is vacuous"
+        );
+        let from_bundle = tokens_of_kind(&shareable, "tenant");
+        for token in &from_capture_text {
+            assert!(
+                from_bundle.contains(token),
+                "the bundle projection disagreed with the capture-text one: {token} is missing from {from_bundle:?}"
+            );
+        }
     }
 
     /// Every `[kind:…]` token in a serialized analysis, in order.

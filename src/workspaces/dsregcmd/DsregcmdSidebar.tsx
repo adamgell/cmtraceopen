@@ -18,7 +18,7 @@ export function DsregcmdSidebar() {
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
   const analysisState = useDsregcmdStore((s) => s.analysisState);
   const isAnalyzing = useDsregcmdStore((s) => s.isAnalyzing);
-  const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource } = useAppActions();
+  const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource, exportDsregcmdBundle } = useAppActions();
 
   const diagnostics = result?.diagnostics ?? [];
   const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
@@ -77,6 +77,18 @@ export function DsregcmdSidebar() {
               )}
               {sourceContext.bundlePath && (
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Bundle root:</strong> {sourceContext.bundlePath}</div>
+              )}
+              {sourceContext.bundlePath && (
+                <div style={{ marginTop: "8px" }}>
+                  <SidebarActionButton
+                    label="Export shareable bundle"
+                    disabled={isAnalyzing}
+                    onClick={() => void exportDsregcmdBundle().catch((err) => console.error("[dsregcmd-sidebar] export failed", err))}
+                  />
+                  <div style={{ marginTop: "4px" }}>
+                    Writes a projected copy of this bundle — no tenant id, domain, device id, thumbprint, user principal name or SID — for attaching to a case. The folder above stays as captured, because the analyzer reads it back.
+                  </div>
+                </div>
               )}
             </div>
 

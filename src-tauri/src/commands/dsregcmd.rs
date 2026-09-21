@@ -5,20 +5,17 @@ use crate::dsregcmd::{registry, DsregcmdAnalysisResult};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
+use std::fs;
 #[cfg(target_os = "windows")]
-use std::fs::{self, File};
+use std::fs::File;
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::io::AsRawHandle;
-use std::path::Path;
-#[cfg(target_os = "windows")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::ptr::{null, null_mut};
-use std::time::Duration;
-#[cfg(target_os = "windows")]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +138,271 @@ fn load_bundle_evidence(bundle_path: &str) -> crate::dsregcmd::DsregcmdBundleEvi
 #[tauri::command]
 pub fn redact_dsregcmd_status_text(input: String) -> String {
     crate::dsregcmd::redacted_status_text(&input)
+}
+
+/// A capture bundle projected for hand-off.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsregcmdShareableBundle {
+    /// Where the projected bundle was written.
+    pub bundle_path: String,
+    /// How many files it holds, the manifest included.
+    pub artifact_count: usize,
+}
+
+/// Write a projected copy of a capture bundle that may leave the machine.
+///
+/// The working bundle stays raw. It is the analyzer's own input — the captured
+/// command output and every evidence file are read back by `load_bundle_evidence`
+/// and by the ESP lane's bundle reader — so masking those files where they are
+/// *stored* would change what those readers conclude rather than what anyone
+/// publishes. This is the hand-off instead: the same files, projected once,
+/// written under `destination_root` and handed back as the path a support
+/// engineer can archive or attach (issue #628).
+///
+/// The projection belongs to the parser crate, so this asks for the
+/// classification the analysis path already uses rather than declaring a second
+/// list of identity fields here, and it reads the bundle layout through the same
+/// constants the analysis path reads it with — a bundle this cannot resolve is
+/// one the analyzer cannot read either.
+#[tauri::command]
+pub fn export_dsregcmd_shareable_bundle(
+    bundle_path: String,
+    destination_root: String,
+) -> Result<DsregcmdShareableBundle, crate::error::AppError> {
+    let bundle_root = resolve_canonical_bundle_root_from_folder_path(Path::new(&bundle_path))
+        .ok_or_else(|| {
+            crate::error::AppError::InvalidInput(
+                "Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string(),
+            )
+        })?;
+
+    // Every input is required rather than merely read if present. A bundle with
+    // no command output would leave the classification with nothing to read, and
+    // the artefact written from it would look projected without being projected
+    // — the one failure mode this hand-off exists to prevent.
+    let capture_text = read_bundle_capture_text(&bundle_root).ok_or_else(|| {
+        crate::error::AppError::InvalidInput(format!(
+            "Resolved bundle root '{}' does not contain dsregcmd evidence. Expected '{}' or '{}'.",
+            bundle_root.display(),
+            DSREGCMD_EVIDENCE_RELATIVE_PATH.join("/"),
+            DSREGCMD_TOP_LEVEL_FALLBACK_FILE
+        ))
+    })?;
+
+    let evidence = load_bundle_evidence(&bundle_root.to_string_lossy());
+    let artifacts = read_bundle_text_artifacts(&bundle_root)?;
+
+    let projected = crate::dsregcmd::redacted_bundle_artifacts(&capture_text, evidence, artifacts);
+
+    let shareable_root = create_shareable_bundle_root(Path::new(&destination_root))?;
+    let artifact_count = write_shareable_bundle(&shareable_root, &projected)?;
+
+    log::info!(
+        "event=dsregcmd_shareable_export_complete bundle_path={} artifact_count={}",
+        shareable_root.display(),
+        artifact_count
+    );
+
+    Ok(DsregcmdShareableBundle {
+        bundle_path: shareable_root.to_string_lossy().to_string(),
+        artifact_count,
+    })
+}
+
+/// The captured `dsregcmd /status` text a bundle holds, where the analysis path
+/// looks for it.
+fn read_bundle_capture_text(bundle_root: &Path) -> Option<String> {
+    let evidence_file_path = DSREGCMD_EVIDENCE_RELATIVE_PATH
+        .iter()
+        .fold(bundle_root.to_path_buf(), |path, segment| {
+            path.join(segment)
+        });
+
+    fs::read_to_string(evidence_file_path)
+        .ok()
+        .or_else(|| fs::read_to_string(bundle_root.join(DSREGCMD_TOP_LEVEL_FALLBACK_FILE)).ok())
+}
+
+/// Read every artifact under `bundle_root` as text, ordered by path so one
+/// bundle always projects to the same output.
+///
+/// A file that is not valid UTF-8 is an error rather than an artifact quietly
+/// left out: a hand-off that silently dropped evidence would publish a bundle
+/// that looks complete.
+fn read_bundle_text_artifacts(
+    bundle_root: &Path,
+) -> Result<Vec<crate::dsregcmd::DsregcmdBundleArtifact>, crate::error::AppError> {
+    let mut paths = Vec::new();
+    collect_bundle_files(bundle_root, &mut paths)?;
+    paths.sort();
+
+    let mut artifacts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let relative_path = path
+            .strip_prefix(bundle_root)
+            .map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "Failed to resolve the bundle-relative path of '{}': {}",
+                    path.display(),
+                    error
+                ))
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let text = fs::read_to_string(&path).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "The capture bundle artifact '{}' is not readable text: {}",
+                path.display(),
+                error
+            ))
+        })?;
+
+        artifacts.push(crate::dsregcmd::DsregcmdBundleArtifact {
+            relative_path,
+            text,
+        });
+    }
+
+    Ok(artifacts)
+}
+
+fn collect_bundle_files(
+    directory: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), crate::error::AppError> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to read the capture bundle folder '{}': {}",
+            directory.display(),
+            error
+        ))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to read an entry of the capture bundle folder '{}': {}",
+                directory.display(),
+                error
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to inspect the capture bundle entry '{}': {}",
+                entry.path().display(),
+                error
+            ))
+        })?;
+
+        if file_type.is_dir() {
+            collect_bundle_files(&entry.path(), out)?;
+        } else if file_type.is_file() {
+            out.push(entry.path());
+        }
+    }
+
+    Ok(())
+}
+
+/// Create a fresh folder under `destination_root` for one projected bundle.
+///
+/// A new folder per export rather than a fixed name, so a second export cannot
+/// overwrite a bundle someone already sent, and a half-written folder is never
+/// mistaken for the previous one.
+fn create_shareable_bundle_root(
+    destination_root: &Path,
+) -> Result<PathBuf, crate::error::AppError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis();
+    let bundle_path = destination_root.join(format!(
+        "cmtraceopen-dsregcmd-shareable-{}-{}",
+        std::process::id(),
+        timestamp
+    ));
+
+    fs::create_dir_all(&bundle_path).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to create the shareable bundle folder '{}': {}",
+            bundle_path.display(),
+            error
+        ))
+    })?;
+
+    Ok(bundle_path)
+}
+
+/// Write the projected artifacts under `destination`, returning how many files
+/// the bundle now holds.
+///
+/// The captured manifest is rewritten rather than copied, so a bundle found
+/// later without its conversation says what it is: a projection of a capture
+/// rather than a capture.
+fn write_shareable_bundle(
+    destination: &Path,
+    artifacts: &[crate::dsregcmd::DsregcmdBundleArtifact],
+) -> Result<usize, crate::error::AppError> {
+    let mut written = 0;
+
+    for artifact in artifacts {
+        if artifact.relative_path == MANIFEST_FILE {
+            continue;
+        }
+
+        let relative = Path::new(&artifact.relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(crate::error::AppError::Internal(format!(
+                "Refusing to write the projected artifact '{}': it is not a bundle-relative path.",
+                artifact.relative_path
+            )));
+        }
+
+        let output_path = destination.join(relative);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "Failed to create the projected evidence folder '{}': {}",
+                    parent.display(),
+                    error
+                ))
+            })?;
+        }
+        fs::write(&output_path, &artifact.text).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to write the projected artifact '{}': {}",
+                output_path.display(),
+                error
+            ))
+        })?;
+        written += 1;
+    }
+
+    write_shareable_manifest(destination)?;
+    Ok(written + 1)
+}
+
+fn write_shareable_manifest(destination: &Path) -> Result<(), crate::error::AppError> {
+    let manifest_path = destination.join(MANIFEST_FILE);
+    fs::write(
+        &manifest_path,
+        format!(
+            "{{\n  \"manifestPath\": \"{MANIFEST_FILE}\",\n  \"source\": \"live-dsregcmd-capture\",\n  \"projection\": \"dsregcmd-redacted\"\n}}\n"
+        ),
+    )
+    .map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to write the shareable manifest '{}': {}",
+            manifest_path.display(),
+            error
+        ))
+    })
 }
 
 #[cfg(debug_assertions)]
@@ -422,16 +684,14 @@ const LIVE_CAPTURE_REGISTRY_EXPORTS: &[RegistryExportSpec] = &[
     },
 ];
 
-#[cfg(target_os = "windows")]
+// The bundle layout is not platform-specific. A capture is *taken* on Windows,
+// but reading a bundle back is ordinary file I/O: the analysis path already
+// reads one on every platform, and so does the hand-off that projects one.
 const DSREGCMD_EVIDENCE_RELATIVE_PATH: [&str; 3] =
     ["evidence", "command-output", "dsregcmd-status.txt"];
-#[cfg(target_os = "windows")]
 const DSREGCMD_TOP_LEVEL_FALLBACK_FILE: &str = "dsregcmd-status.txt";
-#[cfg(target_os = "windows")]
 const MANIFEST_FILE: &str = "manifest.json";
-#[cfg(target_os = "windows")]
 const EVIDENCE_FOLDER_NAME: &str = "evidence";
-#[cfg(target_os = "windows")]
 const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
 
 /// Stage the live capture into its bundle.
@@ -586,7 +846,11 @@ fn resolve_folder_bundle_evidence(
     )))
 }
 
-#[cfg(target_os = "windows")]
+/// Resolve the bundle root a folder selects.
+///
+/// Not platform-gated: reading a bundle is ordinary path inspection, and the
+/// hand-off projects an existing bundle on any platform. Only *taking* a live
+/// capture is Windows-specific.
 fn resolve_canonical_bundle_root_from_folder_path(folder_path: &Path) -> Option<PathBuf> {
     if folder_path.join(MANIFEST_FILE).is_file() {
         return Some(folder_path.to_path_buf());
@@ -621,7 +885,6 @@ fn resolve_canonical_bundle_root_from_folder_path(folder_path: &Path) -> Option<
     None
 }
 
-#[cfg(target_os = "windows")]
 fn path_ends_with_directory(path: &Path, directory_name: &str) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -1207,6 +1470,7 @@ mod tests {
     use super::analyze_dsregcmd;
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
+    use super::export_dsregcmd_shareable_bundle;
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -1443,6 +1707,248 @@ mod tests {
                 unrelated_latency
             );
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // The shareable bundle hand-off (issue #628)
+    // -----------------------------------------------------------------------
+
+    const EXPORT_TENANT_ID: &str = "8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90";
+    const EXPORT_TENANT_DOMAIN: &str = "contoso.onmicrosoft.com";
+    const EXPORT_ON_PREMISES_DOMAIN: &str = "corp.contoso.com";
+    const EXPORT_DEVICE_ID: &str = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+    const EXPORT_THUMBPRINT: &str = "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D";
+    const EXPORT_UPN: &str = "adele.vance@contoso.onmicrosoft.com";
+    const EXPORT_COMPUTER: &str = "HELPDESK-LAPTOP01.corp.contoso.com";
+
+    /// Every identifier the hand-off has to keep out of a shareable artefact,
+    /// with the class it belongs to for the failure message.
+    const EXPORT_IDENTIFIERS: &[(&str, &str)] = &[
+        ("tenant id", EXPORT_TENANT_ID),
+        ("tenant domain", EXPORT_TENANT_DOMAIN),
+        ("on-premises domain", EXPORT_ON_PREMISES_DOMAIN),
+        ("device id", EXPORT_DEVICE_ID),
+        ("certificate thumbprint", EXPORT_THUMBPRINT),
+        ("user principal name", EXPORT_UPN),
+        ("event log computer name", EXPORT_COMPUTER),
+    ];
+
+    /// Every artifact a bundle of this shape is expected to export, so a
+    /// projection that quietly dropped evidence fails rather than passes on the
+    /// files it happened to write.
+    const EXPORT_EXPECTED_ARTIFACTS: &[&str] = &[
+        "manifest.json",
+        "evidence/command-output/dsregcmd-status.txt",
+        "evidence/registry/cdj-joininfo.reg",
+        "evidence/connectivity/scp-query.json",
+        "evidence/event-logs/dsregcmd-events.json",
+    ];
+
+    /// A bundle laid out the way a live capture lays one out, with an identifier
+    /// of every masked class planted in more than one artifact — including the
+    /// occurrences no shaped rule reaches, such as the tenant id sitting
+    /// unlabelled in a registry key path.
+    fn build_shareable_export_fixture() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let command_output_dir = temp_dir.path().join("evidence").join("command-output");
+        let registry_dir = temp_dir.path().join("evidence").join("registry");
+        let connectivity_dir = temp_dir.path().join("evidence").join("connectivity");
+        let event_logs_dir = temp_dir.path().join("evidence").join("event-logs");
+
+        std::fs::create_dir_all(&command_output_dir).expect("create command output dir");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+        std::fs::create_dir_all(&connectivity_dir).expect("create connectivity dir");
+        std::fs::create_dir_all(&event_logs_dir).expect("create event logs dir");
+
+        std::fs::write(
+            temp_dir.path().join("manifest.json"),
+            "{\n  \"manifestPath\": \"manifest.json\",\n  \"source\": \"live-dsregcmd-capture\"\n}\n",
+        )
+        .expect("write manifest");
+
+        std::fs::write(
+            command_output_dir.join("dsregcmd-status.txt"),
+            format!(
+                " AzureAdJoined : YES\n \
+                 DomainJoined : YES\n \
+                 TenantId : {EXPORT_TENANT_ID}\n \
+                 TenantName : {EXPORT_TENANT_DOMAIN}\n \
+                 DomainName : {EXPORT_ON_PREMISES_DOMAIN}\n \
+                 DeviceId : {EXPORT_DEVICE_ID}\n \
+                 Thumbprint : {EXPORT_THUMBPRINT}\n \
+                 User Identity : {EXPORT_UPN}\n"
+            ),
+        )
+        .expect("write dsregcmd status sample");
+
+        std::fs::write(
+            registry_dir.join("cdj-joininfo.reg"),
+            format!(
+                "Windows Registry Editor Version 5.00\n\n\
+                 [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CloudDomainJoin\\JoinInfo\\{EXPORT_TENANT_ID}]\n\
+                 \"UserEmail\"=\"{EXPORT_UPN}\"\n\
+                 \"IdpDomain\"=\"{EXPORT_TENANT_DOMAIN}\"\n"
+            ),
+        )
+        .expect("write cloud domain join sample");
+
+        write_bundle_json(
+            &connectivity_dir.join("scp-query.json"),
+            &crate::dsregcmd::DsregcmdScpQueryResult {
+                scp_found: true,
+                tenant_domain: Some(EXPORT_TENANT_DOMAIN.to_string()),
+                azuread_id: Some(EXPORT_TENANT_ID.to_string()),
+                keywords: vec![format!("azureADId:{EXPORT_TENANT_ID}")],
+                domain_controller: Some(format!("dc1.{EXPORT_ON_PREMISES_DOMAIN}")),
+                error: None,
+            },
+        );
+        write_bundle_json(
+            &event_logs_dir.join("dsregcmd-events.json"),
+            &crate::intune::models::EventLogAnalysis {
+                source_kind: crate::intune::models::EventLogAnalysisSource::Live,
+                entries: vec![crate::intune::models::EventLogEntry {
+                    id: 1,
+                    channel: crate::intune::models::EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: crate::intune::models::EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(EXPORT_COMPUTER.to_string()),
+                    message: format!("registration failed for {EXPORT_UPN}"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..Default::default()
+            },
+        );
+
+        temp_dir
+    }
+
+    /// Every file in a bundle tree, read as text and joined, so one assertion
+    /// covers the whole artefact instead of the file a leak was expected in.
+    fn read_bundle_tree_text(root: &Path) -> String {
+        let mut files = Vec::new();
+        collect_files_for_test(root, &mut files);
+        files.sort();
+        files
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("read bundle artifact"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn collect_files_for_test(directory: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).expect("read bundle folder") {
+            let entry = entry.expect("read bundle entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files_for_test(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The acceptance criteria at the command layer: the artefact a support
+    /// engineer would send carries none of the identifiers, it carries every
+    /// artifact the bundle held, and the working copy the analyzer reads is left
+    /// exactly as it was.
+    #[test]
+    fn exporting_writes_a_shareable_bundle_and_leaves_the_working_copy_raw() {
+        let bundle = build_shareable_export_fixture();
+        let raw_before = read_bundle_tree_text(bundle.path());
+        for (label, marker) in EXPORT_IDENTIFIERS {
+            assert!(
+                raw_before.contains(marker),
+                "the fixture no longer plants the {label}; the export assertion is vacuous"
+            );
+        }
+
+        let destination = tempfile::tempdir().expect("create destination dir");
+        let exported = export_dsregcmd_shareable_bundle(
+            bundle.path().to_string_lossy().to_string(),
+            destination.path().to_string_lossy().to_string(),
+        )
+        .expect("export the shareable bundle");
+
+        let shareable_root = Path::new(&exported.bundle_path);
+        for expected in EXPORT_EXPECTED_ARTIFACTS {
+            assert!(
+                shareable_root.join(expected).is_file(),
+                "the shareable bundle is missing '{expected}'"
+            );
+        }
+        assert_eq!(
+            exported.artifact_count,
+            EXPORT_EXPECTED_ARTIFACTS.len(),
+            "the export did not carry every artifact the bundle held"
+        );
+
+        let shareable = read_bundle_tree_text(shareable_root);
+        for (label, marker) in EXPORT_IDENTIFIERS {
+            assert!(
+                !shareable.contains(marker),
+                "the shareable bundle leaks the {label} ({marker}): {shareable}"
+            );
+        }
+        assert!(
+            shareable.contains("\"projection\": \"dsregcmd-redacted\""),
+            "the shareable bundle does not say that it is a projection: {shareable}"
+        );
+
+        assert_eq!(
+            read_bundle_tree_text(bundle.path()),
+            raw_before,
+            "exporting rewrote the working bundle instead of projecting a copy"
+        );
+    }
+
+    #[test]
+    fn exporting_refuses_a_folder_that_is_not_a_bundle() {
+        let not_a_bundle = tempfile::tempdir().expect("create temp dir");
+        let destination = tempfile::tempdir().expect("create destination dir");
+
+        let error = export_dsregcmd_shareable_bundle(
+            not_a_bundle.path().to_string_lossy().to_string(),
+            destination.path().to_string_lossy().to_string(),
+        )
+        .expect_err("expected a non-bundle folder to be refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("not a supported dsregcmd evidence bundle"),
+            "expected the bundle-location error, saw: {error}"
+        );
+    }
+
+    /// A bundle with no command output classifies nothing, and an artefact
+    /// written from it would look projected without being projected.
+    #[test]
+    fn exporting_refuses_a_bundle_with_no_command_output() {
+        let bundle = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(
+            bundle.path().join("manifest.json"),
+            "{\n  \"manifestPath\": \"manifest.json\"\n}\n",
+        )
+        .expect("write manifest");
+        let destination = tempfile::tempdir().expect("create destination dir");
+
+        let error = export_dsregcmd_shareable_bundle(
+            bundle.path().to_string_lossy().to_string(),
+            destination.path().to_string_lossy().to_string(),
+        )
+        .expect_err("expected a bundle with no command output to be refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not contain dsregcmd evidence"),
+            "expected the missing-evidence error, saw: {error}"
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
