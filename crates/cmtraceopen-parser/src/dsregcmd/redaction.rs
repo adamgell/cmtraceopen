@@ -943,7 +943,11 @@ impl Projection {
             proxy_override: self.text_opt(&proxy.proxy_override),
             auto_config_url: self.text_opt(&proxy.auto_config_url),
             wpad_detected: proxy.wpad_detected,
-            winhttp_proxy: self.text_opt(&proxy.winhttp_proxy),
+            // No `winhttp_proxy` here: `WinHttpSettings` is a binary value, and
+            // reading it as text produced a garbled "WinHTTP Proxy" row, so the
+            // field and its reader were removed (this branch's
+            // `does not expose the binary WinHTTP row` test pins that). The
+            // projection arrived later on main and still projected it.
         }
     }
 

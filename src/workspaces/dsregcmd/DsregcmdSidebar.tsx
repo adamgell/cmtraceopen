@@ -1,5 +1,6 @@
 import { tokens } from "@fluentui/react-components";
 import { useDsregcmdStore } from "./dsregcmd-store";
+import { selectTopFindings } from "./dsregcmd-formatters";
 import { useAppActions } from "../../hooks/use-app-actions";
 import {
   EmptyState,
@@ -13,6 +14,9 @@ import {
 // DsregcmdSidebar
 // ---------------------------------------------------------------------------
 
+/** How many findings the summary sidebar shows. */
+const TOP_FINDINGS_LIMIT = 8;
+
 export function DsregcmdSidebar() {
   const result = useDsregcmdStore((s) => s.result);
   const sourceContext = useDsregcmdStore((s) => s.sourceContext);
@@ -21,6 +25,9 @@ export function DsregcmdSidebar() {
   const { openSourceFileDialog, openSourceFolderDialog, pasteDsregcmdSource, captureDsregcmdSource, exportDsregcmdBundle } = useAppActions();
 
   const diagnostics = result?.diagnostics ?? [];
+  // Ordered before it is limited, so the list can keep claiming
+  // "highest-priority first" even when the rules emitted the Error below the cut.
+  const topFindings = selectTopFindings(diagnostics, TOP_FINDINGS_LIMIT);
   const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
   const warningCount = diagnostics.filter((item) => item.severity === "Warning").length;
   const infoCount = diagnostics.filter((item) => item.severity === "Info").length;
@@ -96,7 +103,7 @@ export function DsregcmdSidebar() {
             {diagnostics.length === 0 ? (
               <EmptyState title="No diagnostics" body="The backend parser did not emit diagnostic findings for this capture." />
             ) : (
-              diagnostics.slice(0, 8).map((item) => (
+              topFindings.map((item) => (
                 <div key={item.id} style={{ padding: "8px 10px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: item.severity === 'Error' ? tokens.colorPaletteRedBackground1 : item.severity === 'Warning' ? tokens.colorPaletteYellowBackground1 : tokens.colorPaletteBlueBackground2 }}>
                   <div style={{ fontSize: "inherit", textTransform: "uppercase", fontWeight: 700, color: item.severity === 'Error' ? tokens.colorPaletteRedForeground2 : item.severity === 'Warning' ? tokens.colorPaletteMarigoldForeground2 : tokens.colorPaletteBlueForeground2 }}>{item.severity}</div>
                   <div style={{ marginTop: "4px", fontSize: "inherit", fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{item.title}</div>

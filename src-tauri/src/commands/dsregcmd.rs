@@ -491,15 +491,36 @@ fn load_active_evidence_from_bundle(
     let scp_path = connectivity_dir.join("scp-query.json");
 
     let connectivity_tests: Vec<crate::dsregcmd::DsregcmdConnectivityResult> =
-        std::fs::read_to_string(&tests_path)
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_default();
+        match std::fs::read_to_string(&tests_path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(tests) => tests,
+                Err(error) => {
+                    log::warn!(
+                        "event=dsregcmd_connectivity_tests_parse_failed path={} error={}",
+                        ARTIFACT_ENDPOINT_TESTS,
+                        error
+                    );
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        };
 
     let scp_query: Option<crate::dsregcmd::DsregcmdScpQueryResult> =
-        std::fs::read_to_string(&scp_path)
-            .ok()
-            .and_then(|json| serde_json::from_str(&json).ok());
+        match std::fs::read_to_string(&scp_path) {
+            Ok(json) => match serde_json::from_str(&json) {
+                Ok(query) => Some(query),
+                Err(error) => {
+                    log::warn!(
+                        "event=dsregcmd_scp_query_parse_failed path={} error={}",
+                        ARTIFACT_SCP_QUERY,
+                        error
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
 
     if connectivity_tests.is_empty() && scp_query.is_none() {
         return None;
@@ -518,9 +539,20 @@ fn load_event_log_from_bundle(
         .join("evidence")
         .join("event-logs")
         .join("dsregcmd-events.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(analysis) => Some(analysis),
+            Err(error) => {
+                log::warn!(
+                    "event=dsregcmd_event_log_parse_failed path={} error={}",
+                    ARTIFACT_EVENT_LOGS,
+                    error
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
 }
 
 fn load_scheduled_task_evidence_from_bundle(
@@ -530,9 +562,20 @@ fn load_scheduled_task_evidence_from_bundle(
         .join("evidence")
         .join("scheduled-tasks")
         .join("enterprise-mgmt-tasks.json");
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|json| serde_json::from_str(&json).ok())
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str(&json) {
+            Ok(evidence) => Some(evidence),
+            Err(error) => {
+                log::warn!(
+                    "event=dsregcmd_scheduled_tasks_parse_failed path={} error={}",
+                    ARTIFACT_SCHEDULED_TASKS,
+                    error
+                );
+                None
+            }
+        },
+        Err(_) => None,
+    }
 }
 
 #[tauri::command]
@@ -747,6 +790,16 @@ const DSREGCMD_TOP_LEVEL_FALLBACK_FILE: &str = "dsregcmd-status.txt";
 const MANIFEST_FILE: &str = "manifest.json";
 const EVIDENCE_FOLDER_NAME: &str = "evidence";
 const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
+
+// The bundle-relative name each evidence reader logs when its artifact does not
+// parse. Not the path it was read from: `tauri_plugin_log` persists these
+// warnings in the OS application log directory, so an absolute path there
+// carries the user profile component of whoever ran the capture, and an
+// application log attached to a support case would expose it.
+const ARTIFACT_ENDPOINT_TESTS: &str = "evidence/connectivity/endpoint-tests.json";
+const ARTIFACT_SCP_QUERY: &str = "evidence/connectivity/scp-query.json";
+const ARTIFACT_EVENT_LOGS: &str = "evidence/event-logs/dsregcmd-events.json";
+const ARTIFACT_SCHEDULED_TASKS: &str = "evidence/scheduled-tasks/enterprise-mgmt-tasks.json";
 
 /// Stage the live capture into its bundle.
 ///
@@ -1153,6 +1206,8 @@ fn verify_dsregcmd_signature(dsregcmd_path: &Path) -> Result<(), crate::error::A
         pg_known_subject: null(),
     };
 
+    // WTD_REVOKE_NONE: no revocation network check. Acceptable for a local
+    // signed system binary; keeps verification offline and deterministic.
     let mut trust_data = WinTrustData {
         cb_struct: std::mem::size_of::<WinTrustData>() as u32,
         p_policy_callback_data: null_mut(),
@@ -2092,5 +2147,46 @@ mod tests {
         let error = tauri::async_runtime::block_on(capture_dsregcmd())
             .expect_err("expected unsupported platform error");
         assert!(error.to_string().contains("only supported on Windows"));
+    }
+    #[test]
+    fn network_issue_and_endpoint_unreachable_both_fire() {
+        use super::analyze_dsregcmd;
+
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let connectivity_dir = temp_dir.path().join("evidence").join("connectivity");
+        std::fs::create_dir_all(&connectivity_dir).expect("create connectivity dir");
+        std::fs::write(
+            connectivity_dir.join("endpoint-tests.json"),
+            r#"[{"endpoint":"https://enterpriseregistration.windows.net","reachable":false,"statusCode":null,"latencyMs":100,"errorMessage":"timeout","timestamp":"2026-01-01T00:00:00Z"}]"#,
+        )
+        .expect("write endpoint tests");
+
+        let input = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ DRS Discovery Test : FAIL [0x801c0021]
+ Server Message : ERROR_WINHTTP_TIMEOUT
+"#;
+
+        // The command is async since the bundle analysis moved to the blocking
+        // pool (issue #627), so a test reaches it through the runtime.
+        let result = tauri::async_runtime::block_on(analyze_dsregcmd(
+            input.to_string(),
+            Some(temp_dir.path().to_string_lossy().to_string()),
+        ))
+        .expect("analyze dsregcmd");
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "endpoint-unreachable-drs"),
+            "endpoint-unreachable-drs should fire for the unreachable DRS endpoint"
+        );
+        assert!(
+            result.diagnostics.iter().any(|d| d.id == "network-issue"),
+            "network-issue carries the marker code from the capture text and is independent evidence"
+        );
     }
 }

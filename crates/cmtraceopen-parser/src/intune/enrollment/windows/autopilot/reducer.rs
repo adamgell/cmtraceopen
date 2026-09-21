@@ -1931,7 +1931,10 @@ mod tests {
     #[test]
     fn a_non_ascii_case_variant_pair_is_one_value() {
         assert_eq!(
-            grouped(&[("e1", "S\u{c9}RIAL-ABC"), ("e2", "s\u{e9}rial-abc")], "serialNumber"),
+            grouped(
+                &[("e1", "S\u{c9}RIAL-ABC"), ("e2", "s\u{e9}rial-abc")],
+                "serialNumber"
+            ),
             1,
             "an accented pair differing only in case is one identity"
         );
@@ -1960,15 +1963,20 @@ mod tests {
             "a case-sensitive key must not fold"
         );
         assert_eq!(
-            grouped(&[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABC")], "serialNumber"),
+            grouped(
+                &[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABC")],
+                "serialNumber"
+            ),
             1,
             "the same spelling is one value"
         );
         assert_eq!(
-            grouped(&[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABD")], "serialNumber"),
+            grouped(
+                &[("e1", "SERIAL-ABC"), ("e2", "SERIAL-ABD")],
+                "serialNumber"
+            ),
             2,
             "a genuinely different value is still two"
         );
     }
 }
-
