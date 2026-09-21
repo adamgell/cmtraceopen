@@ -67,6 +67,12 @@ pub fn test_endpoint_connectivity() -> Vec<DsregcmdConnectivityResult> {
 ///
 /// PowerShell reports an LDAP failure on stdout and still exits successfully, so
 /// the caller reaches this for both exit-status failures and self-reported ones.
+///
+/// Gated like its callers rather than left ungated: the only non-test caller is
+/// `query_scp`, which is itself Windows-only, so on Linux the function was dead
+/// code in the library build and `-D warnings` rejected the crate. Including
+/// `test` keeps the string-combining logic covered on every platform.
+#[cfg(any(target_os = "windows", test))]
 fn scp_failure_message(nltest_error: &Option<String>, scp_failure: &str) -> String {
     match nltest_error {
         Some(nltest) => format!("{nltest}; {scp_failure}"),
