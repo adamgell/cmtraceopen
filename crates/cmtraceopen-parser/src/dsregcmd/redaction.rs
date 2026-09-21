@@ -429,8 +429,34 @@ pub fn redacted_bundle_artifacts(
         .into_iter()
         .map(|artifact| DsregcmdBundleArtifact {
             relative_path: artifact.relative_path,
-            text: projection.text(&artifact.text),
+            text: project_artifact_text(&projection, &artifact.text),
         })
+        .collect()
+}
+
+/// Project one artifact's text, a line at a time.
+///
+/// Line by line because the shared grammar refuses an oversized input rather
+/// than masking it: it replaces any `text` longer than its own input bound with
+/// a single marker. Fed a whole artifact, a real capture's half-megabyte event
+/// log came back as that marker — the evidence was lost *and* the JSON was left
+/// unparseable, so a bundle reopened from the hand-off silently reached
+/// different verdicts (nine findings instead of ten on the machine this was
+/// measured on).
+///
+/// Splitting is safe for these artifacts because they put one value per line —
+/// a `dsregcmd /status` field, one registry value, one JSON value — and a
+/// multi-line value is escaped rather than embedded. So masking per line reaches
+/// every value the whole-file pass reached, while the grammar is never handed an
+/// input it would refuse.
+///
+/// The bound that remains is stated rather than implied: a *single* line longer
+/// than the grammar's input bound would still be replaced wholesale. None of
+/// these artifacts produces one, and the alternative — chunking at an arbitrary
+/// offset — could split an identifier across two chunks and leave it unmasked.
+fn project_artifact_text(projection: &Projection, text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| projection.text(line))
         .collect()
 }
 
@@ -1569,6 +1595,49 @@ mod tests {
                 "the bundle projection disagreed with the capture-text one: {token} is missing from {from_bundle:?}"
             );
         }
+    }
+
+    /// The shared grammar refuses an oversized input rather than masking it, so
+    /// projecting an artifact whole replaced the entire file with its marker. A
+    /// capture's event-log export is routinely several hundred kilobytes, which
+    /// is how this was found: on a live capture the hand-off wrote a 34-byte
+    /// event log, the bundle lost that evidence, and the analysis of the
+    /// reopened bundle reached nine findings instead of ten.
+    #[test]
+    fn the_hand_off_projects_a_large_artifact_instead_of_replacing_it() {
+        let mut entries = String::new();
+        for index in 0..6_000 {
+            entries.push_str(&format!(
+                "    {{\n      \"id\": {index},\n      \"channel\": \"AadOperational\",\n      \"message\": \"event detail line {index}\"\n    }},\n"
+            ));
+        }
+
+        let artifact = vec![DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!(
+                "{{\n  \"sourceKind\": \"Live\",\n  \"entries\": [\n{entries}    {{\n      \"id\": 6001,\n      \"computer\": \"{BUNDLE_EVENT_COMPUTER}\",\n      \"message\": \"registration failed for {BUNDLE_ENROLLMENT_UPN}\"\n    }}\n  ]\n}}\n"
+            ),
+        }];
+        assert!(
+            artifact[0].text.len() > 256 * 1024,
+            "the fixture has to exceed the grammar's input bound to be a regression test"
+        );
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifact);
+        let text = &projected[0].text;
+
+        assert!(
+            !text.contains("oversized text omitted"),
+            "the artifact was replaced wholesale instead of projected"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(text).is_ok(),
+            "the projected artifact is no longer parseable JSON"
+        );
+        assert!(
+            !text.contains(BUNDLE_EVENT_COMPUTER) && !text.contains(BUNDLE_ENROLLMENT_UPN),
+            "the oversized artifact kept an identifier in clear"
+        );
     }
 
     /// Every `[kind:…]` token in a serialized analysis, in order.

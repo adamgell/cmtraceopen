@@ -166,11 +166,32 @@ pub struct DsregcmdShareableBundle {
 /// constants the analysis path reads it with — a bundle this cannot resolve is
 /// one the analyzer cannot read either.
 #[tauri::command]
-pub fn export_dsregcmd_shareable_bundle(
+pub async fn export_dsregcmd_shareable_bundle(
     bundle_path: String,
     destination_root: String,
 ) -> Result<DsregcmdShareableBundle, crate::error::AppError> {
-    let bundle_root = resolve_canonical_bundle_root_from_folder_path(Path::new(&bundle_path))
+    // Projecting a bundle walks its tree and then reads and writes every
+    // artifact, which is the same blocking class as the live capture and the
+    // bundle analysis, so it moves off the command thread alongside them
+    // (issue #627).
+    tokio::task::spawn_blocking(move || {
+        export_dsregcmd_shareable_bundle_blocking(&bundle_path, &destination_root)
+    })
+    .await
+    .map_err(|join_error| {
+        crate::error::AppError::Internal(format!(
+            "DsRegCmd shareable export worker failed: {}",
+            join_error
+        ))
+    })?
+}
+
+/// The export itself, run off the command thread.
+fn export_dsregcmd_shareable_bundle_blocking(
+    bundle_path: &str,
+    destination_root: &str,
+) -> Result<DsregcmdShareableBundle, crate::error::AppError> {
+    let bundle_root = resolve_canonical_bundle_root_from_folder_path(Path::new(bundle_path))
         .ok_or_else(|| {
             crate::error::AppError::InvalidInput(
                 "Selected folder is not a supported dsregcmd evidence bundle location. Choose the bundle root, the bundle's evidence folder, or the bundle's command-output folder.".to_string(),
@@ -195,7 +216,7 @@ pub fn export_dsregcmd_shareable_bundle(
 
     let projected = crate::dsregcmd::redacted_bundle_artifacts(&capture_text, evidence, artifacts);
 
-    let shareable_root = create_shareable_bundle_root(Path::new(&destination_root))?;
+    let shareable_root = create_shareable_bundle_root(Path::new(destination_root))?;
     let artifact_count = write_shareable_bundle(&shareable_root, &projected)?;
 
     log::info!(
@@ -219,17 +240,23 @@ fn read_bundle_capture_text(bundle_root: &Path) -> Option<String> {
             path.join(segment)
         });
 
-    fs::read_to_string(evidence_file_path)
+    read_bundle_artifact_text(&evidence_file_path)
         .ok()
-        .or_else(|| fs::read_to_string(bundle_root.join(DSREGCMD_TOP_LEVEL_FALLBACK_FILE)).ok())
+        .or_else(|| {
+            read_bundle_artifact_text(&bundle_root.join(DSREGCMD_TOP_LEVEL_FALLBACK_FILE)).ok()
+        })
 }
 
 /// Read every artifact under `bundle_root` as text, ordered by path so one
 /// bundle always projects to the same output.
 ///
-/// A file that is not valid UTF-8 is an error rather than an artifact quietly
-/// left out: a hand-off that silently dropped evidence would publish a bundle
-/// that looks complete.
+/// The bytes are decoded with the lane's decoder rather than read as UTF-8: a
+/// real capture's registry exports are frequently UTF-16LE, and reading them as
+/// UTF-8 would reject the whole export rather than decode it.
+///
+/// Nothing is skipped, either way. An artifact that cannot be read at all is an
+/// error, because a hand-off that quietly dropped evidence would publish a
+/// bundle that looks complete.
 fn read_bundle_text_artifacts(
     bundle_root: &Path,
 ) -> Result<Vec<crate::dsregcmd::DsregcmdBundleArtifact>, crate::error::AppError> {
@@ -251,13 +278,7 @@ fn read_bundle_text_artifacts(
             .to_string_lossy()
             .replace('\\', "/");
 
-        let text = fs::read_to_string(&path).map_err(|error| {
-            crate::error::AppError::Internal(format!(
-                "The capture bundle artifact '{}' is not readable text: {}",
-                path.display(),
-                error
-            ))
-        })?;
+        let text = read_bundle_artifact_text(&path)?;
 
         artifacts.push(crate::dsregcmd::DsregcmdBundleArtifact {
             relative_path,
@@ -266,6 +287,39 @@ fn read_bundle_text_artifacts(
     }
 
     Ok(artifacts)
+}
+
+/// Decode one bundle artifact's bytes into text.
+///
+/// Content that is still not text once decoded is an error rather than an
+/// artifact shipped as mojibake. Every decoder this lane uses succeeds on any
+/// byte sequence, so a NUL surviving the decode is the signal that the file was
+/// never a text artifact — and publishing it would corrupt evidence silently
+/// where failing says so.
+fn read_bundle_artifact_text(path: &Path) -> Result<String, crate::error::AppError> {
+    let bytes = fs::read(path).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to read the capture bundle artifact '{}': {}",
+            path.display(),
+            error
+        ))
+    })?;
+
+    let text = crate::dsregcmd::registry::decode_reg_content(&bytes).ok_or_else(|| {
+        crate::error::AppError::Internal(format!(
+            "Failed to decode the capture bundle artifact '{}'.",
+            path.display()
+        ))
+    })?;
+
+    if text.contains('\0') {
+        return Err(crate::error::AppError::Internal(format!(
+            "The capture bundle artifact '{}' is not text: it still holds NUL characters after decoding.",
+            path.display()
+        )));
+    }
+
+    Ok(text)
 }
 
 fn collect_bundle_files(
@@ -1470,7 +1524,7 @@ mod tests {
     use super::analyze_dsregcmd;
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
-    use super::export_dsregcmd_shareable_bundle;
+    use super::export_dsregcmd_shareable_bundle_blocking;
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -1868,9 +1922,9 @@ mod tests {
         }
 
         let destination = tempfile::tempdir().expect("create destination dir");
-        let exported = export_dsregcmd_shareable_bundle(
-            bundle.path().to_string_lossy().to_string(),
-            destination.path().to_string_lossy().to_string(),
+        let exported = export_dsregcmd_shareable_bundle_blocking(
+            &bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
         )
         .expect("export the shareable bundle");
 
@@ -1911,9 +1965,9 @@ mod tests {
         let not_a_bundle = tempfile::tempdir().expect("create temp dir");
         let destination = tempfile::tempdir().expect("create destination dir");
 
-        let error = export_dsregcmd_shareable_bundle(
-            not_a_bundle.path().to_string_lossy().to_string(),
-            destination.path().to_string_lossy().to_string(),
+        let error = export_dsregcmd_shareable_bundle_blocking(
+            &not_a_bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
         )
         .expect_err("expected a non-bundle folder to be refused");
 
@@ -1937,9 +1991,9 @@ mod tests {
         .expect("write manifest");
         let destination = tempfile::tempdir().expect("create destination dir");
 
-        let error = export_dsregcmd_shareable_bundle(
-            bundle.path().to_string_lossy().to_string(),
-            destination.path().to_string_lossy().to_string(),
+        let error = export_dsregcmd_shareable_bundle_blocking(
+            &bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
         )
         .expect_err("expected a bundle with no command output to be refused");
 
@@ -1948,6 +2002,87 @@ mod tests {
                 .to_string()
                 .contains("does not contain dsregcmd evidence"),
             "expected the missing-evidence error, saw: {error}"
+        );
+    }
+
+    /// A minimal bundle holding one planted registry artifact, written with the
+    /// bytes supplied.
+    fn build_bundle_with_registry_artifact(contents: &[u8]) -> tempfile::TempDir {
+        let bundle = tempfile::tempdir().expect("create temp dir");
+        let command_output_dir = bundle.path().join("evidence").join("command-output");
+        let registry_dir = bundle.path().join("evidence").join("registry");
+        std::fs::create_dir_all(&command_output_dir).expect("create command output dir");
+        std::fs::create_dir_all(&registry_dir).expect("create registry dir");
+
+        std::fs::write(
+            bundle.path().join("manifest.json"),
+            "{\n  \"manifestPath\": \"manifest.json\"\n}\n",
+        )
+        .expect("write manifest");
+        std::fs::write(
+            command_output_dir.join("dsregcmd-status.txt"),
+            format!(
+                " AzureAdJoined : YES\n TenantId : {EXPORT_TENANT_ID}\n TenantName : {EXPORT_TENANT_DOMAIN}\n"
+            ),
+        )
+        .expect("write dsregcmd status sample");
+        std::fs::write(registry_dir.join("enrollments.reg"), contents)
+            .expect("write registry artifact");
+
+        bundle
+    }
+
+    /// A real capture's `.reg` exports are frequently UTF-16LE, because that is
+    /// what `reg.exe` writes. Reading an artifact as UTF-8 alone rejected the
+    /// whole export, so the decode order is pinned here rather than assumed.
+    #[test]
+    fn exporting_decodes_a_utf16le_registry_artifact_rather_than_rejecting_it() {
+        let reg_content = format!(
+            "Windows Registry Editor Version 5.00\r\n\r\n\
+             [HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments]\r\n\
+             \"UPN\"=\"{EXPORT_UPN}\"\r\n"
+        );
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in reg_content.encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        let bundle = build_bundle_with_registry_artifact(&utf16);
+        let destination = tempfile::tempdir().expect("create destination dir");
+        let exported = export_dsregcmd_shareable_bundle_blocking(
+            &bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
+        )
+        .expect("export a bundle whose registry artifact is UTF-16LE");
+
+        let shareable = read_bundle_tree_text(Path::new(&exported.bundle_path));
+        assert!(
+            shareable.contains("Windows Registry Editor Version 5.00"),
+            "the UTF-16 export was not decoded into readable text: {shareable}"
+        );
+        assert!(
+            !shareable.contains(EXPORT_UPN),
+            "the decoded artifact still leaks the enrollment user principal name: {shareable}"
+        );
+    }
+
+    /// Binary content has no text representation, and shipping it as mojibake
+    /// would corrupt evidence silently where failing says so.
+    #[test]
+    fn exporting_refuses_an_artifact_that_is_not_text() {
+        let binary = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10";
+
+        let bundle = build_bundle_with_registry_artifact(binary);
+        let destination = tempfile::tempdir().expect("create destination dir");
+        let error = export_dsregcmd_shareable_bundle_blocking(
+            &bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
+        )
+        .expect_err("expected a non-text artifact to be refused");
+
+        assert!(
+            error.to_string().contains("is not text"),
+            "expected the non-text-artifact error, saw: {error}"
         );
     }
 
