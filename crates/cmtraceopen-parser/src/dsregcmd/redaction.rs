@@ -133,45 +133,130 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// that write a case mapping out (`İ` against `i` plus U+0307).
 #[derive(Default)]
 struct IdentityLiterals {
-    /// Literal as classified, paired with its token, longest literal first.
+    /// Classified literals, longest literal first.
     ///
-    /// The scrub no longer depends on that order —
+    /// The scrub does not depend on that order —
     /// [`IdentityLiterals::leftmost_longest_match`] takes the longest match at
     /// the leftmost position itself, so a literal that sits inside a longer one
     /// still cannot cut the longer one in half — but the table is left in the
     /// order it has always held rather than reshuffled for no observable
     /// difference.
-    values: Vec<(String, String)>,
+    values: Vec<ClassifiedLiteral>,
+}
+
+/// One classified identity, paired with the token that replaces it.
+struct ClassifiedLiteral {
+    /// The value as classified, canonicalized.
+    literal: String,
+    /// The token every spelling of this identity reaches.
+    token: String,
+    /// Whether a match has to sit on a token boundary.
+    ///
+    /// A *derived* alias is bounded, because a short form occurs as a fragment of
+    /// ordinary text far more easily than a full identity does: the host
+    /// `HELPDESK-LAPTOP01` sits inside `HELPDESK-LAPTOP011`, which is a different
+    /// machine. A value the capture named outright is not bounded, so a domain
+    /// still loses inside `dc1.corp.contoso.com`.
+    bounded: bool,
 }
 
 impl IdentityLiterals {
     /// Classify one identity value. Values too short to be told apart from
     /// prose are skipped rather than scrubbed out of narrative over-eagerly.
     fn push(&mut self, value: &str, kind: &str) {
+        let Some(token) = self.push_literal(value, kind, false) else {
+            // Below the scrub floor, so there is no token for a short form to
+            // share either.
+            return;
+        };
+
+        // A host is the one identity this lane classifies whose short form is a
+        // *separate* literal in the capture: an event record names the machine by
+        // FQDN while the messages around it name the same machine by its short
+        // form. Classifying only the FQDN therefore masked the field it came from
+        // and published the machine in every narrative mention — 190 occurrences
+        // in a live capture. Both spellings reach one token, because they are one
+        // machine.
+        //
+        // The short form passes the same floor below. That minimum is a shared
+        // contract this lane does not change here (issue #646).
+        if kind == KIND_HOST {
+            if let Some((short, _)) = value.trim().split_once('.') {
+                if !short.is_empty() {
+                    self.push_alias(short, &token);
+                }
+            }
+        }
+    }
+
+    /// Classify one literal and return the token it reaches.
+    ///
+    /// `None` when the value is below the scrub floor, so a caller that meant to
+    /// share the token with a derived form knows there is none to share.
+    fn push_literal(&mut self, value: &str, kind: &str, bounded: bool) -> Option<String> {
         let literal = value.trim();
         if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
-            return;
+            return None;
         }
 
         // The table is keyed by, holds, and mints from the canonical form, so a
         // second spelling of an identity already classified cannot reach a
         // second token.
         let canonical = canonical_identity(literal);
+        if let Some(existing) = self
+            .values
+            .iter_mut()
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
+        {
+            // An entry first learned as an alias widens when the capture names
+            // the value outright, rather than staying narrower than its own
+            // evidence.
+            existing.bounded &= bounded;
+            return Some(existing.token.clone());
+        }
+
+        let token = identity_token(literal, kind);
+        self.values.push(ClassifiedLiteral {
+            literal: canonical,
+            token: token.clone(),
+            bounded,
+        });
+        self.sort_values();
+        Some(token)
+    }
+
+    /// Classify a derived form that has to reach the token of an identity the
+    /// capture already named, rather than minting a second one for one machine.
+    fn push_alias(&mut self, value: &str, token: &str) {
+        let literal = value.trim();
+        if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+            return;
+        }
+
+        let canonical = canonical_identity(literal);
         if self
             .values
             .iter()
-            .any(|(classified, _)| caseless_equal(classified, &canonical))
+            .any(|existing| caseless_equal(&existing.literal, &canonical))
         {
             return;
         }
 
-        self.values.push((canonical, identity_token(literal, kind)));
+        self.values.push(ClassifiedLiteral {
+            literal: canonical,
+            token: token.to_string(),
+            bounded: true,
+        });
+        self.sort_values();
+    }
+
+    fn sort_values(&mut self) {
         self.values.sort_by(|left, right| {
             right
-                .0
+                .literal
                 .len()
-                .cmp(&left.0.len())
-                .then_with(|| left.0.cmp(&right.0))
+                .cmp(&left.literal.len())
+                .then_with(|| left.literal.cmp(&right.literal))
         });
     }
 
@@ -182,8 +267,8 @@ impl IdentityLiterals {
         let canonical = canonical_identity(value);
         self.values
             .iter()
-            .find(|(classified, _)| caseless_equal(classified, &canonical))
-            .map(|(_, token)| token.as_str())
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
+            .map(|existing| existing.token.as_str())
     }
 
     /// Replace every occurrence of a classified literal, whatever its case.
@@ -226,19 +311,60 @@ impl IdentityLiterals {
         cursor: usize,
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
-        for (literal, token) in &self.values {
-            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
+        for entry in &self.values {
+            let Some((start, end)) = next_acceptable_match(entry, haystack, folded, cursor) else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
                 start < best_start || (start == best_start && end > best_end)
             });
             if replaces {
-                best = Some((start, end, token.as_str()));
+                best = Some((start, end, entry.token.as_str()));
             }
         }
         best
     }
+}
+
+/// Whether a character could continue a hostname, so a derived alias must not be
+/// replaced across it.
+fn continues_hostname(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_' | '.')
+}
+
+/// Whether `haystack[start..end]` sits on a token boundary.
+fn on_token_boundary(haystack: &str, start: usize, end: usize) -> bool {
+    let before = haystack[..start].chars().next_back();
+    let after = haystack[end..].chars().next();
+    !before.is_some_and(continues_hostname) && !after.is_some_and(continues_hostname)
+}
+
+/// The next match of `entry` at or after `cursor` that the entry's own boundary
+/// rule accepts.
+///
+/// A bounded alias can still reach a later occurrence when the first one it
+/// finds is a fragment of something longer, so the search steps past a rejected
+/// match rather than giving up on the literal.
+fn next_acceptable_match(
+    entry: &ClassifiedLiteral,
+    haystack: &str,
+    folded: &[FoldedChar],
+    cursor: usize,
+) -> Option<(usize, usize)> {
+    let mut from = cursor;
+
+    while let Some((start, end)) = find_ignore_case(haystack, &entry.literal, folded, from) {
+        if !entry.bounded || on_token_boundary(haystack, start, end) {
+            return Some((start, end));
+        }
+
+        // `start` is a byte offset into `haystack` itself, so stepping one
+        // character past it cannot desynchronize the folded view.
+        let step = haystack[start..].chars().next().map_or(1, char::len_utf8);
+        from = start + step;
+    }
+
+    None
 }
 
 /// The canonical form every classification keys on and mints from: trimmed and
@@ -1190,6 +1316,9 @@ mod tests {
     /// which is the one-identity-two-tokens failure this table exists to prevent.
     /// So the field that classifies a value first decides its token, and a later
     /// field holding the same value follows it rather than minting a second.
+    /// A host value also derives its short form, which is a second entry on
+    /// purpose — they are two different literals naming one machine. What must
+    /// not happen is two entries for the *same* text.
     #[test]
     fn one_text_reaches_one_token_when_two_kinds_classify_it() {
         let mut literals = IdentityLiterals::default();
@@ -1199,7 +1328,15 @@ mod tests {
         let token = literals
             .token_for("contoso.example")
             .expect("the domain was classified");
-        assert_eq!(literals.values.len(), 1, "one text, one entry");
+        assert_eq!(
+            literals
+                .values
+                .iter()
+                .filter(|entry| entry.literal == "contoso.example")
+                .count(),
+            1,
+            "one text, one entry"
+        );
         assert!(
             token.starts_with("[tenant:"),
             "the first classification names the token: {token}"
@@ -1208,6 +1345,12 @@ mod tests {
             literals.token_for("CONTOSO.Example"),
             Some(token),
             "another casing follows the same token"
+        );
+        assert_eq!(
+            literals.token_for("contoso"),
+            Some(token),
+            "the short form derived from the host reaches the token of the value it came from, \
+             rather than minting a second token for one machine"
         );
     }
 
@@ -1637,6 +1780,100 @@ mod tests {
         assert!(
             !text.contains(BUNDLE_EVENT_COMPUTER) && !text.contains(BUNDLE_ENROLLMENT_UPN),
             "the oversized artifact kept an identifier in clear"
+        );
+    }
+
+    /// A machine is named twice in a capture: the event record carries the FQDN,
+    /// and the message body names the same machine by its short form. Only the
+    /// FQDN was classified, so every narrative mention of the short form went out
+    /// in clear — 190 of them in a live capture, in a bundle whose `computer`
+    /// field was correctly masked.
+    #[test]
+    fn a_typed_host_scrubs_its_short_form_from_narrative_text() {
+        let fqdn = "HELPDESK-LAPTOP01.corp.contoso.com";
+        let short = "HELPDESK-LAPTOP01";
+
+        let evidence = DsregcmdBundleEvidence {
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(fqdn.to_string()),
+                    message: format!("{short} reported a failure for {USER_SID}"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        };
+
+        let published = json(
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+        );
+
+        assert!(
+            !published.contains(fqdn),
+            "the typed host field kept the FQDN: {published}"
+        );
+        assert!(
+            !published.contains(short),
+            "the short form of a classified host survived in narrative text: {published}"
+        );
+
+        let tokens = tokens_of_kind(&published, "host");
+        assert!(
+            tokens.len() >= 2,
+            "expected the typed host and its narrative mention both masked: {published}"
+        );
+        assert!(
+            tokens.iter().all(|token| *token == tokens[0]),
+            "one machine reached more than one token: {tokens:?}"
+        );
+    }
+
+    /// A short form is far likelier than a full identity to occur as a fragment
+    /// of ordinary text, so it matches only where the characters around it could
+    /// not continue a hostname. `HELPDESK-LAPTOP011` is a different machine.
+    #[test]
+    fn a_short_host_alias_does_not_replace_a_longer_hostname() {
+        let short = "HELPDESK-LAPTOP01";
+        let neighbour = "HELPDESK-LAPTOP011";
+
+        let evidence = DsregcmdBundleEvidence {
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(format!("{short}.corp.contoso.com")),
+                    message: format!("{neighbour}.corp.contoso.com reported a failure"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        };
+
+        let published = json(
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+        );
+
+        assert!(
+            published.contains(neighbour),
+            "the alias cut a different machine's name in half: {published}"
         );
     }
 
