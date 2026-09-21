@@ -615,6 +615,44 @@ export function getSeverityColor(severity: DsregcmdSeverity) {
   }
 }
 
+/** Severity rank, highest priority first. */
+const SEVERITY_RANK: Record<DsregcmdSeverity, number> = {
+  Error: 0,
+  Warning: 1,
+  Info: 2,
+};
+
+/**
+ * The findings the summary sidebar shows, highest priority first.
+ *
+ * The analysis returns its diagnostics grouped by the rule family that produced
+ * them — extended, then active, then event-log — which is the order that keeps
+ * related findings together in the diagnostics card. The sidebar claims
+ * "Highest-priority diagnostics first", so the ordering belongs here, on the way
+ * to that one list, rather than in an analysis every other view also reads.
+ *
+ * The sort is stable by construction rather than by relying on the engine: two
+ * findings of one severity keep the order the rules produced them in, which is
+ * the order the other views already show. The limit is applied *after* the sort,
+ * because limiting first would hide an Error the rules happened to emit below
+ * the cutoff. The input is read, never reordered.
+ */
+export function selectTopFindings<T extends { severity: DsregcmdSeverity }>(
+  diagnostics: readonly T[],
+  limit: number,
+): T[] {
+  return diagnostics
+    .map((diagnostic, index) => ({ diagnostic, index }))
+    .sort((left, right) => {
+      const bySeverity =
+        SEVERITY_RANK[left.diagnostic.severity] -
+        SEVERITY_RANK[right.diagnostic.severity];
+      return bySeverity !== 0 ? bySeverity : left.index - right.index;
+    })
+    .slice(0, limit)
+    .map((entry) => entry.diagnostic);
+}
+
 export function withNotReportedMetadata(rows: FactRow[]): FactRow[] {
   return rows.map((row) => ({
     ...row,
