@@ -130,9 +130,14 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// characters: `ad` matches as a standalone word in any sentence, so a typed path
 /// with no floor of its own mangled prose the lane had deliberately left alone —
 /// which `a_short_value_does_not_scrub_unrelated_narrative` in this crate's
-/// export-boundary test caught. The typed path therefore has a *smaller* floor
-/// rather than none.
-const MIN_TYPED_LITERAL_BYTES: usize = 4;
+/// export-boundary test caught. Bounded matching is not enough on its own: a
+/// short ordinary word is *often* a bounded token.
+///
+/// So the resulting policy is: a typed-sensitive value of four or five bytes may
+/// be scrubbed, at boundaries only. Below four bytes it stays out of generic
+/// narrative replacement because the observed false-positive risk is too high;
+/// a field-specific treatment can be added if evidence ever supports one.
+const MIN_TYPED_SENSITIVE_LITERAL_BYTES: usize = 4;
 
 /// Every identity value this lane classified, paired with the token that
 /// replaces it.
@@ -217,7 +222,7 @@ impl LiteralOrigin {
     /// text around it.
     fn floor(self) -> usize {
         match self {
-            Self::TypedSensitive => MIN_TYPED_LITERAL_BYTES,
+            Self::TypedSensitive => MIN_TYPED_SENSITIVE_LITERAL_BYTES,
             Self::DerivedFromTyped | Self::ObservedNarrative => MIN_SCRUBBED_LITERAL_BYTES,
         }
     }
@@ -2078,6 +2083,73 @@ mod tests {
             four.values.len(),
             1,
             "a four-character typed value is the leak this policy exists for"
+        );
+    }
+
+    /// The typed floor is a policy boundary, not an accident of a comparison, so
+    /// the lengths either side of it are pinned: two and three bytes stay out,
+    /// four and five are admitted.
+    #[test]
+    fn the_typed_floor_admits_four_bytes_and_refuses_three() {
+        for (value, admitted) in [
+            ("ad", false),
+            ("abc", false),
+            ("abcd", true),
+            ("abcde", true),
+        ] {
+            let mut literals = IdentityLiterals::default();
+            literals.push(value, KIND_TENANT, LiteralOrigin::TypedSensitive);
+            assert_eq!(
+                !literals.values.is_empty(),
+                admitted,
+                "a {}-byte typed value admitted={} but the policy says {admitted}",
+                value.len(),
+                !literals.values.is_empty()
+            );
+        }
+    }
+
+    /// Four and five byte typed values are not merely admitted — they are scrubbed
+    /// out of the narrative they appear in, at a boundary.
+    #[test]
+    fn a_four_or_five_byte_typed_value_is_scrubbed_from_narrative() {
+        for domain in ["acme", "acmes"] {
+            let capture = format!(
+                "\n AzureAdJoined : NO\n DomainJoined : YES\n \
+                 TenantId : {BUNDLE_TENANT_ID}\n DomainName : {domain}\n \
+                 Server Message : sync to {domain} failed\n"
+            );
+            let value = projected_capture(&capture);
+            let message = value["facts"]["registration"]["serverMessage"]
+                .as_str()
+                .expect("the message field is present");
+
+            assert!(
+                !message.to_ascii_lowercase().contains(domain),
+                "a {}-byte typed domain survived in narrative text: {message}",
+                domain.len()
+            );
+        }
+    }
+
+    /// A rejected occurrence must not end the search for that literal: the same
+    /// value appearing later, on a boundary, still has to be found.
+    #[test]
+    fn a_bounded_occurrence_is_still_found_after_an_earlier_rejected_one() {
+        let value = projected_capture(&short_domain_capture(
+            "ACMECORP failed, then ACME failed too",
+        ));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        assert!(
+            message.contains("ACMECORP"),
+            "the fused occurrence was cut: {message}"
+        );
+        assert!(
+            !message.contains("ACME failed"),
+            "the bounded occurrence after the rejected one was missed: {message}"
         );
     }
 
