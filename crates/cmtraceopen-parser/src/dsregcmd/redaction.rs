@@ -120,6 +120,25 @@ const KIND_HOST: &str = "host";
 /// covered.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
+/// Shortest value a **typed** sensitive field may contribute.
+///
+/// Below the ordinary floor, because a typed field is what makes the value an
+/// identity: a four-character NetBIOS domain is real, and one was leaking from a
+/// live capture's prose while its typed field was masked.
+///
+/// Not zero, because the reason for the ordinary floor does not vanish at two
+/// characters: `ad` matches as a standalone word in any sentence, so a typed path
+/// with no floor of its own mangled prose the lane had deliberately left alone —
+/// which `a_short_value_does_not_scrub_unrelated_narrative` in this crate's
+/// export-boundary test caught. Bounded matching is not enough on its own: a
+/// short ordinary word is *often* a bounded token.
+///
+/// So the resulting policy is: a typed-sensitive value of four or five bytes may
+/// be scrubbed, at boundaries only. Below four bytes it stays out of generic
+/// narrative replacement because the observed false-positive risk is too high;
+/// a field-specific treatment can be added if evidence ever supports one.
+const MIN_TYPED_SENSITIVE_LITERAL_BYTES: usize = 4;
+
 /// Every identity value this lane classified, paired with the token that
 /// replaces it.
 ///
@@ -150,23 +169,101 @@ struct ClassifiedLiteral {
     literal: String,
     /// The token every spelling of this identity reaches.
     token: String,
-    /// Whether a match has to sit on a token boundary.
+    /// How the value was found, which is what authorizes replacing it and how it
+    /// is matched. One property rather than a stored boundary flag, so the two
+    /// cannot drift apart.
+    origin: LiteralOrigin,
+}
+
+impl ClassifiedLiteral {
+    /// Whether a match of this literal has to sit on a token boundary.
+    fn requires_boundary(&self) -> bool {
+        self.origin.requires_boundary(self.literal.len())
+    }
+}
+
+/// Where a classified literal came from, which is what authorizes replacing it.
+///
+/// The ordinary six-byte floor exists because a short value in prose cannot be
+/// told apart from the sentence around it: scrubbing one mangles readable
+/// evidence without protecting anything a typed field does not already cover.
+/// That reasoning does not reach a value the capture put in a **typed sensitive
+/// field**, because the field is what makes it an identity and it is masked there
+/// either way. Length alone therefore cannot be the whole test, and the typed
+/// value gets its own insertion path rather than a lower floor.
+///
+/// The origin is passed in when a value is registered rather than inferred from
+/// the `kind` at the match site: a `kind` names the token vocabulary — which token
+/// a value reaches — and says nothing about how the value was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiteralOrigin {
+    /// Read out of a typed field this lane masks, so it is an identity whatever
+    /// its length.
+    TypedSensitive,
+    /// Derived from a typed value rather than observed on its own: the short
+    /// hostname of a classified FQDN.
+    DerivedFromTyped,
+    /// A value with no field behind it, which is what the ordinary floor is for.
     ///
-    /// A *derived* alias is bounded, because a short form occurs as a fragment of
-    /// ordinary text far more easily than a full identity does: the host
-    /// `HELPDESK-LAPTOP01` sits inside `HELPDESK-LAPTOP011`, which is a different
-    /// machine. A value the capture named outright is not bounded, so a domain
-    /// still loses inside `dc1.corp.contoso.com`.
-    bounded: bool,
+    /// No producer in this lane yet — every literal it classifies comes from a
+    /// typed field — so this variant holds the policy's *other* insertion path
+    /// open and pins the floor with a test, rather than leaving unstated the rule
+    /// that a caller with no field must still clear it.
+    #[allow(dead_code)]
+    ObservedNarrative,
+}
+
+impl LiteralOrigin {
+    /// The shortest value this origin may contribute.
+    ///
+    /// A typed field is a different authorization from length, not the absence of
+    /// one: it lowers the bar far enough for a short real identifier to count, and
+    /// keeps it above the length at which a value is indistinguishable from the
+    /// text around it.
+    fn floor(self) -> usize {
+        match self {
+            Self::TypedSensitive => MIN_TYPED_SENSITIVE_LITERAL_BYTES,
+            Self::DerivedFromTyped | Self::ObservedNarrative => MIN_SCRUBBED_LITERAL_BYTES,
+        }
+    }
+
+    /// Whether a value of this origin and length is replaced only where the
+    /// characters around it could not continue an identifier.
+    ///
+    /// Two cases are bounded. A *short* value is, because it occurs as a fragment
+    /// of something longer far more easily than a full identity does: `ACME` sits
+    /// inside `ACMECORP`, `MYACME` and `ACME2`. A *derived* value is, because it is
+    /// a fragment by construction: the short hostname sits inside
+    /// `HELPDESK-LAPTOP011`. A value that cleared the floor and was named outright
+    /// keeps the substring behaviour this lane has always had, which is what makes
+    /// a domain lose inside `dc1.corp.contoso.com`.
+    fn requires_boundary(self, literal_len: usize) -> bool {
+        match self {
+            Self::DerivedFromTyped => true,
+            Self::TypedSensitive => literal_len < MIN_SCRUBBED_LITERAL_BYTES,
+            Self::ObservedNarrative => false,
+        }
+    }
+
+    /// The origin two registrations of one literal leave behind.
+    ///
+    /// A registration from a typed field wins over one that merely derived the
+    /// value, so an identity never stays narrower than the lane's own evidence
+    /// for it.
+    fn widen(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::TypedSensitive, _) | (_, Self::TypedSensitive) => Self::TypedSensitive,
+            _ => self,
+        }
+    }
 }
 
 impl IdentityLiterals {
     /// Classify one identity value. Values too short to be told apart from
     /// prose are skipped rather than scrubbed out of narrative over-eagerly.
-    fn push(&mut self, value: &str, kind: &str) {
-        let Some(token) = self.push_literal(value, kind, false) else {
-            // Below the scrub floor, so there is no token for a short form to
-            // share either.
+    fn push(&mut self, value: &str, kind: &str, origin: LiteralOrigin) {
+        let Some(token) = self.push_literal(value, kind, origin) else {
+            // Refused, so there is no token for a derived form to share either.
             return;
         };
 
@@ -193,9 +290,17 @@ impl IdentityLiterals {
     ///
     /// `None` when the value is below the scrub floor, so a caller that meant to
     /// share the token with a derived form knows there is none to share.
-    fn push_literal(&mut self, value: &str, kind: &str, bounded: bool) -> Option<String> {
+    fn push_literal(&mut self, value: &str, kind: &str, origin: LiteralOrigin) -> Option<String> {
         let literal = value.trim();
-        if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+        if literal.is_empty() {
+            return None;
+        }
+
+        // The floor is unchanged for a value with no field behind it. A typed
+        // field is a different authorization: the field is what says the value is
+        // an identity, so length settles less — but it still settles something,
+        // which is why the typed path has its own floor rather than none.
+        if literal.len() < origin.floor() {
             return None;
         }
 
@@ -208,10 +313,10 @@ impl IdentityLiterals {
             .iter_mut()
             .find(|existing| caseless_equal(&existing.literal, &canonical))
         {
-            // An entry first learned as an alias widens when the capture names
-            // the value outright, rather than staying narrower than its own
-            // evidence.
-            existing.bounded &= bounded;
+            // An entry first learned as a derived form widens when a typed field
+            // holds the value outright, rather than staying narrower than the
+            // lane's own evidence for it.
+            existing.origin = existing.origin.widen(origin);
             return Some(existing.token.clone());
         }
 
@@ -219,7 +324,7 @@ impl IdentityLiterals {
         self.values.push(ClassifiedLiteral {
             literal: canonical,
             token: token.clone(),
-            bounded,
+            origin,
         });
         self.sort_values();
         Some(token)
@@ -234,18 +339,20 @@ impl IdentityLiterals {
         }
 
         let canonical = canonical_identity(literal);
-        if self
+        if let Some(existing) = self
             .values
-            .iter()
-            .any(|existing| caseless_equal(&existing.literal, &canonical))
+            .iter_mut()
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
         {
+            // A derived form never narrows an identity the capture named outright.
+            existing.origin = existing.origin.widen(LiteralOrigin::DerivedFromTyped);
             return;
         }
 
         self.values.push(ClassifiedLiteral {
             literal: canonical,
             token: token.to_string(),
-            bounded: true,
+            origin: LiteralOrigin::DerivedFromTyped,
         });
         self.sort_values();
     }
@@ -326,9 +433,9 @@ impl IdentityLiterals {
     }
 }
 
-/// Whether a character could continue a hostname, so a derived alias must not be
-/// replaced across it.
-fn continues_hostname(character: char) -> bool {
+/// Whether a character could continue an identifier, so a short or derived value
+/// must not be replaced across it.
+fn continues_identifier(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '-' | '_' | '.')
 }
 
@@ -336,7 +443,7 @@ fn continues_hostname(character: char) -> bool {
 fn on_token_boundary(haystack: &str, start: usize, end: usize) -> bool {
     let before = haystack[..start].chars().next_back();
     let after = haystack[end..].chars().next();
-    !before.is_some_and(continues_hostname) && !after.is_some_and(continues_hostname)
+    !before.is_some_and(continues_identifier) && !after.is_some_and(continues_identifier)
 }
 
 /// The next match of `entry` at or after `cursor` that the entry's own boundary
@@ -354,7 +461,7 @@ fn next_acceptable_match(
     let mut from = cursor;
 
     while let Some((start, end)) = find_ignore_case(haystack, &entry.literal, folded, from) {
-        if !entry.bounded || on_token_boundary(haystack, start, end) {
+        if !entry.requires_boundary() || on_token_boundary(haystack, start, end) {
             return Some((start, end));
         }
 
@@ -1017,7 +1124,7 @@ fn collect_identity_literals(result: &DsregcmdAnalysisResult) -> IdentityLiteral
     if let Some(enrollment) = &result.enrollment_evidence {
         for entry in &enrollment.enrollments {
             if let Some(upn) = entry.upn.as_deref() {
-                literals.push(upn, KIND_UPN);
+                literals.push(upn, KIND_UPN, LiteralOrigin::TypedSensitive);
             }
         }
     }
@@ -1073,7 +1180,7 @@ fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals)
         (facts.diagnostics.user_identity.as_deref(), KIND_UPN),
     ] {
         if let Some(value) = value {
-            literals.push(value, kind);
+            literals.push(value, kind, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -1084,10 +1191,10 @@ fn collect_active_evidence_into(
 ) {
     if let Some(scp) = &evidence.scp_query {
         if let Some(domain) = scp.tenant_domain.as_deref() {
-            literals.push(domain, KIND_TENANT);
+            literals.push(domain, KIND_TENANT, LiteralOrigin::TypedSensitive);
         }
         if let Some(azuread_id) = scp.azuread_id.as_deref() {
-            literals.push(azuread_id, KIND_TENANT);
+            literals.push(azuread_id, KIND_TENANT, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -1095,7 +1202,7 @@ fn collect_active_evidence_into(
 fn collect_event_log_into(analysis: &EventLogAnalysis, literals: &mut IdentityLiterals) {
     for entry in &analysis.entries {
         if let Some(computer) = entry.computer.as_deref() {
-            literals.push(computer, KIND_HOST);
+            literals.push(computer, KIND_HOST, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -1111,7 +1218,7 @@ mod tests {
             },
         },
         redacted_bundle_artifacts, redacted_status_text, DsregcmdBundleArtifact, IdentityLiterals,
-        KIND_HOST, KIND_TENANT,
+        LiteralOrigin, KIND_HOST, KIND_TENANT,
     };
     use crate::intune::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
@@ -1322,8 +1429,12 @@ mod tests {
     #[test]
     fn one_text_reaches_one_token_when_two_kinds_classify_it() {
         let mut literals = IdentityLiterals::default();
-        literals.push("contoso.example", KIND_TENANT);
-        literals.push("contoso.example", KIND_HOST);
+        literals.push(
+            "contoso.example",
+            KIND_TENANT,
+            LiteralOrigin::TypedSensitive,
+        );
+        literals.push("contoso.example", KIND_HOST, LiteralOrigin::TypedSensitive);
 
         let token = literals
             .token_for("contoso.example")
@@ -1874,6 +1985,230 @@ mod tests {
         assert!(
             published.contains(neighbour),
             "the alias cut a different machine's name in half: {published}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The typed short-literal policy (issue #646)
+    // -----------------------------------------------------------------------
+
+    /// A four-character on-premises domain: below the ordinary six-byte scrub
+    /// floor, and the shape a live capture on a domain-joined machine has.
+    const SHORT_DOMAIN: &str = "ACME";
+
+    fn short_domain_capture(narrative: &str) -> String {
+        format!(
+            "\n AzureAdJoined : NO\n DomainJoined : YES\n \
+             TenantId : {BUNDLE_TENANT_ID}\n DomainName : {SHORT_DOMAIN}\n \
+             Server Message : {narrative}\n"
+        )
+    }
+
+    fn projected_capture(capture: &str) -> serde_json::Value {
+        let analysis = analyze_text_with_evidence(capture, DsregcmdBundleEvidence::default())
+            .expect("the capture analyzes");
+        serde_json::from_str(&json(&analysis)).expect("a dsregcmd analysis serializes")
+    }
+
+    /// A four-character value the capture put in a *typed* field is an identity,
+    /// so it is masked in that field **and** in the narrative around it, and both
+    /// reach one token — whatever their case, however often they occur.
+    ///
+    /// Covers the policy's requirements 1, 2, 3, 7 and 8.
+    #[test]
+    fn a_short_typed_domain_masks_its_field_and_its_narrative_mentions() {
+        let value = projected_capture(&short_domain_capture(
+            "sync to acme failed; retry ACME; then AcMe done",
+        ));
+
+        let domain_token = value["facts"]["tenantDetails"]["domainName"]
+            .as_str()
+            .expect("the domain field is present")
+            .to_string();
+        assert!(
+            domain_token.starts_with("[tenant:"),
+            "the typed field is masked: {domain_token}"
+        );
+
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+        assert!(
+            !message.to_ascii_lowercase().contains("acme"),
+            "narrative text kept the short domain: {message}"
+        );
+        assert_eq!(
+            message.matches(domain_token.as_str()).count(),
+            3,
+            "every occurrence, whatever its case, reaches the typed field's token: {message}"
+        );
+    }
+
+    /// The floor is unchanged for a value with no typed field behind it. The
+    /// *classification* is what authorizes a short replacement, not the length.
+    ///
+    /// Covers requirement 4, and requirement 10 with the existing suite.
+    #[test]
+    fn an_ordinary_short_word_is_still_not_classified() {
+        let mut observed = IdentityLiterals::default();
+        observed.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::ObservedNarrative);
+        assert!(
+            observed.values.is_empty(),
+            "a four-character value observed in prose still has to clear the floor"
+        );
+
+        let mut typed = IdentityLiterals::default();
+        typed.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            typed.values.len(),
+            1,
+            "the same four characters are an identity when a typed field holds them"
+        );
+    }
+
+    /// The typed path has a smaller floor rather than none, and this pins the
+    /// difference: two characters is prose, four is an identifier.
+    #[test]
+    fn a_two_character_typed_value_is_still_too_short_to_scrub() {
+        let mut two = IdentityLiterals::default();
+        two.push("ad", KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert!(
+            two.values.is_empty(),
+            "a two-character typed value must not enter the table"
+        );
+
+        let mut four = IdentityLiterals::default();
+        four.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            four.values.len(),
+            1,
+            "a four-character typed value is the leak this policy exists for"
+        );
+    }
+
+    /// The typed floor is a policy boundary, not an accident of a comparison, so
+    /// the lengths either side of it are pinned: two and three bytes stay out,
+    /// four and five are admitted.
+    #[test]
+    fn the_typed_floor_admits_four_bytes_and_refuses_three() {
+        for (value, admitted) in [
+            ("ad", false),
+            ("abc", false),
+            ("abcd", true),
+            ("abcde", true),
+        ] {
+            let mut literals = IdentityLiterals::default();
+            literals.push(value, KIND_TENANT, LiteralOrigin::TypedSensitive);
+            assert_eq!(
+                !literals.values.is_empty(),
+                admitted,
+                "a {}-byte typed value admitted={} but the policy says {admitted}",
+                value.len(),
+                !literals.values.is_empty()
+            );
+        }
+    }
+
+    /// Four and five byte typed values are not merely admitted — they are scrubbed
+    /// out of the narrative they appear in, at a boundary.
+    #[test]
+    fn a_four_or_five_byte_typed_value_is_scrubbed_from_narrative() {
+        for domain in ["acme", "acmes"] {
+            let capture = format!(
+                "\n AzureAdJoined : NO\n DomainJoined : YES\n \
+                 TenantId : {BUNDLE_TENANT_ID}\n DomainName : {domain}\n \
+                 Server Message : sync to {domain} failed\n"
+            );
+            let value = projected_capture(&capture);
+            let message = value["facts"]["registration"]["serverMessage"]
+                .as_str()
+                .expect("the message field is present");
+
+            assert!(
+                !message.to_ascii_lowercase().contains(domain),
+                "a {}-byte typed domain survived in narrative text: {message}",
+                domain.len()
+            );
+        }
+    }
+
+    /// A rejected occurrence must not end the search for that literal: the same
+    /// value appearing later, on a boundary, still has to be found.
+    #[test]
+    fn a_bounded_occurrence_is_still_found_after_an_earlier_rejected_one() {
+        let value = projected_capture(&short_domain_capture(
+            "ACMECORP failed, then ACME failed too",
+        ));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        assert!(
+            message.contains("ACMECORP"),
+            "the fused occurrence was cut: {message}"
+        );
+        assert!(
+            !message.contains("ACME failed"),
+            "the bounded occurrence after the rejected one was missed: {message}"
+        );
+    }
+
+    /// A short value is replaced only where the characters around it could not
+    /// continue an identifier, so it cannot cut a longer one in half.
+    ///
+    /// Covers requirement 5.
+    #[test]
+    fn a_short_typed_domain_does_not_cut_a_longer_identifier() {
+        let value = projected_capture(&short_domain_capture("ACMECORP MYACME ACME2 acme-corp"));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        for untouched in ["ACMECORP", "MYACME", "ACME2", "acme-corp"] {
+            assert!(
+                message.contains(untouched),
+                "the short domain cut '{untouched}' in half: {message}"
+            );
+        }
+    }
+
+    /// The account form is a boundary, so the domain loses while the account name
+    /// it belongs to stays readable.
+    ///
+    /// Covers requirement 6.
+    #[test]
+    fn a_short_typed_domain_is_replaced_in_an_account_name() {
+        let value = projected_capture(&short_domain_capture(r"sign-in failed for ACME\adam_admin"));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        assert!(
+            !message.to_ascii_lowercase().contains("acme"),
+            "the domain survived in the account form: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// Projecting what the projection produced changes nothing, which is what
+    /// keeps a second egress pass from disagreeing with the first.
+    ///
+    /// Covers requirement 9.
+    #[test]
+    fn projecting_a_short_typed_domain_is_idempotent() {
+        let capture = short_domain_capture("sync to ACME failed");
+        let once = redacted_status_text(&capture);
+        assert!(
+            !once.to_ascii_lowercase().contains("acme"),
+            "the first pass did not mask the short domain: {once}"
+        );
+        assert_eq!(
+            redacted_status_text(&once),
+            once,
+            "a second pass changed the projected capture"
         );
     }
 
