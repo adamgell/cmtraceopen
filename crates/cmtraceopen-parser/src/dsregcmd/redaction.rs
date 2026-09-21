@@ -167,6 +167,14 @@ struct IdentityLiterals {
 struct ClassifiedLiteral {
     /// The value as classified, canonicalized.
     literal: String,
+    /// The value's byte length as it was found, before canonicalization.
+    ///
+    /// Lowercasing can change byte length — `İ` is two bytes and canonicalizes
+    /// to three — so measuring the canonical form at match time would let a value
+    /// clear one floor and be judged against a different length than the one the
+    /// floor was applied to. Both decisions read this field so they cannot
+    /// disagree, and it is the length the insertion floor was applied to.
+    literal_bytes: usize,
     /// The token every spelling of this identity reaches.
     token: String,
     /// How the value was found, which is what authorizes replacing it and how it
@@ -178,7 +186,7 @@ struct ClassifiedLiteral {
 impl ClassifiedLiteral {
     /// Whether a match of this literal has to sit on a token boundary.
     fn requires_boundary(&self) -> bool {
-        self.origin.requires_boundary(self.literal.len())
+        self.origin.requires_boundary(self.literal_bytes)
     }
 }
 
@@ -323,6 +331,7 @@ impl IdentityLiterals {
         let token = identity_token(literal, kind);
         self.values.push(ClassifiedLiteral {
             literal: canonical,
+            literal_bytes: literal.len(),
             token: token.clone(),
             origin,
         });
@@ -351,6 +360,7 @@ impl IdentityLiterals {
 
         self.values.push(ClassifiedLiteral {
             literal: canonical,
+            literal_bytes: literal.len(),
             token: token.to_string(),
             origin: LiteralOrigin::DerivedFromTyped,
         });
@@ -2083,6 +2093,44 @@ mod tests {
             four.values.len(),
             1,
             "a four-character typed value is the leak this policy exists for"
+        );
+    }
+
+    /// One byte length decides both the insertion floor and the boundary
+    /// requirement, so the two cannot disagree.
+    ///
+    /// Unicode lowercasing can change a value's byte length: `İ` (U+0130) is two
+    /// bytes and canonicalizes to `i` plus a combining dot above, three bytes. A
+    /// five-byte value therefore becomes six, which is exactly the length
+    /// `requires_boundary` compares against. Measuring the *original* at insertion
+    /// and the *canonical* form at match time let such a value clear the typed
+    /// floor and then be replaced **inside** a longer identifier — the
+    /// over-matching the boundary rule exists to prevent.
+    #[test]
+    fn a_value_whose_canonical_form_grows_is_still_bounded() {
+        let value = "\u{130}abc";
+        assert_eq!(value.len(), 5, "the fixture is five bytes as it was found");
+        assert_eq!(
+            value.to_lowercase().len(),
+            6,
+            "and six once canonicalized, which is the threshold that hid the gap"
+        );
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(value, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            literals.values.len(),
+            1,
+            "the typed value clears the four-byte floor and is classified"
+        );
+
+        // Inside a longer identifier the value is a fragment of that identifier,
+        // not the identifier itself, so a bounded literal must leave it alone.
+        let inside = "x\u{130}abcy";
+        assert_eq!(
+            literals.scrub(inside),
+            inside,
+            "a short typed value must not be replaced inside a larger identifier"
         );
     }
 
