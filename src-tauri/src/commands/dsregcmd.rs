@@ -181,7 +181,7 @@ fn load_active_evidence_from_bundle(
                 Err(error) => {
                     log::warn!(
                         "event=dsregcmd_connectivity_tests_parse_failed path={} error={}",
-                        tests_path.display(),
+                        ARTIFACT_ENDPOINT_TESTS,
                         error
                     );
                     Vec::new()
@@ -197,7 +197,7 @@ fn load_active_evidence_from_bundle(
                 Err(error) => {
                     log::warn!(
                         "event=dsregcmd_scp_query_parse_failed path={} error={}",
-                        scp_path.display(),
+                        ARTIFACT_SCP_QUERY,
                         error
                     );
                     None
@@ -229,7 +229,7 @@ fn load_event_log_from_bundle(
             Err(error) => {
                 log::warn!(
                     "event=dsregcmd_event_log_parse_failed path={} error={}",
-                    path.display(),
+                    ARTIFACT_EVENT_LOGS,
                     error
                 );
                 None
@@ -252,7 +252,7 @@ fn load_scheduled_task_evidence_from_bundle(
             Err(error) => {
                 log::warn!(
                     "event=dsregcmd_scheduled_tasks_parse_failed path={} error={}",
-                    path.display(),
+                    ARTIFACT_SCHEDULED_TASKS,
                     error
                 );
                 None
@@ -476,6 +476,16 @@ const MANIFEST_FILE: &str = "manifest.json";
 const EVIDENCE_FOLDER_NAME: &str = "evidence";
 #[cfg(target_os = "windows")]
 const COMMAND_OUTPUT_FOLDER_NAME: &str = "command-output";
+
+// The bundle-relative name each evidence reader logs when its artifact does not
+// parse. Not the path it was read from: `tauri_plugin_log` persists these
+// warnings in the OS application log directory, so an absolute path there
+// carries the user profile component of whoever ran the capture, and an
+// application log attached to a support case would expose it.
+const ARTIFACT_ENDPOINT_TESTS: &str = "evidence/connectivity/endpoint-tests.json";
+const ARTIFACT_SCP_QUERY: &str = "evidence/connectivity/scp-query.json";
+const ARTIFACT_EVENT_LOGS: &str = "evidence/event-logs/dsregcmd-events.json";
+const ARTIFACT_SCHEDULED_TASKS: &str = "evidence/scheduled-tasks/enterprise-mgmt-tasks.json";
 
 /// Stage the live capture into its bundle.
 ///
