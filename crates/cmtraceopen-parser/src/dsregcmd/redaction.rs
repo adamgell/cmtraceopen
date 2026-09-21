@@ -174,6 +174,11 @@ struct ClassifiedLiteral {
     /// clear one floor and be judged against a different length than the one the
     /// floor was applied to. Both decisions read this field so they cannot
     /// disagree, and it is the length the insertion floor was applied to.
+    ///
+    /// When a caseless-equal spelling is merged into an existing entry this holds
+    /// the **minimum** of the lengths seen. Merging may only ever make an entry
+    /// more conservatively bounded: using the latest spelling's length would let a
+    /// shorter spelling inherit a longer one's length and lose the boundary guard.
     literal_bytes: usize,
     /// The token every spelling of this identity reaches.
     token: String,
@@ -324,6 +329,14 @@ impl IdentityLiterals {
             // An entry first learned as a derived form widens when a typed field
             // holds the value outright, rather than staying narrower than the
             // lane's own evidence for it.
+            //
+            // The byte length is the *minimum* of the spellings seen, never the
+            // latest. A caseless-equal spelling can be shorter as found — `İabc`
+            // is five bytes and its decomposed twin is six, both canonicalizing to
+            // the same string — and taking the longer one would drop the boundary
+            // guard from the shorter spelling that needed it. Merging may only ever
+            // make an entry more conservatively bounded, never less.
+            existing.literal_bytes = existing.literal_bytes.min(literal.len());
             existing.origin = existing.origin.widen(origin);
             return Some(existing.token.clone());
         }
@@ -354,6 +367,10 @@ impl IdentityLiterals {
             .find(|existing| caseless_equal(&existing.literal, &canonical))
         {
             // A derived form never narrows an identity the capture named outright.
+            // The byte length still takes the minimum of the spellings seen, for
+            // the same reason as in `push_literal`: merging must not be able to
+            // lengthen the value an entry is measured as and drop its guard.
+            existing.literal_bytes = existing.literal_bytes.min(literal.len());
             existing.origin = existing.origin.widen(LiteralOrigin::DerivedFromTyped);
             return;
         }
@@ -2132,6 +2149,119 @@ mod tests {
             inside,
             "a short typed value must not be replaced inside a larger identifier"
         );
+    }
+
+    /// A later, shorter spelling of one identity must not inherit the byte length
+    /// of a longer spelling already in the table.
+    ///
+    /// `literal_bytes` decides the boundary requirement. When a six-byte spelling
+    /// registers first and a caseless-equal five-byte spelling arrives second, an
+    /// entry that keeps six stops being bounded — and the five-byte spelling, the
+    /// one that needed the guard, is then replaced inside a longer identifier.
+    /// Deduplication must never make an entry less conservatively bounded.
+    #[test]
+    fn a_later_shorter_spelling_keeps_the_entry_bounded() {
+        // `i` + combining dot above + `abc`: six bytes as found.
+        let decomposed = "i\u{307}abc";
+        // `İabc`: five bytes as found, six once canonicalized.
+        let precomposed = "\u{130}abc";
+        assert_eq!(decomposed.len(), 6);
+        assert_eq!(precomposed.len(), 5);
+        assert_eq!(
+            decomposed.to_lowercase(),
+            precomposed.to_lowercase(),
+            "the two spellings are one identity"
+        );
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        literals.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(literals.values.len(), 1, "one identity, one entry");
+        assert_eq!(
+            literals.values[0].literal_bytes, 5,
+            "the entry keeps the shorter spelling's byte length, not the longer one's"
+        );
+
+        let inside = "x\u{130}abcy";
+        assert_eq!(
+            literals.scrub(inside),
+            inside,
+            "the entry stays bounded, so the fragment is left inside the identifier"
+        );
+    }
+
+    /// Registration order must not decide the boundary requirement.
+    #[test]
+    fn registration_order_does_not_change_the_boundary_decision() {
+        let decomposed = "i\u{307}abc";
+        let precomposed = "\u{130}abc";
+
+        let mut short_first = IdentityLiterals::default();
+        short_first.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        short_first.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        let mut long_first = IdentityLiterals::default();
+        long_first.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        long_first.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(
+            short_first.values[0].literal_bytes, long_first.values[0].literal_bytes,
+            "the entry's byte length must not depend on which spelling arrived first"
+        );
+        assert_eq!(
+            short_first.values[0].requires_boundary(),
+            long_first.values[0].requires_boundary(),
+            "and so the boundary decision must match too"
+        );
+    }
+
+    /// Two spellings of one identity still reach one token.
+    #[test]
+    fn two_spellings_of_one_identity_still_share_one_token() {
+        let decomposed = "i\u{307}abc";
+        let precomposed = "\u{130}abc";
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        literals.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(literals.values.len(), 1, "one identity, one entry");
+        let token = literals.values[0].token.clone();
+        let scrubbed = literals.scrub("sync to \u{130}abc done");
+        assert_eq!(
+            scrubbed.matches(token.as_str()).count(),
+            1,
+            "the narrative occurrence reaches the entry's single token: {scrubbed}"
+        );
+    }
+
+    /// Bounded does not mean silent: a value standing alone is still replaced.
+    #[test]
+    fn a_bounded_entry_is_still_replaced_where_it_stands_alone() {
+        let mut literals = IdentityLiterals::default();
+        literals.push("\u{130}abc", KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert!(
+            literals.values[0].requires_boundary(),
+            "a five-byte typed value is bounded"
+        );
+
+        let scrubbed = literals.scrub("sync to \u{130}abc now");
+        assert!(
+            !scrubbed.contains("\u{130}abc"),
+            "a bounded value is still replaced where it stands alone: {scrubbed}"
+        );
+    }
+
+    /// Projecting an already-projected value changes nothing further.
+    #[test]
+    fn projecting_twice_changes_nothing_the_second_time() {
+        let mut literals = IdentityLiterals::default();
+        literals.push("\u{130}abc", KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        let once = literals.scrub("sync to \u{130}abc now; skip x\u{130}abcy");
+        let twice = literals.scrub(&once);
+        assert_eq!(once, twice, "projection is idempotent");
     }
 
     /// The typed floor is a policy boundary, not an accident of a comparison, so
