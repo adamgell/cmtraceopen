@@ -183,7 +183,9 @@ mod tests {
 
         assert_eq!(
             request.paths,
-            [r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log"],
+            [
+                r"C:\Program Files\Microsoft Intune Management Extension\Logs\IntuneManagementExtension.log"
+            ],
         );
     }
 
@@ -219,7 +221,10 @@ mod tests {
         let relative = Path::new("Logs").join("ccmexec.log");
 
         let request = parse_forwarded_open_request(
-            [EXECUTABLE.to_string(), relative.to_string_lossy().to_string()],
+            [
+                EXECUTABLE.to_string(),
+                relative.to_string_lossy().to_string(),
+            ],
             launch_directory.to_string_lossy().as_ref(),
         );
 
@@ -242,7 +247,10 @@ mod tests {
             .join("ccmexec.log");
 
         let request = parse_forwarded_open_request(
-            [EXECUTABLE.to_string(), absolute.to_string_lossy().to_string()],
+            [
+                EXECUTABLE.to_string(),
+                absolute.to_string_lossy().to_string(),
+            ],
             // A different directory: an absolute path never consults it.
             std::env::temp_dir()
                 .join("unrelated-cwd")
@@ -260,8 +268,7 @@ mod tests {
 
         assert!(bare_relaunch.paths.is_empty());
 
-        let no_arguments =
-            parse_forwarded_open_request(Vec::<String>::new(), NO_WORKING_DIRECTORY);
+        let no_arguments = parse_forwarded_open_request(Vec::<String>::new(), NO_WORKING_DIRECTORY);
 
         assert!(no_arguments.paths.is_empty());
     }
@@ -347,8 +354,7 @@ mod tests {
 
         assert!(is_replacement_launch(&relaunch));
 
-        let association =
-            crate::parse_initial_launch_arguments([r"C:\Logs\ime.log".to_string()]);
+        let association = crate::parse_initial_launch_arguments([r"C:\Logs\ime.log".to_string()]);
 
         assert!(!is_replacement_launch(&association));
     }

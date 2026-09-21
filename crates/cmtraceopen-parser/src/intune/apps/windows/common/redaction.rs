@@ -1154,20 +1154,34 @@ mod tests {
     #[test]
     fn the_caseless_key_agrees_with_the_caseless_comparison() {
         for (left, right) in [
-            ("\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example", "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example"),
+            (
+                "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example",
+                "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example",
+            ),
             ("\u{130}STANBUL-PC", "i\u{307}stanbul-pc"),
             ("PC-\u{C9}LODIE", "pc-\u{E9}lodie"),
             ("CONTOSO\\User", "contoso\\user"),
         ] {
             assert!(caseless_equal(left, right), "{left} and {right}");
-            assert_eq!(caseless_key(left), caseless_key(right), "{left} and {right}");
+            assert_eq!(
+                caseless_key(left),
+                caseless_key(right),
+                "{left} and {right}"
+            );
         }
 
         // One folded character whose case mapping is a sequence is not two
         // characters, and neither is a ligature the letters it stands for.
-        for (left, right) in [("Stra\u{DF}e.Example", "strasse.example"), ("\u{FB00}", "ff")] {
+        for (left, right) in [
+            ("Stra\u{DF}e.Example", "strasse.example"),
+            ("\u{FB00}", "ff"),
+        ] {
             assert!(!caseless_equal(left, right), "{left} and {right}");
-            assert_ne!(caseless_key(left), caseless_key(right), "{left} and {right}");
+            assert_ne!(
+                caseless_key(left),
+                caseless_key(right),
+                "{left} and {right}"
+            );
         }
     }
 

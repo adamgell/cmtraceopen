@@ -90,8 +90,8 @@ use crate::intune::models::{
 };
 
 use super::models::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult,
-    DsregcmdDerived, DsregcmdDeviceDetails, DsregcmdDiagnosticFields, DsregcmdDiagnosticInsight,
+    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult, DsregcmdDerived,
+    DsregcmdDeviceDetails, DsregcmdDiagnosticFields, DsregcmdDiagnosticInsight,
     DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdFacts, DsregcmdJoinState,
     DsregcmdManagementDetails, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
     DsregcmdPostJoinDiagnostics, DsregcmdPreJoinTests, DsregcmdProxyEvidence,
@@ -305,10 +305,12 @@ impl Projection {
     /// and a prose mention of one identity to disagree. A value the table does
     /// not hold is one below the scrub floor, and it mints its own.
     fn identity(&self, value: &Option<String>, kind: &str) -> Option<String> {
-        value.as_deref().map(|value| match self.literals.token_for(value) {
-            Some(token) => token.to_string(),
-            None => identity_token(value, kind),
-        })
+        value
+            .as_deref()
+            .map(|value| match self.literals.token_for(value) {
+                Some(token) => token.to_string(),
+                None => identity_token(value, kind),
+            })
     }
 }
 
@@ -912,7 +914,10 @@ mod tests {
         ("tenant domain", "contoso.onmicrosoft.com"),
         ("on-premises domain", "corp.contoso.com"),
         ("device id", "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b"),
-        ("certificate thumbprint", "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D"),
+        (
+            "certificate thumbprint",
+            "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D",
+        ),
         ("user principal name", "adele.vance@contoso.onmicrosoft.com"),
     ];
 
@@ -1102,13 +1107,11 @@ mod tests {
 
     /// `ΣΟΦΟΥΣ.Example` in capitals: `Σ` U+03A3, `Ο` U+039F, `Φ` U+03A6,
     /// `Υ` U+03A5, and a final `Σ` U+03A3 that the narrative renders as `ς`.
-    const CAPITAL_SIGMA_IDENTITY: &str =
-        "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
+    const CAPITAL_SIGMA_IDENTITY: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
 
     /// The same name written in lower case with Greek's final sigma: it ends in
     /// `ς` U+03C2, which lowercasing `Σ` never produces.
-    const FINAL_SIGMA_NARRATIVE: &str =
-        "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
+    const FINAL_SIGMA_NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
 
     /// `Σ` and final `ς` are caseless-equal, but they are two different
     /// lowercase letters, so a comparison that only folds down keeps them apart
