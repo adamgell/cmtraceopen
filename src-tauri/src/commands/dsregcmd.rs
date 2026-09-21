@@ -214,7 +214,8 @@ fn export_dsregcmd_shareable_bundle_blocking(
     let evidence = load_bundle_evidence(&bundle_root.to_string_lossy());
     let artifacts = read_bundle_text_artifacts(&bundle_root)?;
 
-    let projected = crate::dsregcmd::redacted_bundle_artifacts(&capture_text, evidence, artifacts);
+    let projected = crate::dsregcmd::redacted_bundle_artifacts(&capture_text, evidence, artifacts)
+        .map_err(crate::error::AppError::InvalidInput)?;
 
     let shareable_root = create_shareable_bundle_root(Path::new(destination_root))?;
     let artifact_count = write_shareable_bundle(&shareable_root, &projected)?;

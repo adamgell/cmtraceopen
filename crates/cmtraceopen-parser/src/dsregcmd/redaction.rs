@@ -676,20 +676,43 @@ pub struct DsregcmdBundleArtifact {
 /// The artifacts are taken and returned by value so this performs no I/O — the
 /// caller owns the filesystem, exactly as it does for the analysis path — and
 /// so the projected set is a new value rather than a mutation of the raw one.
+///
+/// An artifact whose path identifies it as JSON is projected as JSON — parsed,
+/// every decoded string value projected, serialized back as valid JSON — and
+/// every other artifact keeps the line-oriented pass. The two are not
+/// interchangeable: a real event log escapes its message text, so a
+/// `DOMAIN\account` account name reaches the line-oriented pass preceded by the
+/// `t` of an escaped tab, and `t` is an identifier character, so the boundary
+/// matcher reads the domain as embedded in a longer identifier and refuses to
+/// mask it. Projecting the decoded value removes the encoding from the
+/// boundary question entirely, which a special case for `\t` would not: `\n`,
+/// `\b`, `\f` and `\u0009` are the same problem.
+///
+/// A present artifact that is identified as JSON but does not parse is an
+/// error. Falling back to the line-oriented pass would publish an artifact that
+/// looks projected while retaining whatever that pass could not reach.
 pub fn redacted_bundle_artifacts(
     capture_text: &str,
     evidence: DsregcmdBundleEvidence,
     artifacts: Vec<DsregcmdBundleArtifact>,
-) -> Vec<DsregcmdBundleArtifact> {
+) -> Result<Vec<DsregcmdBundleArtifact>, String> {
     let projection = Projection {
         literals: bundle_literals(capture_text, evidence),
     };
 
     artifacts
         .into_iter()
-        .map(|artifact| DsregcmdBundleArtifact {
-            relative_path: artifact.relative_path,
-            text: project_artifact_text(&projection, &artifact.text),
+        .map(|artifact| {
+            let text = if is_json_artifact(&artifact.relative_path) {
+                project_json_artifact(&projection, &artifact.relative_path, &artifact.text)?
+            } else {
+                project_artifact_text(&projection, &artifact.text)
+            };
+
+            Ok(DsregcmdBundleArtifact {
+                relative_path: artifact.relative_path,
+                text,
+            })
         })
         .collect()
 }
@@ -718,6 +741,76 @@ fn project_artifact_text(projection: &Projection, text: &str) -> String {
     text.split_inclusive('\n')
         .map(|line| projection.text(line))
         .collect()
+}
+
+/// Whether an artifact's path identifies it as JSON, which is what decides how
+/// its text is projected.
+///
+/// By extension rather than by sniffing the first byte: the bundle writes these
+/// files itself through `serde_json`, so the path is the reliable signal, and a
+/// sniffing rule would let a capture artifact that happens to start with `{`
+/// take the JSON path.
+fn is_json_artifact(relative_path: &str) -> bool {
+    relative_path
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("json"))
+}
+
+/// Project a JSON artifact by projecting its **decoded** string values.
+///
+/// Parsing is what takes the encoding out of the boundary question. In the
+/// serialized form the domain in `\tUser Name:\tDOMAIN\\adam_admin\r\n` is
+/// preceded by the `t` of an escaped tab, which the generic matcher reads as an
+/// identifier character and refuses to cross. In the decoded form it is
+/// preceded by a tab, which the same matcher already treats as a boundary — the
+/// same way it treats the account form in non-JSON text.
+///
+/// Numbers, booleans, nulls and object keys are left exactly as they are: they
+/// carry no identity text, and a key is schema rather than capture content.
+///
+/// The re-serialized form is compact rather than a replica of the input's
+/// whitespace, and object members come out in the map's own order rather than
+/// the input's, because `serde_json` is built here without `preserve_order`.
+/// Both are representation changes, not content ones: JSON member order carries
+/// no meaning, every reader of these artifacts deserializes them, and the
+/// canonical form is also what makes a second projection of an already
+/// projected artifact a no-op.
+fn project_json_artifact(
+    projection: &Projection,
+    relative_path: &str,
+    text: &str,
+) -> Result<String, String> {
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
+        format!(
+            "Refusing to project '{relative_path}': it is identified as JSON but does not parse ({error})."
+        )
+    })?;
+
+    project_json_value(projection, &mut value);
+
+    serde_json::to_string(&value).map_err(|error| {
+        format!(
+            "Refusing to project '{relative_path}': the projected JSON could not be serialized ({error})."
+        )
+    })
+}
+
+/// Apply the projection to every string value in a JSON tree, recursively.
+fn project_json_value(projection: &Projection, value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = projection.text(text),
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                project_json_value(projection, item);
+            }
+        }
+        serde_json::Value::Object(members) => {
+            for member in members.values_mut() {
+                project_json_value(projection, member);
+            }
+        }
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null => {}
+    }
 }
 
 impl Projection {
@@ -1811,7 +1904,8 @@ mod tests {
             &bundle_capture(),
             bundle_evidence(),
             unprojected_bundle_artifacts(),
-        );
+        )
+        .expect("the bundle projects");
         let shareable = joined_artifact_text(&projected);
 
         for (label, marker) in BUNDLE_IDENTIFIERS {
@@ -1857,7 +1951,8 @@ mod tests {
             .map(|artifact| artifact.relative_path.clone())
             .collect();
 
-        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts);
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
+            .expect("the bundle projects");
         let actual_paths: Vec<String> = projected
             .iter()
             .map(|artifact| artifact.relative_path.clone())
@@ -1908,7 +2003,8 @@ mod tests {
             "the fixture has to exceed the grammar's input bound to be a regression test"
         );
 
-        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifact);
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifact)
+            .expect("the bundle projects");
         let text = &projected[0].text;
 
         assert!(
@@ -2392,6 +2488,256 @@ mod tests {
             once,
             "a second pass changed the projected capture"
         );
+    }
+
+    /// A `dsregcmd-events.json` artifact holding one event message.
+    ///
+    /// `message` is the JSON *source* form of the message, so a caller passes
+    /// `\t` or `\u0009` the way a capture would have written it rather than a
+    /// decoded tab.
+    fn events_json_artifact(message: &str) -> DsregcmdBundleArtifact {
+        DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!("{{\n  \"entries\": [\n    {{ \"message\": \"{message}\" }}\n  ]\n}}\n"),
+        }
+    }
+
+    /// Project a single artifact through the hand-off.
+    fn project_one_artifact(artifact: DsregcmdBundleArtifact) -> String {
+        redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![artifact])
+            .expect("the bundle projects")
+            .into_iter()
+            .next()
+            .expect("one artifact in, one artifact out")
+            .text
+    }
+
+    /// The decoded message of a projected events artifact, which also proves the
+    /// projected artifact is still valid JSON.
+    fn decoded_message(projected: &str) -> String {
+        let value: serde_json::Value =
+            serde_json::from_str(projected).expect("the projected artifact is valid JSON");
+        value["entries"][0]["message"]
+            .as_str()
+            .expect("the message value survives projection")
+            .to_string()
+    }
+
+    /// The token the *typed* `DomainName` field reached, which is the token a
+    /// mention of the same domain in an artifact message has to reach too.
+    fn typed_domain_token() -> String {
+        projected_capture(&short_domain_capture(""))["facts"]["tenantDetails"]["domainName"]
+            .as_str()
+            .expect("the domain field is present")
+            .to_string()
+    }
+
+    /// A real event log escapes its message text, so a `DOMAIN\account` account
+    /// name reaches the line-oriented pass with the domain preceded by the `t`
+    /// of an escaped tab. `t` is an identifier character, so the generic
+    /// boundary matcher reads the domain as embedded inside a longer identifier
+    /// and refuses to mask it: the domain survives projection in the one
+    /// artifact class whose text is escaped.
+    ///
+    /// Measured on a live domain-joined capture this was nine surviving
+    /// occurrences of the on-premises domain in
+    /// `evidence/event-logs/dsregcmd-events.json`.
+    ///
+    /// The decoded value is `\tUser Name:\tACME\adam_admin\r\n`. The serialized
+    /// text — which is what the line-oriented pass sees — is what the fixture
+    /// writes.
+    ///
+    /// Covers requirements 1, 2, 3, 4 and 9.
+    #[test]
+    fn a_json_message_masks_the_domain_in_an_account_name_behind_an_escaped_tab() {
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "the domain survived projection inside an escaped JSON message: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+        assert!(
+            message.contains(&typed_domain_token()),
+            "the artifact mention did not reach the typed field's token: {message}"
+        );
+    }
+
+    /// A capture may write a tab as `\u0009` instead of `\t`. Both decode to a
+    /// tab, and parsing is what makes that irrelevant — which is why the fix is
+    /// not a `\t` special case.
+    ///
+    /// Covers requirement 10.
+    #[test]
+    fn a_json_message_masks_the_domain_behind_a_unicode_escape_tab() {
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "\\u0009User Name:\\u0009{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "the domain survived behind a \\u0009 boundary: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// No token begins or ends inside a word. A splice — `MY[tenant:…]`, or
+    /// `[tenant:…]CORP` — is the partial replacement the boundary rule exists to
+    /// prevent, and it is the failure this test guards rather than any
+    /// particular treatment of the pair.
+    fn assert_no_spliced_token(text: &str) {
+        let characters: Vec<char> = text.chars().collect();
+        for (index, character) in characters.iter().enumerate() {
+            if *character == '[' {
+                if let Some(previous) = index.checked_sub(1).and_then(|i| characters.get(i)) {
+                    assert!(
+                        !previous.is_alphanumeric(),
+                        "a token was spliced into a longer identifier: {text}"
+                    );
+                }
+            }
+            if *character == ']' {
+                if let Some(next) = characters.get(index + 1) {
+                    assert!(
+                        !next.is_alphanumeric(),
+                        "a token was spliced into a longer identifier: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A short value is replaced only where the characters around it could not
+    /// continue an identifier, so it cannot cut a longer one in half — and where
+    /// the value qualifies an account name, whatever the projection does with the
+    /// pair, it never splices a token into the middle of it.
+    ///
+    /// Covers requirements 5, 6, 7 and 8.
+    #[test]
+    fn a_json_message_does_not_cut_a_longer_identifier_with_the_short_domain() {
+        // Bare longer words keep every character.
+        let projected = project_one_artifact(events_json_artifact(
+            "Seen on ACMECORP MYACME ACME2 acme-corp",
+        ));
+        let message = decoded_message(&projected);
+        for untouched in ["ACMECORP", "MYACME", "ACME2", "acme-corp"] {
+            assert!(
+                message.contains(untouched),
+                "the short domain cut '{untouched}' in half: {message}"
+            );
+        }
+
+        // In the account form the domain is a boundary. These are the longer
+        // identifiers requirement 5 names, and the four-byte domain itself: the
+        // invariant is that none of them is partially replaced.
+        for form in [
+            "ACMECORP\\adam_admin",
+            "MYACME\\adam_admin",
+            "ACME2\\adam_admin",
+            "ACME\\adam_admin",
+        ] {
+            // `form` is the decoded shape; the artifact carries JSON source, so
+            // its backslash has to be the escaped one.
+            let source = form.replace('\\', "\\\\");
+            let projected = project_one_artifact(events_json_artifact(&format!(
+                "sign-in failed for {source}"
+            )));
+            let message = decoded_message(&projected);
+
+            assert_no_spliced_token(&message);
+        }
+
+        // The four-byte domain is the one that must go, and the account name it
+        // qualified stays readable.
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "sign-in failed for {SHORT_DOMAIN}\\\\adam_admin"
+        )));
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "a normally bounded account form kept the domain: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// Projecting a projected JSON artifact changes nothing, which is what keeps
+    /// a second egress pass from disagreeing with the first.
+    ///
+    /// Covers requirement 11.
+    #[test]
+    fn projecting_a_json_artifact_twice_changes_nothing() {
+        let once = project_one_artifact(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+        let twice = project_one_artifact(DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: once.clone(),
+        });
+
+        assert_eq!(twice, once, "a second pass changed the projected artifact");
+    }
+
+    /// An artifact identified as JSON that does not parse fails the hand-off
+    /// rather than taking the line-oriented pass. A silent fallback would
+    /// publish an artifact that looks projected while retaining whatever that
+    /// pass could not reach — the one failure mode the hand-off exists to
+    /// prevent.
+    ///
+    /// Covers the fail-closed requirement.
+    #[test]
+    fn a_malformed_json_artifact_fails_the_hand_off() {
+        let broken = DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!("{{ \"message\": \"{SHORT_DOMAIN}\\\\adam_admin\", }}"),
+        };
+
+        let error =
+            redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![broken])
+                .expect_err("a malformed JSON artifact must fail the hand-off");
+
+        assert!(
+            error.contains("dsregcmd-events.json"),
+            "the error does not name the artifact that failed: {error}"
+        );
+    }
+
+    /// A non-JSON artifact keeps the line-oriented pass, and the whole hand-off
+    /// stays valid JSON wherever it claims to be JSON.
+    ///
+    /// Covers requirement 1 across every artifact the hand-off writes.
+    #[test]
+    fn every_projectable_artifact_in_the_hand_off_stays_valid_json() {
+        let mut artifacts = unprojected_bundle_artifacts();
+        artifacts.push(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
+            .expect("the bundle projects");
+
+        for artifact in &projected {
+            if artifact.relative_path.ends_with(".json") {
+                serde_json::from_str::<serde_json::Value>(&artifact.text).unwrap_or_else(|error| {
+                    panic!(
+                        "the projected artifact '{}' is not valid JSON: {error}",
+                        artifact.relative_path
+                    )
+                });
+            }
+        }
     }
 
     /// Every `[kind:…]` token in a serialized analysis, in order.
