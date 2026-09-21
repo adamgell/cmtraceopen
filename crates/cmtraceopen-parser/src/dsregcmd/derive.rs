@@ -63,8 +63,7 @@ pub(super) fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDe
         .diagnostics
         .client_time
         .as_deref()
-        .and_then(parse_dsregcmd_timestamp)
-        .or_else(|| Some(Utc::now()));
+        .and_then(parse_dsregcmd_timestamp);
     let prt_last_update = facts
         .sso_state
         .azure_ad_prt_update_time
@@ -170,9 +169,13 @@ fn derive_dominant_phase(facts: &DsregcmdFacts) -> DsregcmdDiagnosticPhase {
         return phase;
     }
 
-    if facts.diagnostics.attempt_status.is_some()
-        || facts.diagnostics.previous_prt_attempt.is_some()
-        || facts.sso_state.acquire_prt_diagnostics.is_some()
+    // PRT attempt fields are post-join evidence. On a joined device they are
+    // the freshest signal; on a not-joined device pre-join failures dominate
+    // because the join flow cannot reach post-join while they are failing.
+    if facts.join_state.azure_ad_joined == Some(true)
+        && (facts.diagnostics.attempt_status.is_some()
+            || facts.diagnostics.previous_prt_attempt.is_some()
+            || facts.sso_state.acquire_prt_diagnostics.is_some())
     {
         return DsregcmdDiagnosticPhase::PostJoin;
     }
@@ -360,7 +363,6 @@ fn parse_certificate_validity(value: &str) -> (Option<DateTime<Utc>>, Option<Dat
 
     match timestamps.as_slice() {
         [valid_from, valid_to, ..] => (Some(*valid_from), Some(*valid_to)),
-        [valid_to] => (None, Some(*valid_to)),
         _ => (None, None),
     }
 }
@@ -401,10 +403,30 @@ pub(super) fn has_code(facts: &DsregcmdFacts, code: &str) -> bool {
         || contains_text(&facts.pre_join_tests.token_acquisition_test, code)
         || contains_text(&facts.pre_join_tests.drs_discovery_test, code)
         || contains_text(&facts.pre_join_tests.ad_configuration_test, code)
+        || contains_text(&facts.pre_join_tests.drs_connectivity_test, code)
+        || contains_text(&facts.pre_join_tests.ad_connectivity_test, code)
 }
 
 pub(super) fn has_any_code(facts: &DsregcmdFacts, codes: &[&str]) -> bool {
     codes.iter().any(|code| has_code(facts, code))
+}
+/// Match a Win32 error by decimal value or lowercase hex form (`1312` or
+/// `0x520`) as a whole token, so codes embedded in larger numbers, hex
+/// HRESULTs, or names like `ERROR_1312` do not false-positive. Comma- and
+/// slash-delimited code lists (e.g. `0x801c0021/0x80072ee2`) are evaluated
+/// per code, and surrounding punctuation such as brackets is ignored.
+pub(super) fn contains_win32_code(aggregated: &str, decimal: u32) -> bool {
+    let decimal_text = decimal.to_string();
+    aggregated.split_whitespace().any(|token| {
+        token.split(['/', ',']).any(|part| {
+            let part = part.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            part == decimal_text
+                || part
+                    .strip_prefix("0x")
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .is_some_and(|value| value == decimal)
+        })
+    })
 }
 
 pub(super) fn is_failure(field: &Option<String>) -> bool {
@@ -438,6 +460,22 @@ pub(super) fn render_phase_code_evidence(facts: &DsregcmdFacts, code: &str) -> S
         (
             "Token Acquisition Test",
             facts.pre_join_tests.token_acquisition_test.as_deref(),
+        ),
+        (
+            "DRS Discovery Test",
+            facts.pre_join_tests.drs_discovery_test.as_deref(),
+        ),
+        (
+            "AD Configuration Test",
+            facts.pre_join_tests.ad_configuration_test.as_deref(),
+        ),
+        (
+            "DRS Connectivity Test",
+            facts.pre_join_tests.drs_connectivity_test.as_deref(),
+        ),
+        (
+            "AD Connectivity Test",
+            facts.pre_join_tests.ad_connectivity_test.as_deref(),
         ),
     ];
 
@@ -544,6 +582,40 @@ pub(super) fn contains_text(field: &Option<String>, needle: &str) -> bool {
                 .contains(&needle.to_ascii_lowercase())
         })
         .unwrap_or(false)
+}
+
+/// Match an `AADSTS…` code as a whole token, the way [`contains_win32_code`]
+/// matches a Win32 error.
+///
+/// [`contains_text`] is a substring test, which is what a free-text search wants
+/// and what a status code does not: `AADSTS50126` is a prefix of
+/// `AADSTS501260`, which is a different failure, so a substring test diagnoses
+/// the longer code as invalid credentials.
+///
+/// Unlike [`contains_win32_code`], the code is not split out of the text: these
+/// fields carry it inside prose, as in `Error(AADSTS50126): invalid username or
+/// password`, so the occurrence is found and then required to be bounded on both
+/// sides by anything that is not an ASCII alphanumeric — punctuation, brackets
+/// and whitespace all qualify, and so does the edge of the field.
+pub(super) fn contains_aadsts_code(field: &Option<String>, code: &str) -> bool {
+    let Some(value) = field.as_deref() else {
+        return false;
+    };
+
+    let haystack = value.to_ascii_lowercase();
+    let code = code.to_ascii_lowercase();
+    if code.is_empty() {
+        return false;
+    }
+
+    let ends_code = |character: Option<char>| {
+        character.is_none_or(|character| !character.is_ascii_alphanumeric())
+    };
+
+    haystack.match_indices(&code).any(|(start, _)| {
+        ends_code(haystack[..start].chars().next_back())
+            && ends_code(haystack[start + code.len()..].chars().next())
+    })
 }
 
 pub(super) fn equals_text(field: &Option<String>, expected: &str) -> bool {

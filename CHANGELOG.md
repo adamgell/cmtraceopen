@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
+
 ### Fixed
 
 - **Second launch opens in the running window (#565)**: A second launch, whether a file-association double-click or a path on the command line, hands its files to the window that is already open, which raises itself and opens them like any other path, instead of leaving a second window behind. An elevated restart is a replacement rather than a second launch, so it never routes itself.
@@ -13,6 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Build & CI
 
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
+- **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 
 ## [1.6.0] - 2026-09-14
 
