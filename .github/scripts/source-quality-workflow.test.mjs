@@ -55,7 +55,15 @@ const expectedSourceQualityJob = `  source-quality:
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          if git rev-parse --verify "\${base}^" >/dev/null 2>&1; then
+          # A valid base from the event is usable even when it is the root commit
+          # and has no parent, because base..HEAD and base...HEAD do not need one.
+          # Testing the parent here rejected a root-commit base and sent it down
+          # the empty-tree path below, which diffs the empty tree against HEAD and
+          # so reported whitespace in every file the repository has ever contained
+          # rather than only in the changed range. The two checks above already
+          # establish that base is a real commit, so the empty tree is now reached
+          # only when there is genuinely no base to compare against.
+          if git cat-file -e "\${base}^{commit}" 2>/dev/null; then
             if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
               git diff --check "$base...HEAD"
             else

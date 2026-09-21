@@ -116,32 +116,59 @@ test("every workflow installs the pinned toolchain, or asks for its own", () => 
  */
 const MSRV_INPUT = "1.88";
 
-test("an explicit toolchain input is the pinned channel or the MSRV floor", () => {
-  const workflows = readdirSync(workflowDir).filter((name) =>
-    /\\.ya?ml$/.test(name),
+/**
+ * The workflow filenames the guards scan.
+ *
+ * Asserted non-empty. The filter here once required a literal backslash
+ * (`/\\.ya?ml$/`), which matches no real filename, so the guard below passed
+ * while inspecting no workflow at all. An empty list has to fail rather than
+ * pass silently, because every assertion built on it is vacuous when it is empty.
+ */
+function workflowNames() {
+  const names = readdirSync(workflowDir).filter((name) =>
+    /\.ya?ml$/.test(name),
   );
+  assert.ok(
+    names.length > 0,
+    "expected workflows to scan; an empty list would make this guard vacuous",
+  );
+  return names;
+}
 
+/**
+ * The explicit `toolchain:` inputs that are neither the pinned channel nor the
+ * MSRV floor, collected by the same rule the workflow-wide guard applies.
+ *
+ * Shared with the drift tests deliberately. A drift test that only parsed its
+ * fixture and asserted `inputVersion !== PINNED_REF.version` keeps passing if the
+ * policy itself starts allowing the drifted value — it never consults the policy,
+ * so it cannot notice the policy becoming wrong. Routing the fixture through this
+ * function makes the test fail for that reason too.
+ */
+function inputOffenders(workflow, contents) {
   const offenders = [];
 
-  for (const workflow of workflows) {
-    const steps = toolchainSteps(
-      readFileSync(join(workflowDir, workflow), "utf8"),
-    );
-
-    for (const step of steps) {
-      if (step.inputVersion === null) {
-        continue;
-      }
-      if (
-        step.inputVersion !== PINNED_REF.version &&
-        step.inputVersion !== MSRV_INPUT
-      ) {
-        offenders.push(
-          `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floor ${MSRV_INPUT}`,
-        );
-      }
+  for (const step of toolchainSteps(contents)) {
+    if (step.inputVersion === null) {
+      continue;
+    }
+    if (
+      step.inputVersion !== PINNED_REF.version &&
+      step.inputVersion !== MSRV_INPUT
+    ) {
+      offenders.push(
+        `${workflow}:${step.line} asks for ${step.inputVersion}, expected ${PINNED_REF.version} or the MSRV floor ${MSRV_INPUT}`,
+      );
     }
   }
+
+  return offenders;
+}
+
+test("an explicit toolchain input is the pinned channel or the MSRV floor", () => {
+  const offenders = workflowNames().flatMap((workflow) =>
+    inputOffenders(workflow, readFileSync(join(workflowDir, workflow), "utf8")),
+  );
 
   assert.deepEqual(
     offenders,
@@ -158,13 +185,16 @@ test("the guard detects a step pinned to a third channel", () => {
     '          toolchain: "1.92.0"',
   ].join("\n");
 
-  const [step] = toolchainSteps(drifted);
-  assert.equal(step.inputVersion, "1.92.0", "fixture must expose its version");
-  assert.notEqual(
-    step.inputVersion,
-    PINNED_REF.version,
-    "the guard must reject a version that overrides the pin",
+  // Routed through the guard's own policy rather than merely parsed. Asserting
+  // only `inputVersion !== PINNED_REF.version` would keep passing if the policy
+  // started allowing 1.92.0, which is the drift this test exists to catch.
+  const offenders = inputOffenders("fixture.yml", drifted);
+  assert.equal(
+    offenders.length,
+    1,
+    "the guard must report a version that overrides the pin",
   );
+  assert.match(offenders[0], /1\.92\.0/, "the report must name the version");
 });
 
 test("the guard detects a step left on the wrong ref", () => {
