@@ -222,9 +222,8 @@ mod tests {
     /// a healthy directory alongside a failed SCP query.
     #[test]
     fn an_nltest_failure_survives_a_powershell_reported_scp_error() {
-        let nltest = Some(
-            "nltest /dsgetdc: failed (exit code 1): ERROR_NO_SUCH_DOMAIN".to_string(),
-        );
+        let nltest =
+            Some("nltest /dsgetdc: failed (exit code 1): ERROR_NO_SUCH_DOMAIN".to_string());
 
         let message = scp_failure_message(&nltest, "SCP_ERROR: LDAP error 0x20");
 

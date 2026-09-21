@@ -415,7 +415,8 @@ mod tests {
     #[test]
     fn test_detect_configuration_manager_source_code_span() {
         // The reported log shape: a 0x87D… code attributed to the Configuration Manager source.
-        let message = "App install failed, error 0x87D00607 (Source: Microsoft Configuration Manager)";
+        let message =
+            "App install failed, error 0x87D00607 (Source: Microsoft Configuration Manager)";
         let spans = detect_error_code_spans(message);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].code_hex, "0x87D00607");
@@ -424,7 +425,10 @@ mod tests {
             "Configuration Manager - Content not found"
         );
         assert_eq!(spans[0].category, "ConfigMgr");
-        assert_eq!(js_slice(message, spans[0].start, spans[0].end), "0x87D00607");
+        assert_eq!(
+            js_slice(message, spans[0].start, spans[0].end),
+            "0x87D00607"
+        );
     }
 
     /// Codes published in the "Intune app installation error reference"
