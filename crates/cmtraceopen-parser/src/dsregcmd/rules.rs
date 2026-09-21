@@ -15,7 +15,15 @@ pub use super::extended::{
     build_extended_diagnostics,
 };
 
-pub fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
+/// Evaluate every diagnostic rule against parsed facts and return the analysis.
+///
+/// **Preserving, crate-internal.** The returned analysis carries the identity
+/// values the facts hold, so this is the other way to obtain an unprojected view
+/// of a capture. It is not `pub`: the published entry points
+/// ([`analyze_text`](super::analyze_text) and
+/// [`analyze_text_with_evidence`](super::analyze_text_with_evidence)) call it and
+/// then project (ADR-004 revision 1, Ruling 1).
+pub(crate) fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
     let derived = derive_facts(&facts, raw_input);
     let diagnostics = build_diagnostics(&facts, &derived);
 

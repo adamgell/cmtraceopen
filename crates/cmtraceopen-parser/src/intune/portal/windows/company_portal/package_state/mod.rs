@@ -59,12 +59,13 @@ pub fn parse_package_state_capture(json: &str) -> Result<PackageStateCapture, Pa
         });
     }
 
-    let mut capture: PackageStateCapture = serde_json::from_value(document.clone()).map_err(
-        |error| PackageStateError::InvalidBody {
-            version: schema_version,
-            detail: error.to_string(),
-        },
-    )?;
+    let mut capture: PackageStateCapture =
+        serde_json::from_value(document.clone()).map_err(|error| {
+            PackageStateError::InvalidBody {
+                version: schema_version,
+                detail: error.to_string(),
+            }
+        })?;
     capture.schema_version = schema_version;
     capture.raw_document = None;
     preserve_unknown_package_fields(&document, &mut capture);

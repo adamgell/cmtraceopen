@@ -387,7 +387,13 @@ fn decode_reg_content(bytes: &[u8]) -> Option<String> {
         return Some(String::from_utf16_lossy(&units));
     }
 
-    String::from_utf8(bytes.to_vec()).ok()
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(content) => Some(content),
+        Err(_) => {
+            let (content, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+            Some(content.into_owned())
+        }
+    }
 }
 
 fn build_registry_snapshot_summary(registry: &RegistryKeyMap) -> RegistrySnapshotSummary {
@@ -731,6 +737,12 @@ mod tests {
         ];
         let decoded = decode_reg_content(&utf16).expect("decode utf16 reg export");
         assert_eq!(decoded, "Windows");
+    }
+
+    #[test]
+    fn decodes_windows_1252_reg_exports() {
+        let decoded = decode_reg_content(b"Windows\x80").expect("decode Windows-1252 reg export");
+        assert_eq!(decoded, "Windows€");
     }
 
     #[test]

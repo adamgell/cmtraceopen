@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   getInitialElevationRestore,
   getInitialFilePaths,
   getInitialWorkspace,
+  takeSecondLaunchPaths,
 } from "../lib/commands";
 import { markElevationRetryAttempted } from "../lib/elevation";
 import {
@@ -15,12 +17,72 @@ import { useFilterStore } from "../stores/filter-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RestoreTicket } from "../types/elevation";
 import type { LogSource } from "../types/log";
+import { useAppActions } from "./use-app-actions";
 
 /**
- * Hook that handles validated launch intent at app startup.
+ * Event the backend emits when a second launch has handed paths to this window.
  *
- * Launch intents can arrive together and they never blend into each other.
- * Precedence, highest first, ending in the ordinary no-intent case:
+ * A second launch — a file-association double-click, or a path on the command
+ * line — opens in the window that is already running instead of starting a
+ * second one. The announcement carries no paths: the window claims them, so a
+ * launch detected before this window was listening is not announced into an
+ * empty room, and a claim cannot hand the same path over twice.
+ */
+const SECOND_LAUNCH_OPEN_EVENT = "second-launch-open";
+
+/** Why a forwarded path is being opened, for diagnostics. */
+const SECOND_LAUNCH_TRIGGER = "second-launch.path-open";
+
+/**
+ * Opens the paths one forwarded launch asked for, in turn.
+ *
+ * A path open supersedes one that is still in flight, so a launch carrying
+ * several files must await each open before starting the next: starting them
+ * together would drop all but the last.
+ */
+async function openForwardedPaths(
+  paths: string[],
+  openPath: (path: string, trigger: string) => Promise<void>,
+): Promise<void> {
+  for (const path of paths) {
+    try {
+      await openPath(path, SECOND_LAUNCH_TRIGGER);
+    } catch (error) {
+      console.error("[file-association] failed to open a forwarded path", {
+        path,
+        error,
+      });
+    }
+  }
+}
+
+/**
+ * Opens the files the first launch carried.
+ *
+ * These come from the OS file association: a single file is opened as itself,
+ * and several selected files merge into one stream, which is what that launch
+ * asked for.
+ */
+async function openLaunchPaths(
+  paths: string[],
+  clearFilter: () => void,
+): Promise<void> {
+  useUiStore.getState().ensureLogViewVisible("file-association.path-open");
+  clearFilter();
+
+  if (paths.length === 1) {
+    await loadPathAsLogSource(paths[0], { fallbackToFolder: false });
+    return;
+  }
+
+  await loadFilesAsLogSource(paths);
+}
+
+/**
+ * Hook that handles validated launch intent.
+ *
+ * At startup, launch intents can arrive together and they never blend into each
+ * other. Precedence, highest first, ending in the ordinary no-intent case:
  *
  *   1. positional file paths from an OS file association;
  *   2. a valid, unconsumed elevation restore ticket;
@@ -29,69 +91,132 @@ import type { LogSource } from "../types/log";
  *
  * A restore ticket reopens exactly one workspace and at most one source. Other
  * tabs, filters, searches, and selected rows are deliberately not restored.
+ *
+ * Once the window is running, a second launch hands its file paths over instead
+ * of opening a second window, and the window that is already open claims and
+ * opens them.
  */
 export function useFileAssociation() {
   const clearFilter = useFilterStore((s) => s.clearFilter);
+  const { openPathForActiveWorkspace } = useAppActions();
+  // Every launch open runs through one queue. A path open in this window
+  // supersedes one that is still in flight, so a second launch waits for the
+  // file the first launch opened instead of taking its place, and two launches
+  // arriving back to back wait for each other.
+  const launchOpens = useRef<Promise<void>>(Promise.resolve());
+
+  /**
+   * Runs one launch's file opens behind every launch already in flight.
+   *
+   * The queued promise is returned so the launch that owns the open reports its
+   * own failure; the queue recovers independently, because one failed launch
+   * must not stall the launches after it.
+   */
+  const enqueueLaunchOpens = useCallback(
+    (open: () => Promise<void>): Promise<void> => {
+      const queued = launchOpens.current.catch(() => undefined).then(open);
+      launchOpens.current = queued.catch(() => undefined);
+      return queued;
+    },
+    [],
+  );
+
+  /**
+   * Claims the paths a second launch handed over and opens them.
+   *
+   * Claiming is what moves a path out of the handoff, so this runs through the
+   * launch queue: the paths wait in the backend until the window can open them,
+   * which is also why an announcement that arrives early loses nothing.
+   */
+  const claimForwardedPaths = useCallback((): Promise<void> => {
+    return enqueueLaunchOpens(async () => {
+      const paths = await takeSecondLaunchPaths();
+      await openForwardedPaths(paths, openPathForActiveWorkspace);
+    });
+  }, [enqueueLaunchOpens, openPathForActiveWorkspace]);
 
   useEffect(() => {
-    Promise.all([
-      getInitialFilePaths(),
-      getInitialWorkspace(),
-      getInitialElevationRestore().catch((error) => {
-        // A restore that cannot even be read must not stop the app starting.
-        console.warn("[elevation] unable to read the restore ticket", {
+    // The startup slot is reserved in the queue immediately, with its reads
+    // inside it. The reads take time, and a forwarded launch that arrives
+    // meanwhile is an open too: queuing the reads outside the slot would let the
+    // forwarded open start first and then be superseded by the startup one.
+    void enqueueLaunchOpens(async () => {
+      const [paths, workspace, ticket] = await Promise.all([
+        getInitialFilePaths(),
+        getInitialWorkspace(),
+        getInitialElevationRestore().catch((error) => {
+          // A restore that cannot even be read must not stop the app starting.
+          console.warn("[elevation] unable to read the restore ticket", {
+            error,
+          });
+          return null;
+        }),
+      ]);
+
+      if (paths.length > 0) {
+        await openLaunchPaths(paths, clearFilter);
+        return;
+      }
+
+      if (ticket) {
+        // Mark here, not on ticket arrival: a positional file association wins
+        // the precedence contest above and returns without restoring, and
+        // latching the loop guard for a restore that never ran would suppress
+        // legitimate elevation offers for the rest of the session.
+        //
+        // Marked before restoring, so a restored source that is still denied
+        // offers troubleshooting rather than a second prompt. Read from the
+        // ticket so the guard has one source of truth.
+        if (ticket.retryAttempted) {
+          markElevationRetryAttempted();
+        }
+        // The restore opens a source, so it stays in the startup slot for the
+        // same reason the file branch does.
+        await restoreElevatedSource(ticket, clearFilter);
+        return;
+      }
+
+      if (workspace) {
+        useUiStore
+          .getState()
+          .ensureWorkspaceVisible(workspace, "startup.workspace");
+      }
+    }).catch((error) => {
+      // Covers all three launch intents, not just file association: a restore
+      // ticket that failed to reopen is exactly the case someone is
+      // troubleshooting when they read this line.
+      console.error("[startup] failed to handle launch intent", { error });
+    });
+  }, [clearFilter, enqueueLaunchOpens]);
+
+  // A second launch opens its files in this window. The paths go through the
+  // same flow a path handed to the running window already uses, so they land in
+  // a tab and in Recent like any other open.
+  //
+  // Registering before the claim below is what closes the startup race: a launch
+  // detected after this point is announced, and one detected before it is still
+  // waiting in the handoff for the claim. Either way it is claimed once.
+  useEffect(() => {
+    const registered = listen(SECOND_LAUNCH_OPEN_EVENT, () => {
+      void claimForwardedPaths().catch((error) => {
+        console.error("[file-association] failed to claim a forwarded launch", {
           error,
         });
-        return null;
-      }),
-    ])
-      .then(async ([paths, workspace, ticket]) => {
-        if (paths.length > 0) {
-          useUiStore
-            .getState()
-            .ensureLogViewVisible("file-association.path-open");
-          clearFilter();
-
-          if (paths.length === 1) {
-            await loadPathAsLogSource(paths[0], {
-              fallbackToFolder: false,
-            });
-            return;
-          }
-
-          await loadFilesAsLogSource(paths);
-          return;
-        }
-
-        if (ticket) {
-          // Mark here, not on ticket arrival: a positional file association wins
-          // the precedence contest above and returns without restoring, and
-          // latching the loop guard for a restore that never ran would suppress
-          // legitimate elevation offers for the rest of the session.
-          //
-          // Marked before restoring, so a restored source that is still denied
-          // offers troubleshooting rather than a second prompt. Read from the
-          // ticket so the guard has one source of truth.
-          if (ticket.retryAttempted) {
-            markElevationRetryAttempted();
-          }
-          await restoreElevatedSource(ticket, clearFilter);
-          return;
-        }
-
-        if (workspace) {
-          useUiStore
-            .getState()
-            .ensureWorkspaceVisible(workspace, "startup.workspace");
-        }
-      })
-      .catch((error) => {
-        // Covers all three launch intents, not just file association: a restore
-        // ticket that failed to reopen is exactly the case someone is
-        // troubleshooting when they read this line.
-        console.error("[startup] failed to handle launch intent", { error });
       });
-  }, [clearFilter]);
+    });
+
+    registered
+      .then(() => claimForwardedPaths())
+      .catch((error) => {
+        console.error("[file-association] failed to claim a forwarded launch", {
+          error,
+        });
+      });
+
+    return () => {
+      registered.then((fn) => fn());
+    };
+  }, [claimForwardedPaths]);
 }
 
 /**

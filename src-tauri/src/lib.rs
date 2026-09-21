@@ -27,6 +27,8 @@ pub mod process_util;
 pub mod sccm;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
+#[cfg(desktop)]
+mod single_instance;
 mod state;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;
@@ -43,10 +45,10 @@ use tauri::Manager;
 const ESP_STARTUP_WORKSPACE: &str = "esp-diagnostics";
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct InitialLaunchArguments {
-    file_paths: Vec<String>,
-    workspace: Option<String>,
-    elevation_restore: Option<String>,
+pub(crate) struct InitialLaunchArguments {
+    pub(crate) file_paths: Vec<String>,
+    pub(crate) workspace: Option<String>,
+    pub(crate) elevation_restore: Option<String>,
 }
 
 /// Parses app-owned startup options separately from positional file paths.
@@ -59,7 +61,7 @@ struct InitialLaunchArguments {
 /// An option that fails validation is dropped rather than demoted to a file
 /// path, so a malformed `--elevation-restore=` can never be opened as evidence
 /// and never suppresses a legitimate positional open.
-fn parse_initial_launch_arguments(
+pub(crate) fn parse_initial_launch_arguments(
     arguments: impl IntoIterator<Item = String>,
 ) -> InitialLaunchArguments {
     let mut launch = InitialLaunchArguments::default();
@@ -143,6 +145,19 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
 
+    // A second launch — a file-association double-click or a path on the command
+    // line — opens in this window instead of starting a second one. It is
+    // registered first so the duplicate is detected while the app is still being
+    // built, before the window `tauri.conf.json` declares exists. An elevated
+    // relaunch replaces this process rather than joining it, so it never
+    // registers the plugin: see `single_instance::is_replacement_launch`.
+    #[cfg(desktop)]
+    let builder = if single_instance::is_replacement_launch(&initial_launch) {
+        builder
+    } else {
+        builder.plugin(single_instance::plugin())
+    };
+
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
@@ -200,6 +215,69 @@ pub fn run() {
                     &commands::app_config::get_available_workspaces(),
                 ));
             }
+            #[cfg(feature = "event-log")]
+            {
+                use tauri::Manager as _;
+
+                // Packaged provider coverage is optional: the manifest is allowed to explain that
+                // no real Windows capture was available. Never replace the active empty store
+                // unless a validated, real database directory loads successfully.
+                match app
+                    .path()
+                    .resource_dir()
+                    .map_err(|error| format!("cannot locate packaged resources: {error}"))
+                    .and_then(|resource_dir| {
+                        event_log::provider_db::packaged_provider_directory(&resource_dir)
+                    }) {
+                    Ok(directory) => {
+                        let mut loaded = event_log::provider_db::ProviderStore::default();
+                        match loaded.load_directory(&directory) {
+                            Ok(outcome)
+                                if event_log::provider_db::packaged_provider_load_is_complete(
+                                    &outcome,
+                                ) =>
+                            {
+                                let state = app.state::<AppState>();
+                                let write_result = state.provider_store.write();
+                                match write_result {
+                                    Ok(mut store) => {
+                                        *store = loaded;
+                                        log::info!(
+                                            "event=packaged_provider_databases_loaded count={}",
+                                            outcome.loaded.len()
+                                        );
+                                    }
+                                    Err(_) => {
+                                        log::warn!(
+                                            "event=packaged_provider_databases_unavailable \
+                                             reason=\"provider store lock was poisoned during startup\""
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(outcome) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable \
+                                     reason=\"packaged provider coverage was incomplete \
+                                     ({} loaded, {} failures)\"",
+                                    outcome.loaded.len(),
+                                    outcome.failures.len()
+                                );
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "event=packaged_provider_databases_unavailable directory=\"{}\" error=\"{}\"",
+                                    directory.display(),
+                                    error
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::info!("event=packaged_provider_databases_skipped reason=\"{}\"", error);
+                    }
+                }
+            }
 
             let native_menu = menu::build_app_menu(app.handle())?;
             app.set_menu(native_menu)?;
@@ -237,7 +315,8 @@ pub fn run() {
         })
         .invoke_handler(app_invoke_handler![
             commands::file_association::get_file_association_prompt_status,
-            commands::file_association::associate_log_files_with_app,
+            commands::file_association::register_log_file_handler,
+            commands::file_association::open_windows_default_apps,
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
@@ -284,6 +363,7 @@ pub fn run() {
             commands::file_ops::inspect_path_kind,
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
+            commands::file_ops::take_second_launch_paths,
             commands::file_ops::get_initial_workspace,
             commands::elevation::get_app_elevation_state,
             commands::elevation::restart_as_administrator,
@@ -317,6 +397,8 @@ pub fn run() {
             commands::dsregcmd::capture_dsregcmd,
             #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::load_dsregcmd_source,
+            #[cfg(feature = "dsregcmd")]
+            commands::dsregcmd::redact_dsregcmd_status_text,
             #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_scan_environment,
             #[cfg(feature = "macos-diag")]
@@ -352,11 +434,33 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_parse_files,
             #[cfg(feature = "event-log")]
+            event_log::commands::evtx_expand_sources,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_parse_manifest,
+            #[cfg(feature = "event-log")]
             event_log::commands::evtx_enumerate_channels,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_enumerate_remote_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_export_records,
+            event_log::commands::evtx_query_remote_channels,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_cancel_channel_query,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_start_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_stop_tail,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_clear_channel,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_create_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_append_export_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_finalize_export_session,
+            #[cfg(feature = "event-log")]
+            event_log::export_session::evtx_close_export_session,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_load_event_maps,
             #[cfg(feature = "event-log")]
@@ -366,7 +470,25 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_provider_databases,
             #[cfg(feature = "event-log")]
-            event_log::commands::evtx_build_unified_timeline,
+            event_log::commands::evtx_capture_provider_databases,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_import_provider_database,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_export_provider_database,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_load_packaged_provider_databases,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_create_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_append_analysis_chunk,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_finalize_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_query_analysis_timeline,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_diagnose_analysis_session,
+            #[cfg(feature = "event-log")]
+            event_log::analysis_session::evtx_close_analysis_session,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

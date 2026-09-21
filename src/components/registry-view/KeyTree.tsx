@@ -29,6 +29,23 @@ export function KeyTree() {
   );
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const disclosurePointerRef = useRef(false);
+
+  useEffect(() => {
+    const clearDisclosurePointer = () => {
+      disclosurePointerRef.current = false;
+    };
+
+    document.addEventListener("pointerup", clearDisclosurePointer, true);
+    document.addEventListener("pointercancel", clearDisclosurePointer, true);
+    window.addEventListener("blur", clearDisclosurePointer);
+
+    return () => {
+      document.removeEventListener("pointerup", clearDisclosurePointer, true);
+      document.removeEventListener("pointercancel", clearDisclosurePointer, true);
+      window.removeEventListener("blur", clearDisclosurePointer);
+    };
+  }, []);
 
   // Scroll selected row into view when search navigates.
   const selectedIndex = useMemo(
@@ -73,6 +90,10 @@ export function KeyTree() {
   );
 
   const handleFocus = useCallback(() => {
+    if (disclosurePointerRef.current) {
+      disclosurePointerRef.current = false;
+      return;
+    }
     if (selectedIndex < 0 && flatRows.length > 0) {
       setSelectedKeyPath(flatRows[0].node.fullPath);
     }
@@ -80,6 +101,13 @@ export function KeyTree() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if ((e.key === "Home" || e.key === "End") && flatRows.length > 0) {
+        e.preventDefault();
+        const targetIndex = e.key === "Home" ? 0 : flatRows.length - 1;
+        setSelectedKeyPath(flatRows[targetIndex].node.fullPath);
+        return;
+      }
+
       if (selectedIndex < 0) {
         if (flatRows.length === 0) return;
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -112,7 +140,10 @@ export function KeyTree() {
         }
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (expandedPaths.has(row.node.fullPath)) {
+        if (
+          row.node.children.length > 0 &&
+          expandedPaths.has(row.node.fullPath)
+        ) {
           toggleExpanded(row.node.fullPath);
         } else if (row.depth > 0) {
           for (let index = selectedIndex - 1; index >= 0; index--) {
@@ -149,7 +180,6 @@ export function KeyTree() {
       style={{
         height: "100%",
         overflow: "auto",
-        outline: "none",
       }}
     >
 
@@ -172,6 +202,8 @@ export function KeyTree() {
               id={`registry-tree-item-${virtualRow.index}`}
               role="treeitem"
               aria-level={row.depth + 1}
+              aria-posinset={row.posInSet}
+              aria-setsize={row.setSize}
               aria-selected={isSelected}
               aria-expanded={hasChildren ? isExpanded : undefined}
               style={{
@@ -198,6 +230,11 @@ export function KeyTree() {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
               }}
+              onPointerDown={(e) => {
+                if (e.button === 0) {
+                  setSelectedKeyPath(row.node.fullPath);
+                }
+              }}
               onClick={() => setSelectedKeyPath(row.node.fullPath)}
               onDoubleClick={() => {
                 if (hasChildren) toggleExpanded(row.node.fullPath);
@@ -205,6 +242,9 @@ export function KeyTree() {
             >
               {/* Expand/collapse chevron */}
               <span
+                data-registry-disclosure
+                role="presentation"
+                aria-hidden="true"
                 style={{
                   width: "16px",
                   display: "inline-flex",
@@ -214,9 +254,30 @@ export function KeyTree() {
                   color: tokens.colorNeutralForeground3,
                   fontSize: "10px",
                 }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (hasChildren && e.button === 0) {
+                    disclosurePointerRef.current = true;
+                  }
+                }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  if (hasChildren && e.button === 0) {
+                    // A touch tap emits this compatibility event after pointerup. Restore the
+                    // disclosure intent before its following focus event reaches the tree.
+                    disclosurePointerRef.current = true;
+                  }
+                }}
+                onLostPointerCapture={() => {
+                  disclosurePointerRef.current = false;
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (hasChildren) toggleExpanded(row.node.fullPath);
+                  if (!hasChildren) return;
+                  toggleExpanded(row.node.fullPath);
+                  disclosurePointerRef.current = true;
+                  parentRef.current?.focus({ preventScroll: true });
+                  disclosurePointerRef.current = false;
                 }}
               >
                 {hasChildren ? (isExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />) : ""}

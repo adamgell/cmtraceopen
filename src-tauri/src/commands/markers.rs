@@ -21,6 +21,8 @@ pub struct MarkerCategory {
 #[serde(rename_all = "camelCase")]
 pub struct Marker {
     pub line_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
     pub category: String,
     pub color: String,
     pub added: String,
