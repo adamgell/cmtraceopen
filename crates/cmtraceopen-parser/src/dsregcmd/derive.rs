@@ -584,6 +584,40 @@ pub(super) fn contains_text(field: &Option<String>, needle: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Match an `AADSTS…` code as a whole token, the way [`contains_win32_code`]
+/// matches a Win32 error.
+///
+/// [`contains_text`] is a substring test, which is what a free-text search wants
+/// and what a status code does not: `AADSTS50126` is a prefix of
+/// `AADSTS501260`, which is a different failure, so a substring test diagnoses
+/// the longer code as invalid credentials.
+///
+/// Unlike [`contains_win32_code`], the code is not split out of the text: these
+/// fields carry it inside prose, as in `Error(AADSTS50126): invalid username or
+/// password`, so the occurrence is found and then required to be bounded on both
+/// sides by anything that is not an ASCII alphanumeric — punctuation, brackets
+/// and whitespace all qualify, and so does the edge of the field.
+pub(super) fn contains_aadsts_code(field: &Option<String>, code: &str) -> bool {
+    let Some(value) = field.as_deref() else {
+        return false;
+    };
+
+    let haystack = value.to_ascii_lowercase();
+    let code = code.to_ascii_lowercase();
+    if code.is_empty() {
+        return false;
+    }
+
+    let ends_code = |character: Option<char>| {
+        character.is_none_or(|character| !character.is_ascii_alphanumeric())
+    };
+
+    haystack.match_indices(&code).any(|(start, _)| {
+        ends_code(haystack[..start].chars().next_back())
+            && ends_code(haystack[start + code.len()..].chars().next())
+    })
+}
+
 pub(super) fn equals_text(field: &Option<String>, expected: &str) -> bool {
     field
         .as_deref()

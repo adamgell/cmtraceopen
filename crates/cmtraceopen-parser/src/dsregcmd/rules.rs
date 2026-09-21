@@ -4,9 +4,9 @@ use crate::dsregcmd::models::{
 use crate::intune::models::IntuneDiagnosticSeverity;
 
 use super::derive::{
-    aggregated_error_text, contains_text, contains_win32_code, derive_facts, equals_text, has_code,
-    is_failure, is_failure_text, is_missing, issue, push_test_failure, render_bool,
-    render_optional, render_phase_code_evidence,
+    aggregated_error_text, contains_aadsts_code, contains_text, contains_win32_code, derive_facts,
+    equals_text, has_code, is_failure, is_failure_text, is_missing, issue, push_test_failure,
+    render_bool, render_optional, render_phase_code_evidence,
 };
 
 // Re-export public items that external callers depend on.
@@ -752,8 +752,8 @@ fn build_diagnostics(
         ));
     }
 
-    if contains_text(&facts.registration.server_error_description, "aadsts50126")
-        || contains_text(&facts.registration.server_message, "aadsts50126")
+    if contains_aadsts_code(&facts.registration.server_error_description, "aadsts50126")
+        || contains_aadsts_code(&facts.registration.server_message, "aadsts50126")
     {
         diagnostics.push(issue(
             "aadsts50126-detailed",
@@ -885,7 +885,10 @@ fn build_diagnostics(
                 "Server Error Description",
                 facts.registration.server_error_description.as_deref(),
             ),
-            ("Attempt Status", facts.diagnostics.attempt_status.as_deref()),
+            (
+                "Attempt Status",
+                facts.diagnostics.attempt_status.as_deref(),
+            ),
             ("HTTP Error", facts.diagnostics.http_error.as_deref()),
         ] {
             if let Some(value) = value {
@@ -2345,6 +2348,63 @@ mod tests {
                 .iter()
                 .any(|d| d.id == "aadsts50126-detailed"),
             "server message AADSTS50126 should fire the detailed rule"
+        );
+    }
+
+    /// A status code is a whole token. `AADSTS50126` is a prefix of
+    /// `AADSTS501260`, which is a different failure, and the substring test this
+    /// rule ran could not tell the two apart — so a capture reporting the longer
+    /// code was diagnosed as invalid credentials.
+    #[test]
+    fn a_longer_aadsts_code_does_not_fire_the_50126_rule() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server Message : AADSTS501260 Invalid username or password
+ Server Error Description : AADSTS501260
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+
+        assert!(
+            !analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "aadsts50126-detailed"),
+            "AADSTS501260 is not AADSTS50126: {:?}",
+            analysis
+                .diagnostics
+                .iter()
+                .map(|d| d.id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The boundary has to hold in the other direction too: the code the rule is
+    /// about still fires when the surrounding prose touches it directly.
+    #[test]
+    fn a_delimited_aadsts_code_still_fires_the_50126_rule() {
+        let sample = r#"
+ AzureAdJoined : NO
+ DomainJoined : YES
+ AzureAdPrt : NO
+ Server Error Description : Error(AADSTS50126): invalid username or password.
+"#;
+        let facts = parse_dsregcmd(sample).expect("parse sample");
+        let analysis = analyze_facts(facts, sample);
+
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|d| d.id == "aadsts50126-detailed"),
+            "a bracketed AADSTS50126 should still fire the detailed rule: {:?}",
+            analysis
+                .diagnostics
+                .iter()
+                .map(|d| d.id.as_str())
+                .collect::<Vec<_>>()
         );
     }
 
