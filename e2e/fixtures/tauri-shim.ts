@@ -43,6 +43,7 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
   get_app_version: "0.0.0-e2e",
   // Startup commands — must return valid values so the app fully renders
   get_initial_file_paths: [],
+  take_second_launch_paths: [],
   get_initial_workspace: null,
   get_initial_elevation_restore: null,
   get_app_elevation_state: {
