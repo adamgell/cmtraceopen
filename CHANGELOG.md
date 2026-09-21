@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
+
 ### Fixed
 
 - **Second launch opens in the running window (#565)**: A second launch, whether a file-association double-click or a path on the command line, hands its files to the window that is already open, which raises itself and opens them like any other path, instead of leaving a second window behind. An elevated restart is a replacement rather than a second launch, so it never routes itself.
