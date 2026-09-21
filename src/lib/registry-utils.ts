@@ -53,6 +53,8 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
 export interface FlatTreeRow {
   node: RegistryTreeNode;
   depth: number;
+  posInSet: number;
+  setSize: number;
 }
 
 /**
@@ -65,8 +67,10 @@ export function flattenVisibleTree(
   const rows: FlatTreeRow[] = [];
 
   function walk(nodes: RegistryTreeNode[], depth: number) {
-    for (const node of nodes) {
-      rows.push({ node, depth });
+    const setSize = nodes.length;
+    for (let index = 0; index < setSize; index++) {
+      const node = nodes[index];
+      rows.push({ node, depth, posInSet: index + 1, setSize });
       if (node.children.length > 0 && expandedPaths.has(node.fullPath)) {
         walk(node.children, depth + 1);
       }

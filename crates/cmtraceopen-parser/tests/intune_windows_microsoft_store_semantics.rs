@@ -24,10 +24,10 @@
 //! with observation contexts constructed by the test.
 
 use cmtraceopen_parser::intune::apps::windows::microsoft_store::{
-    analyze_store_bundle, parse_error_code, redact_text, redacted_export_projection,
-    StoreAnalysis, StoreArtifactPayload, StoreAssignment, StoreAssignmentIntent,
-    StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily, StoreInstallerOutcome,
-    StorePackageFact, StorePackageIdentity, StoreSourceArtifact, StoreTransactionState,
+    analyze_store_bundle, parse_error_code, redact_text, redacted_export_projection, StoreAnalysis,
+    StoreArtifactPayload, StoreAssignment, StoreAssignmentIntent, StoreDeploymentAction,
+    StoreExecutionContext, StoreInstallerFamily, StoreInstallerOutcome, StorePackageFact,
+    StorePackageIdentity, StoreSourceArtifact, StoreTransactionState,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneFindingConfidence,
@@ -40,11 +40,7 @@ const PRODUCT_ID: &str = "9WZSYNTH0001";
 const APP_ID: &str = "11111111-2222-4333-8444-555555555555";
 const PACKAGE_FAMILY: &str = "Contoso.SynthApp_9abcdef01234h";
 
-fn context(
-    artifact: &str,
-    record: u64,
-    source_kind: IntuneSourceKind,
-) -> IntuneObservationContext {
+fn context(artifact: &str, record: u64, source_kind: IntuneSourceKind) -> IntuneObservationContext {
     IntuneObservationContext {
         evidence_ref: IntuneEvidenceRef {
             evidence_id: format!("{artifact}:{record}"),
@@ -191,7 +187,11 @@ fn typed_required_intent_survives_caller_writable_named_data() {
         ),
     ]);
 
-    assert_eq!(analysis.transactions.len(), 1, "one package, one transaction");
+    assert_eq!(
+        analysis.transactions.len(),
+        1,
+        "one package, one transaction"
+    );
     let transaction = &analysis.transactions[0];
     assert_eq!(
         transaction.intent,
@@ -1072,7 +1072,9 @@ fn both_degradation_causes_stay_distinguishable_on_the_wire() {
     for transaction in serialized["transactions"].as_array().expect("transactions") {
         for key in ["unknownVersionObserved", "levelMismatchObserved"] {
             assert!(
-                transaction.get(key).is_some_and(serde_json::Value::is_boolean),
+                transaction
+                    .get(key)
+                    .is_some_and(serde_json::Value::is_boolean),
                 "every serialized transaction carries {key}: {transaction}"
             );
         }
@@ -1080,7 +1082,9 @@ fn both_degradation_causes_stay_distinguishable_on_the_wire() {
     for observation in serialized["observations"].as_array().expect("observations") {
         for key in ["unknownVersion", "levelMismatch"] {
             assert!(
-                observation.get(key).is_some_and(serde_json::Value::is_boolean),
+                observation
+                    .get(key)
+                    .is_some_and(serde_json::Value::is_boolean),
                 "every serialized observation carries {key}: {observation}"
             );
         }
@@ -1280,11 +1284,13 @@ fn duplicating_device_only_evidence_cannot_raise_confidence() {
         "device evidence without Intune intent is capped below High"
     );
     assert_eq!(
-        duplicated.transactions[0].confidence,
-        single.transactions[0].confidence,
+        duplicated.transactions[0].confidence, single.transactions[0].confidence,
         "ADR-001: duplication cannot promote evidence"
     );
-    assert_eq!(duplicated.transactions[0].state, single.transactions[0].state);
+    assert_eq!(
+        duplicated.transactions[0].state,
+        single.transactions[0].state
+    );
 }
 
 #[test]
@@ -1358,8 +1364,7 @@ fn coverage_gaps_cannot_raise_confidence() {
     let with_gap = analyze_store_bundle(&[event_artifact, missing]);
 
     assert_eq!(
-        with_gap.transactions[0].confidence,
-        without_gap.transactions[0].confidence,
+        with_gap.transactions[0].confidence, without_gap.transactions[0].confidence,
         "ADR-001: a coverage gap is a gap, not corroboration"
     );
     assert!(
@@ -1656,8 +1661,7 @@ fn restricted_values_are_absent_from_the_redacted_export_including_findings() {
             "restricted value {restricted:?} leaked into the redacted export"
         );
     }
-    let findings_only =
-        serde_json::to_string(&export.findings).expect("findings serialize");
+    let findings_only = serde_json::to_string(&export.findings).expect("findings serialize");
     assert!(!findings_only.contains("synthetic.user@example.invalid"));
 
     // The correlation grammar survives redaction.

@@ -366,6 +366,54 @@ pub struct DsregcmdAnalysisResult {
     pub event_log_analysis: Option<EventLogAnalysis>,
 }
 
+/// Evidence a native collector read from a `dsregcmd` capture bundle.
+///
+/// The parser crate performs no I/O, so the caller reads the bundle and hands
+/// the values in. It exists so the analysis can be assembled — and the extended
+/// diagnostics evaluated against unprojected values — inside the crate, which is
+/// where the export boundary is enforced; otherwise a caller would attach
+/// evidence to an already-projected analysis and publish the attachment raw.
+#[derive(Debug, Clone, Default)]
+pub struct DsregcmdBundleEvidence {
+    pub policy_evidence: DsregcmdWhfbPolicyEvidence,
+    pub os_version: Option<DsregcmdOsVersionEvidence>,
+    pub proxy_evidence: Option<DsregcmdProxyEvidence>,
+    pub enrollment_evidence: Option<DsregcmdEnrollmentEvidence>,
+    pub active_evidence: Option<DsregcmdActiveEvidence>,
+    pub scheduled_task_evidence: Option<DsregcmdScheduledTaskEvidence>,
+    pub event_log_analysis: Option<EventLogAnalysis>,
+}
+
+impl DsregcmdBundleEvidence {
+    /// Attach this evidence to the analysis it belongs to, moving it in.
+    ///
+    /// Crate-internal on purpose: attaching is a step *inside* the analysis, so
+    /// exposing it would let a caller overwrite a projected result's evidence
+    /// with unprojected values after [`analyze_text`](super::analyze_text)
+    /// returned it. The only caller is
+    /// [`analyze_text_with_evidence`](super::analyze_text_with_evidence), which
+    /// projects afterwards.
+    pub(crate) fn apply_to(self, result: &mut DsregcmdAnalysisResult) {
+        let Self {
+            policy_evidence,
+            os_version,
+            proxy_evidence,
+            enrollment_evidence,
+            active_evidence,
+            scheduled_task_evidence,
+            event_log_analysis,
+        } = self;
+
+        result.policy_evidence = policy_evidence;
+        result.os_version = os_version;
+        result.proxy_evidence = proxy_evidence;
+        result.enrollment_evidence = enrollment_evidence;
+        result.active_evidence = active_evidence;
+        result.scheduled_task_evidence = scheduled_task_evidence;
+        result.event_log_analysis = event_log_analysis;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -55,7 +55,10 @@ fn assert_rejected(mutation: &str, manifest: &Value, expected: &Value, needle: &
         "{mutation}: validator accepted a corpus it should have rejected"
     );
     assert!(
-        failures.entries().iter().any(|entry| entry.contains(needle)),
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains(needle)),
         "{mutation}: expected a failure mentioning {needle:?}, got {:?}",
         failures.entries()
     );
@@ -140,7 +143,11 @@ fn a_captured_artifact_outside_the_evidence_directory_is_rejected() {
     let (manifest, expected) = reference_pair();
     assert_rejected(
         "non-evidence root",
-        &mutated(&manifest, "/artifacts/0/relativePath", json!("manifest.json")),
+        &mutated(
+            &manifest,
+            "/artifacts/0/relativePath",
+            json!("manifest.json"),
+        ),
         &expected,
         "evidence directory",
     );
@@ -204,11 +211,7 @@ fn coverage_naming_an_undeclared_artifact_is_rejected() {
     assert_rejected(
         "coverage overreach",
         &manifest,
-        &mutated(
-            &expected,
-            "/coverage/0/artifactId",
-            json!("never-declared"),
-        ),
+        &mutated(&expected, "/coverage/0/artifactId", json!("never-declared")),
         "which no manifest artifact declares",
     );
 }
@@ -335,10 +338,7 @@ fn a_symlink_escaping_the_scenario_is_rejected() {
     // that is not in the corpus at all.
     use std::os::unix::fs::symlink;
 
-    let temp = std::env::temp_dir().join(format!(
-        "cmtrace-symlink-escape-{}",
-        std::process::id()
-    ));
+    let temp = std::env::temp_dir().join(format!("cmtrace-symlink-escape-{}", std::process::id()));
     let scenario = temp.join("escape");
     let evidence = scenario.join("evidence/skeleton-ime/current");
     std::fs::create_dir_all(&evidence).expect("scratch scenario is creatable");
@@ -350,7 +350,9 @@ fn a_symlink_escaping_the_scenario_is_rejected() {
     let _ = std::fs::remove_file(&link);
     symlink(&outside, &link).expect("symlink is creatable");
 
-    let bytes = std::fs::metadata(&link).expect("link target metadata").len();
+    let bytes = std::fs::metadata(&link)
+        .expect("link target metadata")
+        .len();
     let manifest = json!({
         "intuneManifestVersion": 1,
         "syntheticFixture": true,
@@ -402,10 +404,9 @@ fn descriptor_files_are_privacy_scanned() {
 
     let mut failures = Failures::new();
     support::validate_descriptor_privacy("leaky", &scenario, &[], &mut failures);
-    let leaked = failures
-        .entries()
-        .iter()
-        .any(|entry| entry.contains("manifest.json") && entry.contains("forbidden fixture material"));
+    let leaked = failures.entries().iter().any(|entry| {
+        entry.contains("manifest.json") && entry.contains("forbidden fixture material")
+    });
 
     std::fs::remove_dir_all(scenario.parent().expect("temp parent")).ok();
     assert!(

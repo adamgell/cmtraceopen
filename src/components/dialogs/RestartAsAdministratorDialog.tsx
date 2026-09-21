@@ -43,6 +43,7 @@ const FOCUSABLE_SELECTOR = [
  */
 export function RestartAsAdministratorDialog() {
   const prompt = useUiStore((state) => state.elevationPrompt);
+  const modalOwner = useUiStore((state) => state.modalOwner);
   const setElevationPrompt = useUiStore((state) => state.setElevationPrompt);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -61,7 +62,8 @@ export function RestartAsAdministratorDialog() {
     }
   }, [prompt]);
 
-  const isOpen = Boolean(prompt);
+  const activePrompt = modalOwner === "elevationPrompt" ? prompt : null;
+  const isOpen = Boolean(activePrompt);
 
   // Move focus into the modal on open and hand it back on close, so a keyboard
   // user is not left tabbing through the application behind the overlay.
@@ -84,7 +86,7 @@ export function RestartAsAdministratorDialog() {
   }, [isOpen]);
 
   useEffect(() => {
-    if (!prompt) return;
+    if (!activePrompt) return;
 
     const handleKey = (event: KeyboardEvent) => {
       // Escape is a cancellation, which by contract makes no backend call. It is
@@ -131,17 +133,17 @@ export function RestartAsAdministratorDialog() {
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [prompt, isSubmitting, close]);
+  }, [activePrompt, isSubmitting, close]);
 
   const confirm = useCallback(async () => {
-    if (!prompt || isSubmitting) return;
+    if (!activePrompt || isSubmitting) return;
 
     setIsSubmitting(true);
     setFailure(null);
 
     let outcome: ElevationOutcome;
     try {
-      outcome = await requestElevatedRestart(prompt.request);
+      outcome = await requestElevatedRestart(activePrompt.request);
     } catch (error) {
       // requestElevatedRestart is documented never to throw; treat a broken
       // contract as a failure rather than leaving the button stuck.
@@ -169,9 +171,9 @@ export function RestartAsAdministratorDialog() {
 
     setFailure(describeElevationOutcome(outcome));
     setIsSubmitting(false);
-  }, [prompt, isSubmitting, close]);
+  }, [activePrompt, isSubmitting, close]);
 
-  if (!prompt) return null;
+  if (!activePrompt) return null;
 
   return (
     <div
@@ -217,7 +219,7 @@ export function RestartAsAdministratorDialog() {
         </div>
 
         <div style={{ fontSize: "12px", marginBottom: "12px", lineHeight: 1.5 }}>
-          {describeElevationPrompt(prompt.request)}
+          {describeElevationPrompt(activePrompt.request)}
         </div>
 
         <div

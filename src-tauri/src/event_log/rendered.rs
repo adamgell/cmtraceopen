@@ -16,7 +16,8 @@
 use cmtraceopen_parser::eventmap::{EventNode, MapRegistry};
 
 use super::event_node::{
-    extract_event_data, extract_system_fields, parse_event_xml, EventFields, SystemFields,
+    extract_event_data, extract_event_identity, extract_system_fields, parse_event_xml,
+    EventFields, SystemFields,
 };
 use super::models::{EvtxField, EvtxLevel, EvtxRecord};
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
@@ -43,9 +44,11 @@ pub fn parse_xml_to_record(
 ) -> Option<EvtxRecord> {
     let parsed = parse_event_xml(xml).ok()?;
     let system = extract_system_fields(&parsed);
+    let event_fields = extract_event_data(&parsed);
     Some(record_from_parts(
         &parsed,
         system,
+        event_fields,
         xml,
         channel,
         maps,
@@ -59,11 +62,13 @@ pub fn parse_xml_to_record(
 /// provider name first, to name the publisher whose message template it asks the service to render,
 /// and parsing again to get the rest would double the cost of the hottest loop in the view.
 ///
-/// `parsed` is used for the System block, the event fields, the decoded payload and any registered
-/// map, so none of them costs an extra pass over the document.
+/// `parsed` is used for the decoded payload and any registered map. `system` and `event_fields` are
+/// supplied by the caller so the hot live paths can reuse the same extraction for provider lookup
+/// and record construction.
 pub fn record_from_parts(
     parsed: &EventNode,
     system: SystemFields,
+    event_fields: EventFields,
     xml: &str,
     channel: &str,
     maps: &MapRegistry,
@@ -90,7 +95,22 @@ pub fn record_from_parts(
     let EventFields {
         fields: mut event_data,
         insertions: _,
-    } = extract_event_data(parsed);
+    } = event_fields;
+    let identity = extract_event_identity(&event_data);
+    // Derived conflict markers are useful in the detail surface, but they are not event data and
+    // must not become the fallback row message when no real field has a value.
+    let fallback_message = build_event_data_summary(&event_data);
+
+    // Keep a conflict visible even though the conflicting value is intentionally not promoted.
+    // `event_data` is already the record's wire-level detail surface and carries derived
+    // `EventPayload` values, so this preserves the existing `EvtxRecord` shape while making an
+    // ambiguous identity distinguishable from an absent one.
+    for conflict in &identity.conflicts {
+        event_data.push(EvtxField {
+            name: "IdentityConflict".to_string(),
+            value: conflict.clone(),
+        });
+    }
 
     // Trace-backed channels carry their message as a hex blob rather than as EventData, so without
     // this the row reads as a wall of hex digits. Surfaced as a field of its own because the raw
@@ -111,13 +131,14 @@ pub fn record_from_parts(
     let message = rendered_message
         .map(sanitize_control_chars)
         .or(payload)
-        .unwrap_or_else(|| build_event_data_summary(&event_data));
+        .unwrap_or(fallback_message);
 
     let mapped = super::maps::apply_registered(maps, channel, &provider, event_id, parsed);
 
     EvtxRecord {
         id: 0, // assigned by commands.rs after sorting
         event_record_id,
+        event_record_id_text: system.event_record_id.map(|value| value.to_string()),
         timestamp,
         timestamp_epoch,
         provider,
@@ -131,9 +152,16 @@ pub fn record_from_parts(
         event_data,
         raw_xml: xml.to_string(),
         source_label: "Live".to_string(),
+        origin_kind: super::models::EvtxOriginKind::Event,
         task: system.task,
         opcode: system.opcode,
         process_id: system.process_id,
+        activity_id: system.activity_id.or(identity.activity_id),
+        related_activity_id: system.related_activity_id.or(identity.related_activity_id),
+        session_id: identity.session_id,
+        device_id: identity.device_id,
+        user_id: identity.user_id,
+        process_start_time: identity.process_start_time,
         thread_id: system.thread_id,
         user_sid: system.user_sid,
         keywords: system.keywords,
@@ -213,6 +241,60 @@ mod tests {
         assert_eq!(record.user_sid.as_deref(), Some("S-1-5-18"));
         assert_eq!(record.keywords.as_deref(), Some("0x8020000000000000"));
         assert_eq!(field(&record, "TargetUserName"), Some("adam"));
+    }
+
+    #[test]
+    fn explicit_correlation_and_identity_fields_are_preserved() {
+        let xml = r#"<Event>
+  <System>
+    <Provider Name='Provider'/>
+    <EventID>7</EventID>
+    <Correlation ActivityID='{activity}' RelatedActivityID='{related}'/>
+    <Channel>Application</Channel>
+    <Computer>HOST-A</Computer>
+    <Execution ProcessID='123'/>
+  </System>
+  <EventData>
+    <Data Name='SessionId'>session-1</Data>
+    <Data Name='DeviceId'>device-1</Data>
+    <Data Name='UserId'>user-1</Data>
+    <Data Name='ProcessStartTime'>2026-08-18T10:00:00Z</Data>
+  </EventData>
+</Event>"#;
+        let record = record_for(xml, "Application");
+        assert_eq!(record.activity_id.as_deref(), Some("{activity}"));
+        assert_eq!(record.related_activity_id.as_deref(), Some("{related}"));
+        assert_eq!(record.session_id.as_deref(), Some("session-1"));
+        assert_eq!(record.device_id.as_deref(), Some("device-1"));
+        assert_eq!(record.user_id.as_deref(), Some("user-1"));
+        assert_eq!(
+            record.process_start_time.as_deref(),
+            Some("2026-08-18T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn conflicting_identity_aliases_are_reported_without_promoting_a_value() {
+        let xml = r#"<Event>
+  <System><Provider Name='Provider'/><EventID>7</EventID></System>
+  <EventData>
+    <Data Name='ActivityId'>activity-a</Data>
+    <Data Name='CorrelationID'>activity-b</Data>
+  </EventData>
+</Event>"#;
+        let record = record_for(xml, "Application");
+        assert!(!record.message.contains("IdentityConflict"));
+
+        assert_eq!(record.activity_id, None);
+        assert_eq!(
+            record
+                .event_data
+                .iter()
+                .filter(|field| field.name == "IdentityConflict")
+                .map(|field| field.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["activityId"]
+        );
     }
 
     #[test]

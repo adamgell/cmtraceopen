@@ -118,10 +118,18 @@ reviews:
         PowerShell must parse under Windows PowerShell 5.1. Flag any non-ASCII
         character, including em dashes and smart quotes. Require explicit
         error handling rather than silent continuation.
+    # The em-dash clause that used to sit below is gone deliberately, not by
+    # accident. The repository's own accepted prose — the ADRs, specs and charters
+    # under docs/ — uses em dashes as its parenthetical, and roughly 590 of them
+    # are checked in across 45 markdown files. Enforcing the rule on diff lines
+    # meant every change to one of those files grew a review thread for a dash that
+    # matches the file around it, and the alternative, sweeping the corpus, would
+    # rewrite the owner's voice to satisfy a linter. The PowerShell rule above keeps
+    # its non-ASCII clause, because that one has a technical reason: Windows
+    # PowerShell 5.1 misreads those bytes.
     - path: "**/*.md"
       instructions: >-
         Documentation. Verify commands, paths, and flags actually exist in the repo.
-        Flag em dashes and en dashes.
 
   pre_merge_checks:
     title:
