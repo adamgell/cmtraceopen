@@ -71,33 +71,9 @@ test("rust-toolchain.toml pins the channel the workflows install", () => {
 });
 
 test("every workflow installs the pinned toolchain, or asks for its own", () => {
-  const workflows = readdirSync(workflowDir).filter((name) =>
-    /\.ya?ml$/.test(name),
+  const offenders = workflowNames().flatMap((workflow) =>
+    refOffenders(workflow, readFileSync(join(workflowDir, workflow), "utf8")),
   );
-  assert.ok(workflows.length > 0, "expected workflows to scan");
-
-  const offenders = [];
-
-  for (const workflow of workflows) {
-    const steps = toolchainSteps(
-      readFileSync(join(workflowDir, workflow), "utf8"),
-    );
-
-    for (const step of steps) {
-      const expected = step.hasInput ? INPUT_ACCEPTING_REF : PINNED_REF;
-      if (step.sha !== expected.sha) {
-        offenders.push(
-          `${workflow}:${step.line} uses ${step.sha}, expected ${expected.sha} (${expected.version})`,
-        );
-        continue;
-      }
-      if (step.comment !== expected.version) {
-        offenders.push(
-          `${workflow}:${step.line} is commented "${step.comment}", expected "${expected.version}"`,
-        );
-      }
-    }
-  }
 
   assert.deepEqual(
     offenders,
@@ -165,6 +141,35 @@ function inputOffenders(workflow, contents) {
   return offenders;
 }
 
+/**
+ * The steps whose ref does not match what their shape calls for: a step with a
+ * `toolchain:` input must use an input-accepting ref, and a step without one must
+ * use the pinned ref, with a comment naming the channel it installs.
+ *
+ * Shared with the drift tests for the same reason as `inputOffenders`: a test that
+ * only parsed its fixture never consulted this rule.
+ */
+function refOffenders(workflow, contents) {
+  const offenders = [];
+
+  for (const step of toolchainSteps(contents)) {
+    const expected = step.hasInput ? INPUT_ACCEPTING_REF : PINNED_REF;
+    if (step.sha !== expected.sha) {
+      offenders.push(
+        `${workflow}:${step.line} uses ${step.sha}, expected ${expected.sha} (${expected.version})`,
+      );
+      continue;
+    }
+    if (step.comment !== expected.version) {
+      offenders.push(
+        `${workflow}:${step.line} is commented "${step.comment}", expected "${expected.version}"`,
+      );
+    }
+  }
+
+  return offenders;
+}
+
 test("an explicit toolchain input is the pinned channel or the MSRV floor", () => {
   const offenders = workflowNames().flatMap((workflow) =>
     inputOffenders(workflow, readFileSync(join(workflowDir, workflow), "utf8")),
@@ -204,11 +209,130 @@ test("the guard detects a step left on the wrong ref", () => {
     "",
   ].join("\n");
 
-  const [step] = toolchainSteps(drifted);
-  assert.equal(step.hasInput, false, "fixture must have no toolchain input");
-  assert.notEqual(
-    step.sha,
-    PINNED_REF.sha,
-    "the guard must reject a step that would float with stable",
+  // Routed through the guard's own rule rather than only parsed, so the test also
+  // fails if the ref policy itself becomes wrong.
+  const offenders = refOffenders("fixture.yml", drifted);
+  assert.equal(
+    offenders.length,
+    1,
+    `a step with no input must use the pinned ref: ${JSON.stringify(offenders)}`,
+  );
+});
+
+/**
+ * The enumeration has to match real filenames, and it has to fail rather than pass
+ * when it matches nothing.
+ *
+ * The filter here once read `/\\.ya?ml$/`, which requires a **literal backslash**
+ * and therefore matched no workflow at all: `workflows` was empty, the loop never
+ * ran and `offenders` stayed `[]`. A workflow could have adopted
+ * `toolchain: "1.92.0"` — the exact drift the guard exists to catch — and the test
+ * would still have passed.
+ */
+test("the workflow filter matches real filenames, and the old one matched none", () => {
+  const files = ["cmtrace-ci.yml", "codesign.yml", "nightly.yaml"];
+  assert.deepEqual(
+    files.filter((name) => /\.ya?ml$/.test(name)),
+    files,
+    "plain .yml and .yaml names must match",
+  );
+
+  assert.deepEqual(
+    ["trailing-backslash.yml\\", "readme.md", "workflow.yml.bak"].filter((name) =>
+      /\.ya?ml$/.test(name),
+    ),
+    [],
+    "a trailing backslash is not a special case, and non-workflow names do not match",
+  );
+
+  assert.deepEqual(
+    files.filter((name) => /\\.ya?ml$/.test(name)),
+    [],
+    "the filter this guard used to carry matched no real filename, which made every " +
+      "assertion built on it vacuous",
+  );
+});
+
+test("the guard discovers real workflows rather than an empty list", () => {
+  const names = workflowNames();
+
+  assert.ok(
+    names.includes("cmtrace-ci.yml"),
+    `the CI workflow must be discovered, found: ${names.join(", ")}`,
+  );
+  assert.ok(
+    names.length >= 2,
+    `expected several workflows, discovered ${names.length}`,
+  );
+  for (const name of names) {
+    assert.match(name, /\.ya?ml$/, `${name} must be a workflow filename`);
+  }
+});
+
+test("a drifted step planted in a discovered workflow reaches the offender set", () => {
+  const name = "cmtrace-ci.yml";
+  const planted =
+    readFileSync(join(workflowDir, name), "utf8") +
+    [
+      "",
+      "      - name: Drifted",
+      `        uses: dtolnay/rust-toolchain@${INPUT_ACCEPTING_REF.sha} # stable`,
+      "        with:",
+      '          toolchain: "1.92.0"',
+      "",
+    ].join("\n");
+
+  const offenders = inputOffenders(name, planted);
+  assert.equal(
+    offenders.length,
+    1,
+    `the planted step must be reported: ${JSON.stringify(offenders)}`,
+  );
+  assert.match(offenders[0], /1\.92\.0/, "the report must name the planted version");
+});
+
+test("the drift policy accepts the pin and the floor, and rejects anything else", () => {
+  const step = (version) =>
+    [
+      "      - name: Setup Rust",
+      `        uses: dtolnay/rust-toolchain@${INPUT_ACCEPTING_REF.sha} # stable`,
+      "        with:",
+      `          toolchain: "${version}"`,
+    ].join("\n");
+
+  assert.deepEqual(
+    inputOffenders("fixture.yml", step(PINNED_REF.version)),
+    [],
+    "the repository pin is accepted",
+  );
+  assert.deepEqual(
+    inputOffenders("fixture.yml", step(MSRV_INPUT)),
+    [],
+    "the MSRV floor is accepted",
+  );
+  assert.equal(
+    inputOffenders("fixture.yml", step("1.92.0")).length,
+    1,
+    "a stale explicit version is rejected",
+  );
+  assert.equal(
+    inputOffenders("fixture.yml", step("1.70.0")).length,
+    1,
+    "an unknown explicit version is rejected",
+  );
+});
+
+test("the ref guard rejects a comment that names the wrong channel", () => {
+  const mislabelled = [
+    "      - name: Setup Rust",
+    `        uses: dtolnay/rust-toolchain@${PINNED_REF.sha} # stable`,
+    "",
+  ].join("\n");
+
+  const offenders = refOffenders("fixture.yml", mislabelled);
+  assert.equal(
+    offenders.length,
+    1,
+    `the comment must name the channel the ref installs: ${JSON.stringify(offenders)}`,
   );
 });
