@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::collections::HashMap;
 
-use super::codes::{ErrorCode, ERROR_CODES};
+use super::codes::{error_code_outcome, ErrorCode, ErrorCodeOutcome, ERROR_CODES};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -53,6 +53,10 @@ pub struct ErrorCodeSpan {
     pub code_decimal: String,
     pub description: String,
     pub category: String,
+    /// Whether the code reports a failure, a completed operation, or a
+    /// completed operation that still requires action. Consumers that count
+    /// findings must not count a completed operation (#657).
+    pub outcome: ErrorCodeOutcome,
 }
 
 fn hex_code_re() -> &'static Regex {
@@ -94,6 +98,7 @@ pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
                 code_decimal: format!("{}", ec.code as i32),
                 description: ec.description.to_string(),
                 category: ec.category.label().to_string(),
+                outcome: error_code_outcome(ec.code),
             })
         })
         .collect()

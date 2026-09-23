@@ -153,6 +153,9 @@ export interface KnownSourceToolbarFamily {
   groups: KnownSourceToolbarGroup[];
 }
 
+/** What a code says about the operation that produced it. */
+export type ErrorCodeOutcome = "failure" | "success" | "successRequiresAction";
+
 export interface ErrorCodeSpan {
   start: number;
   end: number;
@@ -160,6 +163,9 @@ export interface ErrorCodeSpan {
   codeDecimal: string;
   description: string;
   category: string;
+  /** Whether the code reports a failure, a completed operation, or a
+   *  completed operation that still requires action. */
+  outcome: ErrorCodeOutcome;
 }
 
 export interface LogEntry {
@@ -240,6 +246,18 @@ export interface AggregateParsedFileResult {
   parseErrors: number;
   fileSize: number;
   byteOffset: number;
+}
+
+/**
+ * One file inside an aggregate folder stream, with the parser that read it.
+ *
+ * The merged stream has no parser selection of its own — each file was read by
+ * whichever parser matched it — so the provenance the status bar reports for
+ * the merged view is derived from these per-file selections.
+ */
+export interface AggregateSourceFile extends AggregateParsedFileResult {
+  formatDetected: LogFormat;
+  parserSelection: ParserSelectionInfo;
 }
 
 export interface AggregateParseResult {

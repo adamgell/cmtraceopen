@@ -4,6 +4,7 @@ import { LOG_UI_FONT_FAMILY } from "../../lib/log-accessibility";
 import { getBaseName } from "../../lib/file-paths";
 import {
   getActiveSourceLabel,
+  getAggregateParserDisplay,
   getParserSelectionDisplay,
   getSourceFailureReason,
   getStreamStateSnapshot,
@@ -241,6 +242,15 @@ export function StatusBar() {
     openFilePath,
   );
   const parserDisplay = getParserSelectionDisplay(parserSelection);
+  // The merged stream has no single parser selection, so it reports the
+  // composition of the parsers that read its files instead of "Unknown".
+  const aggregateParserDisplay = useMemo(
+    () =>
+      sourceOpenMode === "aggregate-folder"
+        ? getAggregateParserDisplay(aggregateFiles)
+        : null,
+    [aggregateFiles, sourceOpenMode]
+  );
   const uiChromeStatus = getUiChromeStatus(
     activeView,
     showDetails,
@@ -274,7 +284,13 @@ export function StatusBar() {
       leftParts.push(`Tab ${activeTabIndex + 1} of ${openTabs.length}`);
     }
 
-    if (parserDisplay) {
+    if (aggregateParserDisplay) {
+      leftParts.push(
+        aggregateParserDisplay.parserLabel
+          ? `Parser ${aggregateParserDisplay.parserLabel}`
+          : `${aggregateParserDisplay.parserCount} parsers`
+      );
+    } else if (parserDisplay) {
       leftParts.push(`Parser ${parserDisplay.parserLabel}`);
     }
 
@@ -316,9 +332,10 @@ export function StatusBar() {
               ? `${aggregateFiles.length} files`
               : null,
             severityText,
-            `${formatDetected ?? "Unknown"} format`,
-            parserDisplay?.provenanceLabel,
-            parserDisplay?.qualityLabel,
+            `${aggregateParserDisplay?.formatLabel ?? formatDetected ?? "Unknown"} format`,
+            aggregateParserDisplay?.provenanceLabel ??
+              parserDisplay?.provenanceLabel,
+            aggregateParserDisplay?.qualityLabel ?? parserDisplay?.qualityLabel,
           ]
             .filter((part): part is string => Boolean(part))
             .join(" | ")

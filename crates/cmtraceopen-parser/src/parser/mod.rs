@@ -25,6 +25,7 @@ use crate::{
     intune::device::windows::inventory::{self, DeviceInventoryLogDialect},
     models::log_entry::{LogEntry, ParseResult, ParserSpecialization},
 };
+use chrono::{Local, LocalResult, NaiveDateTime, TimeZone};
 use std::path::Path;
 
 /// Post-process parsed entries to detect error code spans in messages.
@@ -33,6 +34,50 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
         let spans = crate::error_db::lookup::detect_error_code_spans(&entry.message);
         if !spans.is_empty() {
             entry.error_code_spans = spans;
+        }
+    }
+}
+
+/// Interpret a zoneless wall-clock timestamp that the source wrote on the
+/// machine it was captured from.
+///
+/// CBS.log and dism.log record the servicing host's clock with no offset. Their
+/// text is therefore a local wall clock, and reading it as UTC invents a zone
+/// the file never carried: every epoch consumer (sorting, ranges, elapsed) then
+/// disagrees with the timestamp text the same record renders by exactly the
+/// machine's offset. Resolving through `Local` keeps the epoch and the rendered
+/// record on one wall clock.
+///
+/// A wall clock inside a DST gap never existed; it is read with the offset in
+/// effect immediately after the gap, which is the only reading that does not
+/// assert an instant the zone skipped. The `unwrap_or_else` arm is unreachable
+/// while the zone database resolves the shifted instant and exists so a record
+/// keeps a timestamp rather than losing evidence.
+pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> i64 {
+    match naive.and_local_timezone(Local) {
+        LocalResult::Single(value) => value.timestamp_millis(),
+        LocalResult::Ambiguous(value, _) => value.timestamp_millis(),
+        // A wall clock inside a DST gap never existed. Reading it with the
+        // offset in effect just before the gap keeps the record in sequence
+        // instead of placing it before the entries that led up to it.
+        LocalResult::None => {
+            let hour = chrono::Duration::hours(1);
+            (naive - hour)
+                .and_local_timezone(Local)
+                .earliest()
+                .map(|value| value.timestamp_millis() + hour.num_milliseconds())
+                .unwrap_or_else(|| {
+                    // Only reachable for a zone that jumped more than an hour
+                    // (a zone that skipped a day, for example). The machine's
+                    // current offset is still a local reading, which is the
+                    // only thing this function may assert.
+                    let offset = Local::now().offset().to_owned();
+                    offset
+                        .from_local_datetime(&naive)
+                        .single()
+                        .expect("a fixed offset resolves every wall clock")
+                        .timestamp_millis()
+                })
         }
     }
 }
@@ -305,6 +350,7 @@ mod tests {
         RecordFraming,
     };
     use crate::parser::timestamped::DateOrder;
+    use chrono::TimeZone;
 
     #[test]
     fn test_parse_lines_with_selection_uses_timestamp_date_order() {
@@ -542,6 +588,28 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[test]
+    fn test_local_wall_clock_millis_keeps_the_clock_the_source_wrote() {
+        let naive =
+            NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+
+        let millis = local_wall_clock_millis(naive);
+
+        // The epoch renders back to the wall clock the record carried, which is
+        // what keeps the Date/Time column and the epoch consumers (Time Range,
+        // sorting, elapsed) in agreement (#657).
+        let rendered = Local
+            .timestamp_millis_opt(millis)
+            .single()
+            .expect("local instant");
+        assert_eq!(rendered.naive_local(), naive);
+
+        // A machine already on UTC cannot tell the two readings apart.
+        if Local::now().offset().local_minus_utc() != 0 {
+            assert_ne!(millis, naive.and_utc().timestamp_millis());
+        }
     }
 
     #[test]

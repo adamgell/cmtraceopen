@@ -848,3 +848,89 @@ pub static ERROR_CODES: &[ErrorCode] = &[
     ErrorCode { code: 0x80090326, description: "SEC_E_REVOCATION_OFFLINE - The revocation function was unable to check revocation because the revocation server was offline", category: ErrorCategory::Security },
     ErrorCode { code: 0x80090331, description: "SEC_E_ALGORITHM_MISMATCH - The client and server cannot communicate because they do not possess a common algorithm", category: ErrorCategory::Security },
 ];
+
+/// What a code says about the operation that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorCodeOutcome {
+    /// The operation failed or was refused. Triage evidence.
+    Failure,
+    /// The operation completed. Not triage evidence, so the Error Codes table
+    /// does not count it.
+    Success,
+    /// The operation completed but left the machine in a state an operator must
+    /// act on — a pending reboot, for example. Still triage evidence.
+    SuccessRequiresAction,
+}
+
+/// Classify a code as a failure, a completed operation, or a completed
+/// operation that still requires action.
+///
+/// CBS.log writes `[HRESULT = 0x00000000]` on *successful* steps, so counting
+/// the spans a healthy log carries made healthy logs look broken (#657). The
+/// outcome is a property of the code value rather than of the row's wording,
+/// and the value spaces disagree — an HRESULT severity bit says nothing about
+/// an MSI exit code — so the codes that are not failures are named here, next
+/// to the table they classify. `codes_outside_failure_exist_in_the_table`
+/// keeps the two from drifting apart.
+pub fn error_code_outcome(code: u32) -> ErrorCodeOutcome {
+    match code {
+        // S_OK, and S_FALSE (a non-critical warning, not a failed operation).
+        0x0000_0000 | 0x0000_0001 => ErrorCodeOutcome::Success,
+        // WU_S_*: the Windows Update Agent reports a completed operation.
+        0x0024_0001 | 0x0024_0002 | 0x0024_0006 | 0x0024_0008 => ErrorCodeOutcome::Success,
+        // WU_S_REBOOT_REQUIRED, ERROR_SUCCESS_REBOOT_REQUIRED (in both its
+        // decimal and its HRESULT form), and ERROR_SUCCESS_REBOOT_INITIATED:
+        // the install succeeded and a restart is outstanding.
+        0x0024_0005 | 0x8007_0BC2 | 1641 | 3010 => ErrorCodeOutcome::SuccessRequiresAction,
+        // MSI 1707/1724/1726/1728 complete successfully.
+        1707 | 1724 | 1726 | 1728 => ErrorCodeOutcome::Success,
+        _ => ErrorCodeOutcome::Failure,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_outside_failure_exist_in_the_table() {
+        // The table is the lookup's only source of descriptions, so a code
+        // classified here and missing there would silently never be seen.
+        for code in [
+            0x0000_0000,
+            0x0000_0001,
+            0x0024_0001,
+            0x0024_0002,
+            0x0024_0005,
+            0x0024_0006,
+            0x0024_0008,
+            0x8007_0BC2,
+            1641,
+            3010,
+            1707,
+            1724,
+            1726,
+            1728,
+        ] {
+            assert!(
+                ERROR_CODES.iter().any(|entry| entry.code == code),
+                "0x{code:08X} is classified but absent from ERROR_CODES"
+            );
+            assert_ne!(
+                error_code_outcome(code),
+                ErrorCodeOutcome::Failure,
+                "0x{code:08X} lost its classification"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_operations_are_not_classified_as_successful() {
+        // ERROR_FAIL_REBOOT_REQUIRED is the failure twin of the success reboot
+        // codes, and the HRESULT-form WU_E_* codes stay failures.
+        for code in [0x8007_0BC9, 0x8024_0001, 0x8007_0005, 0x800F_081F] {
+            assert_eq!(error_code_outcome(code), ErrorCodeOutcome::Failure);
+        }
+    }
+}

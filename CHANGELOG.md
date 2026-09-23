@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CBS.log and dism.log timestamps are read on the clock the file wrote (#657)**: The servicing prefix is the servicing host's local wall clock with no offset, and both parsers promoted it to UTC. Every epoch consumer — the Time Range header, sorting, and elapsed time — was therefore shifted from the Date/Time column by the machine's offset, and a merged CBS + DISM view could not claim a shared window. The prefix is now resolved through the local zone, which keeps the rendered record and the epoch on one clock. Timezone stance recorded in `references/log-format-reference.md`.
+- **Merged folder view reports the parsers that read it (#657)**: The aggregate stream dropped its format and parser provenance, so a folder whose files were all read by their dedicated parser reported `Unknown format` with no `Dedicated` / quality labels. The merged status line now reports the composition — the shared format, provenance, and quality, or an explicit `Mixed` — from the per-file parser selections the folder load already had.
+- **Error Codes table no longer counts completed operations (#657)**: CBS.log writes `[HRESULT = 0x00000000]` on successful steps, and the table counted every recognized code in a message regardless of outcome, so a healthy log appeared to fail with `S_OK`. Error codes now carry a failure / success / success-requires-action outcome, and the table counts failures plus codes that still require action (a pending reboot) only.
+- **Source panel follows a second known log source (#657)**: Switching to a known *file* source (CBS.log, DISM.log) restored the sidebar through the folder lane, whose listing call refuses a file source; the refusal was swallowed, so the panel kept the previous source's header and path while the main view showed the new file. File-shaped sources now set the panel directly, and the restore is one code path for both shapes.
+
 ## [1.6.0] - 2026-09-14
 
 ### Added
