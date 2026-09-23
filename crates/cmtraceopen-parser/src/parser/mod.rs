@@ -48,11 +48,12 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
 /// machine's offset. Resolving through `Local` keeps the epoch and the rendered
 /// record on one wall clock.
 ///
-/// A wall clock inside a DST gap never existed; it is read with the offset in
-/// effect immediately after the gap, which is the only reading that does not
-/// assert an instant the zone skipped. The `unwrap_or_else` arm is unreachable
-/// while the zone database resolves the shifted instant and exists so a record
-/// keeps a timestamp rather than losing evidence.
+/// A wall clock inside a DST gap never existed. It is read with the offset in
+/// effect just before the gap, which is the only reading that keeps the record
+/// in sequence with the entries around it. Only a zone that jumped further than
+/// that (one that skipped a day, for example) reaches the final arm, which
+/// reads the machine's current offset — still a local reading, because this
+/// function never asserts UTC.
 pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> i64 {
     match naive.and_local_timezone(Local) {
         LocalResult::Single(value) => value.timestamp_millis(),
