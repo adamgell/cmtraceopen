@@ -53,22 +53,31 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
 /// clock, which keeps every gap record in non-decreasing epoch order with the
 /// records on either side of it. Reading it with either neighbouring offset
 /// instead would place it before the entries that led up to it or after the
-/// entries that follow it. Only a zone that jumped further than the probes
-/// below reach (one that skipped a day, for example) falls back to the machine's
-/// current offset, which is still a local reading: this function never asserts
-/// UTC.
-pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> i64 {
+/// entries that follow it. A gap wider than the probes below reach (a zone that
+/// skipped a day, for example) resolves to `None`: no offset in the file can
+/// place that record, and inventing one would assert an instant the source never
+/// wrote. The record keeps its text; only its epoch is absent.
+pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime, previous: Option<i64>) -> Option<i64> {
     match naive.and_local_timezone(Local) {
-        LocalResult::Single(value) => value.timestamp_millis(),
-        LocalResult::Ambiguous(value, _) => value.timestamp_millis(),
-        LocalResult::None => gap_transition_millis(naive).unwrap_or_else(|| {
-            let offset = Local::now().offset().to_owned();
-            offset
-                .from_local_datetime(&naive)
-                .single()
-                .expect("a fixed offset resolves every wall clock")
-                .timestamp_millis()
-        }),
+        LocalResult::Single(value) => Some(value.timestamp_millis()),
+        // A fall-back transition repeats a wall clock. A single stamp cannot say
+        // which pass it belongs to, so the record order is the only evidence:
+        // take the earlier occurrence unless it would move this record behind
+        // the one before it in the same file. The two candidates arrive in no
+        // guaranteed order, so compare them rather than trusting the variant's
+        // field order.
+        LocalResult::Ambiguous(first, second) => {
+            let (earlier, later) = if first.timestamp_millis() <= second.timestamp_millis() {
+                (first.timestamp_millis(), second.timestamp_millis())
+            } else {
+                (second.timestamp_millis(), first.timestamp_millis())
+            };
+            Some(match previous {
+                Some(previous) if earlier < previous => later,
+                _ => earlier,
+            })
+        }
+        LocalResult::None => gap_transition_millis(naive),
     }
 }
 
@@ -615,7 +624,7 @@ mod tests {
         let naive =
             NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
-        let millis = local_wall_clock_millis(naive);
+        let millis = local_wall_clock_millis(naive, None).expect("wall clock resolves");
 
         // The epoch renders back to the wall clock the record carried, which is
         // what keeps the Date/Time column and the epoch consumers (Time Range,
@@ -650,13 +659,36 @@ mod tests {
             .map(|text| {
                 let naive =
                     NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").expect("wall clock");
-                local_wall_clock_millis(naive)
+                local_wall_clock_millis(naive, None).expect("wall clock resolves")
             })
             .collect();
 
         assert!(
             epochs.windows(2).all(|pair| pair[0] <= pair[1]),
             "{wall_clocks:?} produced {epochs:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_repeated_wall_clock_follows_the_record_order() {
+        // A fall-back transition makes 01:30 happen twice. On its own the stamp
+        // cannot say which pass it belongs to, so a record that already reached
+        // the later pass must pull it forward rather than inverting the log.
+        let naive =
+            NaiveDateTime::parse_from_str("2024-11-03 01:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+
+        let earliest = local_wall_clock_millis(naive, None).expect("wall clock resolves");
+        let after_later_record =
+            local_wall_clock_millis(naive, Some(i64::MAX)).expect("wall clock resolves");
+
+        assert!(after_later_record >= earliest);
+        assert!(
+            after_later_record > earliest
+                || !matches!(
+                    naive.and_local_timezone(Local),
+                    LocalResult::Ambiguous(..)
+                ),
+            "a repeated wall clock must take the later occurrence when the record order asks for it"
         );
     }
 
