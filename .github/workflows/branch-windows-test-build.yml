@@ -1,0 +1,74 @@
+# Throwaway Windows test build for a branch under review.
+#
+# macOS cannot produce a Windows executable: `tauri-build` needs the Windows SDK
+# and MSVC linker, and the bundler refuses a non-Windows host. This workflow
+# builds the same code on a Windows runner instead, without signing and without
+# bundles, so a standalone EXE can be copied to a lab machine.
+#
+# `--no-bundle` is deliberate: the bundles are what need the updater signing key,
+# and a standalone EXE is all a lab smoke test needs (WebView2 is present on
+# Windows 10/11 by default). Nothing here publishes or tags a release.
+name: Branch Windows Test Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    name: Windows standalone EXEs (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build full edition (standalone EXE)
+        run: npm run app:build:release -- --target x86_64-pc-windows-msvc --no-bundle
+
+      - name: Build lite edition (standalone EXE)
+        run: npx tauri build --target x86_64-pc-windows-msvc --no-bundle --config src-tauri/tauri.lite.conf.json -- --no-default-features
+
+      - name: Stage the executables
+        shell: pwsh
+        run: |
+          $release = "src-tauri\target\x86_64-pc-windows-msvc\release"
+          $staged = "windows-test-artifacts"
+          New-Item -ItemType Directory -Force -Path $staged | Out-Null
+
+          $full = Join-Path $release "cmtrace-open.exe"
+          $lite = Join-Path $release "cmtrace-open-lite.exe"
+          foreach ($file in @($full, $lite)) {
+            if (-not (Test-Path $file)) {
+              throw "Expected executable was not produced: $file"
+            }
+          }
+
+          Copy-Item $full (Join-Path $staged "CMTraceOpen-full-x64.exe") -Force
+          Copy-Item $lite (Join-Path $staged "CMTraceOpen-lite-x64.exe") -Force
+          Get-ChildItem $staged | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+
+      - name: Upload the executables
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cmtrace-open-branch-windows-x64
+          path: windows-test-artifacts/*.exe
+          if-no-files-found: error
+          retention-days: 14
