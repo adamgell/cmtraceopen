@@ -26,42 +26,62 @@ function filter(partial: Partial<EvtxSavedFilter>): EvtxSavedFilter {
 describe("sanitizeCriteria", () => {
   it("keeps recognised values", () => {
     const criteria = sanitizeCriteria({
-      levels: ["Error", "Warning"],
-      eventIds: "4624,4625",
-      search: "logon",
-      timeWindow: "7d",
-      groupBy: ["level", "provider"],
+      beforeLoad: {
+        levels: ["Error", "Warning"],
+        eventIds: "4624,4625",
+        timeWindow: "7d",
+      },
+      onLoad: {
+        search: "logon",
+        quickFilter: {
+          mode: "allWords",
+          query: "boot failed",
+          scope: "visibleColumns",
+          action: "hide",
+          caseSensitive: true,
+          highlight: false,
+        },
+      },
+      afterLoad: { groupBy: ["level", "provider"] },
     });
-    expect(criteria.levels).toEqual(["Error", "Warning"]);
-    expect(criteria.timeWindow).toBe("7d");
-    expect(criteria.groupBy).toEqual(["level", "provider"]);
+    expect(criteria.beforeLoad.levels).toEqual(["Error", "Warning"]);
+    expect(criteria.beforeLoad.timeWindow).toBe("7d");
+    expect(criteria.afterLoad.groupBy).toEqual(["level", "provider"]);
+    expect(criteria.onLoad.quickFilter).toEqual({
+      mode: "allWords",
+      query: "boot failed",
+      scope: "visibleColumns",
+      action: "hide",
+      caseSensitive: true,
+      highlight: false,
+    });
   });
 
   it("drops unrecognised levels and group fields rather than trusting the file", () => {
     // Import files are hand-edited and shared; an unknown value must not widen a filter.
     const criteria = sanitizeCriteria({
-      levels: ["Error", "Bogus"],
-      groupBy: ["level", "nonsense"],
+      beforeLoad: { levels: ["Error", "Bogus"] },
+      afterLoad: { groupBy: ["level", "nonsense"] },
     });
-    expect(criteria.levels).toEqual(["Error"]);
-    expect(criteria.groupBy).toEqual(["level"]);
+    expect(criteria.beforeLoad.levels).toEqual(["Error"]);
+    expect(criteria.afterLoad.groupBy).toEqual(["level"]);
   });
 
   it("falls back to every level when none survive, rather than matching nothing", () => {
-    const criteria = sanitizeCriteria({ levels: ["Bogus"] });
+    const criteria = sanitizeCriteria({ beforeLoad: { levels: ["Bogus"] } });
     // Compared against the constant rather than its current size, so adding a level does not
     // report a length mismatch that says nothing about the cause.
-    expect([...criteria.levels].sort()).toEqual([...ALL_LEVELS].sort());
+    expect([...criteria.beforeLoad.levels].sort()).toEqual([...ALL_LEVELS].sort());
   });
 
   it("falls back to a known time window", () => {
-    expect(sanitizeCriteria({ timeWindow: "forever" }).timeWindow).toBe("24h");
+    expect(sanitizeCriteria({ beforeLoad: { timeWindow: "forever" } }).beforeLoad.timeWindow).toBe("24h");
   });
 
   it("tolerates a completely wrong shape", () => {
-    expect(sanitizeCriteria(null).eventIds).toBe("");
-    expect(sanitizeCriteria(42).search).toBe("");
-    expect(sanitizeCriteria(["a"]).levels).toHaveLength(5);
+    expect(sanitizeCriteria(null).beforeLoad.eventIds).toBe("");
+    expect(sanitizeCriteria(42).onLoad.search).toBe("");
+    expect(sanitizeCriteria(["a"]).beforeLoad.levels).toEqual(ALL_LEVELS);
   });
 });
 
@@ -95,9 +115,8 @@ describe("parseFilterExport", () => {
   });
 
   it("skips individually invalid entries instead of failing the whole import", () => {
-    // One bad entry in a shared file must not cost the operator the rest of it.
     const text = JSON.stringify({
-      schema: 1,
+      schema: 2,
       filters: [{ name: "Good" }, { noName: true }, { name: "Also good" }],
     });
     const { filters, skipped } = parseFilterExport(text);
@@ -151,12 +170,8 @@ describe("orderFilters", () => {
 
 describe("hostile stored values", () => {
   it("rejects a non-finite lastUsed", () => {
-    // JSON admits 1e309, which parses to Infinity and would reach the ordering comparator as a
-    // non-finite operand.
-    // Literal JSON text, not JSON.stringify: stringify writes 1e309 as null, so the assertion
-    // held whether or not the sanitizer rejected Infinity. JSON.parse produces Infinity.
     const parsed = parseFilterExport(
-      '{"schema":1,"filters":[{"id":"a","name":"A","lastUsed":1e309}]}'
+      '{"schema":2,"filters":[{"id":"a","name":"A","lastUsed":1e309}]}'
     );
     expect(parsed.filters).toHaveLength(1);
     expect(parsed.filters[0].lastUsed).toBeNull();
@@ -164,19 +179,19 @@ describe("hostile stored values", () => {
 
   it("keeps a finite lastUsed", () => {
     const parsed = parseFilterExport(
-      JSON.stringify({ schema: 1, filters: [{ id: "a", name: "A", lastUsed: 1700000000000 }] })
+      JSON.stringify({ schema: 2, filters: [{ id: "a", name: "A", lastUsed: 1700000000000 }] })
     );
     expect(parsed.filters[0].lastUsed).toBe(1700000000000);
   });
 
-  it("refuses an export written by a newer schema", () => {
-    // Sanitizing it into whatever this build understands would import silently and quietly change
-    // the operator's criteria rather than saying the file is from a later version.
-    const parsed = parseFilterExport(
-      JSON.stringify({ schema: 99, filters: [{ id: "a", name: "A" }] })
-    );
-    expect(parsed.filters).toHaveLength(0);
-    expect(parsed.unsupportedSchema).toBe(true);
+  it("refuses an export written by a newer or older schema", () => {
+    for (const schema of [1, 99]) {
+      const parsed = parseFilterExport(
+        JSON.stringify({ schema, filters: [{ id: "a", name: "A" }] })
+      );
+      expect(parsed.filters).toHaveLength(0);
+      expect(parsed.unsupportedSchema).toBe(true);
+    }
   });
 
   it("still accepts the current schema", () => {
@@ -185,5 +200,16 @@ describe("hostile stored values", () => {
     );
     expect(parsed.filters).toHaveLength(1);
     expect(parsed.unsupportedSchema).toBeUndefined();
+  });
+
+  it("rejects exports with a missing or non-numeric schema", () => {
+    for (const payload of [
+      { filters: [{ id: "a", name: "A" }] },
+      { schema: "2", filters: [{ id: "a", name: "A" }] },
+    ]) {
+      const parsed = parseFilterExport(JSON.stringify(payload));
+      expect(parsed.filters).toHaveLength(0);
+      expect(parsed.unsupportedSchema).toBe(true);
+    }
   });
 });

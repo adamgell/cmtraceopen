@@ -137,7 +137,10 @@ export interface AppActionHandlers {
   commandState: AppCommandState;
   openSourceFileDialog: () => Promise<void>;
   openSourceFolderDialog: () => Promise<void>;
-  openPathForActiveWorkspace: (path: string) => Promise<void>;
+  openPathForActiveWorkspace: (
+    path: string,
+    trigger?: string,
+  ) => Promise<void>;
   openKnownSourceCatalogAction: (
     action: OpenKnownSourceCatalogAction,
   ) => Promise<void>;
@@ -403,12 +406,18 @@ export function useAppActions(): AppActionHandlers {
     [loadLogWorkspaceSource],
   );
 
+  /**
+   * Opens a path in the workspace that is active, recording it like any other
+   * open.
+   *
+   * `trigger` labels why the path arrived and reaches diagnostics only. It is a
+   * parameter so a path that arrives from somewhere other than a drop does not
+   * have to be reported as one.
+   */
   const openPathForActiveWorkspace = useCallback(
-    async (path: string) => {
+    async (path: string, trigger = "drag-drop.path-open") => {
       if (activeWorkspace === "dsregcmd") {
-        useUiStore
-          .getState()
-          .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
+        useUiStore.getState().ensureWorkspaceVisible("dsregcmd", trigger);
         await analyzeDsregcmdPath(path, { fallbackToFolder: true });
         void recordRecentPath(path, "dsregcmd");
         return;
@@ -424,26 +433,26 @@ export function useAppActions(): AppActionHandlers {
         if (pathKind === "folder") {
           await workspaceDefinition.onOpenSource(
             { kind: "folder", path },
-            "drag-drop.path-open",
+            trigger,
           );
           return;
         }
         if (pathKind === "file") {
           await workspaceDefinition.onOpenSource(
             { kind: "file", path },
-            "drag-drop.path-open",
+            trigger,
           );
           return;
         }
         try {
           await workspaceDefinition.onOpenSource(
             { kind: "file", path },
-            "drag-drop.path-open",
+            trigger,
           );
         } catch {
           await workspaceDefinition.onOpenSource(
             { kind: "folder", path },
-            "drag-drop.path-open",
+            trigger,
           );
         }
         return;
@@ -457,7 +466,7 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
-      useUiStore.getState().ensureLogViewVisible("drag-drop.path-open");
+      useUiStore.getState().ensureLogViewVisible(trigger);
       useFilterStore.getState().clearFilter();
       const result = await loadPathAsLogSource(path, {
         fallbackToFolder: true,

@@ -1,4 +1,6 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DsregcmdSidebar } from "./DsregcmdSidebar";
 import { DsregcmdWorkspace } from "./DsregcmdWorkspace";
@@ -279,7 +281,6 @@ function analysisResult(): DsregcmdAnalysisResult {
       proxyOverride: null,
       autoConfigUrl: null,
       wpadDetected: false,
-      winhttpProxy: null,
     },
     enrollmentEvidence: {
       enrollmentCount: 1,
@@ -415,5 +416,81 @@ describe("DsregcmdWorkspace fixtures", () => {
     expect(screen.getByRole("button", { name: "Save JSON..." })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save summary..." })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show raw input" })).toBeInTheDocument();
+  });
+  it("DSREG-007 sidebar top findings are severity-sorted", () => {
+    const result = analysisResult();
+    result.diagnostics = [
+      {
+        id: "info-finding",
+        severity: "Info",
+        category: "test",
+        title: "Info finding",
+        summary: "info summary",
+        evidence: [],
+        nextChecks: [],
+        suggestedFixes: [],
+      },
+      {
+        id: "error-finding",
+        severity: "Error",
+        category: "test",
+        title: "Error finding",
+        summary: "error summary",
+        evidence: [],
+        nextChecks: [],
+        suggestedFixes: [],
+      },
+    ];
+    useDsregcmdStore
+      .getState()
+      .setResults("AzureAdJoined : YES", result, sourceContext());
+    render(<DsregcmdSidebar />);
+
+    const titles = screen
+      .getAllByText(/finding/)
+      .map((element) => element.textContent ?? "");
+    expect(titles.indexOf("Error finding")).toBeLessThan(
+      titles.indexOf("Info finding"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Export boundary (issue #556)
+// ---------------------------------------------------------------------------
+
+/// The clipboard is one of the three egress points issue #556 names. The raw
+/// `dsregcmd /status` text has no projected form upstream of the workspace, so
+/// the copy path must ask the backend to project it; everything else the
+/// workspace copies is already projected by the crate before it arrives.
+const CLEARTEXT_STATUS = ` TenantId : 8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90
+ DeviceId : 4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b
+ Thumbprint : 8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D
+ User Identity : adele.vance@contoso.onmicrosoft.com
+`;
+const CLEARTEXT_STATUS_UPN = "adele.vance@contoso.onmicrosoft.com";
+const PROJECTED_STATUS = ` TenantId : [tenant:2f1b8a6d5c4e3f20]
+ DeviceId : [device:9c0f4b2a7e6d5c31]
+ Thumbprint : [thumbprint:4d7a1e9b2c8f6035]
+ User Identity : [upn:7b3e5a1c9f2d4806]
+`;
+
+describe("DsregcmdWorkspace export boundary", () => {
+  it("DSREG-007 projects the raw status text before it reaches the clipboard", async () => {
+    useDsregcmdStore
+      .getState()
+      .setResults(CLEARTEXT_STATUS, analysisResult(), sourceContext());
+    vi.mocked(invoke).mockResolvedValue(PROJECTED_STATUS);
+    render(<DsregcmdWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy status text" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const calls = vi.mocked(writeText).mock.calls;
+    const copied = calls[calls.length - 1]?.[0] ?? "";
+    expect(copied).not.toContain(CLEARTEXT_STATUS_UPN);
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("redact_dsregcmd_status_text", {
+      input: CLEARTEXT_STATUS,
+    });
   });
 });

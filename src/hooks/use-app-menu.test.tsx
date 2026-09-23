@@ -192,6 +192,7 @@ describe("useAppMenu", () => {
       showSettingsDialog: false,
       showEvidenceBundleDialog: false,
       showFileAssociationPrompt: false,
+      alwaysOnTop: false,
     });
   });
 
@@ -306,6 +307,27 @@ describe("useAppMenu", () => {
     expect(actionMocks.current.increaseLogListTextSize).toHaveBeenCalledOnce();
     expect(actionMocks.current.decreaseLogListTextSize).toHaveBeenCalledOnce();
     expect(actionMocks.current.resetLogListTextSize).toHaveBeenCalledOnce();
+  });
+
+  it("does not drop a native action while command handlers rerender", async () => {
+    const { rerender } = renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+
+    const originalToggleSidebar = actionMocks.current.toggleSidebar;
+    const replacementToggleSidebar = vi.fn();
+
+    try {
+      actionMocks.current.toggleSidebar = replacementToggleSidebar;
+      rerender();
+      await act(async () => Promise.resolve());
+
+      expect(eventMocks.listen).toHaveBeenCalledOnce();
+      await emitMenuAction({ action: "toggle_sidebar" });
+
+      expect(replacementToggleSidebar).toHaveBeenCalledOnce();
+    } finally {
+      actionMocks.current.toggleSidebar = originalToggleSidebar;
+    }
   });
 
   it("validates workspace targets and keeps source and target IDs exclusive", async () => {
@@ -541,6 +563,69 @@ describe("useAppMenu", () => {
     expect(invoke).toHaveBeenNthCalledWith(2, "set_always_on_top", {
       enabled: false,
     });
+    expect(useUiStore.getState().alwaysOnTop).toBe(false);
+  });
+
+  it("serializes the persisted Always on Top restore with a user toggle", async () => {
+    useUiStore.setState({ alwaysOnTop: true });
+    let releaseStartupRestore: (() => void) | undefined;
+
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (
+        command === "set_always_on_top" &&
+        (args as { enabled?: boolean } | undefined)?.enabled === true
+      ) {
+        await new Promise<void>((resolve) => {
+          releaseStartupRestore = resolve;
+        });
+      }
+      return undefined;
+    });
+
+    renderHook(() => useAppMenu());
+    await waitFor(() => expect(eventMocks.state.callback).not.toBeNull());
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_always_on_top", {
+        enabled: true,
+      }),
+    );
+
+    const callback = eventMocks.state.callback as (
+      event: { payload: TestMenuPayload },
+    ) => Promise<void>;
+    const toggle = callback({
+      payload: {
+        version: 1,
+        menu_id: "test.toggle_always_on_top",
+        action: "toggle_always_on_top",
+        category: "test",
+        trigger: "menu",
+        source_id: null,
+        target_id: null,
+      },
+    });
+
+    await act(async () => Promise.resolve());
+    expect(invoke).not.toHaveBeenCalledWith("set_always_on_top", {
+      enabled: false,
+    });
+
+    const release = releaseStartupRestore;
+    if (!release) {
+      throw new Error("startup restore was not awaiting native completion");
+    }
+    await act(async () => {
+      release();
+      await toggle;
+    });
+
+    const pinCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "set_always_on_top");
+    expect(pinCalls).toEqual([
+      ["set_always_on_top", { enabled: true }],
+      ["set_always_on_top", { enabled: false }],
+    ]);
     expect(useUiStore.getState().alwaysOnTop).toBe(false);
   });
 

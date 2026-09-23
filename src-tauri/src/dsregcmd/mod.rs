@@ -1,7 +1,13 @@
 // Pure analyzer modules live in cmtraceopen-parser::dsregcmd and are
-// re-exported here so existing references like
-// `crate::dsregcmd::parser::parse_dsregcmd` and
-// `crate::dsregcmd::DsregcmdAnalysisResult` keep resolving unchanged.
+// re-exported here so existing references to the models, the derivation
+// helpers and the diagnostic-rule helpers keep resolving unchanged.
+//
+// The unprojected half of that lane is *not* reachable from here: the crate's
+// `parser::parse_dsregcmd` and `rules::analyze_facts` are crate-internal, and
+// the unprojected analysis is only obtainable through
+// `analyze_text_preserving_local_values`, which is crate-internal too. This
+// crate publishes through `analyze_text_with_evidence` (projected) and
+// `redacted_status_text` (ADR-004 revision 1, Ruling 1).
 //
 // `registry` stays in src-tauri because it reads `.reg` hive files from disk
 // (native-only).
@@ -17,17 +23,22 @@ pub mod connectivity;
 pub mod event_logs;
 
 pub use cmtraceopen_parser::dsregcmd::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult, DsregcmdDerived,
-    DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence,
-    DsregcmdEvidenceSource, DsregcmdFacts, DsregcmdJoinType, DsregcmdOsVersionEvidence,
-    DsregcmdPolicyEvidenceValue, DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence,
-    DsregcmdScpQueryResult, DsregcmdWhfbPolicyEvidence,
+    redacted_status_text, DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight,
+    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts,
+    DsregcmdJoinType, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
+    DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
+    DsregcmdWhfbPolicyEvidence,
 };
 
 pub mod registry;
 
 /// Desktop entry point — same contract as the crate's `analyze_text` but
 /// wraps the parse error into the Tauri-facing `AppError`.
-pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
-    cmtraceopen_parser::dsregcmd::analyze_text(input).map_err(crate::error::AppError::InvalidInput)
+pub fn analyze_text_with_evidence(
+    input: &str,
+    evidence: DsregcmdBundleEvidence,
+) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
+    cmtraceopen_parser::dsregcmd::analyze_text_with_evidence(input, evidence)
+        .map_err(crate::error::AppError::InvalidInput)
 }

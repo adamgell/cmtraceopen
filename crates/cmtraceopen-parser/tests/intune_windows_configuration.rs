@@ -23,9 +23,9 @@ use cmtraceopen_parser::intune::device::windows::configuration::{
     ConfigurationSetting, ConfigurationSnapshot, INTUNE_CONFIGURATION_SCHEMA_VERSION,
 };
 use cmtraceopen_parser::intune::evidence::{
-    IntuneArtifactCoverage, IntuneEvidenceRef, IntuneNamedValue,
-    IntuneObservationContext, IntuneParseState, IntuneProvenance, IntuneSensitivity,
-    IntuneSourceKind, IntuneTimestamp, IntuneTimestampKind,
+    IntuneArtifactCoverage, IntuneEvidenceRef, IntuneNamedValue, IntuneObservationContext,
+    IntuneParseState, IntuneProvenance, IntuneSensitivity, IntuneSourceKind, IntuneTimestamp,
+    IntuneTimestampKind,
 };
 use cmtraceopen_parser::intune::normalized::{
     NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,

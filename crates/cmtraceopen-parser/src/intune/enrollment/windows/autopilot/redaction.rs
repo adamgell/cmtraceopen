@@ -26,18 +26,33 @@
 //! `entraDeviceId` is both device identity and a correlation key, which is
 //! exactly why masking is deterministic rather than destructive.
 //!
-//! Every whole-value mask is computed over the trimmed, lowercased value under
-//! a single token kind, so the same identifier masks identically no matter
-//! which field or which casing it arrived in.
+//! Every whole-value mask is computed over one canonical form of the value --
+//! trimmed and case-folded, Unicode-aware -- under a single token kind, so the
+//! same identifier masks identically no matter which field, which casing, or
+//! which non-ASCII spelling it arrived in.
+//!
+//! Free narrative is not left out of that. A bare serial, a bare DNS domain,
+//! and a bare host name carry no shape any pattern could recognize, so the
+//! projection collects the literal values it is about to mask and scrubs them
+//! out of every free-text field, leaving the very token the typed field
+//! carries in their place. A value that *does* have a shape -- a UPN, a long
+//! opaque blob -- is consumed by a shaped rule before the scrub ever runs, so
+//! that rule resolves a value the export masks to that same typed token instead
+//! of minting a second one. Two records naming one device therefore still read
+//! as one device after the export.
 //!
 //! The hash is deliberately non-cryptographic and unsalted. It exists to make
 //! equal values look equal across an export, not to resist an attacker who
 //! already knows the serial number they are looking for.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::intune::apps::windows::common::{
+    caseless_key, find_ignore_case, fold_with_offsets, FoldedChar,
+};
 use crate::intune::evidence::{IntuneFinding, IntuneNamedValue};
 
 use super::models::*;
@@ -69,6 +84,15 @@ const SENSITIVE_VALUE_KEYS: [&str; 12] = [
 /// nothing and cost cross-field equality.
 const VALUE_KIND: &str = "redacted";
 
+/// Shortest masked value that is scrubbed out of free text.
+///
+/// Firmware routinely reports junk serials ("0", "N/A", "None"). A value that
+/// short cannot be told apart from an ordinary word or number once it sits
+/// unlabelled in narrative, so scrubbing it would mangle readable evidence
+/// without protecting anything. The floor stays below the seven characters of
+/// a Dell service tag, so real serials are still covered.
+const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
+
 /// FNV-1a, stable across runs, platforms, and process restarts, which
 /// `DefaultHasher` explicitly is not.
 fn stable_token(kind: &str, value: &str) -> String {
@@ -82,11 +106,19 @@ fn stable_token(kind: &str, value: &str) -> String {
 
 /// Mask one whole value, normalizing case and surrounding space first so the
 /// same identifier always produces the same token.
+///
+/// The canonical form is the grammar's [`caseless_key`], not `to_lowercase`: an
+/// identity can carry a non-ASCII letter, and lowercasing alone does not fold
+/// every pair the lane's own matching treats as one. `Σ` lowercases to `σ` while
+/// final `ς` keeps its own shape, so a device spelled one way in a typed field
+/// and the other way in a log line minted two tokens for one device. This is the
+/// same key the literal table files a value under, so a typed value and every
+/// caseless spelling of it cannot end up with two tokens.
 fn mask_value(value: &str) -> String {
     if is_token(value) {
         return value.to_owned();
     }
-    stable_token(VALUE_KIND, &value.trim().to_ascii_lowercase())
+    stable_token(VALUE_KIND, &caseless_key(value.trim()))
 }
 
 fn upn_re() -> &'static Regex {
@@ -126,26 +158,48 @@ fn user_path_re() -> &'static Regex {
 /// projection stays idempotent.
 fn opaque_blob_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile")
-    })
+    CELL.get_or_init(|| Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile"))
 }
 
 /// Mask the sensitive spans inside a free-text value.
+///
+/// Shaped rules only, so this is also the entry point for a caller with no
+/// snapshot to read masked literals from. Inside an export,
+/// [`redact_export_text`] is the entry point that additionally scrubs those
+/// literals -- and that hands this pass the table it needs to resolve a match
+/// to the token its typed field carries.
 pub fn redact_text(value: &str) -> String {
+    redact_shaped_text(value, &MaskedLiterals::default())
+}
+
+/// The token for one shaped match.
+///
+/// A value that has a shape of its own is consumed here, before the literal
+/// scrub runs, so this is where a value the export masks as a typed field must
+/// resolve to that field's token. Leaving the rule's own kind in place instead
+/// would give one identity two tokens -- `[upn:…]` in narrative and
+/// `[redacted:…]` in the field -- and an export that named one user in two
+/// records would read as two users.
+fn shaped_token(literals: &MaskedLiterals, kind: &str, matched: &str) -> String {
+    literals
+        .masked_token(matched)
+        .unwrap_or_else(|| stable_token(kind, matched))
+}
+
+fn redact_shaped_text(value: &str, literals: &MaskedLiterals) -> String {
     let masked = upn_re().replace_all(value, |captures: &regex::Captures<'_>| {
-        stable_token("upn", &captures[0])
+        shaped_token(literals, "upn", &captures[0])
     });
     let masked = user_path_re().replace_all(&masked, |captures: &regex::Captures<'_>| {
         format!(
             "{}{}",
             &captures["prefix"],
-            stable_token("user", &captures["user"])
+            shaped_token(literals, "user", &captures["user"])
         )
     });
     opaque_blob_re()
         .replace_all(&masked, |captures: &regex::Captures<'_>| {
-            stable_token("blob", &captures[0])
+            shaped_token(literals, "blob", &captures[0])
         })
         .into_owned()
 }
@@ -169,41 +223,244 @@ fn is_token(value: &str) -> bool {
     hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Whether a named-data or report-value key holds a whole value the export
+/// masks rather than free text it redacts.
+///
+/// One predicate, read by both the masking pass and the literal collector, so a
+/// value cannot be masked as a typed field without its literal also being
+/// scrubbed out of free text.
+fn sensitive_value_key(name: &str) -> bool {
+    SENSITIVE_VALUE_KEYS
+        .iter()
+        .any(|key| key.eq_ignore_ascii_case(name))
+}
+
+/// The values the export masks, each paired with the token it masks to.
+///
+/// A bare serial has no distinctive shape and a bare DNS domain has no label,
+/// so no free-text rule can recognize one. What the projection does have is the
+/// value itself, read from the field it is about to mask; scrubbing that exact
+/// string out of every free-text field closes the gap by construction rather
+/// than by pattern.
+///
+/// Every entry carries the mask token of its own value rather than a generic
+/// marker, so a literal found in narrative is replaced by exactly what its
+/// typed field shows: an export that names one device in two records still
+/// reads as one device. The shaped rules consult the same table, so a value
+/// that is both shaped and masked correlates as well.
+#[derive(Default)]
+struct MaskedLiterals {
+    /// [`caseless_key`] of the literal to the needle the scrub matches with and
+    /// the token its typed field carries.
+    ///
+    /// The key is the grammar's canonical form rather than `to_lowercase`, so the
+    /// table holds one entry per identity the lane's own matching treats as one.
+    /// Two keys would mean two tokens for one identity: the typed fields carry
+    /// the token of their own spelling while a narrative mention matches both
+    /// entries and is replaced by whichever the scan reaches first.
+    ///
+    /// The needle stays the folded spelling (`to_lowercase`) because
+    /// [`find_ignore_case`] compares it one folded character at a time against
+    /// the folded text. It is the first spelling classified, and any
+    /// caseless-equal spelling matches it -- including the final sigma, which the
+    /// comparison settles on the uppercase expansion.
+    literals: BTreeMap<String, MaskedLiteral>,
+}
+
+/// One classified literal: what the scrub matches, and what it replaces with.
+struct MaskedLiteral {
+    needle: String,
+    token: String,
+}
+
+impl MaskedLiterals {
+    fn new(values: BTreeSet<String>) -> Self {
+        let mut literals = BTreeMap::new();
+        for value in values {
+            let value = value.trim();
+            // A mask is not identity, and skipping it is half of what keeps the
+            // projection idempotent: on the second pass the typed fields
+            // already hold tokens, so there is nothing left to scrub.
+            if is_token(value) {
+                continue;
+            }
+            // Firmware routinely reports junk serials ("0", "N/A", "None"). A
+            // value that short cannot be told apart from an ordinary word once
+            // it sits unlabelled in narrative, so scrubbing it would mangle
+            // readable evidence without protecting anything. The floor stays
+            // below the seven characters of a Dell service tag, so real serials
+            // are still covered.
+            if value.len() < MIN_SCRUBBED_LITERAL_BYTES {
+                continue;
+            }
+            // The key is the form `mask_value` hashes, so the table and the
+            // typed fields cannot disagree about the token: one identity folds to
+            // one spelling, which mints one token.
+            literals
+                .entry(caseless_key(value))
+                .or_insert(MaskedLiteral {
+                    needle: value.to_lowercase(),
+                    token: mask_value(value),
+                });
+        }
+        Self { literals }
+    }
+
+    /// The token this value carries as a typed field, if the export masks it.
+    ///
+    /// Asked with the same key the table was built with, so a shaped rule does
+    /// not depend on how the text happened to be cased either.
+    fn masked_token(&self, value: &str) -> Option<String> {
+        self.literals
+            .get(&caseless_key(value.trim()))
+            .map(|literal| literal.token.clone())
+    }
+
+    /// Replace every occurrence of a masked literal with that literal's token.
+    ///
+    /// Runs last in each free-text pipeline. The shaped rules go first so a
+    /// tenant domain scrubbed on its own cannot break the mail-address match on
+    /// a UPN that contains it, which would leak the local part.
+    fn scrub(&self, value: &str) -> String {
+        if self.literals.is_empty() {
+            return value.to_owned();
+        }
+
+        // One folded view of the text, shared by every literal.
+        let folded = fold_with_offsets(value);
+        let mut scrubbed = String::with_capacity(value.len());
+        let mut cursor = 0;
+
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, &folded, cursor) {
+            scrubbed.push_str(&value[cursor..start]);
+            scrubbed.push_str(token);
+            cursor = end;
+        }
+        scrubbed.push_str(&value[cursor..]);
+        scrubbed
+    }
+
+    /// Leftmost match, longest at that position, so a literal that sits inside
+    /// a longer one can never cut the longer one in half.
+    fn leftmost_longest_match<'a>(
+        &'a self,
+        haystack: &str,
+        folded: &[FoldedChar],
+        cursor: usize,
+    ) -> Option<(usize, usize, &'a str)> {
+        let mut best: Option<(usize, usize, &'a str)> = None;
+        for literal in self.literals.values() {
+            let Some((start, end)) = find_ignore_case(haystack, &literal.needle, folded, cursor)
+            else {
+                continue;
+            };
+            let replaces = best.is_none_or(|(best_start, best_end, _)| {
+                start < best_start || (start == best_start && end > best_end)
+            });
+            if replaces {
+                best = Some((start, end, literal.token.as_str()));
+            }
+        }
+        best
+    }
+}
+
+/// Mask the sensitive spans inside a free-text value, then scrub the literals
+/// the export masks as typed fields out of it.
+fn redact_export_text(value: &str, literals: &MaskedLiterals) -> String {
+    literals.scrub(&redact_shaped_text(value, literals))
+}
+
+/// Visit every whole value the export masks in place.
+///
+/// One walk, read by both [`collect_masked_literals`] and
+/// [`redacted_export_projection`], so a value cannot be masked as a typed field
+/// without its literal also being scrubbed out of free text.
+///
+/// Named-data and conflict values are not on this walk because which of them is
+/// masked is decided by a key rather than by the field they sit in;
+/// [`sensitive_value_key`] and [`masked_conflict_literal`] are the shared
+/// decisions for those two.
+fn for_each_masked_value_mut(snapshot: &mut AutopilotSnapshot, mut visit: impl FnMut(&mut String)) {
+    let identity = &mut snapshot.identity;
+    let fields = [
+        &mut identity.serial_number,
+        &mut identity.hardware_hash,
+        &mut identity.product_key_id,
+        &mut identity.ztd_registration_id,
+        &mut identity.entra_device_id,
+        &mut identity.managed_device_id,
+        &mut identity.tenant_id,
+        &mut identity.tenant_domain,
+        &mut identity.device_name,
+    ];
+    for value in fields.into_iter().flatten() {
+        visit(value);
+    }
+
+    // `profile_id` survives: it is a tenant object identifier and the only way
+    // to line an export up against the Intune profile it describes. The
+    // admin-authored display name does not survive.
+    if let Some(name) = &mut snapshot.profile.profile_name {
+        visit(name);
+    }
+
+    for key in &mut snapshot.esp_linkage.matched_keys {
+        visit(&mut key.value);
+    }
+}
+
+/// Read the literal value out of every field the export masks.
+///
+/// Takes `&mut` only to share one walk with the masking pass in
+/// [`for_each_masked_value_mut`]; it changes nothing.
+fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
+    let mut values = BTreeSet::new();
+    for_each_masked_value_mut(snapshot, |value| {
+        values.insert(value.clone());
+    });
+    for observation in &snapshot.observations {
+        for named in &observation.named_data {
+            if sensitive_value_key(&named.name) {
+                values.insert(named.value.clone());
+            }
+        }
+    }
+    for conflict in &snapshot.conflicts {
+        for value in &conflict.values {
+            values.insert(masked_conflict_literal(value).to_owned());
+        }
+    }
+    MaskedLiterals::new(values)
+}
+
 /// Return a copy of `snapshot` safe to export by default.
 ///
 /// Idempotent: `redacted_export_projection(&redacted_export_projection(&s))`
 /// serializes identically to `redacted_export_projection(&s)`.
 pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnapshot {
     let mut projected = snapshot.clone();
+    // Read before anything is masked: once a typed field holds a token there is
+    // no literal left to remember.
+    let literals = collect_masked_literals(&mut projected);
 
-    projected.identity = AutopilotDeviceIdentity {
-        serial_number: redact_opt(&snapshot.identity.serial_number),
-        hardware_hash: redact_opt(&snapshot.identity.hardware_hash),
-        product_key_id: redact_opt(&snapshot.identity.product_key_id),
-        ztd_registration_id: redact_opt(&snapshot.identity.ztd_registration_id),
-        entra_device_id: redact_opt(&snapshot.identity.entra_device_id),
-        managed_device_id: redact_opt(&snapshot.identity.managed_device_id),
-        tenant_id: redact_opt(&snapshot.identity.tenant_id),
-        tenant_domain: redact_opt(&snapshot.identity.tenant_domain),
-        device_name: redact_opt(&snapshot.identity.device_name),
-        registration_state: snapshot.identity.registration_state,
-        evidence: snapshot.identity.evidence.clone(),
-    };
-
-    // `profile_id` survives: it is a tenant object identifier and the only way
-    // to line an export up against the Intune profile it describes. The
-    // admin-authored display name does not survive.
-    projected.profile.profile_name = redact_opt(&snapshot.profile.profile_name);
+    // `mask_value` everywhere a whole value is masked: it performs the
+    // trim/lowercase normalization the module contract promises, so the same
+    // identifier masks identically whatever field or casing it arrived in.
+    for_each_masked_value_mut(&mut projected, |value| *value = mask_value(value));
 
     for observation in &mut projected.observations {
-        observation.message = observation.message.as_deref().map(redact_text);
+        observation.message = observation
+            .message
+            .as_deref()
+            .map(|message| redact_export_text(message, &literals));
         observation.context.provenance.file_path =
             redact_opt(&observation.context.provenance.file_path);
-        redact_named_values(&mut observation.named_data);
+        redact_named_values(&mut observation.named_data, &literals);
     }
 
     for conflict in &mut projected.conflicts {
-        conflict.detail = redact_text(&conflict.detail);
+        conflict.detail = redact_export_text(&conflict.detail, &literals);
         conflict.values = conflict
             .values
             .iter()
@@ -211,65 +468,63 @@ pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnap
             .collect();
     }
 
-    // `mask_value` everywhere a whole value is masked: it performs the
-    // trim/lowercase normalization the module contract promises, so the same
-    // identifier masks identically whatever field or casing it arrived in.
-    for key in &mut projected.esp_linkage.matched_keys {
-        key.value = mask_value(&key.value);
-    }
-
     for entry in &mut projected.coverage {
-        entry.detail = entry.detail.as_deref().map(redact_text);
+        entry.detail = entry
+            .detail
+            .as_deref()
+            .map(|detail| redact_export_text(detail, &literals));
     }
 
     projected.next_evidence_requests = projected
         .next_evidence_requests
         .iter()
-        .map(|request| redact_text(request))
+        .map(|request| redact_export_text(request, &literals))
         .collect();
 
     for finding in &mut projected.findings {
-        redact_finding(finding);
+        redact_finding(finding, &literals);
     }
 
     projected
 }
 
-fn redact_named_values(values: &mut [IntuneNamedValue]) {
+fn redact_named_values(values: &mut [IntuneNamedValue], literals: &MaskedLiterals) {
     for value in values {
-        if SENSITIVE_VALUE_KEYS
-            .iter()
-            .any(|key| key.eq_ignore_ascii_case(&value.name))
-        {
+        if sensitive_value_key(&value.name) {
             value.value = mask_value(&value.value);
         } else {
-            value.value = redact_text(&value.value);
+            value.value = redact_export_text(&value.value, literals);
         }
     }
 }
 
+/// The portion of a conflict value the export masks as one whole value.
+///
 /// Conflict values are written as `name=value` by the reducer for report
-/// sections and as bare values for named-key conflicts, so both shapes are
-/// handled rather than assuming one.
-fn redact_conflict_value(value: &str) -> String {
+/// sections and as bare values for named-key conflicts, so the masked portion
+/// is a slice of the raw string. The masking pass and the literal collector
+/// both read it here, so the two cannot disagree about what was masked.
+fn masked_conflict_literal(value: &str) -> &str {
     match value.split_once('=') {
-        Some((name, raw))
-            if SENSITIVE_VALUE_KEYS
-                .iter()
-                .any(|key| key.eq_ignore_ascii_case(name)) =>
-        {
-            format!("{name}={}", mask_value(raw))
-        }
-        _ => mask_value(value),
+        Some((name, raw)) if sensitive_value_key(name) => raw,
+        _ => value,
     }
 }
 
-fn redact_finding(finding: &mut IntuneFinding) {
-    finding.summary = redact_text(&finding.summary);
+fn redact_conflict_value(value: &str) -> String {
+    let literal = masked_conflict_literal(value);
+    // The masked portion is always a suffix, so what precedes it is the
+    // `name=` prefix or nothing at all.
+    let prefix = &value[..value.len() - literal.len()];
+    format!("{prefix}{}", mask_value(literal))
+}
+
+fn redact_finding(finding: &mut IntuneFinding, literals: &MaskedLiterals) {
+    finding.summary = redact_export_text(&finding.summary, literals);
     finding.recommended_checks = finding
         .recommended_checks
         .iter()
-        .map(|check| redact_text(check))
+        .map(|check| redact_export_text(check, literals))
         .collect();
 }
 
@@ -372,7 +627,7 @@ mod tests {
             name: "entraDeviceId".to_owned(),
             value: "  ABCDABCD-1234-5678-9012-ABCDABCDABCD  ".to_owned(),
         }];
-        redact_named_values(&mut values);
+        redact_named_values(&mut values, &MaskedLiterals::default());
         assert_eq!(values[0].value, canonical);
 
         // Conflict values, both shapes.
@@ -400,5 +655,54 @@ mod tests {
         // to be identity than not.
         let masked = redact_conflict_value("someOtherKey=5CD1234ABC");
         assert!(!masked.contains("5CD1234ABC"), "got {masked}");
+    }
+
+    /// The literal search is cursor-driven and case-insensitive, so it has to
+    /// hold at the tail of the text, across repeats, and for a value that is
+    /// the whole text -- without re-finding what it already replaced.
+    #[test]
+    fn the_literal_search_replaces_every_occurrence_including_at_the_tail() {
+        let literals = MaskedLiterals::new(BTreeSet::from(["PC-ÉLODIE".to_owned()]));
+        let token = mask_value("PC-ÉLODIE");
+
+        assert_eq!(
+            literals.scrub("device pc-élodie"),
+            format!("device {token}")
+        );
+        assert_eq!(literals.scrub("PC-ÉLODIE"), token);
+        assert_eq!(
+            literals.scrub("pc-élodie met PC-ÉLODIE"),
+            format!("{token} met {token}")
+        );
+        assert_eq!(literals.scrub("unrelated narrative"), "unrelated narrative");
+    }
+
+    /// One device spelled two ways in one export reaches one token.
+    ///
+    /// `Σ` and final `ς` are caseless-equal to the matcher -- the comparison
+    /// settles them on the uppercase `Σ` -- but they are two different lowercase
+    /// letters, so a table keyed by `to_lowercase` held two entries: the typed
+    /// field carrying one spelling minted its own token, and a narrative mention
+    /// of the other matched both entries and was replaced by one of the two.
+    #[test]
+    fn a_final_sigma_spelling_reaches_the_capital_sigma_token() {
+        const CAPITAL: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
+        const NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
+
+        let literals =
+            MaskedLiterals::new(BTreeSet::from([CAPITAL.to_owned(), NARRATIVE.to_owned()]));
+        let token = mask_value(CAPITAL);
+
+        assert_eq!(literals.literals.len(), 1, "one identity, one entry");
+        assert_eq!(mask_value(NARRATIVE), token, "one identity, one token");
+        assert_eq!(literals.masked_token(NARRATIVE), Some(token.clone()));
+        assert_eq!(
+            literals.scrub(&format!("device {CAPITAL}")),
+            format!("device {token}")
+        );
+        assert_eq!(
+            literals.scrub(&format!("device {NARRATIVE}")),
+            format!("device {token}")
+        );
     }
 }

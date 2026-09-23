@@ -1,22 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  associateLogFilesWithApp,
+  getFileAssociationPromptStatus,
+  getSafeErrorMessage,
+  openWindowsDefaultApps,
+  registerLogFileHandler,
   setFileAssociationPromptSuppressed,
 } from "../../lib/commands";
 import { tokens } from "@fluentui/react-components";
 import { useModalFocus } from "../../hooks/use-modal-focus";
+import { useUiStore } from "../../stores/ui-store";
 
 interface FileAssociationPromptDialogProps {
   isOpen: boolean;
   onClose: () => void;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Unknown error";
 }
 
 export function FileAssociationPromptDialog({
@@ -25,7 +21,14 @@ export function FileAssociationPromptDialog({
 }: FileAssociationPromptDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const setFileAssociationPromptBusy = useUiStore(
+    (state) => state.setFileAssociationPromptBusy,
+  );
   const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(
+    () => () => setFileAssociationPromptBusy(false),
+    [setFileAssociationPromptBusy],
+  );
   useModalFocus(
     isOpen,
     dialogRef,
@@ -54,30 +57,68 @@ export function FileAssociationPromptDialog({
     return null;
   }
 
-  const handleAssociate = async () => {
+  const handleRegister = async () => {
     setIsSubmitting(true);
+    setFileAssociationPromptBusy(true);
     setErrorMessage(null);
 
     try {
-      await associateLogFilesWithApp();
+      await registerLogFileHandler();
+    } catch (error) {
+      setErrorMessage(
+        `Failed to register CMTrace Open: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
+      setFileAssociationPromptBusy(false);
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      const status = await getFileAssociationPromptStatus();
+      if (!status.isRegistered) {
+        setErrorMessage(
+          "CMTrace Open registration could not be confirmed by Windows. Try again or check Windows Default Apps.",
+        );
+        setFileAssociationPromptBusy(false);
+        setIsSubmitting(false);
+        return;
+      }
+    } catch (error) {
+      setErrorMessage(
+        `CMTrace Open was registered, but Windows registration could not be confirmed: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
+      setFileAssociationPromptBusy(false);
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      await openWindowsDefaultApps();
+      setFileAssociationPromptBusy(false);
       onClose();
     } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      setErrorMessage(
+        `CMTrace Open is registered, but Windows Default Apps could not be opened: ${getSafeErrorMessage(error, "Unknown error")}`,
+      );
     } finally {
+      setFileAssociationPromptBusy(false);
       setIsSubmitting(false);
     }
   };
 
   const handleDontAskAgain = async () => {
     setIsSubmitting(true);
+    setFileAssociationPromptBusy(true);
     setErrorMessage(null);
 
     try {
       await setFileAssociationPromptSuppressed(true);
+      setFileAssociationPromptBusy(false);
       onClose();
     } catch (error) {
-      setErrorMessage(getErrorMessage(error));
+      setErrorMessage(getSafeErrorMessage(error, "Unknown error"));
     } finally {
+      setFileAssociationPromptBusy(false);
       setIsSubmitting(false);
     }
   };
@@ -106,7 +147,7 @@ export function FileAssociationPromptDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Associate log files with CMTrace Open?"
+        aria-label="Make CMTrace Open available for log files?"
         tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
@@ -126,13 +167,14 @@ export function FileAssociationPromptDialog({
             marginBottom: "10px",
           }}
         >
-          Associate log files with CMTrace Open?
+          Make CMTrace Open available for log files?
         </div>
 
         <div style={{ fontSize: "12px", lineHeight: 1.5, marginBottom: "12px" }}>
-          This standalone copy of CMTrace Open can associate <strong>.log</strong>,{" "}
+          This edition of CMTrace Open can register as a per-user available
+          handler for <strong>.log</strong>,{" "}
           <strong>.log_</strong>, <strong>.lo_</strong>, and <strong>.cmtlog</strong>{" "}
-          files so they open directly in the app, similar to classic CMTrace.exe.
+          files.
         </div>
 
         <div
@@ -146,12 +188,14 @@ export function FileAssociationPromptDialog({
             color: tokens.colorNeutralForeground1,
           }}
         >
-          If you choose <strong>Associate</strong>, CMTrace Open will register
-          itself for the current Windows user.
+          Windows keeps your current defaults until you choose CMTrace Open in
+          Default Apps. This action registers CMTrace Open for the current user,
+          then opens the Windows-owned picker.
         </div>
 
         {errorMessage && (
           <div
+            role="alert"
             style={{
               color: tokens.colorPaletteRedForeground1,
               fontSize: "11px",
@@ -200,7 +244,7 @@ export function FileAssociationPromptDialog({
             Don&apos;t Ask Again
           </button>
           <button
-            onClick={() => void handleAssociate()}
+            onClick={() => void handleRegister()}
             disabled={isSubmitting}
             style={{
               padding: "2px 12px",
@@ -212,7 +256,7 @@ export function FileAssociationPromptDialog({
               cursor: isSubmitting ? "default" : "pointer",
             }}
           >
-            {isSubmitting ? "Working..." : "Associate"}
+            {isSubmitting ? "Working..." : "Register and open Default Apps"}
           </button>
         </div>
       </div>

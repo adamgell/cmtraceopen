@@ -1,0 +1,19 @@
+# Pins the compiler that local runs and CI both use.
+#
+# CI installs this exact channel: every `dtolnay/rust-toolchain` step is pinned to
+# the action's own `<version>` ref, whose `action.yml` bakes the version in, so CI
+# no longer floats with whatever `stable` happens to be that week.
+#
+# `scripts/ci-toolchain.test.mjs` fails when this file and the workflow pins
+# disagree. That guard exists because they did disagree: a lint that only the
+# newest clippy emits (`question_mark`) reached CI while every local gate here was
+# green, because this workstation sat on a nine-month-old stable. A gate that only
+# one side can see is not a gate.
+#
+# The MSRV floor is separate and deliberately lower: `src-tauri/Cargo.toml`
+# declares `rust-version = "1.88"`, and the MSRV job installs 1.88 explicitly
+# through a `toolchain:` input — which is why that one step keeps the
+# input-accepting `stable` ref rather than a version ref.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy"]
