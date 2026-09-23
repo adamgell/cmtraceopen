@@ -56,15 +56,11 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
     let mut parse_errors = 0;
     let mut next_id = 0;
     let mut pending: Option<PendingEntry> = None;
-    let mut last_epoch: Option<i64> = None;
 
     for (index, line) in lines.iter().enumerate() {
         let line_number = (index + 1) as u32;
 
-        if let Some(entry) = parse_header(line, file_path, last_epoch) {
-            if entry.timestamp.is_some() {
-                last_epoch = entry.timestamp;
-            }
+        if let Some(entry) = parse_header(line, file_path) {
             flush_pending(&mut entries, &mut pending, &mut next_id);
             pending = Some(PendingEntry {
                 entry,
@@ -103,26 +99,22 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
     (entries, parse_errors)
 }
 
-fn parse_header(line: &str, file_path: &str, previous_epoch: Option<i64>) -> Option<LogEntry> {
+fn parse_header(line: &str, file_path: &str) -> Option<LogEntry> {
     // The strict regex matches known severity keywords — accept any component.
     // CBS/DISM/Panther logs all share the same format; once a file is detected
     // as CBS, every well-formed line should be parsed regardless of component
     // (e.g. DISM entries interleaved in CBS.log).
     if let Some(caps) = cbs_header_re().captures(line) {
-        return build_entry_from_caps(&caps, file_path, previous_epoch);
+        return build_entry_from_caps(&caps, file_path);
     }
 
     // Relaxed regex: non-standard severity token.  Accept any component so
     // that mixed CBS/DISM logs parse fully.
     let caps = cbs_relaxed_header_re().captures(line)?;
-    build_entry_from_caps(&caps, file_path, previous_epoch)
+    build_entry_from_caps(&caps, file_path)
 }
 
-fn build_entry_from_caps(
-    caps: &regex::Captures<'_>,
-    file_path: &str,
-    previous_epoch: Option<i64>,
-) -> Option<LogEntry> {
+fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<LogEntry> {
     let year: i32 = caps.get(1)?.as_str().parse().ok()?;
     let month: u32 = caps.get(2)?.as_str().parse().ok()?;
     let day: u32 = caps.get(3)?.as_str().parse().ok()?;
@@ -142,7 +134,7 @@ fn build_entry_from_caps(
     // `local_wall_clock_millis` for why it must not be promoted to UTC.
     let timestamp = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
-        .and_then(|naive| super::local_wall_clock_millis(naive, previous_epoch));
+        .and_then(super::local_wall_clock_millis);
 
     Some(LogEntry {
         id: 0,

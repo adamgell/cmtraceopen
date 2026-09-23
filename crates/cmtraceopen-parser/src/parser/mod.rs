@@ -48,37 +48,20 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
 /// machine's offset. Resolving through `Local` keeps the epoch and the rendered
 /// record on one wall clock.
 ///
-/// A wall clock inside a DST gap never existed. It is clamped to the instant the
-/// zone jumped, the first instant the zone can represent at or after the skipped
-/// clock, which keeps every gap record in non-decreasing epoch order with the
-/// records on either side of it. Reading it with either neighbouring offset
-/// instead would place it before the entries that led up to it or after the
-/// entries that follow it. A gap wider than the probes below reach (a zone that
-/// skipped a day, for example) resolves to `None`: no offset in the file can
-/// place that record, and inventing one would assert an instant the source never
-/// wrote. The record keeps its text; only its epoch is absent.
-pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime, previous: Option<i64>) -> Option<i64> {
+/// Two wall clocks a zone cannot place resolve to `None`, and the record keeps
+/// its text with no epoch: a clock inside a DST gap that the probes below cannot
+/// bound, and a clock a fall-back transition repeats. Both are genuinely
+/// ambiguous from the stamp alone. Choosing an occurrence would be a guess: a
+/// gap or repeated hour is either read with a neighbouring offset, which orders
+/// it before the records that led up to it or after the ones that follow, or
+/// carried from record to record, which either drags an hour of records forward
+/// on a small stamp inversion between writer threads or steps backwards across a
+/// sparse interval inside the repeated hour. A missing epoch is visible to every
+/// consumer; a wrong one is not.
+pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
     match naive.and_local_timezone(Local) {
         LocalResult::Single(value) => Some(value.timestamp_millis()),
-        // A fall-back transition repeats a wall clock. A single stamp cannot say
-        // which pass it belongs to, so the record order is the only evidence: the
-        // occurrence nearest to the record before it is the one that order
-        // supports, with the earlier occurrence chosen when there is no record
-        // before it. Distance rather than direction, because a small stamp
-        // inversion between writer threads must not drag the rest of the first
-        // pass an hour forward. The two candidates arrive in no guaranteed order,
-        // so compare them rather than trusting the variant's field order.
-        LocalResult::Ambiguous(first, second) => {
-            let (earlier, later) = if first.timestamp_millis() <= second.timestamp_millis() {
-                (first.timestamp_millis(), second.timestamp_millis())
-            } else {
-                (second.timestamp_millis(), first.timestamp_millis())
-            };
-            Some(match previous {
-                Some(previous) if (later - previous).abs() < (earlier - previous).abs() => later,
-                _ => earlier,
-            })
-        }
+        LocalResult::Ambiguous(..) => None,
         LocalResult::None => gap_transition_millis(naive),
     }
 }
@@ -626,7 +609,7 @@ mod tests {
         let naive =
             NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
-        let millis = local_wall_clock_millis(naive, None).expect("wall clock resolves");
+        let millis = local_wall_clock_millis(naive).expect("wall clock resolves");
 
         // The epoch renders back to the wall clock the record carried, which is
         // what keeps the Date/Time column and the epoch consumers (Time Range,
@@ -661,7 +644,7 @@ mod tests {
             .map(|text| {
                 let naive =
                     NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").expect("wall clock");
-                local_wall_clock_millis(naive, None).expect("wall clock resolves")
+                local_wall_clock_millis(naive).expect("wall clock resolves")
             })
             .collect();
 
@@ -672,44 +655,35 @@ mod tests {
     }
 
     #[test]
-    fn test_a_repeated_wall_clock_follows_the_record_order() {
-        // A fall-back transition makes 01:30 happen twice. On its own the stamp
-        // cannot say which pass it belongs to, so a record that already reached
-        // the later pass must pull it forward rather than inverting the log.
+    fn test_a_repeated_wall_clock_reports_no_epoch() {
+        // A fall-back transition makes 01:30 happen twice. The stamp cannot say
+        // which pass it belongs to, so no epoch is asserted: the record keeps
+        // its text and the gap stays visible instead of being placed an hour
+        // from the truth in silence.
         let naive =
             NaiveDateTime::parse_from_str("2024-11-03 01:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let repeated = matches!(naive.and_local_timezone(Local), LocalResult::Ambiguous(..));
 
-        let earliest = local_wall_clock_millis(naive, None).expect("wall clock resolves");
-        let after_later_record =
-            local_wall_clock_millis(naive, Some(i64::MAX)).expect("wall clock resolves");
+        let resolved = local_wall_clock_millis(naive);
 
-        assert!(after_later_record >= earliest);
-        assert!(
-            after_later_record > earliest
-                || !matches!(
-                    naive.and_local_timezone(Local),
-                    LocalResult::Ambiguous(..)
-                ),
-            "a repeated wall clock must take the later occurrence when the record order asks for it"
-        );
+        if repeated {
+            assert_eq!(
+                resolved, None,
+                "a wall clock the zone repeats must not be given an epoch"
+            );
+        } else {
+            assert!(
+                resolved.is_some(),
+                "a zone without that transition resolves the wall clock"
+            );
+        }
     }
 
     #[test]
-    fn test_a_small_stamp_inversion_during_a_repeated_hour_keeps_the_earlier_pass() {
-        // Two writer threads can emit stamps a second out of order. That must not
-        // read as "the second pass has started", which would shift the rest of
-        // the hour forward.
+    fn test_an_unrepeated_wall_clock_still_reports_an_epoch() {
         let naive =
-            NaiveDateTime::parse_from_str("2024-11-03 01:30:04", "%Y-%m-%d %H:%M:%S").unwrap();
-
-        let earlier = local_wall_clock_millis(naive, None).expect("wall clock resolves");
-        let one_second_ahead =
-            local_wall_clock_millis(naive, Some(earlier + 1_000)).expect("wall clock resolves");
-
-        assert_eq!(
-            one_second_ahead, earlier,
-            "a one-second inversion must not move the record an hour forward"
-        );
+            NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert!(local_wall_clock_millis(naive).is_some());
     }
 
     #[test]

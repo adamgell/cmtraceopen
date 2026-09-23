@@ -28,7 +28,7 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Hex_Sequence_Counter> <Message>
 ### Parsing Notes
 
 - **Timestamp**: `yyyy-MM-dd HH:mm:ss` — 19 characters, always at position 0.
-- **Timezone**: the prefix is the servicing host's **local** clock and carries no offset. CBS also logs the same instant as UTC on lines of the form `<prefix>, Info CBS Universal Time is: <utc>` (`2025-06-15 20:31:22, Info CBS Universal Time is: 2025-06-15 17:31:22.446` on a UTC+3 host), which is the only in-file way to recover the offset. Never read the prefix as UTC: doing so put the rendered record and every epoch consumer (sorting, ranges, elapsed) an offset apart (#657).
+- **Timezone**: the prefix is the servicing host's **local** clock and carries no offset. CBS also logs the same instant as UTC on lines of the form `<prefix>, Info CBS Universal Time is: <utc>` (`2025-06-15 20:31:22, Info CBS Universal Time is: 2025-06-15 17:31:22.446` on a UTC+3 host), which is the only in-file way to recover the offset. Never read the prefix as UTC: doing so put the rendered record and every epoch consumer (sorting, ranges, elapsed) an offset apart (#657). A wall clock the servicing host's zone cannot place keeps its text and reports no epoch instead of being given a guessed instant: inside a spring-forward gap it is clamped to the instant the zone jumped, and inside a fall-back hour, where the same clock happens twice, it gets no epoch at all.
 - **Level**: After the `, ` separator. Right-padded with spaces. Values: `Info`, `Error`, `Warning`, `Perf`.
 - **Component**: Variable-width, right-padded. Common: `CBS`, `CSI`, `DPX`, `DISM`, `DIA`, `TI`, `SQM`.
 - **Hex Counter**: CSI lines include `XXXXXXXX` hex counter (e.g., `00000001`); CBS/DPX lines do not.
