@@ -945,12 +945,16 @@ pub fn error_code_outcome(code: u32) -> ErrorCodeOutcome {
         // decimal and its HRESULT form): the install succeeded and an operator
         // must still restart.
         0x0024_0005 | 0x8007_0BC2 | 3010 => ErrorCodeOutcome::SuccessRequiresAction,
-        // MSI 1707/1724/1726/1728 complete successfully, and 1641
-        // (ERROR_SUCCESS_REBOOT_INITIATED) reports that the restart is already
+        // ERROR_SUCCESS_REBOOT_INITIATED reports that the restart is already
         // under way, so no operator action is outstanding.
-        1707 | 1724 | 1726 | 1728 | 1641 => ErrorCodeOutcome::Success,
+        1641 => ErrorCodeOutcome::Success,
         // Configuration Manager reports a completed installation.
         0x87D1_076C => ErrorCodeOutcome::Success,
+        // MSI 1707/1724/1726/1728 complete successfully, but their values are
+        // bare numbers that other code spaces also use: 1726 is also
+        // RPC_S_CALL_FAILED, so `0x000006BE` in a service log is a failure. A
+        // code whose meaning depends on a context this classifier does not see
+        // stays a finding rather than being pruned.
         _ => ErrorCodeOutcome::Failure,
     }
 }
@@ -974,10 +978,6 @@ mod tests {
             0x8007_0BC2,
             1641,
             3010,
-            1707,
-            1724,
-            1726,
-            1728,
             0x87D1_076C,
         ] {
             assert!(
@@ -995,8 +995,19 @@ mod tests {
     #[test]
     fn failed_operations_are_not_classified_as_successful() {
         // ERROR_FAIL_REBOOT_REQUIRED is the failure twin of the success reboot
-        // codes, and the HRESULT-form WU_E_* codes stay failures.
-        for code in [0x8007_0BC9, 0x8024_0001, 0x8007_0005, 0x800F_081F] {
+        // codes, the HRESULT-form WU_E_* codes stay failures, and the MSI
+        // success values stay findings because other code spaces give them
+        // failure meanings (1726 is RPC_S_CALL_FAILED).
+        for code in [
+            0x8007_0BC9,
+            0x8024_0001,
+            0x8007_0005,
+            0x800F_081F,
+            1707,
+            1724,
+            1726,
+            1728,
+        ] {
             assert_eq!(error_code_outcome(code), ErrorCodeOutcome::Failure);
         }
     }

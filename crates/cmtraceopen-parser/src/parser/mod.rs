@@ -61,11 +61,13 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime, previous: Option<i64
     match naive.and_local_timezone(Local) {
         LocalResult::Single(value) => Some(value.timestamp_millis()),
         // A fall-back transition repeats a wall clock. A single stamp cannot say
-        // which pass it belongs to, so the record order is the only evidence:
-        // take the earlier occurrence unless it would move this record behind
-        // the one before it in the same file. The two candidates arrive in no
-        // guaranteed order, so compare them rather than trusting the variant's
-        // field order.
+        // which pass it belongs to, so the record order is the only evidence: the
+        // occurrence nearest to the record before it is the one that order
+        // supports, with the earlier occurrence chosen when there is no record
+        // before it. Distance rather than direction, because a small stamp
+        // inversion between writer threads must not drag the rest of the first
+        // pass an hour forward. The two candidates arrive in no guaranteed order,
+        // so compare them rather than trusting the variant's field order.
         LocalResult::Ambiguous(first, second) => {
             let (earlier, later) = if first.timestamp_millis() <= second.timestamp_millis() {
                 (first.timestamp_millis(), second.timestamp_millis())
@@ -73,7 +75,7 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime, previous: Option<i64
                 (second.timestamp_millis(), first.timestamp_millis())
             };
             Some(match previous {
-                Some(previous) if earlier < previous => later,
+                Some(previous) if (later - previous).abs() < (earlier - previous).abs() => later,
                 _ => earlier,
             })
         }
@@ -689,6 +691,24 @@ mod tests {
                     LocalResult::Ambiguous(..)
                 ),
             "a repeated wall clock must take the later occurrence when the record order asks for it"
+        );
+    }
+
+    #[test]
+    fn test_a_small_stamp_inversion_during_a_repeated_hour_keeps_the_earlier_pass() {
+        // Two writer threads can emit stamps a second out of order. That must not
+        // read as "the second pass has started", which would shift the rest of
+        // the hour forward.
+        let naive =
+            NaiveDateTime::parse_from_str("2024-11-03 01:30:04", "%Y-%m-%d %H:%M:%S").unwrap();
+
+        let earlier = local_wall_clock_millis(naive, None).expect("wall clock resolves");
+        let one_second_ahead =
+            local_wall_clock_millis(naive, Some(earlier + 1_000)).expect("wall clock resolves");
+
+        assert_eq!(
+            one_second_ahead, earlier,
+            "a one-second inversion must not move the record an hour forward"
         );
     }
 
