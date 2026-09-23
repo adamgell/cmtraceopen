@@ -124,4 +124,22 @@ describe("StatusBar aggregate parser reporting", () => {
 
     expect(container.textContent ?? "").toContain("Parser CBS");
   });
+
+  it("reports the merged composition when the files hold no entries", () => {
+    // #657: the merged view must not hide its parsers behind a bare load
+    // message when every file in it parsed to nothing.
+    useLogStore.setState({
+      entries: [],
+      totalLines: 0,
+      sourceStatus: { kind: "loaded", message: "Loaded 2 files." },
+    });
+
+    const { container } = render(<StatusBar />);
+    const text = container.textContent ?? "";
+
+    expect(text).toContain("Loaded 2 files.");
+    expect(text).toContain("Timestamped format");
+    expect(text).toContain("Dedicated");
+    expect(text).toContain("Semi-structured");
+  });
 });

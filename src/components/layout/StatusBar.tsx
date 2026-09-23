@@ -342,7 +342,19 @@ export function StatusBar() {
         : failureReason
           ? `Reason: ${failureReason}`
           : sourceStatus.kind !== "idle"
-            ? (sourceStatus.detail ?? sourceStatus.message)
+            ? [
+                sourceStatus.detail ?? sourceStatus.message,
+                // A stream whose files parsed to no entries still knows which
+                // parsers read them, so the merged view reports its composition
+                // here too rather than only when it has rows to show.
+                aggregateParserDisplay
+                  ? `${aggregateParserDisplay.formatLabel} format`
+                  : null,
+                aggregateParserDisplay?.provenanceLabel,
+                aggregateParserDisplay?.qualityLabel,
+              ]
+                .filter((part): part is string => Boolean(part))
+                .join(" | ")
             : "");
 
     const filterStatusText = filterError

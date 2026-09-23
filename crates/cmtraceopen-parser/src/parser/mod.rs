@@ -48,39 +48,58 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
 /// machine's offset. Resolving through `Local` keeps the epoch and the rendered
 /// record on one wall clock.
 ///
-/// A wall clock inside a DST gap never existed. It is read with the offset in
-/// effect just before the gap, which is the only reading that keeps the record
-/// in sequence with the entries around it. Only a zone that jumped further than
-/// that (one that skipped a day, for example) reaches the final arm, which
-/// reads the machine's current offset — still a local reading, because this
-/// function never asserts UTC.
+/// A wall clock inside a DST gap never existed. It is clamped to the instant the
+/// zone jumped, the first instant the zone can represent at or after the skipped
+/// clock, which keeps every gap record in non-decreasing epoch order with the
+/// records on either side of it. Reading it with either neighbouring offset
+/// instead would place it before the entries that led up to it or after the
+/// entries that follow it. Only a zone that jumped further than the probes
+/// below reach (one that skipped a day, for example) falls back to the machine's
+/// current offset, which is still a local reading: this function never asserts
+/// UTC.
 pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> i64 {
     match naive.and_local_timezone(Local) {
         LocalResult::Single(value) => value.timestamp_millis(),
         LocalResult::Ambiguous(value, _) => value.timestamp_millis(),
-        // A wall clock inside a DST gap never existed. Reading it with the
-        // offset in effect just before the gap keeps the record in sequence
-        // instead of placing it before the entries that led up to it.
-        LocalResult::None => {
-            let hour = chrono::Duration::hours(1);
-            (naive - hour)
-                .and_local_timezone(Local)
-                .earliest()
-                .map(|value| value.timestamp_millis() + hour.num_milliseconds())
-                .unwrap_or_else(|| {
-                    // Only reachable for a zone that jumped more than an hour
-                    // (a zone that skipped a day, for example). The machine's
-                    // current offset is still a local reading, which is the
-                    // only thing this function may assert.
-                    let offset = Local::now().offset().to_owned();
-                    offset
-                        .from_local_datetime(&naive)
-                        .single()
-                        .expect("a fixed offset resolves every wall clock")
-                        .timestamp_millis()
-                })
+        LocalResult::None => gap_transition_millis(naive).unwrap_or_else(|| {
+            let offset = Local::now().offset().to_owned();
+            offset
+                .from_local_datetime(&naive)
+                .single()
+                .expect("a fixed offset resolves every wall clock")
+                .timestamp_millis()
+        }),
+    }
+}
+
+/// The first instant the local zone can represent at or after `naive`, for a
+/// wall clock that falls inside a DST gap.
+///
+/// Returns `None` when the gap is wider than the probe window, which leaves the
+/// zone's own boundary unresolvable from the offsets alone.
+fn gap_transition_millis(naive: NaiveDateTime) -> Option<i64> {
+    let hour = chrono::Duration::hours(1);
+    let before = (naive - hour).and_local_timezone(Local).earliest()?;
+    let after = (naive + hour).and_local_timezone(Local).earliest()?;
+    let post_gap_offset = *after.offset();
+
+    // Equal offsets mean the window holds no boundary to find, so the bisection
+    // below would converge on a wrong instant.
+    if *before.offset() == post_gap_offset {
+        return None;
+    }
+
+    let mut low = before.timestamp_millis();
+    let mut high = after.timestamp_millis();
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        match Local.timestamp_millis_opt(middle).single() {
+            Some(value) if *value.offset() == post_gap_offset => high = middle,
+            _ => low = middle,
         }
     }
+
+    Some(high)
 }
 
 pub use detect::ResolvedParser;
@@ -607,10 +626,38 @@ mod tests {
             .expect("local instant");
         assert_eq!(rendered.naive_local(), naive);
 
-        // A machine already on UTC cannot tell the two readings apart.
-        if Local::now().offset().local_minus_utc() != 0 {
+        // The zone this instant actually sits in decides whether the two
+        // readings can be told apart: a zone that happened to sit on UTC that
+        // day (London in January) cannot.
+        if rendered.offset().local_minus_utc() != 0 {
             assert_ne!(millis, naive.and_utc().timestamp_millis());
         }
+    }
+
+    #[test]
+    fn test_local_wall_clock_millis_keeps_a_skipped_clock_in_non_decreasing_order() {
+        // A spring-forward gap is the one reading no zone can resolve. The
+        // epoch order around the transition must still be non-decreasing, or a
+        // chronological merge places a gap record after a later wall clock.
+        let wall_clocks = [
+            "2024-03-10 01:30:00", // before the US transition
+            "2024-03-10 02:30:00", // inside it, where US zones skip an hour
+            "2024-03-10 03:00:00", // after it
+            "2024-03-10 04:00:00",
+        ];
+        let epochs: Vec<i64> = wall_clocks
+            .iter()
+            .map(|text| {
+                let naive =
+                    NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").expect("wall clock");
+                local_wall_clock_millis(naive)
+            })
+            .collect();
+
+        assert!(
+            epochs.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{wall_clocks:?} produced {epochs:?}"
+        );
     }
 
     #[test]

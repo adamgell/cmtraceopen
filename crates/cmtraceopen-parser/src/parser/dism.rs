@@ -362,8 +362,10 @@ mod tests {
             .expect("local instant");
         assert_eq!(rendered.naive_local().to_string(), "2024-01-15 08:00:00");
 
-        // A machine already on UTC cannot tell the two readings apart.
-        if chrono::Local::now().offset().local_minus_utc() != 0 {
+        // The zone this instant actually sits in decides whether the two
+        // readings can be told apart: a zone that happened to sit on UTC that
+        // day cannot.
+        if rendered.offset().local_minus_utc() != 0 {
             let as_utc = chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
                 .expect("date")
                 .and_hms_opt(8, 0, 0)

@@ -55,7 +55,7 @@ secureboot = ["dep:tempfile"]
 sccm-diagnostics = []
 
 [dependencies]
-cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.1" }
+cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.2" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

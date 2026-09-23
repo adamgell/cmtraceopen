@@ -941,12 +941,14 @@ pub fn error_code_outcome(code: u32) -> ErrorCodeOutcome {
         0x0000_0000 | 0x0000_0001 => ErrorCodeOutcome::Success,
         // WU_S_*: the Windows Update Agent reports a completed operation.
         0x0024_0001 | 0x0024_0002 | 0x0024_0006 | 0x0024_0008 => ErrorCodeOutcome::Success,
-        // WU_S_REBOOT_REQUIRED, ERROR_SUCCESS_REBOOT_REQUIRED (in both its
-        // decimal and its HRESULT form), and ERROR_SUCCESS_REBOOT_INITIATED:
-        // the install succeeded and a restart is outstanding.
-        0x0024_0005 | 0x8007_0BC2 | 1641 | 3010 => ErrorCodeOutcome::SuccessRequiresAction,
-        // MSI 1707/1724/1726/1728 complete successfully.
-        1707 | 1724 | 1726 | 1728 => ErrorCodeOutcome::Success,
+        // WU_S_REBOOT_REQUIRED and ERROR_SUCCESS_REBOOT_REQUIRED (in both its
+        // decimal and its HRESULT form): the install succeeded and an operator
+        // must still restart.
+        0x0024_0005 | 0x8007_0BC2 | 3010 => ErrorCodeOutcome::SuccessRequiresAction,
+        // MSI 1707/1724/1726/1728 complete successfully, and 1641
+        // (ERROR_SUCCESS_REBOOT_INITIATED) reports that the restart is already
+        // under way, so no operator action is outstanding.
+        1707 | 1724 | 1726 | 1728 | 1641 => ErrorCodeOutcome::Success,
         // Configuration Manager reports a completed installation.
         0x87D1_076C => ErrorCodeOutcome::Success,
         _ => ErrorCodeOutcome::Failure,
@@ -997,5 +999,21 @@ mod tests {
         for code in [0x8007_0BC9, 0x8024_0001, 0x8007_0005, 0x800F_081F] {
             assert_eq!(error_code_outcome(code), ErrorCodeOutcome::Failure);
         }
+    }
+
+    #[test]
+    fn a_reboot_an_operator_owes_is_actionable_while_an_initiated_one_is_not() {
+        // 3010 reports that a restart is still required, so it stays in the
+        // Error Codes table; 1641 reports that the restart is already under way
+        // and leaves nothing for the operator to do.
+        assert_eq!(
+            error_code_outcome(3010),
+            ErrorCodeOutcome::SuccessRequiresAction
+        );
+        assert_eq!(
+            error_code_outcome(0x8007_0BC2),
+            ErrorCodeOutcome::SuccessRequiresAction
+        );
+        assert_eq!(error_code_outcome(1641), ErrorCodeOutcome::Success);
     }
 }
