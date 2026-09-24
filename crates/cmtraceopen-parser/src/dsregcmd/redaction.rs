@@ -372,6 +372,22 @@ pub fn redacted_status_text(input: &str) -> String {
     .text(input)
 }
 
+/// Project one artifact of a capture bundle for sharing.
+///
+/// A bundle keeps its artifacts as captured -- the analyzer reads them back, and
+/// masking where they are stored changes what its rules conclude -- so the
+/// projection belongs at the hand-off, on the way out. This is that projection.
+/// The capture classifies the identities, and the artifact loses what the shared
+/// grammar recognizes by shape and then the literals the same capture named, in
+/// that order, so a tenant domain is not scrubbed out of a principal name before
+/// the mail-address rule has seen it.
+pub fn redacted_capture_artifact(capture: &str, artifact: &str) -> String {
+    Projection {
+        literals: capture_literals(capture),
+    }
+    .text(artifact)
+}
+
 impl Projection {
     fn facts(&self, facts: &DsregcmdFacts) -> DsregcmdFacts {
         DsregcmdFacts {
@@ -1077,6 +1093,29 @@ mod tests {
     /// One text reaches one token even when two fields classify it under two
     /// kinds.
     ///
+    /// An artifact handed over from a bundle loses what its capture named.
+    ///
+    /// The capture is the classifier: the bundle's other files carry the same
+    /// identities in shapes no rule recognizes (a bare domain in a JSON string,
+    /// a device id in a named field), so the literals have to come from it.
+    #[test]
+    fn a_bundle_artifact_loses_what_its_capture_named() {
+        let capture = " TenantName : Contoso Ltd\n DomainName : contoso.example\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n";
+        let artifact = r#"{"domain":"contoso.example","deviceId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant":"11111111-2222-3333-4444-555555555555"}"#;
+
+        let projected = super::redacted_capture_artifact(capture, artifact);
+
+        assert!(!projected.contains("contoso.example"), "{projected}");
+        assert!(
+            !projected.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "{projected}"
+        );
+        assert!(
+            !projected.contains("11111111-2222-3333-4444-555555555555"),
+            "{projected}"
+        );
+    }
+
     /// The kind is a property of the *field*; the token is a property of the
     /// *value*, and a narrative mention carries no field at all. Keying the table
     /// by kind would leave a mention of `contoso.example` in prose choosing

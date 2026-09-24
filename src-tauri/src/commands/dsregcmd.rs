@@ -502,6 +502,268 @@ const ARTIFACT_SCHEDULED_TASKS: &str = "evidence/scheduled-tasks/enterprise-mgmt
 /// identity fingerprint). The projection belongs at the boundary that publishes
 /// a value, which for this lane is `analyze_text_with_evidence` and
 /// `redacted_status_text`. The folder is not private, though: its path is handed
+/// One projected copy of a capture bundle.
+#[derive(Debug, serde::Serialize)]
+pub struct CaptureBundleProjection {
+    /// The folder the shareable copy was written to.
+    pub destination: String,
+    /// How many files were rewritten with the capture's identities scrubbed.
+    pub projected_files: usize,
+    /// Files whose bytes are not text this build can read, copied unchanged and
+    /// named here. Reported rather than implied away: a caller that hands the
+    /// copy to someone else has to know what was not projected.
+    pub unprojected_files: Vec<String>,
+}
+
+/// The projected copy carries the whole bundle tree, so its walk is bounded by
+/// the bundle a capture actually writes and refuses a symlink rather than
+/// following one out of the folder.
+fn project_capture_bundle_impl(
+    root: &Path,
+) -> Result<CaptureBundleProjection, crate::error::AppError> {
+    let metadata = std::fs::metadata(root).map_err(|error| {
+        crate::error::AppError::InvalidInput(format!(
+            "capture bundle is not readable at '{}': {error}",
+            root.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "capture bundle is not a folder: {}",
+            root.display()
+        )));
+    }
+
+    let capture_path = find_bundle_capture(root)?;
+    let capture = std::fs::read_to_string(&capture_path).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to read the capture '{}': {error}",
+            capture_path.display()
+        ))
+    })?;
+
+    let destination = shareable_sibling(root);
+    if destination.exists() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "a projected copy already exists at '{}'",
+            destination.display()
+        )));
+    }
+    std::fs::create_dir_all(&destination).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to create the projected copy at '{}': {error}",
+            destination.display()
+        ))
+    })?;
+
+    let mut projected_files = 0;
+    let mut unprojected_files = Vec::new();
+    project_bundle_dir(
+        root,
+        root,
+        &destination,
+        &capture,
+        &capture_path,
+        &mut projected_files,
+        &mut unprojected_files,
+    )?;
+
+    Ok(CaptureBundleProjection {
+        destination: destination.display().to_string(),
+        projected_files,
+        unprojected_files,
+    })
+}
+
+/// Walk one directory of the bundle, writing its projected twin.
+#[allow(clippy::too_many_arguments)]
+fn project_bundle_dir(
+    root: &Path,
+    directory: &Path,
+    destination: &Path,
+    capture: &str,
+    capture_path: &Path,
+    projected_files: &mut usize,
+    unprojected_files: &mut Vec<String>,
+) -> Result<(), crate::error::AppError> {
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to list '{}': {error}",
+            directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            crate::error::AppError::Internal(format!("Failed to read a bundle entry: {error}"))
+        })?;
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        let target = destination.join(&relative);
+        let file_type = entry.file_type().map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to inspect '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if file_type.is_symlink() {
+            // Following it could project a file outside the bundle, and copying
+            // it would hand over something this walk never inspected.
+            unprojected_files.push(relative.display().to_string());
+            continue;
+        }
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&target).map_err(|error| {
+                crate::error::AppError::Internal(format!(
+                    "Failed to create '{}': {error}",
+                    target.display()
+                ))
+            })?;
+            project_bundle_dir(
+                root,
+                &path,
+                destination,
+                capture,
+                capture_path,
+                projected_files,
+                unprojected_files,
+            )?;
+            continue;
+        }
+
+        let bytes = std::fs::read(&path).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to read '{}': {error}",
+                path.display()
+            ))
+        })?;
+        let projected = if path == capture_path {
+            // The capture is the file every other literal was read from, so its
+            // own projection is the status-text projection.
+            Some(
+                cmtraceopen_parser::dsregcmd::redaction::redacted_status_text(capture).into_bytes(),
+            )
+        } else {
+            project_artifact_bytes(capture, &bytes)
+        };
+        match projected {
+            Some(bytes) => {
+                std::fs::write(&target, bytes).map_err(|error| {
+                    crate::error::AppError::Internal(format!(
+                        "Failed to write '{}': {error}",
+                        target.display()
+                    ))
+                })?;
+                *projected_files += 1;
+            }
+            None => {
+                std::fs::write(&target, &bytes).map_err(|error| {
+                    crate::error::AppError::Internal(format!(
+                        "Failed to write '{}': {error}",
+                        target.display()
+                    ))
+                })?;
+                unprojected_files.push(relative.display().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The projected form of one artifact's bytes, or `None` when they are not text.
+///
+/// Registry evidence is written as UTF-16, so a UTF-8 read is not enough to see
+/// the identities inside it. Anything else is left for the caller to report.
+fn project_artifact_bytes(capture: &str, bytes: &[u8]) -> Option<Vec<u8>> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Some(
+            cmtraceopen_parser::dsregcmd::redaction::redacted_capture_artifact(capture, text)
+                .into_bytes(),
+        );
+    }
+    let (text, little_endian) = decode_utf16(bytes)?;
+    let projected =
+        cmtraceopen_parser::dsregcmd::redaction::redacted_capture_artifact(capture, &text);
+    Some(encode_utf16(&projected, little_endian))
+}
+
+/// Decode UTF-16 text with a byte-order mark, reporting which order it was.
+fn decode_utf16(bytes: &[u8]) -> Option<(String, bool)> {
+    let (little_endian, body) = match bytes {
+        [0xFF, 0xFE, rest @ ..] => (true, rest),
+        [0xFE, 0xFF, rest @ ..] => (false, rest),
+        _ => return None,
+    };
+    if body.len() % 2 != 0 {
+        return None;
+    }
+    let units: Vec<u16> = (0..body.len() / 2)
+        .map(|index| {
+            let pair = [body[index * 2], body[index * 2 + 1]];
+            if little_endian {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        })
+        .collect();
+    let text = String::from_utf16(&units).ok()?;
+    Some((text, little_endian))
+}
+
+/// Re-encode projected text in the order it arrived, keeping its byte-order mark.
+fn encode_utf16(text: &str, little_endian: bool) -> Vec<u8> {
+    let mut out = if little_endian {
+        vec![0xFF, 0xFE]
+    } else {
+        vec![0xFE, 0xFF]
+    };
+    for unit in text.encode_utf16() {
+        out.extend_from_slice(&if little_endian {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        });
+    }
+    out
+}
+
+/// The capture a bundle's identities are read from.
+fn find_bundle_capture(root: &Path) -> Result<std::path::PathBuf, crate::error::AppError> {
+    let staged = root
+        .join("evidence")
+        .join("command-output")
+        .join("dsregcmd-status.txt");
+    if staged.is_file() {
+        return Ok(staged);
+    }
+    Err(crate::error::AppError::InvalidInput(format!(
+        "no capture to project: '{}' does not exist",
+        staged.display()
+    )))
+}
+
+/// Where the shareable copy is written: beside the bundle it came from.
+fn shareable_sibling(root: &Path) -> std::path::PathBuf {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "capture".to_string());
+    root.with_file_name(format!("{name}-shareable"))
+}
+
+/// Write a shareable copy of a live capture bundle.
+///
+/// The staged bundle stays as captured, because the analyzer reads it back and a
+/// projected capture changes what its rules conclude. This is the hand-off half
+/// of that boundary: the copy this writes has the capture's identities scrubbed
+/// out of every artifact, and the folder it was read from is untouched.
+#[tauri::command]
+pub fn project_dsregcmd_capture_bundle(
+    bundle_root: String,
+) -> Result<CaptureBundleProjection, crate::error::AppError> {
+    project_capture_bundle_impl(Path::new(&bundle_root))
+}
+
 /// to the frontend, the sidebar renders it, and a support engineer can open or
 /// archive it — so any path that hands this bundle, or a file in it, to a user
 /// or another machine must project that content first, and the residual gap is
@@ -1318,6 +1580,153 @@ mod tests {
     fn write_bundle_json<T: serde::Serialize>(path: &Path, value: &T) {
         let json = serde_json::to_string_pretty(value).expect("serialize bundle fixture");
         std::fs::write(path, json).expect("write bundle fixture");
+    }
+
+    /// The capture that names identities, and an artifact carrying the same ones
+    /// in shapes no rule recognizes: a bare domain in a JSON string and a device
+    /// id in a named field.
+    const PROJECTION_CAPTURE: &str = " TenantName : Contoso Ltd\n DomainName : contoso.example\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n";
+    const PROJECTION_ARTIFACT: &str =
+        r#"{"domain":"contoso.example","device":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#;
+
+    fn write_projection_bundle(root: &std::path::Path) {
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            PROJECTION_CAPTURE,
+        )
+        .expect("write capture");
+        std::fs::write(
+            command_output.join("endpoint-tests.json"),
+            PROJECTION_ARTIFACT,
+        )
+        .expect("write artifact");
+    }
+
+    /// The copy handed over is projected, and the bundle it was read from is not.
+    ///
+    /// Both halves matter: the analyzer reads the staged bundle back to reach its
+    /// verdicts, so projecting it in place would change what it concludes, and a
+    /// copy that still named the tenant would defeat the point of handing it over.
+    #[test]
+    fn projecting_a_bundle_scrubs_the_hand_over_and_leaves_the_bundle_alone() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        write_projection_bundle(&root);
+        let capture_path = root
+            .join("evidence")
+            .join("command-output")
+            .join("dsregcmd-status.txt");
+        let before = std::fs::read(&capture_path).expect("read raw capture");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        assert_eq!(projection.projected_files, 2, "{projection:?}");
+        assert!(projection.unprojected_files.is_empty(), "{projection:?}");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let status = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("command-output")
+                .join("dsregcmd-status.txt"),
+        )
+        .expect("read projected capture");
+        let artifact = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("command-output")
+                .join("endpoint-tests.json"),
+        )
+        .expect("read projected artifact");
+        for projected in [&status, &artifact] {
+            assert!(!projected.contains("contoso.example"), "{projected}");
+            assert!(
+                !projected.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+                "{projected}"
+            );
+        }
+
+        assert_eq!(
+            std::fs::read(&capture_path).expect("read raw capture again"),
+            before,
+            "the staged bundle is the analyzer's input and stays as captured"
+        );
+    }
+
+    /// A file this build cannot read as text is copied unchanged and named.
+    ///
+    /// Registry evidence is not UTF-8, and a bundle also carries files nothing
+    /// here can interpret; reporting them is the difference between a copy that
+    /// is complete and one that only looks complete.
+    #[test]
+    fn an_artifact_that_is_not_text_is_copied_and_reported() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        write_projection_bundle(&root);
+        let opaque = root.join("evidence").join("registry").join("device.bin");
+        std::fs::create_dir_all(opaque.parent().expect("parent")).expect("create registry dir");
+        let bytes = [0x00u8, 0x9F, 0x92, 0x01];
+        std::fs::write(&opaque, bytes).expect("write opaque artifact");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        assert_eq!(projection.projected_files, 2, "{projection:?}");
+        assert_eq!(
+            projection.unprojected_files,
+            vec!["evidence/registry/device.bin".to_string()],
+            "{projection:?}"
+        );
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        assert_eq!(
+            std::fs::read(
+                destination
+                    .join("evidence")
+                    .join("registry")
+                    .join("device.bin")
+            )
+            .expect("read copied artifact"),
+            bytes,
+            "an artifact that was not projected is copied verbatim"
+        );
+    }
+
+    /// A UTF-16 artifact is text, so it is projected rather than passed through.
+    #[test]
+    fn a_utf16_artifact_is_projected_in_its_own_encoding() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        write_projection_bundle(&root);
+        let registry = root.join("evidence").join("registry").join("device.reg");
+        std::fs::create_dir_all(registry.parent().expect("parent")).expect("create registry dir");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "Tenant : contoso.example\n".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(&registry, &bytes).expect("write registry artifact");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        assert!(projection.unprojected_files.is_empty(), "{projection:?}");
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let projected = std::fs::read(
+            destination
+                .join("evidence")
+                .join("registry")
+                .join("device.reg"),
+        )
+        .expect("read projected registry artifact");
+        let units: Vec<u16> = (0..projected.len().saturating_sub(2) / 2)
+            .map(|index| u16::from_le_bytes([projected[2 + index * 2], projected[3 + index * 2]]))
+            .collect();
+        let text = String::from_utf16(&units).expect("utf16");
+        assert!(!text.contains("contoso.example"), "{text}");
+        assert!(
+            projected.starts_with(&[0xFF, 0xFE]),
+            "keeps its byte-order mark"
+        );
     }
 
     fn build_dsregcmd_bundle_fixture() -> tempfile::TempDir {

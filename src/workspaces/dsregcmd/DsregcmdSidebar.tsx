@@ -1,4 +1,6 @@
 import { tokens } from "@fluentui/react-components";
+import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import { useDsregcmdStore } from "./dsregcmd-store";
 import { selectTopFindings } from "./dsregcmd-formatters";
 import { useAppActions } from "../../hooks/use-app-actions";
@@ -16,6 +18,81 @@ import {
 
 /** How many findings the summary sidebar shows. */
 const TOP_FINDINGS_LIMIT = 8;
+
+interface CaptureBundleProjection {
+  destination: string;
+  projectedFiles: number;
+  unprojectedFiles: string[];
+}
+
+/**
+ * Write a shareable copy of the capture bundle beside it.
+ *
+ * The staged bundle is the analyzer's input and stays as captured, so nothing
+ * here changes what the analysis concluded. The copy is what can be archived and
+ * sent: every artifact in it has the capture's identities scrubbed out. A file
+ * the projection cannot read as text is copied unchanged and named, so whoever
+ * hands it over knows what was not projected rather than assuming.
+ */
+function ExportBundleButton({ bundleRoot }: { bundleRoot: string }) {
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "busy" }
+    | { kind: "done"; projection: CaptureBundleProjection }
+    | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+
+  const run = async () => {
+    setState({ kind: "busy" });
+    try {
+      const projection = await invoke<CaptureBundleProjection>(
+        "project_dsregcmd_capture_bundle",
+        { bundleRoot },
+      );
+      setState({ kind: "done", projection });
+    } catch (error) {
+      setState({
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  return (
+    <div style={{ marginTop: "6px" }}>
+      <button
+        type="button"
+        onClick={run}
+        disabled={state.kind === "busy"}
+        style={{
+          font: "inherit",
+          color: tokens.colorNeutralForeground1,
+          backgroundColor: tokens.colorNeutralBackground3,
+          border: `1px solid ${tokens.colorNeutralStroke2}`,
+          borderRadius: "4px",
+          padding: "4px 8px",
+          cursor: state.kind === "busy" ? "default" : "pointer",
+        }}
+      >
+        {state.kind === "busy" ? "Projecting…" : "Export redacted copy"}
+      </button>
+      {state.kind === "done" && (
+        <div style={{ marginTop: "4px", wordBreak: "break-word", color: tokens.colorNeutralForeground2 }}>
+          Wrote {state.projection.projectedFiles} projected file
+          {state.projection.projectedFiles === 1 ? "" : "s"} to {state.projection.destination}
+          {state.projection.unprojectedFiles.length > 0 && (
+            <> — not projected, copied as-is: {state.projection.unprojectedFiles.join(", ")}</>
+          )}
+        </div>
+      )}
+      {state.kind === "failed" && (
+        <div style={{ marginTop: "4px", color: tokens.colorPaletteRedForeground1 }}>
+          {state.message}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function DsregcmdSidebar() {
   const result = useDsregcmdStore((s) => s.result);
@@ -83,7 +160,10 @@ export function DsregcmdSidebar() {
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Evidence file:</strong> {sourceContext.evidenceFilePath}</div>
               )}
               {sourceContext.bundlePath && (
+                <>
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Bundle root:</strong> {sourceContext.bundlePath}</div>
+                <ExportBundleButton bundleRoot={sourceContext.bundlePath} />
+              </>
               )}
             </div>
 
