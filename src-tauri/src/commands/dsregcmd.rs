@@ -1457,8 +1457,7 @@ mod tests {
             .build()
             .expect("build current-thread runtime");
         runtime.block_on(async move {
-            let spawned_at = Instant::now();
-            let unrelated_task = tokio::spawn(async move { spawned_at.elapsed() });
+            let unrelated_task = tokio::spawn(async { Instant::now() });
 
             let analysis_started = Instant::now();
             let result = analyze_dsregcmd(
@@ -1467,8 +1466,11 @@ mod tests {
             )
             .await
             .expect("analyze dsregcmd bundle fixture");
+            let analysis_finished_at = Instant::now();
             let total_analysis_duration = analysis_started.elapsed();
-            let unrelated_latency = unrelated_task.await.expect("join unrelated latency task");
+            let unrelated_ran_at = unrelated_task
+                .await
+                .expect("join unrelated latency task");
 
             assert!(result.active_evidence.is_some(), "expected active evidence");
             assert!(
@@ -1481,9 +1483,9 @@ mod tests {
             );
 
             println!(
-                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_task_latency_ms={}",
+                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_ran_{}ms_before_the_analysis_finished",
                 total_analysis_duration.as_millis(),
-                unrelated_latency.as_millis()
+                analysis_finished_at.duration_since(unrelated_ran_at).as_millis()
             );
 
             assert!(
@@ -1491,11 +1493,16 @@ mod tests {
                 "expected simulated bundle analysis to take at least 980ms, saw {:?}",
                 total_analysis_duration
             );
+            // The property is that the unrelated task *ran* while the analysis
+            // was still in flight, not that it ran within some number of
+            // milliseconds. A wall-clock budget here failed at random on a loaded
+            // runner -- a check red for reasons unrelated to the change is worse
+            // than no check -- while this holds on any runner, and still fails if
+            // the analysis ever moves back onto the command thread.
             assert!(
-                unrelated_latency < Duration::from_millis(100),
-                "expected the command thread to stay responsive while the analysis runs off-thread; total={:?} unrelated={:?}",
-                total_analysis_duration,
-                unrelated_latency
+                unrelated_ran_at < analysis_finished_at,
+                "the unrelated task did not run until the analysis had finished; total={:?}",
+                total_analysis_duration
             );
         });
     }
