@@ -130,7 +130,7 @@ jobs:
         run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
 
       - name: Install cargo-deny and cargo-audit
-        uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
           tool: cargo-deny,cargo-audit
 
