@@ -1014,6 +1014,31 @@ mod tests {
         );
     }
 
+    /// An unplaceable reading never becomes the terminal one.
+    ///
+    /// `sort_readings` puts readings with no usable timestamp first precisely so
+    /// this cannot happen, and nothing in the fixture corpus exercises it: every
+    /// scenario reports a usable instant. A device whose newest install report
+    /// carries an unreadable time must still be read from its placed records.
+    #[test]
+    fn an_unplaceable_reading_does_not_become_the_terminal_state() {
+        let mut unreadable = reading_at("install", "succeeded", "wu-30", "2026-01-01T03:00:00Z");
+        if let Some(timestamp) = unreadable.context.source_timestamp.as_mut() {
+            timestamp.kind = IntuneTimestampKind::Invalid;
+            timestamp.normalized_utc = None;
+        }
+        let placed = reading_at("download", "failed", "wu-31", "2026-01-01T02:00:00Z");
+
+        // Canonical order: the unplaceable reading sorts first.
+        let state = transaction_state(&[unreadable, placed]);
+
+        assert_eq!(
+            state,
+            UpdateTransactionState::DownloadFailed,
+            "the placed record states the terminal outcome"
+        );
+    }
+
     /// The scanned source is the latest reading, not the first.
     ///
     /// A device that moved from WSUS to WUfB kept being assessed as WSUS while
