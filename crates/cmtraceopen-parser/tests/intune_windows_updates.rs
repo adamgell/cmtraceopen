@@ -1203,3 +1203,39 @@ fn reversal_of_the_same_bundle_produces_the_same_snapshot() {
         );
     }
 }
+
+/// A finding must not echo an identifier its own field masks.
+///
+/// The conflict's policy ids are enrollment identifiers, masked in the conflict
+/// the export carries; naming them in the finding's prose republished exactly
+/// what masking removed.
+#[test]
+fn the_conflict_finding_does_not_echo_the_policy_ids_it_masks() {
+    let scenario = "conflicting-policy-sources";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));
+    let conflict = snapshot
+        .policy_chain
+        .conflicts
+        .first()
+        .expect("this scenario reports a policy conflict");
+
+    let prose = snapshot
+        .findings
+        .iter()
+        .map(|finding| finding.summary.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    for id in &conflict.policy_ids {
+        assert!(
+            !prose.contains(id.as_str()),
+            "a summary echoed a policy id the export masks: {prose}"
+        );
+    }
+    assert!(
+        prose.contains(&conflict.node),
+        "the node is what an operator acts on and stays: {prose}"
+    );
+}

@@ -288,11 +288,14 @@ fn push_policy_conflict(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFind
             IntuneFindingSeverity::Error,
             IntuneFindingConfidence::High,
             "Two policy sources contend for the same update setting",
+            // The ids are enrollment identifiers and the export masks them in
+            // the conflict it cites, so naming them here would republish what
+            // masking removes. The count and the node are what an administrator
+            // acts on; the ids remain reachable through the finding's evidence.
             format!(
-                "{} was claimed by {} policy sources ({}). The device applies one of them; the others are not in force.",
+                "{} was claimed by {} policy sources. The device applies one of them; the others are not in force.",
                 conflict.node,
-                conflict.policy_ids.len(),
-                conflict.policy_ids.join(", ")
+                conflict.policy_ids.len()
             ),
             &[
                 "Remove the overlapping assignment so a single source owns the node",
