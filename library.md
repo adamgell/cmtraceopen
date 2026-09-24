@@ -1,5 +1,16 @@
 # CMTrace Open — Workspace Library
 
+> **Checked 2026-09-24: every entry below routes to finished work.** All thirteen issues and
+> pull requests named here are closed or merged — #317, #490, #500, #512, #409, #441, #410,
+> #414, #506, #507, #326, #321, #333 — and the plan files they point at still exist, so
+> nothing here is broken. What is missing is anything current: `docs/superpowers/plans/` holds
+> 40 files, several of them months newer (through 2026-08-30), and none of them appear here.
+>
+> A session following this index is routed only into the past. Regenerating it from the plans
+> directory — one `IF <subject> → read <plan>` per file, with the date in the rule — is
+> mechanical; deciding which subjects still matter is not, which is why it is flagged rather
+> than rewritten.
+
 - IF loading the CMTrace Open specialist agent → read [[soul.md]] for identity/rules and [[memory.md]] for durable facts
 - IF integrating SCCM advanced capture PR #500 with current main → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-capture-main-integration.md]]
 - IF reworking SCCM advanced capture PR #500 server-validation gates → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-server-validation-rework.md]]
