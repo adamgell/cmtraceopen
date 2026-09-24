@@ -514,6 +514,12 @@ pub struct CaptureBundleProjection {
     /// named here. Reported rather than implied away: a caller that hands the
     /// copy to someone else has to know what was not projected.
     pub unprojected_files: Vec<String>,
+    /// Paths the walk refused to follow, which are *not* in the copy.
+    ///
+    /// A symlink is skipped rather than copied or projected, so reporting it among
+    /// the files that were "copied as-is" described an entry the destination does
+    /// not contain.
+    pub skipped_files: Vec<String>,
 }
 
 /// The projected copy carries the whole bundle tree, so its walk is bounded by
@@ -574,6 +580,7 @@ fn project_capture_bundle_impl(
 
     let mut projected_files = 0;
     let mut unprojected_files = Vec::new();
+    let mut skipped_files = Vec::new();
     if let Err(error) = project_bundle_dir(
         root,
         root,
@@ -583,6 +590,7 @@ fn project_capture_bundle_impl(
         &capture_path,
         &mut projected_files,
         &mut unprojected_files,
+        &mut skipped_files,
     ) {
         // A copy that stops halfway is worse than none: the caller would have to
         // tell a partial projection from a complete one by reading it.
@@ -594,11 +602,13 @@ fn project_capture_bundle_impl(
     // the report is sorted: a caller comparing two runs of the same bundle
     // should not see the list move.
     unprojected_files.sort();
+    skipped_files.sort();
 
     Ok(CaptureBundleProjection {
         destination: destination.display().to_string(),
         projected_files,
         unprojected_files,
+        skipped_files,
     })
 }
 
@@ -613,6 +623,7 @@ fn project_bundle_dir(
     capture_path: &Path,
     projected_files: &mut usize,
     unprojected_files: &mut Vec<String>,
+    skipped_files: &mut Vec<String>,
 ) -> Result<(), crate::error::AppError> {
     let entries = std::fs::read_dir(directory).map_err(|error| {
         crate::error::AppError::Internal(format!(
@@ -635,8 +646,9 @@ fn project_bundle_dir(
         })?;
         if file_type.is_symlink() {
             // Following it could project a file outside the bundle, and copying
-            // it would hand over something this walk never inspected.
-            unprojected_files.push(projection_relative_path(&relative));
+            // it would hand over something this walk never inspected. It is
+            // skipped, so it is reported as skipped.
+            skipped_files.push(projection_relative_path(&relative));
             continue;
         }
         if file_type.is_dir() {
@@ -655,6 +667,7 @@ fn project_bundle_dir(
                 capture_path,
                 projected_files,
                 unprojected_files,
+                skipped_files,
             )?;
             continue;
         }
@@ -2013,6 +2026,42 @@ mod tests {
         )
         .expect("read projected registry evidence");
         assert!(!projected.contains("tenant.example.invalid"), "{projected}");
+    }
+
+    /// A symlink is reported as skipped, not as copied.
+    ///
+    /// The walk refuses to follow one and writes nothing for it, while the report
+    /// said "not projected, copied as-is" -- so the message described an entry the
+    /// copy does not contain.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_reported_as_skipped_rather_than_copied() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        std::os::unix::fs::symlink(
+            command_output.join("dsregcmd-status.txt"),
+            command_output.join("elsewhere.txt"),
+        )
+        .expect("create symlink");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        assert_eq!(
+            projection.skipped_files,
+            vec!["evidence/command-output/elsewhere.txt".to_string()],
+            "{projection:?}"
+        );
+        assert!(
+            projection.unprojected_files.is_empty(),
+            "nothing was copied, so nothing is reported as copied: {projection:?}"
+        );
     }
 
     fn write_projection_bundle(root: &std::path::Path) {

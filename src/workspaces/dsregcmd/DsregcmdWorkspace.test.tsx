@@ -364,6 +364,7 @@ describe("DsregcmdSidebar export control", () => {
             destination: "C:\\temp\\capture-shareable",
             projectedFiles: 12,
             unprojectedFiles: ["evidence/registry/device.reg"],
+            skippedFiles: ["evidence/command-output/elsewhere.txt"],
           })
         : Promise.resolve(null),
     );
@@ -375,6 +376,10 @@ describe("DsregcmdSidebar export control", () => {
     expect(screen.getByText(/capture-shareable/)).toBeTruthy();
     expect(
       screen.getByText(/not projected, copied as-is: evidence\/registry\/device\.reg/),
+    ).toBeTruthy();
+    // A skipped path was never copied, so it is not reported as copied.
+    expect(
+      screen.getByText(/skipped, not in the copy: evidence\/command-output\/elsewhere\.txt/),
     ).toBeTruthy();
   });
 

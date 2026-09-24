@@ -23,6 +23,8 @@ interface CaptureBundleProjection {
   destination: string;
   projectedFiles: number;
   unprojectedFiles: string[];
+  /** Paths the walk refused to follow: not projected, and not in the copy either. */
+  skippedFiles: string[];
 }
 
 /**
@@ -50,7 +52,9 @@ function readProjection(payload: unknown): CaptureBundleProjection | null {
     typeof candidate.destination !== "string" ||
     typeof candidate.projectedFiles !== "number" ||
     !Array.isArray(candidate.unprojectedFiles) ||
-    !candidate.unprojectedFiles.every((file) => typeof file === "string")
+    !candidate.unprojectedFiles.every((file) => typeof file === "string") ||
+    !Array.isArray(candidate.skippedFiles) ||
+    !candidate.skippedFiles.every((file) => typeof file === "string")
   ) {
     return null;
   }
@@ -111,6 +115,9 @@ function ExportBundleButton({ bundleRoot }: { bundleRoot: string }) {
           {state.projection.projectedFiles === 1 ? "" : "s"} to {state.projection.destination}
           {state.projection.unprojectedFiles.length > 0 && (
             <> — not projected, copied as-is: {state.projection.unprojectedFiles.join(", ")}</>
+          )}
+          {state.projection.skippedFiles.length > 0 && (
+            <> — skipped, not in the copy: {state.projection.skippedFiles.join(", ")}</>
           )}
         </div>
       )}
