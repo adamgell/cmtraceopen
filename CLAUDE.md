@@ -44,9 +44,17 @@ npx tsc --noEmit
 
 ### CI Checks (what PR gates enforce)
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+Seven jobs, all required:
+
+1. **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint rather than a formality: the parser crate must stay wasm32-compatible.
+2. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
+3. **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+4. **TypeScript Check** — `npx tsc --noEmit`.
+5. **E2E (Playwright)** — `npm run test:e2e`.
+6. **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+7. **Build** — macOS-arm64, Windows-x64, Linux-x64.
+
+Build the Lite edition locally with `npm run app:build:lite` (`--no-default-features`).
 
 ## Architecture
 
