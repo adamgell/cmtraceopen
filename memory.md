@@ -50,7 +50,7 @@ cargo bench                     # Criterion benchmarks (intune_pipeline)
 npx tsc --noEmit                # TypeScript check
 ```
 
-CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tauri build on macOS-arm64, Windows-x64, Linux-x64.
+CI gates: seven jobs — Source Quality (fmt, changed-range whitespace, wasm32 portability), Check & Test (Rust, both feature sets, the parser crate's tests and clippy, `cargo deny`, `cargo audit`), Rust MSRV 1.88 (Ubuntu and Windows), TypeScript Check, E2E (Playwright), ESP Diagnostics (Windows), Build (macos-arm64, Windows-x64, Linux-x64). The three-item shorthand that used to sit here came from `CLAUDE.md` and was understated in both places.
 
 ## Verified Checkpoints
 
