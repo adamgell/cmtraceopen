@@ -28,9 +28,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::updates::{
-    analyze_update_bundle, redacted_export_projection, SupplementalLogKind, UpdateEvidenceBundle,
-    UpdateSnapshot, UpdateSupplementalLog, EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX,
-    REDACTED, UPDATE_FINDING_PREFIX,
+    analyze_update_bundle, redacted_export_projection, SupplementalLogKind, UpdateChainState,
+    UpdateEvidenceBundle, UpdateSnapshot, UpdateSupplementalLog, EVIDENCE_FINDING_PREFIX,
+    POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneEvidenceRef,
@@ -105,7 +105,10 @@ fn build_bundle(scenario: &str, manifest: &Value) -> UpdateEvidenceBundle {
             family: artifact["family"].as_str().unwrap_or_default().to_owned(),
             status: coverage_status(capture_state),
             detail: artifact["detail"].as_str().map(str::to_owned),
-            observed_at_utc: artifact["capturedUtc"].as_str().unwrap_or_default().to_owned(),
+            observed_at_utc: artifact["capturedUtc"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             evidence: Vec::new(),
         });
 
@@ -134,7 +137,10 @@ fn build_bundle(scenario: &str, manifest: &Value) -> UpdateEvidenceBundle {
             "deviceFacts" => {
                 bundle.device = serde_json::from_value(load_json(&path)["device"].clone())
                     .unwrap_or_else(|error| {
-                        panic!("{}: device facts do not deserialize: {error}", path.display())
+                        panic!(
+                            "{}: device facts do not deserialize: {error}",
+                            path.display()
+                        )
                     });
             }
             other => panic!("{scenario}/{artifact_id}: unknown payloadKind {other:?}"),
@@ -179,7 +185,10 @@ fn supplemental_log(
                 event: None,
             },
             source_timestamp: None,
-            observed_at_utc: artifact["capturedUtc"].as_str().unwrap_or_default().to_owned(),
+            observed_at_utc: artifact["capturedUtc"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             sensitivity: IntuneSensitivity::Sensitive,
             parse_state: IntuneParseState::Parsed,
             access_state: if capture_state == "capped" {
@@ -221,7 +230,10 @@ fn analyze(scenario: &str) -> (UpdateSnapshot, Value, Value) {
 fn the_corpus_holds_exactly_the_required_fixture_matrix() {
     assert_eq!(
         scenario_names(&corpus_root(CORPUS)),
-        SCENARIOS.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>(),
+        SCENARIOS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>(),
         "the fixture matrix of issue #365 is pinned; add or remove a scenario in both places"
     );
 }
@@ -293,7 +305,10 @@ fn every_scenario_reduces_to_its_stated_contract() {
 
 fn assert_policy_chain(scenario: &str, actual: &Value, expected: &Value) {
     let chain = &actual["policyChain"];
-    assert_eq!(chain["state"], expected["state"], "{scenario}: policy state");
+    assert_eq!(
+        chain["state"], expected["state"],
+        "{scenario}: policy state"
+    );
     assert_eq!(
         chain["workloadOwner"], expected["workloadOwner"],
         "{scenario}: workload owner"
@@ -307,14 +322,19 @@ fn assert_policy_chain(scenario: &str, actual: &Value, expected: &Value) {
         // A `None` on the Rust side is skipped in the serialized form, so an
         // absent key and a JSON null both mean "not known".
         let observed = chain["effectiveSource"].get(field).unwrap_or(&Value::Null);
-        let want = expected["effectiveSource"].get(field).unwrap_or(&Value::Null);
+        let want = expected["effectiveSource"]
+            .get(field)
+            .unwrap_or(&Value::Null);
         assert_eq!(observed, want, "{scenario}: effectiveSource.{field}");
     }
 }
 
 fn assert_update_chain(scenario: &str, actual: &Value, expected: &Value) {
     let chain = &actual["updateChain"];
-    assert_eq!(chain["state"], expected["state"], "{scenario}: update state");
+    assert_eq!(
+        chain["state"], expected["state"],
+        "{scenario}: update state"
+    );
     assert_eq!(
         chain.get("rebootPending").unwrap_or(&Value::Null),
         expected.get("rebootPending").unwrap_or(&Value::Null),
@@ -631,8 +651,15 @@ fn the_serialized_snapshot_keeps_its_documented_camel_case_shape() {
     ] {
         assert!(value.get(key).is_some(), "snapshot is missing key {key:?}");
     }
-    for key in ["state", "workloadOwner", "effectiveSource", "observations", "conflicts",
-                "evidence", "confidence"] {
+    for key in [
+        "state",
+        "workloadOwner",
+        "effectiveSource",
+        "observations",
+        "conflicts",
+        "evidence",
+        "confidence",
+    ] {
         assert!(
             value["policyChain"].get(key).is_some(),
             "policyChain is missing key {key:?}"
@@ -693,8 +720,8 @@ fn the_export_removes_the_tenant_shaped_values_the_privacy_scenario_plants() {
         "{scenario} must plant a tenant-shaped value for the export to remove"
     );
 
-    let exported = serde_json::to_string(&redacted_export_projection(&snapshot))
-        .expect("export serializes");
+    let exported =
+        serde_json::to_string(&redacted_export_projection(&snapshot)).expect("export serializes");
     assert!(
         !exported.contains("wsus.example.invalid"),
         "{scenario}: the planted value survived the export"
@@ -730,5 +757,79 @@ fn re_reducing_the_same_bundle_produces_the_same_snapshot() {
         let first = serde_json::to_string(&analyze_update_bundle(&bundle)).unwrap();
         let second = serde_json::to_string(&analyze_update_bundle(&bundle)).unwrap();
         assert_eq!(first, second, "{scenario}: reduction is not deterministic");
+    }
+}
+
+/// A record the adapter could not parse, or read without permission, is a
+/// coverage state rather than a reading.
+///
+/// An earlier revision of this leaf classified such records like any other, so a
+/// malformed, access-denied install could establish an `Installed` transaction
+/// at High confidence. The excluded records stay visible instead of vanishing:
+/// the snapshot counts them under its input coverage.
+#[test]
+fn a_record_that_could_not_be_read_never_establishes_a_state() {
+    let scenario = "policy-applied-update-installed-reboot-complete";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut bundle = build_bundle(scenario, &manifest);
+    assert!(
+        !bundle.events.is_empty(),
+        "{scenario}: this test needs client events to exclude"
+    );
+    for event in &mut bundle.events {
+        event.context.parse_state = IntuneParseState::Malformed;
+        event.context.access_state = IntuneAccessState::PermissionDenied;
+    }
+
+    let snapshot = analyze_update_bundle(&bundle);
+    assert_eq!(
+        snapshot.update_chain.state,
+        UpdateChainState::NotObserved,
+        "{scenario}: unreadable records must not establish an update state"
+    );
+    assert!(
+        snapshot.input_coverage.unusable_records > 0,
+        "{scenario}: the excluded records must stay visible as coverage"
+    );
+    assert!(
+        snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id.ends_with("/unusable-records")),
+        "{scenario}: excluding records must produce a finding that says so"
+    );
+}
+
+/// The snapshot is a function of the readings, not of the order the caller
+/// happened to collect them in.
+///
+/// `re_reducing_the_same_bundle_produces_the_same_snapshot` pins repeatability
+/// over one input order; this pins invariance across orders. The terminal state
+/// is the *last* decisive update-client reading, so "last" has to mean last in
+/// time -- resolved from the record's own timestamp -- rather than last in the
+/// order the artifact happened to be listed. An independent audit of an earlier
+/// revision of this leaf reproduced the opposite: reversing the same records
+/// moved a transaction from `Installed / contradiction=true` to
+/// `InProgress / false` and changed the selected scan source.
+#[test]
+fn reversal_of_the_same_bundle_produces_the_same_snapshot() {
+    for scenario in SCENARIOS {
+        let root = scenario_root(scenario);
+        let manifest = load_json(&root.join("manifest.json"));
+        let forward = build_bundle(scenario, &manifest);
+        let mut reversed = forward.clone();
+        reversed.events.reverse();
+        reversed.setting_reports.reverse();
+        reversed.registry_facts.reverse();
+        reversed.service_reports.reverse();
+        reversed.supplemental_logs.reverse();
+
+        let left = serde_json::to_string(&analyze_update_bundle(&forward)).unwrap();
+        let right = serde_json::to_string(&analyze_update_bundle(&reversed)).unwrap();
+        assert_eq!(
+            left, right,
+            "{scenario}: reversing the bundle changed the snapshot"
+        );
     }
 }

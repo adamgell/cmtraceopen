@@ -153,7 +153,9 @@ mod tests {
         snapshot.policy_chain.observations.push(PolicyObservation {
             context: context(),
             signal: PolicySignal::Applied,
-            setting_uri: Some("./Device/Vendor/MSFT/Policy/Config/Update/UpdateServiceUrl".to_owned()),
+            setting_uri: Some(
+                "./Device/Vendor/MSFT/Policy/Config/Update/UpdateServiceUrl".to_owned(),
+            ),
             setting_id: None,
             policy_id: None,
             value: Some("http://wsus.example.invalid:8530".to_owned()),

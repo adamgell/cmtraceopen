@@ -106,11 +106,26 @@ pub const NAMED_NODE_URI: &str = "cmtraceNodeUri";
 /// other when an expectation is checked. Only `3DA21691` reliably means a
 /// managed server (WSUS or Configuration Manager).
 const UPDATE_SERVICE_IDS: [(&str, UpdateSource); 6] = [
-    ("9482f4b4-e343-43b6-b170-9a65bc822c77", UpdateSource::WindowsUpdate),
-    ("7971f918-a847-4430-9279-4a52d1efe18d", UpdateSource::MicrosoftUpdate),
-    ("855e8a7c-ecb4-4ca3-b045-1dfa50104289", UpdateSource::MicrosoftStore),
-    ("117cab2d-82b1-4b5a-a08c-4d62dbee7782", UpdateSource::MicrosoftStore),
-    ("8b24b027-1dee-babb-9a95-3517dfb9c552", UpdateSource::MicrosoftStore),
+    (
+        "9482f4b4-e343-43b6-b170-9a65bc822c77",
+        UpdateSource::WindowsUpdate,
+    ),
+    (
+        "7971f918-a847-4430-9279-4a52d1efe18d",
+        UpdateSource::MicrosoftUpdate,
+    ),
+    (
+        "855e8a7c-ecb4-4ca3-b045-1dfa50104289",
+        UpdateSource::MicrosoftStore,
+    ),
+    (
+        "117cab2d-82b1-4b5a-a08c-4d62dbee7782",
+        UpdateSource::MicrosoftStore,
+    ),
+    (
+        "8b24b027-1dee-babb-9a95-3517dfb9c552",
+        UpdateSource::MicrosoftStore,
+    ),
     ("3da21691-e39d-4da6-8a4b-b43877bcb1b7", UpdateSource::Wsus),
 ];
 
@@ -215,7 +230,8 @@ pub const WSUS_AU_POLICY_KEY: &str = r"SOFTWARE\Policies\Microsoft\Windows\Windo
 ///
 /// Microsoft is explicit that this is the *only* hive Intune writes for update
 /// rings, which is what makes it the authoritative policy-delivery location.
-pub const POLICY_MANAGER_UPDATE_KEY: &str = r"SOFTWARE\Microsoft\PolicyManager\current\device\Update";
+pub const POLICY_MANAGER_UPDATE_KEY: &str =
+    r"SOFTWARE\Microsoft\PolicyManager\current\device\Update";
 
 /// Value name that points at a WSUS server.
 pub const WSUS_SERVER_VALUE: &str = "WUServer";
@@ -247,10 +263,8 @@ fn kb_re() -> &'static Regex {
 fn guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r"(?i)\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?",
-        )
-        .unwrap()
+        Regex::new(r"(?i)\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?")
+            .unwrap()
     })
 }
 
@@ -291,20 +305,18 @@ pub fn error_code(raw: &str) -> Option<IntuneErrorCode> {
     if raw.is_empty() {
         return None;
     }
-    let (decimal, hex) = if let Some(stripped) = raw
-        .strip_prefix("0x")
-        .or_else(|| raw.strip_prefix("0X"))
-    {
-        match u32::from_str_radix(stripped, 16) {
-            Ok(value) => (Some(value as i32 as i64), Some(format!("0x{value:08X}"))),
-            Err(_) => (None, None),
-        }
-    } else {
-        match raw.parse::<i64>() {
-            Ok(value) => (Some(value), Some(format!("0x{:08X}", value as i32 as u32))),
-            Err(_) => (None, None),
-        }
-    };
+    let (decimal, hex) =
+        if let Some(stripped) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            match u32::from_str_radix(stripped, 16) {
+                Ok(value) => (Some(value as i32 as i64), Some(format!("0x{value:08X}"))),
+                Err(_) => (None, None),
+            }
+        } else {
+            match raw.parse::<i64>() {
+                Ok(value) => (Some(value), Some(format!("0x{:08X}", value as i32 as u32))),
+                Err(_) => (None, None),
+            }
+        };
     Some(IntuneErrorCode {
         raw: raw.to_owned(),
         decimal,
@@ -353,9 +365,7 @@ fn normalize_guid(raw: &str) -> String {
 }
 
 fn first_kb(text: &str) -> Option<String> {
-    kb_re()
-        .captures(text)
-        .map(|caps| format!("KB{}", &caps[1]))
+    kb_re().captures(text).map(|caps| format!("KB{}", &caps[1]))
 }
 
 // ── Policy chain classification ─────────────────────────────────────────────
@@ -399,10 +409,7 @@ pub fn classify_mdm_event(event: &NormalizedWindowsEvent) -> Option<PolicyObserv
     // Scope check: either an explicit node names Update, or the rendered message
     // does. With neither, the event is not attributable to update policy.
     let scoped = node.as_deref().is_some_and(is_update_policy_node)
-        || event
-            .message
-            .as_deref()
-            .is_some_and(is_update_policy_node);
+        || event.message.as_deref().is_some_and(is_update_policy_node);
     if !scoped {
         return None;
     }
@@ -636,7 +643,10 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> EventClassification {
         };
     }
 
-    if event.provider.eq_ignore_ascii_case(MDM_DIAGNOSTICS_PROVIDER) {
+    if event
+        .provider
+        .eq_ignore_ascii_case(MDM_DIAGNOSTICS_PROVIDER)
+    {
         return match classify_mdm_event(event) {
             Some(observation) => EventClassification::Policy(Box::new(observation)),
             None if mdm_event(event.event_id).is_some() => EventClassification::OutOfScope,
@@ -799,12 +809,7 @@ fn supplemental_observation_from_entry(
         Severity::Success => Some(UpdateOutcome::Succeeded),
         _ => None,
     };
-    supplemental_observation_from_text(
-        log,
-        &entry.message,
-        u64::from(entry.line_number),
-        severity,
-    )
+    supplemental_observation_from_text(log, &entry.message, u64::from(entry.line_number), severity)
 }
 
 /// Lift one supplemental line into an observation, or `None` when it names no
@@ -916,7 +921,11 @@ mod tests {
         }
     }
 
-    fn event(provider: &str, event_id: u32, named_data: Vec<IntuneNamedValue>) -> NormalizedWindowsEvent {
+    fn event(
+        provider: &str,
+        event_id: u32,
+        named_data: Vec<IntuneNamedValue>,
+    ) -> NormalizedWindowsEvent {
         NormalizedWindowsEvent {
             context: context("e1", "a1"),
             channel: format!("{provider}/Operational"),
@@ -927,6 +936,7 @@ mod tests {
             keywords: None,
             record_id: None,
             activity_id: None,
+            event_version: None,
             named_data,
             message: None,
         }
@@ -994,7 +1004,11 @@ mod tests {
 
     #[test]
     fn a_non_update_csp_failure_is_out_of_scope_for_this_leaf() {
-        let mut mdm = event(MDM_DIAGNOSTICS_PROVIDER, 404, vec![value("CSPURI", "./Device/Vendor/MSFT/BitLocker")]);
+        let mut mdm = event(
+            MDM_DIAGNOSTICS_PROVIDER,
+            404,
+            vec![value("CSPURI", "./Device/Vendor/MSFT/BitLocker")],
+        );
         mdm.level = NormalizedEventLevel::Error;
         assert_eq!(classify_event(&mdm), EventClassification::OutOfScope);
     }
@@ -1005,7 +1019,10 @@ mod tests {
             MDM_DIAGNOSTICS_PROVIDER,
             404,
             vec![
-                value("CSPURI", "./Device/Vendor/MSFT/Policy/Config/Update/DeferQualityUpdatesPeriodInDays"),
+                value(
+                    "CSPURI",
+                    "./Device/Vendor/MSFT/Policy/Config/Update/DeferQualityUpdatesPeriodInDays",
+                ),
                 value("Result", "0x82B00003"),
             ],
         );

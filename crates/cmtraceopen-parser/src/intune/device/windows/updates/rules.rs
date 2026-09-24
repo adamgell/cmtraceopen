@@ -59,6 +59,7 @@ pub fn derive_findings(snapshot: &UpdateSnapshot) -> Vec<IntuneFinding> {
 
     push_order_contradiction(snapshot, &mut findings);
     push_unknown_schema(snapshot, &mut findings);
+    push_unusable_records(snapshot, &mut findings);
     push_coverage_gaps(snapshot, &mut findings);
 
     findings
@@ -304,7 +305,10 @@ fn push_effective_source_mismatch(snapshot: &UpdateSnapshot, findings: &mut Vec<
     }
     let (Some(expected), Some(effective)) = (
         assessment.expected.as_ref(),
-        assessment.scanned.as_ref().or(assessment.configured.as_ref()),
+        assessment
+            .scanned
+            .as_ref()
+            .or(assessment.configured.as_ref()),
     ) else {
         return;
     };
@@ -732,6 +736,30 @@ fn push_unknown_schema(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFindi
             parts.join("; ")
         ),
         &["Update the analyzer's event tables, or supply the phase through the documented adapter keys"],
+        coverage.evidence.clone(),
+        Vec::new(),
+    ));
+}
+
+/// Records nobody could read are a gap in the evidence, not a silent absence.
+fn push_unusable_records(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFinding>) {
+    let coverage = &snapshot.input_coverage;
+    if coverage.unusable_records == 0 {
+        return;
+    }
+    findings.push(finding(
+        format!("{EVIDENCE_FINDING_PREFIX}/unusable-records"),
+        IntuneFindingSeverity::Warning,
+        IntuneFindingConfidence::High,
+        "Captured records could not be read",
+        format!(
+            "{} captured record(s) could not be parsed, or could not be read, so they are excluded from the analysis instead of being treated as evidence. Any conclusion that depends on them is incomplete.",
+            coverage.unusable_records
+        ),
+        &[
+            "Re-collect the named evidence with the permissions the source requires",
+            "Confirm the capture completed before the device stopped reporting",
+        ],
         coverage.evidence.clone(),
         Vec::new(),
     ));

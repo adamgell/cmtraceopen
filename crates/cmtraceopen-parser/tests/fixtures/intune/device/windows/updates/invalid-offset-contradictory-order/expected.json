@@ -31,13 +31,13 @@
     }
   },
   "updateChain": {
-    "state": "installed",
+    "state": "inProgress",
     "rebootPending": false,
     "unkeyedObservationCount": 0,
     "transactions": [
       {
         "key": "KB5000011.1",
-        "state": "installed",
+        "state": "inProgress",
         "confidence": "low",
         "orderContradiction": true,
         "serviceState": null,
@@ -61,22 +61,6 @@
         {
           "evidenceId": "mdm-814",
           "sourceArtifactId": "mdm-admin-events"
-        }
-      ],
-      "coverageGapIds": []
-    },
-    {
-      "findingId": "intune/windows/updates/update/installed/KB5000011.1",
-      "severity": "info",
-      "confidence": "low",
-      "evidence": [
-        {
-          "evidenceId": "wu-19",
-          "sourceArtifactId": "wu-client-events"
-        },
-        {
-          "evidenceId": "wu-44",
-          "sourceArtifactId": "wu-client-events"
         }
       ],
       "coverageGapIds": []
@@ -109,6 +93,7 @@
   ],
   "assertions": [
     "an impossible phase ordering caps the transaction's confidence",
+    "the terminal state follows the records' own timestamps, not the order the artifact listed them in: the install at 01:00 is earlier, so the download that started at 02:00 is the client's last statement and no install is claimed",
     "a parseFailed artifact keeps its bytes and reports parseFailed coverage"
   ]
 }

@@ -10,12 +10,14 @@
 //! Nothing here reads a clock, a file, or a registry. Every input arrives in the
 //! bundle.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 
 use chrono::{DateTime, Utc};
 
 use crate::intune::evidence::{
-    IntuneArtifactCoverage, IntuneEvidenceRef, IntuneFindingConfidence, IntuneTimestampKind,
+    IntuneAccessState, IntuneArtifactCoverage, IntuneEvidenceRef, IntuneFindingConfidence,
+    IntuneObservationContext, IntuneParseState, IntuneTimestampKind,
 };
 
 use super::models::*;
@@ -34,6 +36,10 @@ pub fn reduce_bundle(bundle: &UpdateEvidenceBundle) -> UpdateSnapshot {
     let mut unmapped_ids = BTreeSet::new();
 
     for event in &bundle.events {
+        if !record_can_be_read(&event.context) {
+            exclude_unreadable(&mut input_coverage, &event.context);
+            continue;
+        }
         match classify_event(event) {
             EventClassification::Policy(observation) => policy_observations.push(*observation),
             EventClassification::Update(observation) => update_observations.push(*observation),
@@ -56,24 +62,49 @@ pub fn reduce_bundle(bundle: &UpdateEvidenceBundle) -> UpdateSnapshot {
     }
 
     for report in &bundle.setting_reports {
+        if !record_can_be_read(&report.context) {
+            exclude_unreadable(&mut input_coverage, &report.context);
+            continue;
+        }
         if let Some(observation) = classify_setting_report(report) {
             policy_observations.push(observation);
         }
     }
     for fact in &bundle.registry_facts {
+        if !record_can_be_read(&fact.context) {
+            exclude_unreadable(&mut input_coverage, &fact.context);
+            continue;
+        }
         if let Some(observation) = classify_registry_fact(fact) {
             policy_observations.push(observation);
         }
     }
     for log in &bundle.supplemental_logs {
+        if !record_can_be_read(&log.context) {
+            exclude_unreadable(&mut input_coverage, &log.context);
+            continue;
+        }
         let reading = read_supplemental(log);
         input_coverage.supplemental_parse_errors += reading.parse_errors;
         update_observations.extend(reading.observations);
     }
 
+    for report in &bundle.service_reports {
+        // Read by `build_transaction`, which skips these; counting them here is
+        // what keeps the exclusion visible in the snapshot.
+        if !record_can_be_read(&report.context) {
+            exclude_unreadable(&mut input_coverage, &report.context);
+        }
+    }
+
     input_coverage.unmapped_event_id_list = unmapped_ids.into_iter().collect();
     input_coverage.unknown_providers = unknown_providers.into_iter().collect();
     sort_evidence(&mut input_coverage.evidence);
+
+    // Both chains read their readings in canonical order, never in the order
+    // the caller happened to list the artifacts in.
+    sort_policy_readings(&mut policy_observations);
+    sort_readings(&mut update_observations);
 
     // The policy chain needs the update client's own scanned service id to
     // complete its source assessment, and nothing else. Passing only the
@@ -110,10 +141,107 @@ fn sorted_coverage(coverage: &[IntuneArtifactCoverage]) -> Vec<IntuneArtifactCov
     sorted
 }
 
+/// Whether a captured record may become evidence.
+///
+/// A record the adapter could not parse, or could not read at all, is a coverage
+/// state rather than a reading. Classifying it anyway is what let a malformed,
+/// access-denied install establish an `Installed` transaction at High confidence
+/// in an earlier revision of this leaf.
+///
+/// `Capped` stays readable: the records a truncated capture did contain are real
+/// readings, and the truncation is on the artifact's own coverage entry where a
+/// conclusion that depends on completeness can see it.
+fn record_can_be_read(context: &IntuneObservationContext) -> bool {
+    context.parse_state == IntuneParseState::Parsed
+        && matches!(
+            context.access_state,
+            IntuneAccessState::Available | IntuneAccessState::Capped
+        )
+}
+
+/// Count an excluded record and keep its reference, so the exclusion shows up
+/// in the snapshot rather than looking like evidence that was never captured.
+fn exclude_unreadable(coverage: &mut UpdateInputCoverage, context: &IntuneObservationContext) {
+    coverage.unusable_records += 1;
+    coverage.evidence.push(context.evidence_ref.clone());
+}
+
 /// Sort and deduplicate evidence so a snapshot never depends on input order.
 fn sort_evidence(evidence: &mut Vec<IntuneEvidenceRef>) {
     evidence.sort();
     evidence.dedup();
+}
+
+/// Put the readings of one pass in their canonical order.
+///
+/// The terminal state is the *last* decisive reading, so "last" has to mean
+/// last in time. Ordering by the record's own timestamp, instead of trusting
+/// the order a caller listed artifacts in, is what makes a snapshot a function
+/// of the evidence rather than of the collection order.
+///
+/// A reading with no usable timestamp sorts first. That is not cosmetic: an
+/// unplaceable reading must not become the terminal one merely because it was
+/// handed over last, and an earlier revision of this leaf did exactly that --
+/// reversing one bundle changed a transaction's state and which scan source was
+/// selected.
+fn sort_readings(readings: &mut [UpdateObservation]) {
+    readings.sort_by(|left, right| {
+        compare_contexts(&left.context, &right.context)
+            .then_with(|| left.phase.cmp(&right.phase))
+            .then_with(|| left.outcome.cmp(&right.outcome))
+    });
+}
+
+/// Canonical order for policy readings; see [`sort_readings`].
+///
+/// The source assessment reads the last `UseWUServer` statement and the first
+/// policy that names a source, so an unsorted vector let the caller's listing
+/// order decide which source the device is assessed as being configured for.
+fn sort_policy_readings(readings: &mut [PolicyObservation]) {
+    readings.sort_by(|left, right| {
+        compare_contexts(&left.context, &right.context)
+            .then_with(|| left.signal.cmp(&right.signal))
+            .then_with(|| left.setting_uri.cmp(&right.setting_uri))
+            .then_with(|| left.setting_id.cmp(&right.setting_id))
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+}
+
+/// Order two readings by the record they came from.
+///
+/// One rule for both chains, so "which record comes first" has a single
+/// definition. Ties break on the evidence pointer, then the line, then the
+/// record number, so two runs over the same bytes agree even when two records
+/// share an instant.
+fn compare_contexts(left: &IntuneObservationContext, right: &IntuneObservationContext) -> Ordering {
+    context_instant(left)
+        .cmp(&context_instant(right))
+        .then_with(|| left.evidence_ref.cmp(&right.evidence_ref))
+        .then_with(|| {
+            left.provenance
+                .line_number
+                .cmp(&right.provenance.line_number)
+        })
+        .then_with(|| {
+            left.provenance
+                .record_number
+                .cmp(&right.provenance.record_number)
+        })
+}
+
+/// The instant a reading places itself at, or `None` when it cannot be placed.
+///
+/// A timestamp the adapter marked invalid counts as unplaceable, which is the
+/// same reading `has_order_contradiction` takes of it.
+fn context_instant(context: &IntuneObservationContext) -> Option<DateTime<Utc>> {
+    let timestamp = context.source_timestamp.as_ref()?;
+    if timestamp.kind == IntuneTimestampKind::Invalid {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(timestamp.normalized_utc.as_deref()?)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc))
 }
 
 // ── Policy chain ────────────────────────────────────────────────────────────
@@ -236,11 +364,7 @@ fn collect_conflicts(observations: &[PolicyObservation]) -> Vec<PolicyConflict> 
                 existing_ids.extend(ids);
                 evidence.push(observation.context.evidence_ref.clone());
             }
-            None => nodes.push((
-                node,
-                ids,
-                vec![observation.context.evidence_ref.clone()],
-            )),
+            None => nodes.push((node, ids, vec![observation.context.evidence_ref.clone()])),
         }
     }
 
@@ -385,7 +509,7 @@ fn build_update_chain(
         .into_iter()
         .map(|(key, group)| build_transaction(key, &group, &bundle.service_reports))
         .collect();
-    transactions.sort_by(|left, right| left.key.label().cmp(&right.key.label()));
+    transactions.sort_by_key(|transaction| transaction.key.label());
 
     let device_signals = device_level_signals(&unkeyed);
     let state = chain_state(&transactions, &device_signals);
@@ -492,6 +616,9 @@ fn build_transaction(
     let mut service_state = None;
     let mut service_evidence = Vec::new();
     for report in service_reports {
+        if !record_can_be_read(&report.context) {
+            continue;
+        }
         if key.joins(&report.key) {
             if service_state.is_none() {
                 service_state = Some(report.state.clone());
@@ -545,7 +672,9 @@ fn transaction_state(observations: &[UpdateObservation]) -> UpdateTransactionSta
             (UpdatePhase::Applicability, UpdateOutcome::NotApplicable) => {
                 UpdateTransactionState::NoApplicableUpdate
             }
-            (UpdatePhase::Download, UpdateOutcome::Failed) => UpdateTransactionState::DownloadFailed,
+            (UpdatePhase::Download, UpdateOutcome::Failed) => {
+                UpdateTransactionState::DownloadFailed
+            }
             (UpdatePhase::Install, UpdateOutcome::Failed) => UpdateTransactionState::InstallFailed,
             (UpdatePhase::Install, UpdateOutcome::Succeeded) => UpdateTransactionState::Installed,
             (UpdatePhase::Reboot, UpdateOutcome::Pending) => UpdateTransactionState::RebootPending,
@@ -598,6 +727,12 @@ fn phase_rank(phase: UpdatePhase) -> u8 {
 /// (`IntuneTimestampKind::Invalid`), and a later phase stamped earlier than an
 /// earlier phase of the same update. Both mean the ordering evidence is unusable,
 /// which caps the transaction's confidence rather than being silently ignored.
+///
+/// The pair check is symmetric by construction: every ordered pair is compared,
+/// so the answer cannot depend on which of the two records the caller listed
+/// first. Comparing only *later* vector positions was the bug -- it detected
+/// `install@01:00` after `download@02:00` but not the same two records in the
+/// other order, so a bundle's ordering evidence was decided by its listing.
 fn has_order_contradiction(observations: &[UpdateObservation]) -> bool {
     let mut stamped: Vec<(u8, DateTime<Utc>)> = Vec::new();
 
@@ -616,17 +751,13 @@ fn has_order_contradiction(observations: &[UpdateObservation]) -> bool {
             // the adapter claimed a normalization it did not perform.
             return true;
         };
-        stamped.push((
-            phase_rank(observation.phase),
-            parsed.with_timezone(&Utc),
-        ));
+        stamped.push((phase_rank(observation.phase), parsed.with_timezone(&Utc)));
     }
 
-    stamped.iter().enumerate().any(|(index, (rank, at))| {
+    stamped.iter().any(|(rank, at)| {
         stamped
             .iter()
-            .skip(index + 1)
-            .any(|(later_rank, later_at)| later_rank > rank && later_at < at)
+            .any(|(other_rank, other_at)| other_rank > rank && other_at < at)
     })
 }
 
@@ -635,10 +766,7 @@ fn has_order_contradiction(observations: &[UpdateObservation]) -> bool {
 /// Worst-first here, unlike within a transaction: across several updates there
 /// is no "latest" to prefer, and the most actionable outcome is the one an
 /// administrator needs to see.
-fn chain_state(
-    transactions: &[UpdateTransaction],
-    signals: &DeviceSignals,
-) -> UpdateChainState {
+fn chain_state(transactions: &[UpdateTransaction], signals: &DeviceSignals) -> UpdateChainState {
     if signals.scan_failed.is_some() {
         return UpdateChainState::ScanFailed;
     }
@@ -649,7 +777,10 @@ fn chain_state(
         .collect();
 
     for (candidate, chain) in [
-        (UpdateTransactionState::ScanFailed, UpdateChainState::ScanFailed),
+        (
+            UpdateTransactionState::ScanFailed,
+            UpdateChainState::ScanFailed,
+        ),
         (
             UpdateTransactionState::InstallFailed,
             UpdateChainState::InstallFailed,
@@ -663,8 +794,14 @@ fn chain_state(
             UpdateTransactionState::RebootPending,
             UpdateChainState::RebootPending,
         ),
-        (UpdateTransactionState::InProgress, UpdateChainState::InProgress),
-        (UpdateTransactionState::Installed, UpdateChainState::Installed),
+        (
+            UpdateTransactionState::InProgress,
+            UpdateChainState::InProgress,
+        ),
+        (
+            UpdateTransactionState::Installed,
+            UpdateChainState::Installed,
+        ),
         (
             UpdateTransactionState::NoApplicableUpdate,
             UpdateChainState::NoApplicableUpdate,

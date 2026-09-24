@@ -657,6 +657,13 @@ pub struct UpdateInputCoverage {
     pub unknown_providers: Vec<String>,
     /// Supplemental log lines the generic parsers could not read as records.
     pub supplemental_parse_errors: u32,
+    /// Records excluded before classification because nobody could read them.
+    ///
+    /// A record the adapter could not parse, or could not read at all, is a
+    /// coverage state rather than a reading. Counting it here keeps the
+    /// exclusion visible instead of letting the evidence look absent.
+    #[serde(default)]
+    pub unusable_records: u32,
     /// Evidence refs for the unclassified records, so a finding can cite them.
     pub evidence: Vec<IntuneEvidenceRef>,
 }
@@ -783,7 +790,10 @@ mod tests {
     #[test]
     fn source_enum_preserves_unknown_wire_values() {
         let decoded: UpdateSource = serde_json::from_str("\"someFutureSource\"").unwrap();
-        assert_eq!(decoded, UpdateSource::Unknown("someFutureSource".to_owned()));
+        assert_eq!(
+            decoded,
+            UpdateSource::Unknown("someFutureSource".to_owned())
+        );
         assert_eq!(
             serde_json::to_string(&decoded).unwrap(),
             "\"someFutureSource\""
