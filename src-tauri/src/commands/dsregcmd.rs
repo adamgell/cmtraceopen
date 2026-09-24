@@ -536,12 +536,26 @@ fn project_capture_bundle_impl(
     }
 
     let capture_path = find_bundle_capture(root)?;
-    let capture = std::fs::read_to_string(&capture_path).map_err(|error| {
+    // The capture is decoded from bytes rather than read as UTF-8: a bundle
+    // this build did not write may hold a UTF-16 capture, and the artifacts
+    // beside it already take that path.
+    let capture_bytes = std::fs::read(&capture_path).map_err(|error| {
         crate::error::AppError::Internal(format!(
             "Failed to read the capture '{}': {error}",
             capture_path.display()
         ))
     })?;
+    let capture = match std::str::from_utf8(&capture_bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => decode_utf16(&capture_bytes)
+            .map(|(text, _)| text)
+            .ok_or_else(|| {
+                crate::error::AppError::InvalidInput(format!(
+                    "the capture '{}' is not text this build can read",
+                    capture_path.display()
+                ))
+            })?,
+    };
     let literals = bundle_literals(root, &capture);
 
     let destination = shareable_sibling(root);
@@ -1758,6 +1772,28 @@ mod tests {
             !scp.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
             "the Entra id survives: {scp}"
         );
+    }
+
+    /// A capture this build did not write, in UTF-16, is still projected.
+    ///
+    /// The bundle is normally written by this application as UTF-8, but the
+    /// command accepts any bundle root, and `fs::read_to_string` fails outright on
+    /// a UTF-16 file rather than projecting it.
+    #[test]
+    fn a_utf16_capture_is_read_and_projected() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in " DomainName : contoso.example\n".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(command_output.join("dsregcmd-status.txt"), &bytes).expect("write capture");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        assert!(projection.projected_files >= 1, "{projection:?}");
     }
 
     fn write_projection_bundle(root: &std::path::Path) {
