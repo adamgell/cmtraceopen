@@ -112,6 +112,58 @@ beforeEach(() => {
 });
 
 describe("DeploymentWorkspace fixtures", () => {
+  it("DEP-006 does not report an empty folder when a bound is why it is empty", () => {
+    useDeploymentStore.setState({
+      phase: "empty",
+      result: {
+        ...readyResult(),
+        files: [],
+        totalFiles: 0,
+        succeeded: 0,
+        failed: 0,
+        deferred: 0,
+        unknown: 0,
+        limitations: ["Symlinked directory was not scanned: C:\\Logs\\link"],
+      },
+      errorMessage: null,
+      expandedErrorIndex: null,
+    });
+    render(<DeploymentWorkspace />);
+
+    // "No logs found" would be false: logs exist, the walk did not reach them.
+    expect(
+      screen.getByText(
+        "No deployment logs were found in the paths that were scanned.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No deployment logs found in this folder.")).toBeNull();
+    expect(
+      screen.getByText("Symlinked directory was not scanned: C:\\Logs\\link"),
+    ).toBeInTheDocument();
+  });
+
+  it("DEP-007 still reports a genuinely empty folder as empty", () => {
+    useDeploymentStore.setState({
+      phase: "empty",
+      result: {
+        ...readyResult(),
+        files: [],
+        totalFiles: 0,
+        succeeded: 0,
+        failed: 0,
+        deferred: 0,
+        unknown: 0,
+        limitations: [],
+      },
+      errorMessage: null,
+      expandedErrorIndex: null,
+    });
+    render(<DeploymentWorkspace />);
+
+    expect(screen.getByText("No deployment logs found in this folder.")).toBeInTheDocument();
+    expect(screen.queryByText("Scan incomplete")).toBeNull();
+  });
+
   it("DEP-004 states the scan was bounded when the backend reports a limit", () => {
     seedReadyWith({
       limitations: ["Directory depth budget of 32 was exhausted."],
