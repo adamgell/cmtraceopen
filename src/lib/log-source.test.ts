@@ -318,6 +318,56 @@ describe("switchToTab", () => {
     await expect(pendingLoad).resolves.toBeNull();
   });
 
+  it("adopts a known file source as the active source instead of listing it", async () => {
+    // #657: the panel header kept the previously loaded source because the
+    // known file source was routed through the folder lane, whose listing call
+    // refuses a file source and the refusal was swallowed.
+    const cbsSource: LogSource = {
+      kind: "known",
+      sourceId: "windows-cbs-log",
+      defaultPath: "C:\\Windows\\Logs\\CBS\\CBS.log",
+      pathKind: "file",
+    };
+    const dismSource: LogSource = {
+      kind: "known",
+      sourceId: "windows-dism-log",
+      defaultPath: "C:\\Windows\\Logs\\DISM\\dism.log",
+      pathKind: "file",
+    };
+    commands.listLogSourceFolder.mockImplementation((source: LogSource) =>
+      source.kind === "known" && source.pathKind === "file"
+        ? Promise.reject(
+            new Error(
+              `Source kind '${source.kind}' does not resolve to a single file path.`
+            )
+          )
+        : Promise.resolve({
+            sourceKind: "folder",
+            source: folderSource,
+            entries: [],
+            bundleMetadata: null,
+          })
+    );
+    setCachedTabSnapshot(cbsSource.defaultPath, snapshotFor(cbsSource.defaultPath, "CBS line"));
+    useLogStore.setState({
+      openFilePath: dismSource.defaultPath,
+      selectedSourceFilePath: dismSource.defaultPath,
+      activeSource: dismSource,
+      sourceEntries: [],
+      bundleMetadata: null,
+    });
+
+    await switchToTab(cbsSource.defaultPath, {
+      sourceKind: "known",
+      sourcePath: cbsSource.defaultPath,
+      source: cbsSource,
+    });
+
+    expect(useLogStore.getState().activeSource).toEqual(cbsSource);
+    expect(useLogStore.getState().openFilePath).toBe(cbsSource.defaultPath);
+    expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
+  });
+
   it("restores a cached migrated tab as a standalone file", async () => {
     setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
     useLogStore.setState({
