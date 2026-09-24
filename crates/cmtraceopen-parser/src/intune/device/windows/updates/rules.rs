@@ -729,12 +729,11 @@ fn push_reporting_mismatch(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneF
 
 /// Render a service-reported state for a summary.
 ///
-/// Same rule as [`source_text`]: an unrecognized vocabulary value is reported as
-/// unrecognized rather than echoed into prose.
+/// No unrecognized-value branch: the reporting-mismatch rule treats an
+/// unrecognized service vocabulary value as agreement, so it never reaches this
+/// renderer and an arm for it would be unreachable. The value stays visible in
+/// the field, where the export masks it.
 fn source_text_for_service(state: &ServiceReportedState) -> String {
-    if matches!(state, ServiceReportedState::Unknown(_)) {
-        return "an unrecognized service state".to_owned();
-    }
     serde_json::to_value(state)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))

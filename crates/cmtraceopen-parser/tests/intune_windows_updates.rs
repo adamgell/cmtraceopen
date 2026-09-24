@@ -1239,3 +1239,35 @@ fn the_conflict_finding_does_not_echo_the_policy_ids_it_masks() {
         "the node is what an operator acts on and stays: {prose}"
     );
 }
+
+/// A finding must not echo an unrecognized vocabulary value either.
+///
+/// The expected source is caller-supplied, so an expectation this build cannot
+/// read reaches the mismatch finding's prose. It is named as unrecognized there
+/// rather than echoed, for the same reason the field is masked in the export.
+#[test]
+fn the_mismatch_finding_does_not_echo_an_unrecognized_expected_source() {
+    let scenario = "effective-wsus-source-when-wufb-expected";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut bundle = build_bundle(scenario, &manifest);
+    let planted = "expectation.example.invalid";
+    bundle.device.expected_update_source = Some(UpdateSource::Unknown(planted.to_owned()));
+
+    let snapshot = analyze_update_bundle(&bundle);
+    let prose = snapshot
+        .findings
+        .iter()
+        .map(|finding| finding.summary.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(
+        prose.contains("an unrecognized update source"),
+        "the mismatch finding names the source: {prose}"
+    );
+    assert!(
+        !prose.contains(planted),
+        "a summary echoed an unrecognized vocabulary value: {prose}"
+    );
+}
