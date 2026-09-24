@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **CodeRabbit reviews are advisory again (#742)**: `request_changes_workflow` was `true`, so every review submitted as CHANGES_REQUESTED and GitHub treated it as a block. With `main` unprotected, that state alone held 39 pull requests whose checks all passed - 14 of them against a review the branch had already answered, which CodeRabbit does not re-read. Reviews comment again, as the configuration's own note describes, and the CI gates stay the gate.
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 
