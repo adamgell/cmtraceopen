@@ -37,6 +37,22 @@ describe("buildRegistryTree", () => {
     expect(paths.filter((p) => p.toLowerCase() === "hklm").length).toBe(1);
   });
 
+  it("adopts the displayed casing of the parent a key attaches to", () => {
+    // The second key arrives with different casing, so it merges into the first
+    // key's subtree. A node that keeps its own raw casing does not prefix-match
+    // the parent it hangs from, which strands whatever checks that.
+    const tree = buildRegistryTree([K("HKLM\\Software\\A"), K("hklm\\software\\B")]);
+    const paths = allPaths(tree);
+
+    expect(paths).toContain("HKLM\\Software\\B");
+    expect(paths).not.toContain("hklm\\software\\B");
+
+    const parent = tree[0].children[0];
+    const child = parent.children.find((c) => c.name === "B")!;
+    const parentPrefix = parent.fullPath + "\\";
+    expect(child.fullPath.startsWith(parentPrefix)).toBe(true);
+  });
+
   it("displays the first-seen casing rather than imposing lowercase", () => {
     const tree = buildRegistryTree([K("HKLM\\Software\\A"), K("hklm\\software\\a")]);
     expect(allPaths(tree)).toContain("HKLM\\Software\\A");

@@ -32,9 +32,14 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
         continue;
       }
 
+      // A child hangs from the node it matched, so its displayed path follows
+      // that node's casing instead of the casing this key happened to arrive
+      // with. Anything that prefix-matches a path against its parent depends on
+      // it — collapsing a subtree and taking the selection with it, for one.
+      const parent = j === 0 ? null : nodeMap.get(parentPath.toLowerCase());
       const node: RegistryTreeNode = {
         name: parts[j],
-        fullPath: currentPath,
+        fullPath: parent ? `${parent.fullPath}\\${parts[j]}` : currentPath,
         children: [],
         keyIndex: j === parts.length - 1 ? i : null,
       };
@@ -42,11 +47,8 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
 
       if (j === 0) {
         roots.push(node);
-      } else {
-        const parent = nodeMap.get(parentPath.toLowerCase());
-        if (parent) {
-          parent.children.push(node);
-        }
+      } else if (parent) {
+        parent.children.push(node);
       }
     }
   }
