@@ -553,17 +553,21 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
 
     // Phase 3: Active diagnostics (connectivity + SCP)
     let evidence_connectivity = bundle_path.join("evidence").join("connectivity");
-    if fs::create_dir_all(&evidence_connectivity).is_ok() {
-        simulate_bundle_io_delay("capture-active-diagnostics");
-        let active_evidence = connectivity::run_active_diagnostics();
-        if let Ok(json) = serde_json::to_string_pretty(&active_evidence.connectivity_tests) {
-            let _ = fs::write(evidence_connectivity.join("endpoint-tests.json"), json);
-        }
-        if let Some(ref scp) = active_evidence.scp_query {
-            if let Ok(json) = serde_json::to_string_pretty(scp) {
-                let _ = fs::write(evidence_connectivity.join("scp-query.json"), json);
-            }
-        }
+    fs::create_dir_all(&evidence_connectivity).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to create the live capture's connectivity evidence directory '{}': {}",
+            evidence_connectivity.display(),
+            error
+        ))
+    })?;
+    simulate_bundle_io_delay("capture-active-diagnostics");
+    let active_evidence = connectivity::run_active_diagnostics();
+    write_evidence_json(
+        &evidence_connectivity.join("endpoint-tests.json"),
+        &active_evidence.connectivity_tests,
+    )?;
+    if let Some(ref scp) = active_evidence.scp_query {
+        write_evidence_json(&evidence_connectivity.join("scp-query.json"), scp)?;
     }
 
     // Phase 4: Event log collection
@@ -571,29 +575,63 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     let event_log_analysis = crate::dsregcmd::event_logs::collect_dsregcmd_event_logs();
     if let Some(ref analysis) = event_log_analysis {
         let evidence_event_logs = bundle_path.join("evidence").join("event-logs");
-        if fs::create_dir_all(&evidence_event_logs).is_ok() {
-            if let Ok(json) = serde_json::to_string_pretty(analysis) {
-                let _ = fs::write(evidence_event_logs.join("dsregcmd-events.json"), json);
-            }
-        }
+        fs::create_dir_all(&evidence_event_logs).map_err(|error| {
+            AppError::Internal(format!(
+                "Failed to create the live capture's event-log evidence directory '{}': {}",
+                evidence_event_logs.display(),
+                error
+            ))
+        })?;
+        write_evidence_json(&evidence_event_logs.join("dsregcmd-events.json"), analysis)?;
     }
 
     // Phase 5: Scheduled task evidence (EnterpriseMgmt GUIDs)
     simulate_bundle_io_delay("capture-scheduled-task-evidence");
     let scheduled_task_evidence = collect_enterprise_mgmt_task_guids();
     let evidence_scheduled_tasks = bundle_path.join("evidence").join("scheduled-tasks");
-    if fs::create_dir_all(&evidence_scheduled_tasks).is_ok() {
-        if let Ok(json) = serde_json::to_string_pretty(&scheduled_task_evidence) {
-            let _ = fs::write(
-                evidence_scheduled_tasks.join("enterprise-mgmt-tasks.json"),
-                json,
-            );
-        }
-    }
+    fs::create_dir_all(&evidence_scheduled_tasks).map_err(|error| {
+        AppError::Internal(format!(
+            "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
+            evidence_scheduled_tasks.display(),
+            error
+        ))
+    })?;
+    write_evidence_json(
+        &evidence_scheduled_tasks.join("enterprise-mgmt-tasks.json"),
+        &scheduled_task_evidence,
+    )?;
 
     Ok(LiveCaptureBundle {
         bundle_path,
         evidence_file_path,
+    })
+}
+
+/// Serialize one evidence value and write it, failing the capture rather than
+/// leaving the bundle quietly short of what its manifest lists.
+///
+/// The manifest write above already reports its own failure. An evidence file
+/// that could not be written is the same class of problem - the bundle would
+/// describe evidence it does not contain - so it is reported too, instead of
+/// discarding the error and returning a successful capture.
+#[cfg(target_os = "windows")]
+fn write_evidence_json<T: serde::Serialize>(
+    path: &std::path::Path,
+    value: &T,
+) -> Result<(), crate::error::AppError> {
+    let json = serde_json::to_string_pretty(value).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to serialize the live capture evidence '{}': {}",
+            path.display(),
+            error
+        ))
+    })?;
+    fs::write(path, json).map_err(|error| {
+        crate::error::AppError::Internal(format!(
+            "Failed to write the live capture evidence '{}': {}",
+            path.display(),
+            error
+        ))
     })
 }
 
@@ -1259,6 +1297,29 @@ extern "system" {
 
 #[cfg(test)]
 mod tests {
+    /// #760: a write that cannot succeed must report it, not return a bundle.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_evidence_write_that_fails_is_an_error_rather_than_a_quiet_bundle() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        // A directory where the file belongs: the write cannot succeed.
+        let occupied = directory.path().join("dsregcmd-events.json");
+        std::fs::create_dir(&occupied).expect("occupy the evidence path");
+
+        let error = write_evidence_json(&occupied, &serde_json::json!({ "a": 1 }))
+            .expect_err("writing over a directory must fail rather than be discarded");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("dsregcmd-events.json"),
+            "the error must name the file it could not write: {message}"
+        );
+        assert!(
+            message.contains("Failed to write the live capture evidence"),
+            "the error must say what failed: {message}"
+        );
+    }
+
     use super::analyze_dsregcmd;
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
