@@ -824,7 +824,13 @@ fn collect_artifact_identities(
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
         if is_json {
-            let Ok(text) = std::fs::read_to_string(&path) else {
+            // Decoded, not read as UTF-8: the walk itself decodes and writes this
+            // same file, so skipping a UTF-16 one here left identities in the copy
+            // that the projection had the means to remove.
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Some(text) = decode_artifact_text(&bytes) else {
                 continue;
             };
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -838,11 +844,7 @@ fn collect_artifact_identities(
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        let decoded = match std::str::from_utf8(&bytes) {
-            Ok(text) => Some(text.to_owned()),
-            Err(_) => decode_utf16(&bytes).map(|(text, _)| text),
-        };
-        if let Some(text) = decoded {
+        if let Some(text) = decode_artifact_text(&bytes) {
             collect_labelled_identities(&text, literals);
         }
     }
@@ -854,6 +856,14 @@ fn collect_artifact_identities(
 /// identities in a labelled form. The label is the anchor that makes this safe: a
 /// value with no label beside it has nothing to key on and is left to the shared
 /// grammar.
+/// One artifact's text, in either encoding this walk reads.
+fn decode_artifact_text(bytes: &[u8]) -> Option<String> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Some(text.to_owned()),
+        Err(_) => decode_utf16(bytes).map(|(text, _)| text),
+    }
+}
+
 fn collect_labelled_identities(
     text: &str,
     literals: &mut cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
@@ -865,6 +875,9 @@ fn collect_labelled_identities(
         let needle = key.to_ascii_lowercase();
         for (at, _) in lowered.match_indices(&needle) {
             let after = text[at + key.len()..].trim_start();
+            // A registry value name is quoted: `"tenantDomain"="..."`. The closing
+            // quote belongs to the name, not to the delimiter that follows it.
+            let after = after.strip_prefix('"').unwrap_or(after).trim_start();
             // A label with no delimiter states nothing: treating the word that
             // merely follows the key as its value added `Contoso` to the table for
             // `tenantDomainContoso` and scrubbed it out of the whole bundle.
@@ -1922,6 +1935,84 @@ mod tests {
             notes.contains("Contoso"),
             "a key with no delimiter states no identity: {notes}"
         );
+    }
+
+    /// A UTF-16 JSON artifact's identities are collected too.
+    ///
+    /// The JSON branch read with `read_to_string`, so a BOM-marked UTF-16 file
+    /// failed to parse and its identities never reached the table -- while the
+    /// walk itself decoded and wrote that same file. A tenant absent from the
+    /// capture could stay in the copy.
+    #[test]
+    fn a_utf16_json_artifact_contributes_its_identities() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let connectivity = root.join("evidence").join("connectivity");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&connectivity).expect("create bundle dirs");
+        std::fs::create_dir_all(&command_output).expect("create command output dir");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in r#"{"tenantDomain":"tenant.example.invalid"}"#.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(connectivity.join("scp-query.json"), &bytes).expect("write utf16 json");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let projected = std::fs::read(
+            destination
+                .join("evidence")
+                .join("connectivity")
+                .join("scp-query.json"),
+        )
+        .expect("read projected artifact");
+        let text = String::from_utf16(
+            &projected[2..]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<u16>>(),
+        )
+        .expect("utf16");
+        assert!(!text.contains("tenant.example.invalid"), "{text}");
+    }
+
+    /// A registry value name is quoted in the form the agent writes.
+    #[test]
+    fn a_quoted_registry_value_name_still_states_its_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let registry = root.join("evidence").join("registry");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&registry).expect("create bundle dirs");
+        std::fs::create_dir_all(&command_output).expect("create command output dir");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        std::fs::write(
+            registry.join("policy.reg"),
+            "\"tenantDomain\"=\"tenant.example.invalid\"\r\n",
+        )
+        .expect("write registry evidence");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let projected = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("registry")
+                .join("policy.reg"),
+        )
+        .expect("read projected registry evidence");
+        assert!(!projected.contains("tenant.example.invalid"), "{projected}");
     }
 
     fn write_projection_bundle(root: &std::path::Path) {
