@@ -770,6 +770,14 @@ fn has_order_contradiction(observations: &[UpdateObservation]) -> bool {
     let mut stamped: Vec<(u8, DateTime<Utc>)> = Vec::new();
 
     for observation in observations {
+        // A supplemental format corroborates the client's reading; it never
+        // establishes a state of its own, so its timestamps cannot contradict the
+        // client's ordering and drop a client-backed verdict to low confidence.
+        // `build_transaction` draws the same line between `evidence` and
+        // `corroborating`.
+        if observation.supplemental.is_some() {
+            continue;
+        }
         let Some(timestamp) = &observation.context.source_timestamp else {
             continue;
         };
@@ -979,6 +987,29 @@ mod sources_agree_tests {
 mod tests {
     use super::*;
 
+    /// A supplemental format corroborates; it cannot contradict the client.
+    ///
+    /// A CBS or DISM line arrives with its own timestamps and used to take part
+    /// in the ordering check, so a supplement could drop a client-backed
+    /// transaction to low confidence without saying anything about the client.
+    #[test]
+    fn a_supplemental_reading_cannot_contradict_the_client_ordering() {
+        let install = reading_at("install", "succeeded", "wu-2", "2026-01-01T01:00:00Z");
+        let mut download = reading_at("download", "started", "wu-1", "2026-01-01T02:00:00Z");
+
+        assert!(
+            has_order_contradiction(&[download.clone(), install.clone()]),
+            "the client's own records contradict each other here"
+        );
+
+        download.supplemental = Some(SupplementalLogKind::Cbs);
+
+        assert!(
+            !has_order_contradiction(&[download, install]),
+            "a supplemental line is not a contradiction with the client's ordering"
+        );
+    }
+
     /// One unkeyed device reading, built from the context a fixture carries.
     ///
     /// The shape is copied from the corpus rather than invented, so a change to
@@ -986,18 +1017,29 @@ mod tests {
     const CONTEXT: &str = r#"{"evidenceRef":{"evidenceId":"{evidence_id}","sourceArtifactId":"wu-client-events"},"provenance":{"sourceKind":"eventLog","sourceArtifactId":"wu-client-events","filePath":null,"lineNumber":null,"recordNumber":201,"registry":null,"event":{"channel":"Microsoft-Windows-WindowsUpdateClient/Operational","provider":"Microsoft-Windows-WindowsUpdateClient","eventId":25,"recordId":201}},"sourceTimestamp":{"rawText":"2026-07-31T01:00:00Z","originalOffset":null,"normalizedUtc":"2026-07-31T01:00:00Z","kind":"utc"},"observedAtUtc":"2026-07-31T03:00:00Z","sensitivity":"public","parseState":"parsed","accessState":"available"}"#;
 
     fn reading(phase: &str, outcome: &str, evidence_id: &str) -> UpdateObservation {
-        let context: IntuneObservationContext =
+        reading_at(phase, outcome, evidence_id, "2026-01-01T01:00:00Z")
+    }
+
+    /// The same reading, at a stated instant.
+    fn reading_at(phase: &str, outcome: &str, evidence_id: &str, at: &str) -> UpdateObservation {
+        let mut context: IntuneObservationContext =
             serde_json::from_str(&CONTEXT.replace("{evidence_id}", evidence_id))
                 .expect("the corpus context deserializes");
+        if let Some(timestamp) = context.source_timestamp.as_mut() {
+            timestamp.normalized_utc = Some(at.to_owned());
+        }
         UpdateObservation {
             context,
             phase: match phase {
                 "scan" => UpdatePhase::Scan,
+                "download" => UpdatePhase::Download,
+                "install" => UpdatePhase::Install,
                 other => panic!("unknown phase {other}"),
             },
             outcome: match outcome {
                 "failed" => UpdateOutcome::Failed,
                 "succeeded" => UpdateOutcome::Succeeded,
+                "started" => UpdateOutcome::Started,
                 other => panic!("unknown outcome {other}"),
             },
             key: UpdateKey::default(),
