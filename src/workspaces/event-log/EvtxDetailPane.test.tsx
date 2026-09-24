@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
 
@@ -111,6 +111,31 @@ describe("EvtxDetailPane error code enrichment", () => {
 
     render(<EvtxDetailPane />);
 
+    // The command has to be asked, or the assertion below would pass for the
+    // wrong reason: a pane that never called it shows no section either.
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "detect_error_codes",
+        expect.objectContaining({ text: expect.any(String) }),
+      ),
+    );
+    expect(screen.queryByText(/Error Codes/i)).toBeNull();
+  });
+
+  it("ignores entries that do not carry what the pane renders", async () => {
+    // An IPC payload is untrusted: a null entry would be read as `entry.start`
+    // during render and throw, so entries missing the fields are discarded.
+    invoke.mockImplementation(() =>
+      Promise.resolve([null, { codeHex: "0x80070005" }]),
+    );
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message: "0x80070005 failed" }],
+      selectedRecordId: 1,
+    });
+
+    render(<EvtxDetailPane />);
+
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
     expect(screen.queryByText(/Error Codes/i)).toBeNull();
   });
 });

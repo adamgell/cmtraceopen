@@ -19,9 +19,11 @@ pub fn search_error_codes(query: String) -> Vec<ErrorSearchResult> {
 ///
 /// Detection lives in the parser crate so one span rule serves every surface;
 /// this command is an adapter over it, not a second pattern. Each span carries
-/// the database's description and category, and a code the database does not know
-/// keeps its place with `Unknown error code` rather than being dropped -- a code
-/// an operator can see is one they can look up elsewhere.
+/// the database's description and category. Detection reports the codes it can
+/// *describe*: a code absent from the database is omitted rather than surfaced
+/// with no meaning, and this adapter does not guess at code shapes to find one.
+/// Callers therefore receive a possibly-empty list that means "nothing readable
+/// here", not "no code was present".
 #[tauri::command]
 pub fn detect_error_codes(text: String) -> Vec<ErrorCodeSpan> {
     do_detect(&text)

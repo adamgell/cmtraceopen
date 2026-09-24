@@ -43,6 +43,30 @@ interface DetectedErrorCode {
  * can describe are listed: detection does not invent an entry for a code it
  * cannot read, so the pane never shows a code with no meaning beside it.
  */
+/**
+ * The detected codes in an IPC payload, or none when it is not one.
+ *
+ * IPC responses are untrusted input: `invoke<T>` types the call at compile time
+ * only, so `[null]` or an entry missing what the pane renders would reach the
+ * render pass and throw there. Every entry is checked for the fields this pane
+ * reads, and an entry that fails is discarded rather than displayed.
+ */
+function detectedCodes(payload: unknown): DetectedErrorCode[] {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  return payload.filter(
+    (entry): entry is DetectedErrorCode =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as DetectedErrorCode).start === "number" &&
+      typeof (entry as DetectedErrorCode).end === "number" &&
+      typeof (entry as DetectedErrorCode).codeHex === "string" &&
+      typeof (entry as DetectedErrorCode).description === "string" &&
+      typeof (entry as DetectedErrorCode).category === "string",
+  );
+}
+
 function DetectedErrorCodes({
   text,
   labelFontSize,
@@ -62,9 +86,7 @@ function DetectedErrorCodes({
     let cancelled = false;
     invoke<DetectedErrorCode[]>("detect_error_codes", { text })
       .then((found) => {
-        // The command is the only thing that knows a code's shape, so a payload
-        // that is not a list of them is treated as no answer at all.
-        if (!cancelled) setCodes(Array.isArray(found) ? found : []);
+        if (!cancelled) setCodes(detectedCodes(found));
       })
       .catch(() => {
         // A failed lookup is not evidence that the record carried no code, so
