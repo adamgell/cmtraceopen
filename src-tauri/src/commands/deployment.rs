@@ -616,7 +616,20 @@ fn analyze_single_file(file_path: &str) -> DeploymentLogFile {
 
 // ── Recursive file enumeration ──────────────────────────────────────────
 
-fn collect_log_files(dir: &Path, out: &mut Vec<String>) {
+/// Deepest directory nesting the scan will descend.
+///
+/// Also terminates a Windows junction loop, which `file_type().is_symlink()`
+/// does not report, so this and the symlink check cover each other.
+const MAX_DEPLOYMENT_SCAN_DEPTH: usize = 32;
+
+/// Upper bound on collected paths, so a wide tree cannot accumulate without limit.
+const MAX_DEPLOYMENT_LOG_FILES: usize = 5_000;
+
+fn collect_log_files(dir: &Path, out: &mut Vec<String>, depth: usize) {
+    if depth >= MAX_DEPLOYMENT_SCAN_DEPTH || out.len() >= MAX_DEPLOYMENT_LOG_FILES {
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -624,9 +637,22 @@ fn collect_log_files(dir: &Path, out: &mut Vec<String>) {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
-            collect_log_files(&path, out);
-        } else if path.is_file() {
+
+        // `symlink_metadata` reports the link itself rather than following it, so
+        // a link pointing at an ancestor cannot be entered as a cycle. `is_dir()`
+        // would follow it, which is how the recursion previously had no floor.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let file_type = metadata.file_type();
+
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        if file_type.is_dir() {
+            collect_log_files(&path, out, depth + 1);
+        } else if file_type.is_file() {
             if let Some(ext) = path.extension() {
                 if ext.to_string_lossy().to_ascii_lowercase() == "log" {
                     out.push(path.to_string_lossy().to_string());
@@ -651,7 +677,7 @@ pub fn analyze_deployment_folder(
     }
 
     let mut log_files = Vec::new();
-    collect_log_files(dir, &mut log_files);
+    collect_log_files(dir, &mut log_files, 0);
 
     if log_files.is_empty() {
         return Ok(DeploymentAnalysisResult {
@@ -1025,5 +1051,60 @@ mod tests {
         let (start, end) = extract_timestamps(&[e1, e2]);
         assert_eq!(start.as_deref(), Some("2025-11-25 01:55:42.000"));
         assert_eq!(end.as_deref(), Some("2025-11-25 02:10:00.000"));
+    }
+}
+
+#[cfg(test)]
+mod collect_log_files_tests {
+    use super::{collect_log_files, MAX_DEPLOYMENT_SCAN_DEPTH};
+
+    fn collect(root: &std::path::Path) -> Vec<String> {
+        let mut out = Vec::new();
+        collect_log_files(root, &mut out, 0);
+        out
+    }
+
+    #[test]
+    fn collects_logs_at_any_nesting_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("deep.log"), b"x\n").unwrap();
+        std::fs::write(dir.path().join("shallow.log"), b"x\n").unwrap();
+        std::fs::write(dir.path().join("ignored.txt"), b"x\n").unwrap();
+
+        let found = collect(dir.path());
+        assert_eq!(found.len(), 2, "expected both .log files, got {found:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_cycle_terminates_instead_of_recursing() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("real.log"), b"x\n").unwrap();
+        // inner/loop -> the parent, which previously had no floor
+        std::os::unix::fs::symlink(dir.path(), inner.join("loop")).unwrap();
+
+        let found = collect(dir.path());
+        assert_eq!(found.len(), 1, "the link must not be entered: {found:?}");
+    }
+
+    #[test]
+    fn stops_at_the_depth_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().to_path_buf();
+        for _ in 0..(MAX_DEPLOYMENT_SCAN_DEPTH + 5) {
+            path = path.join("d");
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        std::fs::write(path.join("too-deep.log"), b"x\n").unwrap();
+
+        let found = collect(dir.path());
+        assert!(
+            found.is_empty(),
+            "a file past the depth bound must not be collected: {found:?}",
+        );
     }
 }
