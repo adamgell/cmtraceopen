@@ -297,6 +297,20 @@ jobs:
             throw "Installer cleanup tests ended with result $($result.Result)."
           }
 
+      - name: Test evidence collector scripts
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./scripts/collection/tests/Invoke-CmtraceEvidenceCollection.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Evidence collector tests ended with result $($result.Result)."
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
 

@@ -121,7 +121,17 @@ Describe 'New-CollectorBundleId' {
             [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
         }
 
-        $bundleId | Should -Match '^CMTRACE-20260521-123456-DEVICE-01-[0-9a-f]{32}$'
+        # The id embeds the current UTC time, so the assertion pins the shape rather
+        # than a literal clock value. What the culture switch must not change is that
+        # the digits are invariant ASCII: fa-IR would otherwise render Persian digits.
+        $bundleId | Should -Match '^CMTRACE-[0-9]{8}-[0-9]{6}-DEVICE-01-[0-9a-f]{32}$'
+        $timestamp = ($bundleId -split '-')[1..2] -join '-'
+        [System.Globalization.CultureInfo]::InvariantCulture
+        foreach ($ch in $timestamp.ToCharArray()) {
+            if ($ch -ne '-') {
+                [int]$ch | Should -BeLessThan 128 -Because "'$ch' must be an ASCII digit under any culture"
+            }
+        }
     }
 }
 
