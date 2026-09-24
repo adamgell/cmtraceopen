@@ -2813,8 +2813,14 @@ mod packaged_manifest_tests {
             .expect("the manifest ships beside the databases it describes");
         let manifest: Manifest =
             serde_json::from_str(&text).expect("the provider manifest is valid JSON");
-        assert_eq!(manifest.schema_version, 1, "unsupported manifest schema version");
-        assert!(!manifest.databases.is_empty(), "the manifest lists no databases");
+        assert_eq!(
+            manifest.schema_version, 1,
+            "unsupported manifest schema version"
+        );
+        assert!(
+            !manifest.databases.is_empty(),
+            "the manifest lists no databases"
+        );
 
         let mut declared_names: BTreeSet<String> = BTreeSet::new();
 
