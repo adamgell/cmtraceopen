@@ -355,6 +355,18 @@ fn collect_bundle_files(
             collect_bundle_files(&entry.path(), out)?;
         } else if file_type.is_file() {
             out.push(entry.path());
+        } else {
+            // A symlink, junction or other non-regular entry is neither followed
+            // nor skipped. `DirEntry::file_type` reports the link itself, so
+            // following it would be the only way to read it, and its target can
+            // live outside the bundle. Skipping it would contradict this
+            // projection's contract that it carries every artifact the bundle
+            // holds. Refusing is the only answer that keeps both.
+            return Err(crate::error::AppError::Internal(format!(
+                "The capture bundle holds an entry that is neither a file nor a folder, \
+                 so the projection cannot carry every artifact: {}",
+                entry.path().display()
+            )));
         }
     }
 
@@ -1960,6 +1972,44 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    /// A symlink is neither a file nor a folder as far as the bundle reader is
+    /// concerned. It must not be followed, because its target can sit outside the
+    /// bundle, and it must not be dropped, because the projection promises to
+    /// carry every artifact. Refusing the export is the only answer that keeps
+    /// both, and the refusal has to name the entry.
+    #[cfg(unix)]
+    #[test]
+    fn exporting_refuses_a_bundle_holding_a_non_regular_entry() {
+        let bundle = build_shareable_export_fixture();
+        let outside = tempfile::tempdir().expect("create outside dir");
+        let secret = outside.path().join("outside.txt");
+        std::fs::write(&secret, "outside the bundle\n").expect("write outside file");
+        std::os::unix::fs::symlink(&secret, bundle.path().join("linked.txt"))
+            .expect("plant a link inside the bundle");
+
+        let destination = tempfile::tempdir().expect("create destination dir");
+        let error = match export_dsregcmd_shareable_bundle_blocking(
+            &bundle.path().to_string_lossy(),
+            &destination.path().to_string_lossy(),
+        ) {
+            Ok(exported) => panic!(
+                "a bundle holding a link must be refused, but the export wrote {}",
+                exported.bundle_path
+            ),
+            Err(error) => error,
+        };
+
+        let message = error.to_string();
+        assert!(
+            message.contains("linked.txt"),
+            "the refusal must name the entry it refused: {message}"
+        );
+        assert!(
+            !message.contains("outside the bundle"),
+            "the refusal must not read through the link: {message}"
+        );
     }
 
     /// The acceptance criteria at the command layer: the artefact a support
