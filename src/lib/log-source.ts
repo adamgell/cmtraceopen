@@ -628,6 +628,9 @@ export async function loadSelectedLogFile(
         parseErrors: 0,
         filePath,
         fileSize: 0,
+        // The cached tab snapshot carries no file metadata, so no time is
+        // claimed rather than a placeholder one.
+        modifiedUnixMs: null,
         byteOffset: 0,
       } as ParseResult;
     }
@@ -970,13 +973,16 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     const commonDir = getCommonDirectory(paths);
     const source: LogSource = { kind: "folder", path: commonDir };
 
-    // Build sidebar entries from the file list
+    // Build sidebar entries from the file list. The modified time comes from
+    // the parse result: the backend has it from the same metadata as the size,
+    // and writing a placeholder here is what made every multi-file open read
+    // "Modified time unavailable".
     const folderEntries: FolderEntry[] = results.map((r) => ({
       path: r.filePath,
       name: r.filePath.split(/[\\/]/).pop() ?? r.filePath,
       isDir: false,
       sizeBytes: r.fileSize,
-      modifiedUnixMs: 0,
+      modifiedUnixMs: r.modifiedUnixMs,
     }));
 
     if (!isCurrentTabSwitch(loadGeneration)) return false;

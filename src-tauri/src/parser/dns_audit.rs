@@ -48,7 +48,11 @@ pub fn is_dns_evtx(path: &Path) -> bool {
 /// produce structured `LogEntry` values.
 pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
     let path_obj = Path::new(path);
-    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let metadata = std::fs::metadata(path).ok();
+    let file_size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+    let modified_unix_ms = metadata
+        .as_ref()
+        .and_then(crate::commands::file_ops::metadata_modified_unix_ms);
 
     let mut parser = EvtxParser::from_path(path_obj)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path, e))?;
@@ -104,6 +108,7 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
         parse_errors,
         file_path: path.to_string(),
         file_size,
+        modified_unix_ms,
         byte_offset: file_size,
     })
 }

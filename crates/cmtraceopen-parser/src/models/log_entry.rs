@@ -315,6 +315,15 @@ pub struct ParseResult {
     pub parse_errors: u32,
     pub file_path: String,
     pub file_size: u64,
+    /// When the source file was last modified, as epoch milliseconds.
+    ///
+    /// Supplied by the adapter from the same metadata as `file_size`; the pure
+    /// entry points have no file to read and leave it `None`. `None` means the
+    /// platform could not report a time, which is not the same fact as a time of
+    /// zero: a consumer that shows it has to say "unavailable" rather than
+    /// invent an instant.
+    #[serde(default)]
+    pub modified_unix_ms: Option<u64>,
     /// Byte offset where parsing ended — used as the starting point for tailing
     pub byte_offset: u64,
 }
