@@ -393,12 +393,18 @@ pub fn redacted_status_text(input: &str) -> String {
 }
 
 /// The kind of identity a literal is, which decides the token it reaches.
+/// The kind of identity a literal is, which decides the token it reaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityKind {
+    /// A tenant id, its display name, or its domain.
     Tenant,
+    /// A device id.
     Device,
+    /// A device certificate thumbprint.
     Thumbprint,
+    /// A user principal name.
     Upn,
+    /// A computer or host name.
     Host,
 }
 
