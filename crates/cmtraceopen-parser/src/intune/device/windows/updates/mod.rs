@@ -93,6 +93,7 @@ use thiserror::Error;
 
 /// Why an evidence bundle could not be read.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpdateBundleError {
     #[error("evidence bundle is not valid JSON: {0}")]
     InvalidJson(String),

@@ -656,6 +656,7 @@ pub fn workload_owner_from(named_data: &[IntuneNamedValue]) -> Option<UpdateWork
 
 /// Outcome of classifying one event that is not from a modeled provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EventClassification {
     /// A policy-chain reading, routed to the policy chain.
     Policy(Box<PolicyObservation>),

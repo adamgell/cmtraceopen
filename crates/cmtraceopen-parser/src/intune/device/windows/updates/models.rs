@@ -319,6 +319,7 @@ impl UpdateKey {
 /// What one policy-chain record said.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum PolicySignal {
     /// The device received or applied an update-related policy value.
     Applied,
@@ -491,6 +492,7 @@ impl Default for UpdateWorkloadOwner {
 /// A stage of the Windows Update client's own work.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum UpdatePhase {
     /// The client's detection pass. An event 26 reporting `updateCount=0` ends here, and that is what makes the chain `NoApplicableUpdate`.
     Scan,
@@ -509,6 +511,7 @@ pub enum UpdatePhase {
 /// What happened in that stage.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum UpdateOutcome {
     /// The stage began and has not reported an end.
     Started,
@@ -568,6 +571,7 @@ impl UpdateObservation {
 /// Terminal reading of one update's execution.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum UpdateTransactionState {
     /// The scan failed and nothing keyed follows it.
     ScanFailed,
@@ -642,6 +646,7 @@ pub struct UpdateTransaction {
 /// Terminal reading of the device's update execution as a whole.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum UpdateChainState {
     /// No update-client evidence of any kind was present.
     #[default]
@@ -685,6 +690,7 @@ pub struct UpdateChain {
 /// How, if at all, the two chains are connected.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum ChainLinkState {
     /// Nothing ties the chains together. This is the default and stays the
     /// default unless an explicit identifier says otherwise.
