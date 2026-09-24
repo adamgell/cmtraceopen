@@ -77,6 +77,10 @@
         {
           "evidenceId": "wu-44",
           "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-45",
+          "sourceArtifactId": "wu-client-events"
         }
       ],
       "coverageGapIds": []
@@ -95,6 +99,7 @@
     "an impossible phase ordering caps the transaction's confidence",
     "the terminal state follows the records' own timestamps, not the order the artifact listed them in: the install at 01:00 is earlier, so the download that started at 02:00 is the client's last statement and no install is claimed",
     "an unreadable client artifact means no restart can be claimed either way, so rebootPending stays unknown rather than false",
-    "a parseFailed artifact keeps its bytes and reports parseFailed coverage"
+    "a parseFailed artifact keeps its bytes and reports parseFailed coverage",
+    "a record whose offset cannot be read is cited as evidence but is never the reading the verdict rests on: the state, the confidence and the ordering verdict stay exactly as the placed records state them"
   ]
 }

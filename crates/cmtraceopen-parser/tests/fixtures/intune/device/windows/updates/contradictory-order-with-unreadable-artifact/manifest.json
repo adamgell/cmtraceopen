@@ -3,7 +3,7 @@
   "syntheticFixture": true,
   "scenario": "contradictory-order-with-unreadable-artifact",
   "workload": "device/windows/updates",
-  "description": "The install is stamped before its own download, so the ordering is contradictory and the state is read at low confidence. The second client artifact is unreadable, so its records never reach the analyzer: this scenario pins contradictory ordering and an unreadable artifact, not offset handling.",
+  "description": "The install is stamped before its own download, so the ordering is contradictory and the state is read at low confidence. The second client artifact is unreadable, so its records never reach the analyzer: this scenario pins contradictory ordering and an unreadable artifact, not offset handling. One of the install records is repeated with an offset outside any real range and no normalized time, so its place in the order cannot be read at all.",
   "generatedAtUtc": "2026-07-31T03:00:00Z",
   "artifacts": [
     {
@@ -50,7 +50,7 @@
       "originalBasename": "events.json",
       "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
       "relativePath": "evidence/wu-client-events/current/events.json",
-      "bytesCopied": 3317,
+      "bytesCopied": 4927,
       "capturedUtc": "2026-07-31T03:00:00Z",
       "rotation": {
         "kind": "current",
