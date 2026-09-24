@@ -127,7 +127,12 @@ These are documented, not speculative. Always verify state before acting:
 
 | Checkpoint | SHA | Status | Issues |
 |---|---|---|---|
-| Client health (#320) | `6ccf8dafa7` | 6/6 focused pass | Blockers exist; NOT merge-ready |
-| DP post-SUP (#329) | `a03af515fa` | P1: semantic admission accepts wrong profile | Hold PR until clean |
-| SUP coverage (#330) | `76e2b0b910d` | TDD red 6/2 → green 8/0 | Full gate pending |
-| Intune CP (#366) | `04e1ecba6f` | Store 39/39, hook 7/7 | Findings to address: observedThroughLine, amendment bounds, runtime validation |
+| Client health (#320) | `6ccf8dafa7` | **CLOSED** 2026-08-05 | Published over synthetic manifests; "intentionally not merge-ready"; no native Windows acceptance claimed |
+| DP post-SUP (#329) | `a03af515fa` | **CLOSED** 2026-08-05 | Closed with a draft PR blocked on SUP #473, never restacked |
+| SUP coverage (#330) | `76e2b0b910d` | **CLOSED** 2026-08-05 | Closed with a draft integration PR against the SCCM integration branch |
+| Intune CP (#366) | `04e1ecba6f` | **CLOSED** 2026-08-08 | Closed as implementation history; the closeout note states closure is not final epic acceptance evidence |
+
+All four closed as implementation history. The blockers recorded here at the time were **scoped out, not
+resolved**, so none of these rows is a live lane awaiting an unblock. The standing gap is **native Windows
+acceptance**, which none of them claims — every green gate in this repository is a Linux/macOS or
+synthetic-manifest result until someone runs it on the Setup-CM lab.
