@@ -50,7 +50,7 @@ pub fn start_tail(
     }
 
     // Tailing reuses the backend-owned parser selection stored during open_log_file.
-    let (parser_selection, initial_logical_record) = {
+    let (parser_selection, initial_logical_record, file_identity) = {
         let mut open_files = state
             .open_files
             .lock()
@@ -61,17 +61,24 @@ pub fn start_tail(
         let initial_logical_record = (open_file.byte_offset == byte_offset)
             .then(|| open_file.initial_logical_record.take())
             .flatten();
-        (open_file.parser_selection.clone(), initial_logical_record)
+        (
+            open_file.parser_selection.clone(),
+            initial_logical_record,
+            open_file.file_identity,
+        )
     };
 
     let file_path_for_event = path.clone();
     let session = tail::start_tail_session(
         path_buf.clone(),
-        byte_offset,
-        parser_selection,
-        next_id,
-        next_line,
-        initial_logical_record,
+        tail::TailStart {
+            byte_offset,
+            parser_selection,
+            next_id,
+            next_line,
+            initial_logical_record,
+            file_identity,
+        },
         move |batch| {
             let payload = TailPayload {
                 entries: batch.entries,

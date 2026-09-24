@@ -310,6 +310,18 @@ impl TailReader {
         }
     }
 
+    /// Seed the identity of the generation this reader is about to follow.
+    ///
+    /// The caller holds the identity of the file whose parsed bytes produced
+    /// `byte_offset`. Without it the first read cannot tell a replacement from an
+    /// append: an unknown identity is deliberately not treated as a change, and a
+    /// replacement larger than the offset also passes the size test. Called before
+    /// the first read, not after, because the window between construction and that
+    /// read is where a rotation lands in production.
+    pub fn seed_file_identity(&mut self, identity: Option<FileIdentity>) {
+        self.file_identity = identity;
+    }
+
     /// Read new content from the file since last read, parse into entries.
     /// Returns the new entries plus a `reset` flag and updates internal byte_offset.
     pub fn read_new_entries(&mut self) -> Result<TailBatch, crate::error::AppError> {
@@ -1455,18 +1467,35 @@ impl TailSession {
 /// Start watching a file for changes.
 /// Spawns a background thread that monitors the file and calls `on_new_entries`
 /// whenever new log entries appear.
+/// Where a tail session starts.
+///
+/// These travel together: they all describe the state the initial parse reached,
+/// including the identity of the file whose bytes produced `byte_offset`.
+pub struct TailStart {
+    pub byte_offset: u64,
+    pub parser_selection: ResolvedParser,
+    pub next_id: u64,
+    pub next_line: u32,
+    pub initial_logical_record: Option<InitialLogicalRecord>,
+    pub file_identity: Option<FileIdentity>,
+}
+
 pub fn start_tail_session<F>(
     path: PathBuf,
-    byte_offset: u64,
-    parser_selection: ResolvedParser,
-    next_id: u64,
-    next_line: u32,
-    initial_logical_record: Option<InitialLogicalRecord>,
+    start: TailStart,
     on_new_entries: F,
 ) -> Result<TailSession, crate::error::AppError>
 where
     F: Fn(TailBatch) + Send + 'static,
 {
+    let TailStart {
+        byte_offset,
+        parser_selection,
+        next_id,
+        next_line,
+        initial_logical_record,
+        file_identity,
+    } = start;
     let stop_flag = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
 
@@ -1486,6 +1515,9 @@ where
             ),
             None => TailReader::new(path, byte_offset, parser_selection, next_id, next_line),
         };
+        // Seed before the watcher starts: the first read is triggered by an event
+        // that can arrive long after construction.
+        tail_reader.seed_file_identity(file_identity);
 
         // Create a channel for notify events
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3755,25 +3787,18 @@ mod tests {
         let first_generation =
             "15/01/2024 08:00:00 First entry\n15/01/2024 08:00:01 Second entry\n";
         fs::write(&path, first_generation).expect("should write first generation");
-        let byte_offset = fs::metadata(&path).expect("metadata should exist").len();
+        let path_str = path.to_string_lossy().to_string();
 
+        // The production sequence, exactly: the parse captures the identity of the
+        // file whose bytes produced the offset, the reader is seeded with it, and
+        // only then does the watcher start. No read happens in between, because in
+        // production none does.
+        let (parsed, _selection, identity) = crate::parser::parse_file_identified(&path_str)
+            .expect("the initial parse must succeed");
+        let identity = identity.expect("the parse must report the identity it read");
         let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
-        let mut reader = TailReader::new(path.clone(), byte_offset, selection, 2, 3);
-
-        // KNOWN GAP, reproduced by deleting this settling read: a reader that has not
-        // yet read once holds no identity, an unknown identity is not a change, and a
-        // replacement larger than `byte_offset` also passes the size test. So a
-        // rotation landing between construction and the first read is not detected.
-        // Production starts the reader and then waits for a watcher event, so that
-        // window is the normal path, not a corner. Closing it means capturing the
-        // identity from the same handle that produced `byte_offset` and seeding the
-        // reader with it; `parser::parse_file` currently reads the file and then
-        // re-stats the path for the size, so the two do not come from one handle.
-        let settled = reader
-            .read_new_entries()
-            .expect("settling tail read should succeed");
-        assert!(!settled.reset);
-        assert!(settled.entries.is_empty());
+        let mut reader = TailReader::new(path.clone(), parsed.byte_offset, selection, 2, 3);
+        reader.seed_file_identity(Some(identity));
 
         // Rotate: the replacement arrives at a new inode and is already LARGER than
         // the offset held for the old generation, so a size comparison cannot see it.
@@ -3785,7 +3810,7 @@ mod tests {
             "16/01/2024 09:00:04 Rotated fifth\n",
         );
         assert!(
-            replacement.len() as u64 > byte_offset,
+            replacement.len() as u64 > parsed.byte_offset,
             "the test needs the replacement to exceed the old offset"
         );
         let staging = unique_test_path("tail-reader-rotation-larger-staging");
