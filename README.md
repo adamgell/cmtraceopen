@@ -163,6 +163,51 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace
 
+## Command-line export
+
+`event-log-export` is a headless exporter for `.evtx` files. It runs without the
+GUI, which is what makes it useful on a machine where you would rather not launch
+the app — pulling a channel from a customer's host, or scripting an export.
+
+It is attached to every release, named for the version and target it was built for
+(for example `event-log-export-1.6.0-x86_64-pc-windows-msvc.exe`), and it is built
+from source by CI on every change.
+
+```
+usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>]
+       [--format csv|tsv|json|xml|html|rawXml] [--output <path|->]
+       [--channel <name>]... [--level <level>]... [--event-id <id>]...
+       [--search <text>]
+```
+
+```bash
+# Print one channel as CSV
+event-log-export --source System.evtx --channel System --format csv --output -
+
+# Every level below Warning, as JSON, to a file
+event-log-export --source Application.evtx --level Critical --level Error \
+  --format json --output application-errors.json
+
+# Export the sources and filters named by a manifest rather than on the command line
+event-log-export --manifest export.json --format json --output -
+```
+
+`--output -` writes to stdout. The filters combine across flags: an event is
+exported only when it satisfies every flag you supply, while several values for
+one flag are alternatives to each other — `--level Critical --level Error` keeps
+events at either level. `--manifest` cannot be combined with `--source` or with
+the filter arguments.
+
+Build it from a checkout with:
+
+```bash
+cd src-tauri
+cargo build --release --features event-log --bin event-log-export
+```
+
+The exporter is compiled behind the `event-log` feature, so the default build of
+the app does not include it.
+
 ## Supported Log Formats
 
 | Format | Examples |

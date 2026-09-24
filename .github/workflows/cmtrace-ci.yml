@@ -101,6 +101,15 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # `cargo check` and `cargo test` never compile this binary: it is behind the
+      # `event-log` feature, so nothing would notice it rotting. Build it and run
+      # it, so the headless exporter is covered by something.
+      - name: Build and smoke the headless event-log exporter
+        working-directory: src-tauri
+        run: |
+          cargo build --locked --features event-log --bin event-log-export
+          cargo run --locked --quiet --features event-log --bin event-log-export -- --help > /dev/null
+
       - name: Rust check (lite)
         working-directory: src-tauri
         run: cargo check --no-default-features
