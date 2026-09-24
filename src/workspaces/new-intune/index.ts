@@ -5,8 +5,8 @@ import { createIntuneOnOpenSource } from "../intune";
 
 export const newIntuneWorkspace: WorkspaceDefinition = {
   id: "new-intune",
-  label: "New Intune Workspace",
-  statusLabel: "New Intune Workspace",
+  label: "Intune Analysis",
+  statusLabel: "Intune analysis",
   platforms: "all",
   component: lazy(() =>
     import("../intune/NewIntuneWorkspace").then((m) => ({

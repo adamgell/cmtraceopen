@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { inspectEvidenceArtifact, inspectEvidenceBundle } from "../../lib/commands";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
+import { getWorkspace } from "../../workspaces/registry";
 import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useLogStore } from "../../stores/log-store";
 import { isIntuneWorkspace, useUiStore } from "../../stores/ui-store";
@@ -296,11 +297,11 @@ function getArtifactNavigationState(
       canOpen: true,
       reason:
         activeView === "new-intune"
-          ? "Open this artifact in New Intune Workspace."
+          ? `Open this artifact in ${getWorkspace(activeView).label}.`
           : "Open this artifact in the Intune workspace.",
       actionLabel:
         activeView === "new-intune"
-          ? "Open in new Intune workspace"
+          ? `Open in ${getWorkspace(activeView).label}`
           : "Open in Intune workspace",
     };
   }

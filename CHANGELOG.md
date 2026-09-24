@@ -45,6 +45,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The second Intune workspace is named for what it does**: it was labelled "New Intune Workspace", a development name shown beside "Intune Diagnostics" with nothing to tell a reader which to use. It is now "Intune Analysis", and its name comes from the workspace definition rather than five separate copies, so a rename is one edit ([#701](https://github.com/adamgell/cmtraceopen/issues/701)).
+
 - **Device Inventory framing (#511)**: Logical-record framing for Device Inventory is lossless and bounded so oversized or partial continuations cannot starve the open/tail paths or drop producer evidence.
 - **Intune inventory rotation detection (#509)**: Narrow rotation-failure detection so generic `Failed …` lines are not misclassified as Device Inventory rotation failures, and align open-path continuation bounds with the tail path.
 - **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
