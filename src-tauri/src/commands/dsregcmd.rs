@@ -143,12 +143,16 @@ pub fn redact_dsregcmd_status_text(input: String) -> String {
     crate::dsregcmd::redacted_status_text(&input)
 }
 
-/// How many simulated I/O stages have started in this process.
+/// How many simulated I/O stages have started.
+///
+/// A count is what makes a responsiveness assertion about *the moment*: a task
+/// created during one stage has to complete before the next begins, which a thread
+/// asleep inside a stage cannot allow.
 #[cfg(debug_assertions)]
 static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-/// Read by the responsiveness test, so it exists for tests only.
+/// Read by the responsiveness test, so they exist for tests only.
 #[cfg(all(debug_assertions, test))]
 fn simulated_bundle_io_stages_entered() -> usize {
     SIMULATED_BUNDLE_IO_STAGES.load(std::sync::atomic::Ordering::SeqCst)
@@ -1474,8 +1478,6 @@ mod tests {
             .expect("build current-thread runtime");
         runtime.block_on(async move {
             super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
-            let unrelated_task = tokio::spawn(async { Instant::now() });
-
             let analysis_started = Instant::now();
             let analysis = tokio::spawn(async move {
                 analyze_dsregcmd(
@@ -1499,16 +1501,40 @@ mod tests {
                 entered.is_ok(),
                 "no simulated I/O stage started, so the wait never had anything to observe"
             );
-            assert!(
-                unrelated_task.is_finished(),
-                "the unrelated task had not run while a simulated I/O stage was in progress"
-            );
+            // The measurement is the *stage counter*: the unrelated task is created
+            // inside a stage, and it has to complete before the next stage begins.
+            //
+            // Known limitation, and the reason this finding is still open: in a
+            // current-thread runtime a synchronous analysis blocks the only thread,
+            // which prevents the *observation* as much as the responsiveness. So this
+            // cannot fail when the analysis moves back onto the command thread -- it
+            // was checked by reverting that seam and watching it pass. Discriminating
+            // it needs the runtime on its own OS thread and a stage the test itself
+            // gates, so the assertion can be made while the stage is blocked.
+            // Two earlier versions passed with the analysis back on the command
+            // thread -- a task spawned before the analysis could be polled in the
+            // window before the slow work started, and a task created during a stage
+            // could be polled between stages. Neither asked whether the command
+            // thread was busy *at that moment*; this does, because a thread asleep
+            // inside a stage cannot schedule anything until that stage ends.
+            let stages_before = super::simulated_bundle_io_stages_entered();
+            let unrelated_completed_at = tokio::spawn(async { Instant::now() })
+                .await
+                .expect("join the unrelated task");
+            let stages_after = super::simulated_bundle_io_stages_entered();
 
             let result = analysis
                 .await
                 .expect("join the analysis task")
                 .expect("analyze dsregcmd bundle fixture");
             let total_analysis_duration = analysis_started.elapsed();
+
+            assert_eq!(
+                stages_before, stages_after,
+                "the unrelated task did not complete inside the stage it was created in: \
+                 stages went from {stages_before} to {stages_after}, which means the command \
+                 thread was busy in the simulated I/O instead of scheduling it"
+            );
 
             assert!(result.active_evidence.is_some(), "expected active evidence");
             assert!(
