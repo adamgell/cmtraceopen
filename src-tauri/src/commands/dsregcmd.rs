@@ -143,6 +143,17 @@ pub fn redact_dsregcmd_status_text(input: String) -> String {
     crate::dsregcmd::redacted_status_text(&input)
 }
 
+/// How many simulated I/O stages have started in this process.
+#[cfg(debug_assertions)]
+static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Read by the responsiveness test, so it exists for tests only.
+#[cfg(all(debug_assertions, test))]
+fn simulated_bundle_io_stages_entered() -> usize {
+    SIMULATED_BUNDLE_IO_STAGES.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[cfg(debug_assertions)]
 fn simulate_bundle_io_delay(stage: &str) {
     let delay_ms = std::env::var("CMTRACE_SIMULATE_BUNDLE_IO_MS")
@@ -153,6 +164,11 @@ fn simulate_bundle_io_delay(stage: &str) {
     if delay_ms == 0 {
         return;
     }
+
+    // A test synchronization point: a stage being *in progress* is the moment the
+    // assertion about responsiveness is about, and a counter is the smallest way to
+    // observe it from outside.
+    SIMULATED_BUNDLE_IO_STAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     log::debug!(
         "event=dsregcmd_simulated_bundle_io stage={} delay_ms={}",
@@ -1457,20 +1473,42 @@ mod tests {
             .build()
             .expect("build current-thread runtime");
         runtime.block_on(async move {
+            super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
             let unrelated_task = tokio::spawn(async { Instant::now() });
 
             let analysis_started = Instant::now();
-            let result = analyze_dsregcmd(
-                DSREGCMD_SAMPLE.to_string(),
-                Some(bundle.path().to_string_lossy().to_string()),
-            )
-            .await
-            .expect("analyze dsregcmd bundle fixture");
-            let analysis_finished_at = Instant::now();
-            let total_analysis_duration = analysis_started.elapsed();
-            let unrelated_ran_at = unrelated_task
+            let analysis = tokio::spawn(async move {
+                analyze_dsregcmd(
+                    DSREGCMD_SAMPLE.to_string(),
+                    Some(bundle.path().to_string_lossy().to_string()),
+                )
                 .await
-                .expect("join unrelated latency task");
+            });
+
+            // Wait for a simulated I/O stage to be *running*, then ask whether the
+            // unrelated task has run yet. Asserting it ran before the whole analysis
+            // finished was weaker: it could run in the window before the slow work
+            // started, while the command thread was still about to be blocked.
+            let entered = tokio::time::timeout(Duration::from_secs(5), async {
+                while super::simulated_bundle_io_stages_entered() == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            assert!(
+                entered.is_ok(),
+                "no simulated I/O stage started, so the wait never had anything to observe"
+            );
+            assert!(
+                unrelated_task.is_finished(),
+                "the unrelated task had not run while a simulated I/O stage was in progress"
+            );
+
+            let result = analysis
+                .await
+                .expect("join the analysis task")
+                .expect("analyze dsregcmd bundle fixture");
+            let total_analysis_duration = analysis_started.elapsed();
 
             assert!(result.active_evidence.is_some(), "expected active evidence");
             assert!(
@@ -1483,25 +1521,14 @@ mod tests {
             );
 
             println!(
-                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_ran_{}ms_before_the_analysis_finished",
+                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} stages={}",
                 total_analysis_duration.as_millis(),
-                analysis_finished_at.duration_since(unrelated_ran_at).as_millis()
+                super::simulated_bundle_io_stages_entered()
             );
 
             assert!(
                 total_analysis_duration >= Duration::from_millis(7 * 140),
                 "expected simulated bundle analysis to take at least 980ms, saw {:?}",
-                total_analysis_duration
-            );
-            // The property is that the unrelated task *ran* while the analysis
-            // was still in flight, not that it ran within some number of
-            // milliseconds. A wall-clock budget here failed at random on a loaded
-            // runner -- a check red for reasons unrelated to the change is worse
-            // than no check -- while this holds on any runner, and still fails if
-            // the analysis ever moves back onto the command thread.
-            assert!(
-                unrelated_ran_at < analysis_finished_at,
-                "the unrelated task did not run until the analysis had finished; total={:?}",
                 total_analysis_duration
             );
         });
