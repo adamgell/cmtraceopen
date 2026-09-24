@@ -1,0 +1,48 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "profile-retrieval-failure",
+  "workload": "enrollment/windows/autopilot",
+  "description": "Acquisition started and the report explicitly records that profile retrieval failed. The device is registered, so the failure is attributed to retrieval rather than identity.",
+  "generatedAtUtc": "2026-07-31T09:30:00Z",
+  "capture": {
+    "collectedAtUtc": "2026-07-31T09:30:00Z",
+    "windowsBuild": "10.0.26100.2314",
+    "autopilotSchemaVersion": "1",
+    "timezone": "UTC"
+  },
+  "artifacts": [
+    {
+      "artifactId": "autopilot-channel",
+      "family": "autopilotEvents",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-events.json",
+      "relativePath": "evidence/autopilot-channel/current/autopilot-events.json",
+      "bytesCopied": 4400,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "family": "mdmReport",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-report.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-report.json",
+      "relativePath": "evidence/mdm-diagnostics-report/current/autopilot-report.json",
+      "bytesCopied": 2727,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

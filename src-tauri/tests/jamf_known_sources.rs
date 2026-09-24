@@ -22,7 +22,10 @@ fn jamf_known_sources_present() {
     let all = build_known_log_sources();
     let jamf = jamf_sources(&all);
     let ids: Vec<&str> = jamf.iter().map(|s| s.id.as_str()).collect();
-    assert!(ids.contains(&"macos-jamf-log"), "missing macos-jamf-log: {ids:?}");
+    assert!(
+        ids.contains(&"macos-jamf-log"),
+        "missing macos-jamf-log: {ids:?}"
+    );
     assert!(ids.contains(&"macos-jamf-app-support-logs"));
     assert!(ids.contains(&"macos-jamf-receipts"));
     assert!(ids.contains(&"macos-jamf-self-service-log"));
@@ -40,11 +43,11 @@ fn jamf_log_default_file_is_jamf_log() {
         .iter()
         .find(|s| s.id == "macos-jamf-log")
         .expect("macos-jamf-log should exist");
-    let intent = entry.default_file_intent.as_ref().expect("should have default file intent");
-    assert!(intent
-        .preferred_file_names
-        .iter()
-        .any(|n| n == "jamf.log"));
+    let intent = entry
+        .default_file_intent
+        .as_ref()
+        .expect("should have default file intent");
+    assert!(intent.preferred_file_names.iter().any(|n| n == "jamf.log"));
 }
 
 #[cfg(not(target_os = "macos"))]

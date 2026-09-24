@@ -25,6 +25,7 @@ use crate::{
     intune::device::windows::inventory::{self, DeviceInventoryLogDialect},
     models::log_entry::{LogEntry, ParseResult, ParserSpecialization},
 };
+use chrono::{Local, LocalResult, NaiveDateTime, TimeZone};
 use std::path::Path;
 
 /// Post-process parsed entries to detect error code spans in messages.
@@ -35,6 +36,64 @@ pub fn annotate_error_code_spans(entries: &mut [LogEntry]) {
             entry.error_code_spans = spans;
         }
     }
+}
+
+/// Interpret a zoneless wall-clock timestamp that the source wrote on the
+/// machine it was captured from.
+///
+/// CBS.log and dism.log record the servicing host's clock with no offset. Their
+/// text is therefore a local wall clock, and reading it as UTC invents a zone
+/// the file never carried: every epoch consumer (sorting, ranges, elapsed) then
+/// disagrees with the timestamp text the same record renders by exactly the
+/// machine's offset. Resolving through `Local` keeps the epoch and the rendered
+/// record on one wall clock.
+///
+/// Two wall clocks a zone cannot place resolve to `None`, and the record keeps
+/// its text with no epoch: a clock inside a DST gap that the probes below cannot
+/// bound, and a clock a fall-back transition repeats. Both are genuinely
+/// ambiguous from the stamp alone. Choosing an occurrence would be a guess: a
+/// gap or repeated hour is either read with a neighbouring offset, which orders
+/// it before the records that led up to it or after the ones that follow, or
+/// carried from record to record, which either drags an hour of records forward
+/// on a small stamp inversion between writer threads or steps backwards across a
+/// sparse interval inside the repeated hour. A missing epoch is visible to every
+/// consumer; a wrong one is not.
+pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
+    match naive.and_local_timezone(Local) {
+        LocalResult::Single(value) => Some(value.timestamp_millis()),
+        LocalResult::Ambiguous(..) => None,
+        LocalResult::None => gap_transition_millis(naive),
+    }
+}
+
+/// The first instant the local zone can represent at or after `naive`, for a
+/// wall clock that falls inside a DST gap.
+///
+/// Returns `None` when the gap is wider than the probe window, which leaves the
+/// zone's own boundary unresolvable from the offsets alone.
+fn gap_transition_millis(naive: NaiveDateTime) -> Option<i64> {
+    let hour = chrono::Duration::hours(1);
+    let before = (naive - hour).and_local_timezone(Local).earliest()?;
+    let after = (naive + hour).and_local_timezone(Local).earliest()?;
+    let post_gap_offset = *after.offset();
+
+    // Equal offsets mean the window holds no boundary to find, so the bisection
+    // below would converge on a wrong instant.
+    if *before.offset() == post_gap_offset {
+        return None;
+    }
+
+    let mut low = before.timestamp_millis();
+    let mut high = after.timestamp_millis();
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        match Local.timestamp_millis_opt(middle).single() {
+            Some(value) if *value.offset() == post_gap_offset => high = middle,
+            _ => low = middle,
+        }
+    }
+
+    Some(high)
 }
 
 pub use detect::ResolvedParser;
@@ -142,6 +201,9 @@ pub fn parse_lines_with_selection(
         }
         crate::models::log_entry::ParserImplementation::CmtLog => {
             cmtlog::parse_lines(lines, file_path)
+        }
+        crate::models::log_entry::ParserImplementation::CompanyPortal => {
+            crate::intune::portal::windows::company_portal::logs::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => {
             match selection.parser {
@@ -302,6 +364,7 @@ mod tests {
         RecordFraming,
     };
     use crate::parser::timestamped::DateOrder;
+    use chrono::TimeZone;
 
     #[test]
     fn test_parse_lines_with_selection_uses_timestamp_date_order() {
@@ -418,7 +481,7 @@ mod tests {
             None,
         );
         let lines = [
-            "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t3\t{22222222-2222-2222-2222-222222222222}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034123",
+            "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123-0500\t1\t183\t[AGENT_INSTALLING_SUCCEEDED]\t101\t{22222222-2222-2222-2222-222222222222}\t1\t80240022\tWindows Update Agent\tFailure\tContent Install\tInstallation failed for KB5034123\tAAAAAAAAAAAAAAAA.1.0.0.3.0",
         ];
 
         let (entries, parse_errors) =
@@ -539,6 +602,88 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[test]
+    fn test_local_wall_clock_millis_keeps_the_clock_the_source_wrote() {
+        let naive =
+            NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+
+        let millis = local_wall_clock_millis(naive).expect("wall clock resolves");
+
+        // The epoch renders back to the wall clock the record carried, which is
+        // what keeps the Date/Time column and the epoch consumers (Time Range,
+        // sorting, elapsed) in agreement (#657).
+        let rendered = Local
+            .timestamp_millis_opt(millis)
+            .single()
+            .expect("local instant");
+        assert_eq!(rendered.naive_local(), naive);
+
+        // The zone this instant actually sits in decides whether the two
+        // readings can be told apart: a zone that happened to sit on UTC that
+        // day (London in January) cannot.
+        if rendered.offset().local_minus_utc() != 0 {
+            assert_ne!(millis, naive.and_utc().timestamp_millis());
+        }
+    }
+
+    #[test]
+    fn test_local_wall_clock_millis_keeps_a_skipped_clock_in_non_decreasing_order() {
+        // A spring-forward gap is the one reading no zone can resolve. The
+        // epoch order around the transition must still be non-decreasing, or a
+        // chronological merge places a gap record after a later wall clock.
+        let wall_clocks = [
+            "2024-03-10 01:30:00", // before the US transition
+            "2024-03-10 02:30:00", // inside it, where US zones skip an hour
+            "2024-03-10 03:00:00", // after it
+            "2024-03-10 04:00:00",
+        ];
+        let epochs: Vec<i64> = wall_clocks
+            .iter()
+            .map(|text| {
+                let naive =
+                    NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S").expect("wall clock");
+                local_wall_clock_millis(naive).expect("wall clock resolves")
+            })
+            .collect();
+
+        assert!(
+            epochs.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{wall_clocks:?} produced {epochs:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_repeated_wall_clock_reports_no_epoch() {
+        // A fall-back transition makes 01:30 happen twice. The stamp cannot say
+        // which pass it belongs to, so no epoch is asserted: the record keeps
+        // its text and the gap stays visible instead of being placed an hour
+        // from the truth in silence.
+        let naive =
+            NaiveDateTime::parse_from_str("2024-11-03 01:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let repeated = matches!(naive.and_local_timezone(Local), LocalResult::Ambiguous(..));
+
+        let resolved = local_wall_clock_millis(naive);
+
+        if repeated {
+            assert_eq!(
+                resolved, None,
+                "a wall clock the zone repeats must not be given an epoch"
+            );
+        } else {
+            assert!(
+                resolved.is_some(),
+                "a zone without that transition resolves the wall clock"
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_unrepeated_wall_clock_still_reports_an_epoch() {
+        let naive =
+            NaiveDateTime::parse_from_str("2024-01-15 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        assert!(local_wall_clock_millis(naive).is_some());
     }
 
     #[test]

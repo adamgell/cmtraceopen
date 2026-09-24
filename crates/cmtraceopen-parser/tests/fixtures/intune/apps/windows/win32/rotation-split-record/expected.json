@@ -1,0 +1,60 @@
+{
+  "scenario": "rotation-split-record",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-rotation",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "assigned",
+      "lastConfirmedPhase": "preEnforcementDetection",
+      "confidence": "low",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppWorkload.log covering the applicability and detection pass",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "fragmentRecords": 2,
+  "findings": [
+    {
+      "findingId": "win32-rotation-fragment",
+      "severity": "info",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-rotation:4",
+          "sourceArtifactId": "app-workload-rotation"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a physical-line fragment cannot create a transaction event",
+    "the 1603 inside the split record never reaches the deployment's outcome"
+  ],
+  "unkeyedObservationCount": 0,
+  "unknownVocabularyObserved": false
+}

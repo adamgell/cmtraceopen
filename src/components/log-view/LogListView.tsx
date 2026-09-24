@@ -262,22 +262,29 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirtyFilesRef = useRef<Set<string>>(new Set());
 
+  const flushDirtyMarkerFiles = useCallback(() => {
+    const dirty = Array.from(dirtyFilesRef.current);
+    dirtyFilesRef.current.clear();
+    for (const fp of dirty) {
+      void saveMarkers(fp);
+    }
+  }, [saveMarkers]);
+
   const scheduleMarkerSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const dirty = Array.from(dirtyFilesRef.current);
-      dirtyFilesRef.current.clear();
-      for (const fp of dirty) {
-        saveMarkers(fp);
-      }
+      saveTimerRef.current = null;
+      flushDirtyMarkerFiles();
     }, 1000);
-  }, [saveMarkers]);
+  }, [flushDirtyMarkerFiles]);
 
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      flushDirtyMarkerFiles();
     };
-  }, []);
+  }, [flushDirtyMarkerFiles]);
 
   const handleToggleMarker = useCallback(
     (filePath: string, lineId: number) => {

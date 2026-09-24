@@ -1,0 +1,74 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized configuration report rows, no real device data",
+  "reports": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-devicelock",
+          "sourceArtifactId": "mdm-diagnostic-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostic-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:14:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:14:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/Policy/Config/DeviceLock/DevicePasswordEnabled",
+      "settingId": null,
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "displayName": "Require a password",
+      "outcome": "applied",
+      "value": "1",
+      "error": null,
+      "namedData": []
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-passport",
+          "sourceArtifactId": "mdm-diagnostic-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostic-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:14:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:14:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/PassportForWork/33333333-3333-4333-8333-333333333333/Policies/UsePassportForWork",
+      "settingId": null,
+      "policyId": "22222222-2222-4222-8222-222222222222",
+      "displayName": "Require a password",
+      "outcome": "applied",
+      "value": "1",
+      "error": null,
+      "namedData": []
+    }
+  ]
+}

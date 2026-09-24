@@ -77,7 +77,10 @@ fn classifies_jss_connectivity_failure() {
 #[test]
 fn unparsed_lines_counted() {
     let result = parse_policy_log_impl(Path::new(BASIC)).expect("parse");
-    assert_eq!(result.total_lines, result.events.len() + result.unparsed_lines);
+    assert_eq!(
+        result.total_lines,
+        result.events.len() + result.unparsed_lines
+    );
 }
 
 #[test]
@@ -129,8 +132,10 @@ Wed Jul 22 20:10:32 host jamf[6003]: Successfully installed Zscaler-osx-4.5.2.31
     let installing = result
         .events
         .iter()
-        .find(|e| matches!(&e.result, JamfPolicyResult::InProgress)
-            && e.policy_name.as_deref() == Some("Zscaler-osx-4.5.2.312-installer.pkg"))
+        .find(|e| {
+            matches!(&e.result, JamfPolicyResult::InProgress)
+                && e.policy_name.as_deref() == Some("Zscaler-osx-4.5.2.312-installer.pkg")
+        })
         .expect("the Installing line should name the package");
     assert!(matches!(&installing.trigger, JamfPolicyTrigger::Other(k) if k == "install"));
 

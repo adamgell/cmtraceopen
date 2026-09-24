@@ -1,0 +1,2591 @@
+//! Fixture matrix for `intune::enrollment::windows::autopilot` (issue #362).
+//!
+//! Two layers, deliberately kept apart:
+//!
+//! 1. The shared harness in `tests/support/` validates everything every Intune
+//!    corpus shares: manifest envelope, path safety, byte-count truth, evidence
+//!    closure, the synthetic marker, coverage/capture-state binding, and the
+//!    privacy scan. That is not re-implemented here.
+//! 2. This file owns the Autopilot semantics: which outcome each scenario must
+//!    reduce to, how far the phase got, whether ESP linkage was earned by an
+//!    explicit key, and what the export may not leak.
+//!
+//! Expectations live in each scenario's `expected.json` rather than in inline
+//! snapshots, so a reviewer reads the contract next to the evidence that
+//! produced it. The `findings` array is the one golden section; regenerate it
+//! alone (never beside the readers of the same files) with
+//! `UPDATE_AUTOPILOT_FINDINGS=1 cargo test --test intune_windows_autopilot -- \
+//! --ignored update_findings_golden` and review the diff. The hand-written
+//! `findingIds` list is asserted against it, so a careless regeneration cannot
+//! quietly change which rules fire.
+
+mod support;
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use cmtraceopen_parser::intune::enrollment::windows::autopilot::{
+    redacted_export_projection, reduce_autopilot_bundle, AutopilotBundleInput,
+    AutopilotCaptureMetadata, AutopilotCaptureState, AutopilotEspLinkState, AutopilotOutcome,
+    AutopilotPhase, AutopilotSnapshot, AutopilotSourceInput,
+};
+use serde_json::{json, Value};
+use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, wire, Failures};
+
+/// The corpus this leaf owns.
+const CORPUS: &str = "enrollment/windows/autopilot";
+
+/// The required fixture matrix from issue #362, pinned so a scenario cannot be
+/// dropped or silently renamed. Asserted against the directory listing below.
+const SCENARIOS: [&str; 15] = [
+    "completed-without-esp-bundle",
+    "conflicting-profile-session-identifiers",
+    "deterministic-identity-redaction",
+    "identity-registration-mismatch",
+    "incomplete-event-channel",
+    "invalid-timezone",
+    "malformed-report-section",
+    "matching-autopilot-and-esp-session",
+    "network-retry-without-terminal-proof",
+    "no-profile-candidate",
+    "profile-application-failure",
+    "profile-retrieval-failure",
+    "self-deploying-source-contract-not-captured",
+    "unknown-windows-schema-version",
+    "user-driven-success-through-esp-handoff",
+];
+
+fn scenario_root(scenario: &str) -> PathBuf {
+    support::scenario_root(CORPUS, scenario)
+}
+
+/// The manifest's capture state as this lane's own collector vocabulary.
+///
+/// Deliberately not `support::artifact_status_for_capture_state`: Autopilot's
+/// input is `AutopilotCaptureState`, not `IntuneArtifactStatus`, and the mapping
+/// is serde's own `rename_all = "camelCase"` rather than a hand-written table.
+/// Routing it through the shared helper would mean re-deriving a lane enum from
+/// a status, which is backwards, and would drop serde as the single definition of
+/// how that enum spells itself on the wire.
+fn capture_state(raw: &str) -> AutopilotCaptureState {
+    serde_json::from_value(Value::String(raw.to_owned()))
+        .unwrap_or_else(|error| panic!("captureState {raw:?} is a known state: {error}"))
+}
+
+fn optional_string(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_owned)
+}
+
+/// Build the reducer input from a scenario's manifest and evidence on disk.
+///
+/// This is the only place the test touches the filesystem: the crate itself is
+/// wasm32-clean and never reads a file.
+fn bundle(scenario: &str) -> AutopilotBundleInput {
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+
+    let capture = &manifest["capture"];
+    let sources = manifest["artifacts"]
+        .as_array()
+        .expect("manifest artifacts must be an array")
+        .iter()
+        .map(|artifact| AutopilotSourceInput {
+            artifact_id: artifact["artifactId"]
+                .as_str()
+                .expect("artifactId")
+                .to_owned(),
+            family: artifact["family"].as_str().unwrap_or_default().to_owned(),
+            capture_state: capture_state(artifact["captureState"].as_str().expect("captureState")),
+            original_basename: optional_string(&artifact["originalBasename"]),
+            sanitized_source_path: optional_string(&artifact["sanitizedSourcePath"]),
+            content: artifact["relativePath"].as_str().map(|relative| {
+                std::fs::read_to_string(root.join(relative))
+                    .unwrap_or_else(|error| panic!("{relative} is readable: {error}"))
+            }),
+            ..AutopilotSourceInput::default()
+        })
+        .collect();
+
+    AutopilotBundleInput {
+        generated_at_utc: manifest["generatedAtUtc"]
+            .as_str()
+            .expect("generatedAtUtc")
+            .to_owned(),
+        capture: AutopilotCaptureMetadata {
+            collected_at_utc: optional_string(&capture["collectedAtUtc"]),
+            windows_build: optional_string(&capture["windowsBuild"]),
+            autopilot_schema_version: optional_string(&capture["autopilotSchemaVersion"]),
+            timezone: optional_string(&capture["timezone"]),
+        },
+        sources,
+        events: Vec::new(),
+    }
+}
+
+fn reduce(scenario: &str) -> (AutopilotSnapshot, Value) {
+    let expected = load_json(&scenario_root(scenario).join("expected.json"));
+    (reduce_autopilot_bundle(&bundle(scenario)), expected)
+}
+
+// ── The shared contract ─────────────────────────────────────────────────────
+
+#[test]
+fn the_corpus_contains_exactly_the_required_fixture_matrix() {
+    assert_eq!(
+        scenario_names(&corpus_root(CORPUS)),
+        SCENARIOS.map(str::to_owned).to_vec(),
+        "issue #362 pins this matrix; adding or dropping a scenario is a contract change"
+    );
+}
+
+#[test]
+fn every_scenario_satisfies_the_shared_fixture_contract() {
+    let mut failures = Failures::new();
+    for scenario in SCENARIOS {
+        let root = scenario_root(scenario);
+        failures.absorb(validate_scenario(
+            scenario,
+            &root,
+            &load_json(&root.join("manifest.json")),
+            &load_json(&root.join("expected.json")),
+        ));
+    }
+    failures.assert_empty("autopilot corpus");
+}
+
+/// The harness must actually reject a corrupted copy of this corpus, not merely
+/// pass over the clean one.
+#[test]
+fn a_corrupted_byte_count_in_this_corpus_is_rejected() {
+    let scenario = "no-profile-candidate";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+
+    let failures = validate_scenario(
+        scenario,
+        &root,
+        &mutated(&manifest, "/artifacts/0/bytesCopied", json!(1)),
+        &expected,
+    );
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("bytesCopied")),
+        "expected a bytesCopied failure, got {:?}",
+        failures.entries()
+    );
+}
+
+// ── Autopilot semantics ─────────────────────────────────────────────────────
+
+/// Assert one scenario's reduction against its stated contract.
+fn assert_scenario(scenario: &str) -> AutopilotSnapshot {
+    let (snapshot, expected) = reduce(scenario);
+    let value = wire(&snapshot);
+    let at = scenario;
+
+    for (pointer, key) in [
+        ("/outcome", "outcome"),
+        ("/phase", "phase"),
+        ("/confidence", "confidence"),
+        ("/timezoneState", "timezoneState"),
+        ("/timeBasis", "timeBasis"),
+    ] {
+        assert_eq!(
+            value.pointer(pointer).unwrap_or(&Value::Null),
+            &expected[key],
+            "{at}: {key}"
+        );
+    }
+    assert_eq!(
+        value["identity"]["registrationState"], expected["registrationState"],
+        "{at}: registrationState"
+    );
+    assert_eq!(
+        value["profile"]["candidateState"], expected["profileCandidateState"],
+        "{at}: profileCandidateState"
+    );
+    assert_eq!(
+        value["profile"]["retrieved"], expected["profileRetrieved"],
+        "{at}: profileRetrieved"
+    );
+    assert_eq!(
+        value["profile"]["applied"], expected["profileApplied"],
+        "{at}: profileApplied"
+    );
+
+    // ESP stays a sibling: the snapshot records how the two bind and nothing
+    // about what ESP itself concluded.
+    assert_eq!(
+        value["espLinkage"]["state"], expected["espLinkState"],
+        "{at}: espLinkState"
+    );
+    assert_eq!(
+        value["espLinkage"]["confidence"], expected["espLinkConfidence"],
+        "{at}: espLinkConfidence"
+    );
+    assert_eq!(
+        value["espLinkage"]["espSessionIds"], expected["espSessionIds"],
+        "{at}: espSessionIds"
+    );
+    assert_eq!(
+        snapshot
+            .esp_linkage
+            .matched_keys
+            .iter()
+            .map(|key| wire(&key.kind))
+            .collect::<Value>(),
+        expected["matchedKeyKinds"],
+        "{at}: matched correlation key kinds"
+    );
+
+    assert_eq!(
+        snapshot
+            .conflicts
+            .iter()
+            .map(|conflict| Value::String(conflict.conflict_id.clone()))
+            .collect::<Value>(),
+        expected["conflictIds"],
+        "{at}: conflictIds"
+    );
+
+    for document in &snapshot.documents {
+        let want = &expected["documentParseStates"][&document.artifact_id];
+        assert!(
+            !want.is_null(),
+            "{at}: document {} has no expected parse state",
+            document.artifact_id
+        );
+        assert_eq!(
+            wire(&document.parse_state),
+            *want,
+            "{at}: parse state for {}",
+            document.artifact_id
+        );
+    }
+    assert_eq!(
+        snapshot.documents.len(),
+        expected["documentParseStates"]
+            .as_object()
+            .expect("documentParseStates")
+            .len(),
+        "{at}: every expected document must be reported"
+    );
+
+    assert_eq!(
+        snapshot.unclassified_observation_ids.len() as u64,
+        expected["unclassifiedObservationCount"]
+            .as_u64()
+            .expect("unclassifiedObservationCount"),
+        "{at}: unclassified observation count"
+    );
+
+    assert_coverage_matches_manifest(at, &snapshot, &expected);
+    assert_findings(at, &snapshot, &expected);
+
+    // The invariant every leaf of epic #356 owes: no uncited conclusions.
+    assert!(
+        snapshot.findings_are_evidence_backed(),
+        "{at}: a finding cited neither evidence nor a coverage gap"
+    );
+
+    snapshot
+}
+
+fn assert_coverage_matches_manifest(at: &str, snapshot: &AutopilotSnapshot, expected: &Value) {
+    let actual = snapshot
+        .coverage
+        .iter()
+        .map(|entry| json!({ "artifactId": entry.artifact_id, "status": wire(&entry.status) }))
+        .collect::<Value>();
+    assert_eq!(actual, expected["coverage"], "{at}: coverage");
+}
+
+fn assert_findings(at: &str, snapshot: &AutopilotSnapshot, expected: &Value) {
+    let actual_ids = snapshot
+        .findings
+        .iter()
+        .map(|finding| Value::String(finding.finding_id.clone()))
+        .collect::<Value>();
+    assert_eq!(actual_ids, expected["findingIds"], "{at}: findingIds");
+
+    let golden = expected["findings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{at}: expected.json must carry a findings array"));
+    assert_eq!(
+        golden.len(),
+        snapshot.findings.len(),
+        "{at}: findings golden is stale; regenerate with UPDATE_AUTOPILOT_FINDINGS=1"
+    );
+    for (actual, want) in snapshot.findings.iter().zip(golden) {
+        assert_eq!(
+            wire(actual),
+            *want,
+            "{at}: finding {} drifted from its golden",
+            actual.finding_id
+        );
+    }
+}
+
+// ── The required fixture matrix ─────────────────────────────────────────────
+
+#[test]
+fn user_driven_success_reaches_the_esp_handoff_and_links_by_an_explicit_key() {
+    let snapshot = assert_scenario("user-driven-success-through-esp-handoff");
+    assert_eq!(
+        snapshot.oobe.settings.len(),
+        1,
+        "the OOBE settings override must be retained as a typed fact"
+    );
+    assert_eq!(
+        snapshot.profile.profile_id.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555")
+    );
+}
+
+/// Issue #362 explicitly defers self-deploying and pre-provisioning "only after
+/// its actual source contract is captured". Until then the honest reduction is
+/// a refusal, not a guess -- so this fixture asserts the refusal.
+#[test]
+fn a_self_deploying_sample_without_a_captured_source_contract_asserts_nothing_terminal() {
+    let snapshot = assert_scenario("self-deploying-source-contract-not-captured");
+    assert!(
+        snapshot
+            .documents
+            .iter()
+            .any(|document| document.declared_kind.as_deref()
+                == Some("autopilot.selfDeployingContract")),
+        "the unvalidated document's declared kind must survive verbatim"
+    );
+}
+
+#[test]
+fn no_profile_candidate_outranks_the_transient_lookup_that_preceded_it() {
+    assert_scenario("no-profile-candidate");
+}
+
+#[test]
+fn profile_retrieval_failure_is_distinct_from_having_no_candidate() {
+    let snapshot = assert_scenario("profile-retrieval-failure");
+    assert_eq!(
+        snapshot
+            .profile
+            .error
+            .as_ref()
+            .map(|error| error.raw.as_str()),
+        Some("0x80072EE2"),
+        "the reported code must survive in the form the source wrote it"
+    );
+}
+
+#[test]
+fn profile_application_failure_keeps_retrieval_marked_as_succeeded() {
+    assert_scenario("profile-application-failure");
+}
+
+#[test]
+fn an_identity_mismatch_outranks_every_downstream_profile_symptom() {
+    assert_scenario("identity-registration-mismatch");
+}
+
+#[test]
+fn a_network_symptom_without_a_proven_cause_stays_low_confidence() {
+    let snapshot = assert_scenario("network-retry-without-terminal-proof");
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-network-symptom-without-cause")
+        .expect("the symptom finding must be present");
+    assert_eq!(
+        wire(&finding.confidence),
+        json!("low"),
+        "a symptom with no proven cause may never be presented confidently"
+    );
+}
+
+#[test]
+fn reaching_the_handoff_without_esp_evidence_is_not_a_completed_deployment() {
+    assert_scenario("completed-without-esp-bundle");
+}
+
+#[test]
+fn one_explicit_shared_identifier_links_autopilot_to_an_esp_session() {
+    let snapshot = assert_scenario("matching-autopilot-and-esp-session");
+    assert_eq!(snapshot.esp_linkage.matched_keys.len(), 1);
+}
+
+#[test]
+fn contradictory_identifiers_suppress_every_terminal_claim() {
+    assert_scenario("conflicting-profile-session-identifiers");
+}
+
+#[test]
+fn a_capped_channel_cannot_support_a_negative_conclusion() {
+    assert_scenario("incomplete-event-channel");
+}
+
+#[test]
+fn a_malformed_report_section_is_a_coverage_gap_not_an_unknown_schema() {
+    assert_scenario("malformed-report-section");
+}
+
+#[test]
+fn an_unvalidated_windows_build_withholds_terminal_semantics_but_keeps_the_phase() {
+    assert_scenario("unknown-windows-schema-version");
+}
+
+#[test]
+fn an_unrecognizable_timezone_downgrades_the_time_basis() {
+    assert_scenario("invalid-timezone");
+}
+
+#[test]
+fn the_redacted_export_removes_identity_while_preserving_correlation() {
+    let scenario = "deterministic-identity-redaction";
+    let snapshot = assert_scenario(scenario);
+    let expected = load_json(&scenario_root(scenario).join("expected.json"));
+
+    let redacted = redacted_export_projection(&snapshot);
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    for needle in expected["redactionMustNotContain"]
+        .as_array()
+        .expect("redactionMustNotContain")
+    {
+        let needle = needle.as_str().expect("needle");
+        assert!(
+            !text.contains(needle),
+            "{scenario}: redacted export still contains {needle:?}"
+        );
+    }
+    for needle in expected["redactionMustContain"]
+        .as_array()
+        .expect("redactionMustContain")
+    {
+        let needle = needle.as_str().expect("needle");
+        assert!(
+            text.contains(needle),
+            "{scenario}: redacted export dropped {needle:?}, which is the only handle back to Intune"
+        );
+    }
+
+    // The masked correlation key must still equal the masked value it came
+    // from; otherwise redaction would destroy the very link it is exported to
+    // show.
+    let masked_key = &redacted.esp_linkage.matched_keys[0].value;
+    assert!(
+        masked_key.starts_with('['),
+        "the correlation key must be masked, got {masked_key}"
+    );
+    assert_eq!(
+        redacted.esp_linkage.matched_keys,
+        redacted_export_projection(&snapshot)
+            .esp_linkage
+            .matched_keys,
+        "masking must be a pure function of the value"
+    );
+}
+
+/// The `matched_keys` masking site in `redacted_export_projection` must
+/// normalize case on its own, not by riding on `autopilot_keys` happening to
+/// lowercase first. Both halves of that contract are pinned here: the reducer
+/// hands the projection lowercase key values, and the projection would still
+/// mask a mixed-case value to the same token if it ever received one.
+#[test]
+fn matched_key_masking_normalizes_case_independently_of_the_reducer() {
+    let snapshot = reduce_autopilot_bundle(&bundle("matching-autopilot-and-esp-session"));
+    let raw = snapshot.esp_linkage.matched_keys[0].value.clone();
+
+    // Contract half 1: reducer-produced key values are already lowercased.
+    assert_eq!(
+        raw,
+        raw.to_ascii_lowercase(),
+        "autopilot_keys must lowercase key values before they reach the snapshot"
+    );
+
+    let lower_token = redacted_export_projection(&snapshot)
+        .esp_linkage
+        .matched_keys[0]
+        .value
+        .clone();
+    assert!(
+        lower_token.starts_with("[redacted:"),
+        "the matched key must be masked, got {lower_token}"
+    );
+
+    // Contract half 2: the masking loop normalizes on its own. Feed it the
+    // same key in a casing the reducer never produces and the token must not
+    // change -- otherwise the loop is only correct by coincidence.
+    let mut mixed = snapshot.clone();
+    mixed.esp_linkage.matched_keys[0].value = raw.to_ascii_uppercase();
+    let upper_token = redacted_export_projection(&mixed).esp_linkage.matched_keys[0]
+        .value
+        .clone();
+    assert_eq!(
+        lower_token, upper_token,
+        "the same identifier in two casings must mask to one token at the matched_keys site"
+    );
+}
+
+// ── Cross-cutting contract ──────────────────────────────────────────────────
+
+#[test]
+fn reduction_is_deterministic_across_runs() {
+    for scenario in SCENARIOS {
+        let first = wire(&reduce_autopilot_bundle(&bundle(scenario)));
+        let second = wire(&reduce_autopilot_bundle(&bundle(scenario)));
+        assert_eq!(first, second, "{scenario}: reduction must be deterministic");
+    }
+}
+
+#[test]
+fn the_redacted_export_projection_is_idempotent() {
+    for scenario in SCENARIOS {
+        let snapshot = reduce_autopilot_bundle(&bundle(scenario));
+        let once = redacted_export_projection(&snapshot);
+        let twice = redacted_export_projection(&once);
+        assert_eq!(
+            wire(&once),
+            wire(&twice),
+            "{scenario}: redaction must be idempotent"
+        );
+    }
+}
+
+#[test]
+fn the_snapshot_serializes_as_stable_camel_case() {
+    let snapshot = reduce_autopilot_bundle(&bundle("user-driven-success-through-esp-handoff"));
+    let value = wire(&snapshot);
+    for key in [
+        "schemaVersion",
+        "generatedAtUtc",
+        "capture",
+        "timezoneState",
+        "timeBasis",
+        "identity",
+        "profile",
+        "oobe",
+        "handoff",
+        "espLinkage",
+        "phase",
+        "outcome",
+        "confidence",
+        "nextEvidenceRequests",
+        "observations",
+        "unclassifiedObservationIds",
+        "documents",
+        "conflicts",
+        "coverage",
+        "findings",
+    ] {
+        assert!(value.get(key).is_some(), "missing top-level key {key}");
+    }
+}
+
+/// Every finding must name a concrete next artifact, and every scenario that is
+/// not already complete must ask for something. A diagnosis that cannot say
+/// what to collect next is not actionable.
+#[test]
+fn every_finding_recommends_at_least_one_concrete_check() {
+    for scenario in SCENARIOS {
+        let snapshot = reduce_autopilot_bundle(&bundle(scenario));
+        for finding in &snapshot.findings {
+            assert!(
+                !finding.recommended_checks.is_empty(),
+                "{scenario}: finding {} recommends nothing",
+                finding.finding_id
+            );
+        }
+        if snapshot.outcome != cmtraceopen_parser::intune::enrollment::windows::autopilot::AutopilotOutcome::Completed {
+            assert!(
+                !snapshot.next_evidence_requests.is_empty(),
+                "{scenario}: an incomplete diagnosis must name the next artifact"
+            );
+        }
+    }
+}
+
+/// Observation ids must be unique across a bundle, or a finding's citation
+/// becomes ambiguous.
+#[test]
+fn observation_ids_are_unique_within_a_bundle() {
+    for scenario in SCENARIOS {
+        let snapshot = reduce_autopilot_bundle(&bundle(scenario));
+        let mut seen = BTreeSet::new();
+        for observation in &snapshot.observations {
+            assert!(
+                seen.insert(observation.observation_id.as_str()),
+                "{scenario}: observation id {} was reused",
+                observation.observation_id
+            );
+        }
+    }
+}
+
+/// Records from a channel this module does not own must not become Autopilot
+/// evidence, however plausible they look. A busy device would otherwise report
+/// a worse diagnosis than a quiet one.
+#[test]
+fn records_from_a_sibling_channel_are_ignored_entirely() {
+    let mut input = bundle("no-profile-candidate");
+    let intruder = std::fs::read_to_string(
+        scenario_root("no-profile-candidate")
+            .join("evidence/autopilot-channel/current/autopilot-events.json"),
+    )
+    .expect("evidence is readable")
+    .replace(
+        "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+        "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/ManagementService",
+    );
+    input.sources.push(AutopilotSourceInput {
+        artifact_id: "sibling-channel".to_owned(),
+        family: "managementService".to_owned(),
+        capture_state: AutopilotCaptureState::Captured,
+        original_basename: Some("management-service.json".to_owned()),
+        sanitized_source_path: None,
+        content: Some(intruder),
+        ..AutopilotSourceInput::default()
+    });
+
+    let snapshot = reduce_autopilot_bundle(&input);
+    let baseline = reduce_autopilot_bundle(&bundle("no-profile-candidate"));
+    assert_eq!(
+        snapshot.observations.len(),
+        baseline.observations.len(),
+        "a sibling channel's records must not become Autopilot observations"
+    );
+    assert_eq!(snapshot.outcome, baseline.outcome);
+    assert!(
+        snapshot.unclassified_observation_ids.is_empty(),
+        "an unrelated channel must not even register as unclassified Autopilot evidence"
+    );
+}
+
+// ── Framework hardening: assessability and linkage-conflict gates ───────────
+//
+// These scenarios are built inline rather than as fixture directories because
+// each one isolates a single reducer invariant from ADR-001 or ADR-003; the
+// fixture matrix above stays the contract for whole-bundle behavior.
+
+/// One synthetic Autopilot-channel event as a JSON fragment for an
+/// `autopilot.events` document. `access_state`/`parse_state` are the
+/// observation's own declared context, which is exactly what the assessability
+/// gate must consult.
+#[allow(clippy::too_many_arguments)]
+fn synthetic_event(
+    evidence_id: &str,
+    artifact_id: &str,
+    record: u64,
+    event_id: u32,
+    access_state: &str,
+    parse_state: &str,
+    named_data: Value,
+    message: &str,
+) -> Value {
+    json!({
+        "context": {
+            "evidenceRef": { "evidenceId": evidence_id, "sourceArtifactId": artifact_id },
+            "provenance": {
+                "sourceKind": "eventLog", "sourceArtifactId": artifact_id,
+                "filePath": null, "lineNumber": null, "recordNumber": record,
+                "registry": null, "event": null
+            },
+            "sourceTimestamp": null,
+            "observedAtUtc": "2026-07-31T09:30:00Z",
+            "sensitivity": "public",
+            "parseState": parse_state,
+            "accessState": access_state
+        },
+        "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+        "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+        "eventId": event_id,
+        "level": "information",
+        "task": null, "keywords": null, "recordId": record, "activityId": null,
+        "namedData": named_data,
+        "message": message
+    })
+}
+
+fn synthetic_source(artifact_id: &str, family: &str, document: &Value) -> AutopilotSourceInput {
+    AutopilotSourceInput {
+        artifact_id: artifact_id.to_owned(),
+        family: family.to_owned(),
+        capture_state: AutopilotCaptureState::Captured,
+        original_basename: Some(format!("{artifact_id}.json")),
+        sanitized_source_path: None,
+        content: Some(document.to_string()),
+        ..AutopilotSourceInput::default()
+    }
+}
+
+fn synthetic_bundle(sources: Vec<AutopilotSourceInput>) -> AutopilotBundleInput {
+    AutopilotBundleInput {
+        generated_at_utc: "2026-07-31T09:30:00Z".to_owned(),
+        capture: AutopilotCaptureMetadata {
+            collected_at_utc: Some("2026-07-31T09:30:00Z".to_owned()),
+            windows_build: Some("10.0.26100.2314".to_owned()),
+            autopilot_schema_version: Some("1".to_owned()),
+            timezone: Some("UTC".to_owned()),
+        },
+        sources,
+        events: Vec::new(),
+    }
+}
+
+/// The espHandoff report section every ADR-001 test below pairs with the
+/// success events, so a Completed claim is one gate away if the reducer honors
+/// a non-assessable record.
+fn esp_handoff_report(artifact_id: &str) -> Value {
+    json!({
+        "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+        "documentVersion": 1,
+        "sections": [{
+            "context": {
+                "evidenceRef": { "evidenceId": "hardening-esp-handoff", "sourceArtifactId": artifact_id },
+                "provenance": {
+                    "sourceKind": "diagnosticReport", "sourceArtifactId": artifact_id,
+                    "filePath": null, "lineNumber": null, "recordNumber": 1,
+                    "registry": null, "event": null
+                },
+                "sourceTimestamp": null,
+                "observedAtUtc": "2026-07-31T09:30:00Z",
+                "sensitivity": "sensitive",
+                "parseState": "parsed",
+                "accessState": "available"
+            },
+            "sectionId": "espHandoff",
+            "kind": "espHandoff",
+            "outcome": "observed",
+            "error": null,
+            "values": [],
+            "message": "Control passed to the Enrollment Status Page."
+        }]
+    })
+}
+
+/// ADR-001: non-assessable evidence cannot produce a terminal conclusion.
+/// A capped success record must not set `retrieved`/`applied`, and must not
+/// combine with an observed handoff into `Completed`.
+#[test]
+fn non_assessable_success_records_cannot_prove_profile_progress() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "gate-e1", "gated-channel", 1, 161, "capped", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "gate-e2", "gated-channel", 2, 153, "available", "raw",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("gated-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "gated-report",
+            "mdmReport",
+            &esp_handoff_report("gated-report"),
+        ),
+    ]));
+
+    assert!(
+        !snapshot.profile.retrieved,
+        "a capped record must not prove retrieval"
+    );
+    assert!(
+        !snapshot.profile.applied,
+        "an unparsed record must not prove application"
+    );
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "non-assessable success evidence must never reach a terminal success"
+    );
+}
+
+/// One report section as a JSON fragment, with its own declared context.
+#[allow(clippy::too_many_arguments)]
+fn synthetic_section(
+    evidence_id: &str,
+    artifact_id: &str,
+    section_id: &str,
+    kind: &str,
+    outcome: &str,
+    access_state: &str,
+    parse_state: &str,
+    message: &str,
+) -> Value {
+    json!({
+        "context": {
+            "evidenceRef": { "evidenceId": evidence_id, "sourceArtifactId": artifact_id },
+            "provenance": {
+                "sourceKind": "diagnosticReport", "sourceArtifactId": artifact_id,
+                "filePath": null, "lineNumber": null, "recordNumber": 1,
+                "registry": null, "event": null
+            },
+            "sourceTimestamp": null,
+            "observedAtUtc": "2026-07-31T09:30:00Z",
+            "sensitivity": "sensitive",
+            "parseState": parse_state,
+            "accessState": access_state
+        },
+        "sectionId": section_id,
+        "kind": kind,
+        "outcome": outcome,
+        "error": null,
+        "values": [],
+        "message": message
+    })
+}
+
+/// ADR-001, direction-aware: a non-assessable section can never PROVE
+/// progress, but one that explicitly RECORDED a failure must still block
+/// success. Hiding it entirely would let sibling assessable evidence complete
+/// the enrollment at high confidence over a failure that is on record.
+///
+/// This is the capped-failed-section fixture the corpus lacked: an assessable
+/// success path (events 161 + 153, an observed espHandoff section) plus a
+/// capped `profileApplication` section whose outcome is `failed`.
+#[test]
+fn a_recorded_failure_on_a_non_assessable_section_blocks_success() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "blocked-e1", "blocked-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "blocked-e2", "blocked-channel", 2, 153, "available", "parsed",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.",
+            ),
+        ]
+    });
+    let report = json!({
+        "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+        "documentVersion": 1,
+        "sections": [
+            synthetic_section(
+                "blocked-handoff", "blocked-report", "espHandoff", "espHandoff",
+                "observed", "available", "parsed",
+                "Control passed to the Enrollment Status Page.",
+            ),
+            synthetic_section(
+                "blocked-failure", "blocked-report", "profileApplication", "profileApplication",
+                "failed", "capped", "parsed",
+                "Failed to set the Autopilot profile as available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("blocked-channel", "autopilotEvents", &events),
+        synthetic_source("blocked-report", "mdmReport", &report),
+    ]));
+
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "a recorded failure on a capped section must block a completed outcome"
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::InsufficientEvidence,
+        "non-assessable evidence proves neither the failure nor the success (ADR-001)"
+    );
+    assert_ne!(
+        wire(&snapshot.confidence),
+        json!("high"),
+        "a success-path bundle carrying a recorded failure may not be presented at high confidence"
+    );
+    assert!(
+        !snapshot.profile.applied || snapshot.outcome != AutopilotOutcome::Completed,
+        "assessable progress may survive, but never as a completed enrollment"
+    );
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded")
+        .unwrap_or_else(|| {
+            panic!(
+                "the recorded-but-unassessable failure must never be silent, got {:?}",
+                snapshot
+                    .findings
+                    .iter()
+                    .map(|finding| finding.finding_id.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(wire(&finding.confidence), json!("low"));
+    assert!(
+        finding
+            .evidence
+            .iter()
+            .any(|evidence| evidence.evidence_id == "blocked-failure"),
+        "the finding must cite the capped section that recorded the failure"
+    );
+    assert!(snapshot.findings_are_evidence_backed());
+}
+
+/// The same gate must not fire when the failed section is assessable: an
+/// assessable failure is the real terminal outcome, not a blocked success.
+#[test]
+fn an_assessable_failed_section_still_produces_the_terminal_failure() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "term-e1", "term-channel", 1, 161, "available", "parsed",
+            json!([]), "AutopilotManager retrieve settings succeeded.",
+        )]
+    });
+    let report = json!({
+        "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+        "documentVersion": 1,
+        "sections": [synthetic_section(
+            "term-failure", "term-report", "profileApplication", "profileApplication",
+            "failed", "available", "parsed",
+            "Failed to set the Autopilot profile as available.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("term-channel", "autopilotEvents", &events),
+        synthetic_source("term-report", "mdmReport", &report),
+    ]));
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::ProfileApplicationFailure
+    );
+    assert!(
+        !snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded"),
+        "an assessable failure is not a non-assessable one"
+    );
+}
+
+/// ADR-001, direction-aware, event side: the same class as the capped-failed-
+/// section fixture above, but the recorded failure arrives as a capped EVENT
+/// (172, `ProfileApplicationFailed`) instead of a report section. The
+/// assessable success path (161 + 153-into-Available + an assessable
+/// espHandoff section) must not complete the enrollment over it.
+#[test]
+fn a_recorded_failure_on_a_non_assessable_event_blocks_success() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "evtblocked-e1", "evtblocked-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "evtblocked-e2", "evtblocked-channel", 2, 153, "available", "parsed",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+            synthetic_event(
+                "evtblocked-failure", "evtblocked-channel", 3, 172, "capped", "parsed",
+                json!([]), "Failed to set the Autopilot profile as available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("evtblocked-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "evtblocked-report",
+            "mdmReport",
+            &esp_handoff_report("evtblocked-report"),
+        ),
+    ]));
+
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "a recorded failure on a capped event must block a completed outcome"
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::InsufficientEvidence,
+        "non-assessable evidence proves neither the failure nor the success (ADR-001)"
+    );
+    assert_ne!(
+        wire(&snapshot.confidence),
+        json!("high"),
+        "a success-path bundle carrying a recorded failure may not be presented at high confidence"
+    );
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded")
+        .unwrap_or_else(|| {
+            panic!(
+                "the recorded-but-unassessable failure must never be silent, got {:?}",
+                snapshot
+                    .findings
+                    .iter()
+                    .map(|finding| finding.finding_id.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(wire(&finding.confidence), json!("low"));
+    assert!(
+        finding
+            .evidence
+            .iter()
+            .any(|evidence| evidence.evidence_id == "evtblocked-failure"),
+        "the finding must cite the capped event that recorded the failure"
+    );
+    assert!(snapshot.findings_are_evidence_backed());
+}
+
+/// The symmetric control: the same event 172, assessable, is the real terminal
+/// failure. The new event-side gate must not swallow it into a blocked
+/// success, and the non-assessable finding must not fire.
+#[test]
+fn an_assessable_failed_event_still_produces_the_terminal_failure() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "evtterm-e1", "evtterm-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "evtterm-failure", "evtterm-channel", 2, 172, "available", "parsed",
+                json!([]), "Failed to set the Autopilot profile as available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "evtterm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::ProfileApplicationFailure
+    );
+    assert!(
+        !snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded"),
+        "an assessable failure is not a non-assessable one"
+    );
+}
+
+/// ADR-001, same class: a non-assessable record carrying identity keys must
+/// not inflate the phase to `IdentityObserved` through the evidence list.
+#[test]
+fn non_assessable_identity_records_cannot_raise_the_phase() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "gate-i1", "gated-channel", 1, 161, "capped", "parsed",
+            json!([{ "name": "serialNumber", "value": "SYNTH-5CD1234ABC" }]),
+            "AutopilotManager retrieve settings succeeded.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "gated-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    assert!(
+        snapshot.identity.evidence.is_empty(),
+        "a non-assessable record may not be cited as identity evidence"
+    );
+    assert_eq!(
+        snapshot.phase,
+        AutopilotPhase::NoEvidence,
+        "an unreadable record alone must not raise the phase"
+    );
+}
+
+/// ADR-003: unresolved authoritative contradictions stay conservative. When
+/// distinct explicit keys resolve to distinct ESP sessions, the linkage is
+/// `Conflicting`; that must surface as `ContradictoryEvidence` with a finding,
+/// never as `Completed`.
+#[test]
+fn a_conflicting_esp_linkage_cannot_report_completed() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "link-e1", "linked-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "link-e2", "linked-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "correlationId", "value": "99999999-8888-7777-6666-555555555555" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [
+            {
+                "sessionId": "esp-session-a",
+                "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "correlationId": null, "activityId": null,
+                "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "esp-a", "sourceArtifactId": "esp-session-facts" }
+            },
+            {
+                "sessionId": "esp-session-b",
+                "enrollmentId": null,
+                "correlationId": "99999999-8888-7777-6666-555555555555",
+                "activityId": null, "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:25Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "esp-b", "sourceArtifactId": "esp-session-facts" }
+            }
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("linked-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "linked-report",
+            "mdmReport",
+            &esp_handoff_report("linked-report"),
+        ),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::ContradictoryEvidence,
+        "an ambiguous session identity must not be reported as a completed handoff"
+    );
+    assert!(
+        snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "autopilot-esp-link-conflicting"),
+        "the conflicting linkage must be explained by a finding, got {:?}",
+        snapshot
+            .findings
+            .iter()
+            .map(|finding| finding.finding_id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot.findings_are_evidence_backed(),
+        "the linkage-conflict finding must cite evidence"
+    );
+}
+
+/// ADR-003 via ADR-001, the conservative direction for correlation keys: a key
+/// carried only by a non-assessable observation must still be USED to DETECT a
+/// session-identity conflict. Dropping it can shrink the matched-session set
+/// from two to one and collapse Conflicting into Linked into Completed --
+/// exactly the silent upgrade the assessability gate exists to prevent.
+///
+/// This is the capped-key-carrying-observation fixture the corpus lacked: the
+/// first ESP session matches an assessable key, the second matches only a key
+/// on a capped observation.
+#[test]
+fn a_key_on_a_capped_observation_still_detects_a_second_esp_session() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "cap-e1", "cap-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "cap-e2", "cap-channel", 2, 153, "available", "parsed",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.",
+            ),
+            synthetic_event(
+                "cap-e3", "cap-channel", 3, 161, "capped", "parsed",
+                json!([{ "name": "correlationId", "value": "99999999-8888-7777-6666-555555555555" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [
+            {
+                "sessionId": "esp-session-a",
+                "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "correlationId": null, "activityId": null,
+                "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "cap-esp-a", "sourceArtifactId": "esp-session-facts" }
+            },
+            {
+                "sessionId": "esp-session-b",
+                "enrollmentId": null,
+                "correlationId": "99999999-8888-7777-6666-555555555555",
+                "activityId": null, "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:25Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "cap-esp-b", "sourceArtifactId": "esp-session-facts" }
+            }
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("cap-channel", "autopilotEvents", &events),
+        synthetic_source("cap-report", "mdmReport", &esp_handoff_report("cap-report")),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting,
+        "the capped key's session must still count toward conflict detection"
+    );
+    assert!(
+        snapshot
+            .esp_linkage
+            .esp_session_ids
+            .contains(&"esp-session-b".to_owned()),
+        "the session detected through the capped key must be named"
+    );
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "dropping the capped key must not collapse Conflicting into Completed"
+    );
+    assert_eq!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+    assert!(snapshot.findings_are_evidence_backed());
+}
+
+/// `AutopilotEspLinkage` documents `matched_keys` as empty for every
+/// non-`Linked` state. The distinct-keys-to-distinct-sessions `Conflicting`
+/// path only DETECTED ambiguity; exporting its detecting keys as
+/// `matched_keys` would hand a consumer match-shaped proof from the one state
+/// whose meaning is that nothing was proven.
+#[test]
+fn a_conflicting_linkage_exports_no_matched_keys() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "nomk-e1", "nomk-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "nomk-e2", "nomk-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "correlationId", "value": "99999999-8888-7777-6666-555555555555" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [
+            {
+                "sessionId": "esp-session-a",
+                "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "correlationId": null, "activityId": null,
+                "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "nomk-esp-a", "sourceArtifactId": "esp-session-facts" }
+            },
+            {
+                "sessionId": "esp-session-b",
+                "enrollmentId": null,
+                "correlationId": "99999999-8888-7777-6666-555555555555",
+                "activityId": null, "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:25Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "nomk-esp-b", "sourceArtifactId": "esp-session-facts" }
+            }
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("nomk-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "nomk-report",
+            "mdmReport",
+            &esp_handoff_report("nomk-report"),
+        ),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting
+    );
+    assert!(
+        snapshot.esp_linkage.matched_keys.is_empty(),
+        "matched_keys is documented empty for every non-Linked state, got {:?}",
+        snapshot.esp_linkage.matched_keys
+    );
+}
+
+/// `distinct_values` groups case-insensitively only for keys whose values are
+/// case-insensitive identities on Windows. `hardwareHash` is not one: its
+/// Base64 payload is case-sensitive, so two hashes differing only by case are
+/// two different hashes. Folding them into one group let `single_value`
+/// publish one of them as corroborated identity evidence.
+#[test]
+fn hardware_hashes_differing_only_by_case_stay_distinct() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "hash-e1", "hash-channel", 1, 161, "available", "parsed",
+                json!([
+                    { "name": "hardwareHash", "value": "AAECAwQFBgcICQ==" },
+                    { "name": "serialNumber", "value": "SER-0001" },
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "hash-e2", "hash-channel", 2, 161, "available", "parsed",
+                json!([
+                    { "name": "hardwareHash", "value": "aaecawqfbgcicq==" },
+                    { "name": "serialNumber", "value": "ser-0001" },
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "hash-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    assert_eq!(
+        snapshot.identity.hardware_hash, None,
+        "two hardware hashes differing only by case are two distinct hashes; \
+         neither may be published as the single corroborated value"
+    );
+    // Control: serial numbers ARE case-insensitive identities on Windows, so
+    // the same bundle still collapses the two serial casings into one value.
+    assert!(
+        snapshot.identity.serial_number.is_some(),
+        "case-insensitive identity keys must keep collapsing casings"
+    );
+}
+
+/// The other half of the same rule: a linkage whose ONLY explicit key rides a
+/// non-assessable observation may not upgrade to a confident Linked. Detection
+/// may widen (conservative); proof may not.
+#[test]
+fn a_non_assessable_only_key_match_cannot_upgrade_to_linked() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "solo-e1", "solo-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "solo-e2", "solo-channel", 2, 161, "capped", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-a",
+            "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "correlationId": null, "activityId": null,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "solo-esp-a", "sourceArtifactId": "esp-session-facts" }
+        }]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("solo-channel", "autopilotEvents", &events),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_ne!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Linked,
+        "a key readable only from a capped record may not prove a link"
+    );
+}
+
+/// A capture that declares only an unvalidated Autopilot schema version (no
+/// Windows build at all) still refuses terminal semantics, and that refusal
+/// must be explained by the unknown-schema finding rather than left silent.
+#[test]
+fn a_schema_version_only_unknown_schema_is_explained_by_a_finding() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "schema-e1", "schema-channel", 1, 161, "available", "parsed",
+            json!([]), "AutopilotManager retrieve settings succeeded.",
+        )]
+    });
+    let mut bundle = synthetic_bundle(vec![synthetic_source(
+        "schema-channel",
+        "autopilotEvents",
+        &events,
+    )]);
+    bundle.capture.windows_build = None;
+    bundle.capture.autopilot_schema_version = Some("3".to_owned());
+
+    let snapshot = reduce_autopilot_bundle(&bundle);
+    assert_eq!(snapshot.outcome, AutopilotOutcome::UnknownSchema);
+    assert!(
+        snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "autopilot-unknown-schema"),
+        "withheld terminal semantics must be explained, got {:?}",
+        snapshot
+            .findings
+            .iter()
+            .map(|finding| finding.finding_id.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A case-only difference between two sightings of the same identifier is not
+/// a conflict: serials and GUIDs are case-insensitive identities, and the
+/// redacted export already masks the trimmed, lowercased value, so treating
+/// casings as distinct produced "2 distinct values" rendered as two identical
+/// tokens -- a self-contradictory export (ADR-004: redaction must not change
+/// conclusions within one analysis).
+#[test]
+fn a_case_only_identifier_difference_is_not_a_conflict() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "case-e1", "case-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD1234ABC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "case-e2", "case-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "synth-5cd1234abc" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "case-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert!(
+        snapshot.conflicts.is_empty(),
+        "two casings of one serial are one identity, got {:?}",
+        snapshot.conflicts
+    );
+    assert_ne!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+    assert_eq!(
+        snapshot.identity.serial_number.as_deref(),
+        Some("SYNTH-5CD1234ABC"),
+        "the representative casing must be deterministic"
+    );
+}
+
+/// The control for the test above: genuinely different identifiers still
+/// conflict, and the conflict still reports both values.
+#[test]
+fn genuinely_distinct_identifiers_still_conflict() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "real-e1", "real-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD1234ABC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "real-e2", "real-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD9999XYZ" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "real-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let conflict = snapshot
+        .conflicts
+        .iter()
+        .find(|conflict| conflict.conflict_id == "conflicting-serial-number")
+        .expect("two different serials must still conflict");
+    assert_eq!(conflict.values.len(), 2);
+    assert_eq!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+}
+
+/// When ESP facts exist but share no explicit key, the guidance to go find a
+/// shared identifier must survive whatever the time gate concludes. The
+/// narrowed (assessable-only) overlap window can turn TimeOnlyCandidate into
+/// NotObserved, and losing the next-evidence request with it would hide the
+/// one step that advances the diagnosis.
+#[test]
+fn unlinked_esp_sessions_keep_the_shared_identifier_evidence_request() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "unlinked-e1", "unlinked-channel", 1, 161, "available", "parsed",
+            json!([]), "AutopilotManager retrieve settings succeeded.",
+        )]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-a",
+            "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "correlationId": null, "activityId": null,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "unlinked-esp-a", "sourceArtifactId": "esp-session-facts" }
+        }]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("unlinked-channel", "autopilotEvents", &events),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::NotObserved,
+        "no key and no provable overlap window must stay NotObserved"
+    );
+    assert!(
+        snapshot.next_evidence_requests.iter().any(|request| {
+            request.contains("identifier shared by the Autopilot and ESP evidence")
+        }),
+        "the shared-identifier request must survive the time gate, got {:?}",
+        snapshot.next_evidence_requests
+    );
+}
+
+/// The native-event input path: events supplied directly on the bundle derive
+/// their artifact from the event's own provenance and produce observations
+/// without any document or source coverage entry.
+#[test]
+fn native_events_are_absorbed_with_their_provenance_artifact() {
+    use cmtraceopen_parser::intune::evidence::{
+        IntuneAccessState, IntuneEvidenceRef, IntuneObservationContext, IntuneParseState,
+        IntuneProvenance, IntuneSensitivity, IntuneSourceKind,
+    };
+    use cmtraceopen_parser::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
+
+    let mut bundle = synthetic_bundle(Vec::new());
+    bundle.events.push(NormalizedWindowsEvent {
+        context: IntuneObservationContext {
+            evidence_ref: IntuneEvidenceRef {
+                evidence_id: "native-e1".to_owned(),
+                source_artifact_id: "native-adapter".to_owned(),
+            },
+            provenance: IntuneProvenance {
+                source_kind: IntuneSourceKind::EventLog,
+                source_artifact_id: "native-adapter".to_owned(),
+                file_path: None,
+                line_number: None,
+                record_number: Some(1),
+                registry: None,
+                event: None,
+            },
+            source_timestamp: None,
+            observed_at_utc: "2026-07-31T09:30:00Z".to_owned(),
+            sensitivity: IntuneSensitivity::Public,
+            parse_state: IntuneParseState::Parsed,
+            access_state: IntuneAccessState::Available,
+        },
+        channel: "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot".to_owned(),
+        provider: "Microsoft-Windows-ModernDeployment-Diagnostics-Provider".to_owned(),
+        event_id: 161,
+        level: NormalizedEventLevel::Information,
+        task: None,
+        keywords: None,
+        record_id: Some(1),
+        activity_id: None,
+        event_version: None,
+        named_data: Vec::new(),
+        message: Some("AutopilotManager retrieve settings succeeded.".to_owned()),
+    });
+
+    let snapshot = reduce_autopilot_bundle(&bundle);
+    let observation = snapshot
+        .observations
+        .iter()
+        .find(|observation| observation.observation_id == "native-e1")
+        .expect("the native event must become an observation under its own evidence id");
+    assert_eq!(
+        observation.context.evidence_ref.source_artifact_id, "native-adapter",
+        "the artifact must come from the event's own provenance"
+    );
+    assert!(
+        snapshot.documents.is_empty(),
+        "a native event is not a document"
+    );
+    assert!(
+        snapshot.coverage.is_empty(),
+        "coverage entries describe supplied sources; a native event has none"
+    );
+    assert!(snapshot.profile.retrieved);
+}
+
+/// One profile-channel event with a caller-set `activityId`, the module's
+/// retry/session correlation key. `synthetic_event` hardcodes a null
+/// `activityId`, so the linkage cases override it here.
+fn profile_event(record: u64, event_id: u32, activity: Option<&str>, message: &str) -> Value {
+    let mut event = synthetic_event(
+        &format!("prof-{event_id}-{record}"),
+        "prof-channel",
+        record,
+        event_id,
+        "available",
+        "parsed",
+        json!([]),
+        message,
+    );
+    event["activityId"] = match activity {
+        Some(value) => json!(value),
+        None => Value::Null,
+    };
+    event
+}
+
+/// An ESP session fact keyed only on `activityId`, so it links to whichever
+/// profile events carry the same activity id.
+fn esp_session_on_activity(activity: &str) -> Value {
+    json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-1",
+            "enrollmentId": null, "correlationId": null,
+            "activityId": activity,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "esp-retry-1", "sourceArtifactId": "esp-facts" }
+        }]
+    })
+}
+
+/// Reduce a bundle whose profile events appear in `events_in_order`, paired
+/// with an observed ESP handoff and an ESP session on `success_activity`. Every
+/// completion gate except the profile candidate is left open, so the outcome
+/// turns solely on whether the later success is allowed to erase the earlier
+/// explicit negative.
+fn reduce_profile_retry(events_in_order: Vec<Value>, success_activity: &str) -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": events_in_order,
+    });
+    reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("prof-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "prof-report",
+            "mdmReport",
+            &esp_handoff_report("prof-report"),
+        ),
+        synthetic_source(
+            "esp-facts",
+            "espSession",
+            &esp_session_on_activity(success_activity),
+        ),
+    ]))
+}
+
+const PROFILE_NEGATIVE_MESSAGE: &str =
+    "ZtdDeviceHasNoAssignedProfile - No profile assigned to the device and no default profile.";
+const PROFILE_RETRIEVE_MESSAGE: &str = "AutopilotManager retrieve settings succeeded.";
+const PROFILE_STATE_MESSAGE: &str =
+    "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.";
+
+/// ADR-003: an explicit negative profile signal (815, NoAssignedProfile) must
+/// not be silently erased by a later success (161 + 153) that shares no retry
+/// linkage with it. Here the negative carries no activity id while the
+/// successes and the ESP session share `attempt-1`, so the ESP handoff links
+/// and every completion gate except the profile candidate is open. Without an
+/// explicit retry link the reducer must stay conservative: the recorded
+/// negative stands and the enrollment is not Completed.
+#[test]
+fn an_unlinked_success_cannot_erase_an_earlier_no_profile_negative() {
+    let snapshot = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    // Sanity: the ESP handoff path is genuinely open, so the only thing that can
+    // hold the outcome back from Completed is the unlinked profile negative.
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Linked,
+        "the ESP session must link so this test isolates the profile-linkage gate"
+    );
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "an unlinked later success must not complete over an explicit negative"
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::NoProfileCandidate,
+        "the conservative result is the explicit negative that was recorded, not success"
+    );
+}
+
+/// The linkage-permitted companion: when the negative and the successes share
+/// the same activity id, the success is a proven retry of the same attempt and
+/// may raise the candidate to Available, reaching Completed.
+#[test]
+fn a_retry_linked_success_completes_over_an_earlier_negative() {
+    let snapshot = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, Some("attempt-1"), PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "a retry-linked success may replace the earlier negative and complete"
+    );
+}
+
+/// ADR-003: input vector order is not chronology. The unlinked negative-then-
+/// success verdict must not change when the events are permuted.
+#[test]
+fn the_profile_linkage_verdict_is_invariant_under_input_order() {
+    let forward = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+    let reversed = reduce_profile_retry(
+        vec![
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    assert_eq!(
+        forward.outcome, reversed.outcome,
+        "permuting non-ordered input must not change the outcome"
+    );
+    assert_eq!(forward.outcome, AutopilotOutcome::NoProfileCandidate);
+}
+
+/// ADR-001, finding side: a non-assessable failure event cannot produce a
+/// high-confidence terminal FINDING, exactly as it cannot produce a terminal
+/// OUTCOME. A capped event 171 (`TpmIdentityFailed`) with no assessable
+/// identity-mismatch evidence must not emit the `Blocker`/`High`
+/// `autopilot-identity-registration-mismatch` finding. The recorded failure is
+/// still surfaced -- by the low-confidence non-assessable finding -- so it is
+/// blocked visibly rather than silently.
+#[test]
+fn a_non_assessable_tpm_failure_cannot_emit_a_high_confidence_blocker() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "tpm-capped", "tpm-channel", 1, 171, "capped", "parsed",
+            json!([]),
+            "AutopilotManager failed to confirm the TPM identity for this device.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "tpm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::IdentityRegistrationMismatch,
+        "a capped 171 cannot prove the terminal outcome"
+    );
+    assert!(
+        !snapshot.findings.iter().any(|finding| {
+            finding.finding_id == "autopilot-identity-registration-mismatch"
+        }),
+        "a non-assessable 171 must not emit the high-confidence identity-mismatch blocker, got {:?}",
+        snapshot
+            .findings
+            .iter()
+            .map(|finding| &finding.finding_id)
+            .collect::<Vec<_>>()
+    );
+    // The recorded failure must still be visible, just not as a terminal claim.
+    assert!(
+        snapshot
+            .findings
+            .iter()
+            .any(|finding| { finding.finding_id == "autopilot-non-assessable-failure-recorded" }),
+        "the recorded failure must be surfaced by its own low-confidence finding"
+    );
+}
+
+/// The regression companion: an *assessable* event 171 must still emit the
+/// `autopilot-identity-registration-mismatch` blocker. The assessability
+/// boundary must gate non-assessable evidence without silencing the real
+/// terminal finding.
+#[test]
+fn an_assessable_tpm_failure_still_emits_the_identity_mismatch_blocker() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "tpm-ok", "tpm-channel", 1, 171, "available", "parsed",
+            json!([]),
+            "AutopilotManager failed to confirm the TPM identity for this device.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "tpm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-identity-registration-mismatch")
+        .expect("an assessable 171 must still emit the identity-mismatch blocker");
+    assert_eq!(wire(&finding.severity), json!("blocker"));
+    assert_eq!(wire(&finding.confidence), json!("high"));
+}
+
+/// ADR-004: a Base64 hardware hash quoted in an observation message must be
+/// absent from the exported projection even when it ends in a non-word Base64
+/// character (`=`, `==`, `+`, `/`). Free-text redaction, not whole-value
+/// masking, owns this path, so the export is the honest place to pin it.
+#[test]
+fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
+    for blob in [
+        format!("{}=", "Q".repeat(43)),
+        format!("{}==", "Q".repeat(42)),
+        format!("{}+", "Q".repeat(43)),
+        format!("{}/", "Q".repeat(43)),
+    ] {
+        let events = json!({
+            "autopilotDocument": "autopilot.events",
+            "documentVersion": 1,
+            "events": [synthetic_event(
+                "blob-e1", "blob-channel", 1, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported hardware hash {blob} for this device."),
+            )]
+        });
+        let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+            "blob-channel",
+            "autopilotEvents",
+            &events,
+        )]));
+        let redacted = redacted_export_projection(&snapshot);
+        let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+        assert!(
+            !text.contains(&blob),
+            "the Base64 hash {blob:?} survived the exported projection: {text}"
+        );
+        // The whole-blob check alone would pass while a masked body left its
+        // punctuation tail behind, which is the exact partial match the old
+        // word-boundary pattern produced. Assert the tail is gone too.
+        let body = &blob[..blob.len() - 1];
+        assert!(
+            !text.contains(body),
+            "the Base64 body {body:?} survived the exported projection: {text}"
+        );
+        let tail = &blob[blob.len() - 1..];
+        assert!(
+            !text.contains(&format!("] {tail}")) && !text.contains(&format!("]{tail}")),
+            "the Base64 tail {tail:?} dangled after the mask token: {text}"
+        );
+    }
+}
+
+// ── Literals masked as typed fields must not survive in free text ───────────
+//
+// Issue #564: `redacted_export_projection` masks serial numbers, tenant
+// domains, device names, hardware hashes, and UPNs where they are typed fields,
+// but the same literals used to ride out untouched inside narrative. A bare
+// serial, a bare DNS domain, and a bare host name carry no distinctive shape,
+// so no free-text pattern can recognize one; the projection has to scrub the
+// exact values it is about to mask.
+
+/// A snapshot whose typed identity fields are also planted, unlabelled, in the
+/// narrative: the shape issue #564 is about.
+///
+/// The values are the corpus's own synthetic identity material
+/// (`deterministic-identity-redaction`), not invented text. The second event's
+/// narrative names the device the way a real record does -- "Device X
+/// (serial) ... tenant" -- with no field label anywhere in sight.
+fn literal_carrying_export_snapshot() -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The typed fields: every one of these values is masked.
+            synthetic_event(
+                "literal-e1", "literal-channel", 1, 161, "available", "parsed",
+                json!([
+                    { "name": "serialNumber", "value": "SYNTH-SERIAL-0001" },
+                    { "name": "tenantDomain", "value": "contoso.example" },
+                    { "name": "deviceName", "value": "SYNTH-DEV-01" }
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same three literals, unlabelled, in free narrative.
+            synthetic_event(
+                "literal-e2", "literal-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download. Device SYNTH-DEV-01 \
+                 (SYNTH-SERIAL-0001) last checked in to contoso.example.",
+            ),
+        ]
+    });
+    reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "literal-channel",
+        "autopilotEvents",
+        &events,
+    )]))
+}
+
+#[test]
+fn bare_identity_literals_in_narrative_do_not_survive_the_export() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    // The typed fields really do carry these values, so the assertions below
+    // are about the narrative and not about a fixture that declared nothing.
+    for (field, typed) in [
+        ("serialNumber", &redacted.identity.serial_number),
+        ("tenantDomain", &redacted.identity.tenant_domain),
+        ("deviceName", &redacted.identity.device_name),
+    ] {
+        let typed = typed
+            .as_deref()
+            .unwrap_or_else(|| panic!("the fixture declares {field}"));
+        assert!(
+            typed.starts_with("[redacted:"),
+            "{field} must be masked as a typed field, got {typed}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for needle in ["SYNTH-SERIAL-0001", "contoso.example", "SYNTH-DEV-01"] {
+        assert!(
+            !text.contains(needle),
+            "the bare literal {needle:?} survived the exported projection: {text}"
+        );
+    }
+}
+
+/// The scrub must not merely delete identity from narrative: it must put the
+/// same token there that the typed field carries. Otherwise an export that
+/// named one device in two records would read as two different devices.
+#[test]
+fn a_free_text_literal_masks_to_the_same_token_as_its_typed_field() {
+    let snapshot = literal_carrying_export_snapshot();
+    let redacted = redacted_export_projection(&snapshot);
+
+    let serial_token = redacted
+        .identity
+        .serial_number
+        .clone()
+        .expect("the fixture declares a serial number");
+    assert!(serial_token.starts_with("[redacted:"), "got {serial_token}");
+
+    let messages = |snapshot: &AutopilotSnapshot| -> Vec<Option<String>> {
+        snapshot
+            .observations
+            .iter()
+            .map(|observation| observation.message.clone())
+            .collect()
+    };
+    let before = messages(&snapshot);
+    let after = messages(&redacted);
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "the projection must not add or drop observations"
+    );
+
+    let mut rewritten = 0;
+    for (before, after) in before.iter().zip(&after) {
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        if !before.contains("SYNTH-SERIAL-0001") {
+            continue;
+        }
+        rewritten += 1;
+        assert!(
+            after.contains(&serial_token),
+            "the free-text mention must carry the typed field's token {serial_token}, got {after}"
+        );
+    }
+    assert_eq!(
+        rewritten, 1,
+        "the fixture plants exactly one free-text mention of the serial"
+    );
+}
+
+/// Firmware routinely reports junk serials. A value too short to be told apart
+/// from an ordinary word must not be scrubbed, or readable evidence is mangled
+/// without anything being protected.
+#[test]
+fn a_degenerate_short_serial_does_not_scrub_unrelated_narrative() {
+    let message = "AutopilotManager reported serial N/A to the service.";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "junk-e1", "junk-channel", 1, 161, "available", "parsed",
+            json!([{ "name": "serialNumber", "value": "N/A" }]),
+            message,
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "junk-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    assert!(
+        matches!(
+            redacted.identity.serial_number.as_deref(),
+            Some(serial) if serial.starts_with("[redacted:")
+        ),
+        "the fixture's junk serial must still be masked as a typed field, got {:?}",
+        redacted.identity.serial_number
+    );
+    assert_eq!(
+        redacted.observations[0].message.as_deref(),
+        Some(message),
+        "a three-byte junk serial must not scrub ordinary narrative"
+    );
+}
+
+/// The scrub reads its own output back on the second pass, so a token must
+/// never be treated as a literal to scrub again.
+#[test]
+fn the_literal_scrub_is_idempotent() {
+    let snapshot = literal_carrying_export_snapshot();
+    let once = redacted_export_projection(&snapshot);
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a projection of a projection must serialize identically"
+    );
+}
+
+/// A value with a shape of its own must correlate too. A UPN in narrative is
+/// consumed by the mail-address rule long before the literal scrub looks for
+/// it, so that rule has to resolve a value the export masks to the token the
+/// typed field carries. Otherwise one identity exports under two tokens and the
+/// export reads as two different users.
+#[test]
+fn a_narrative_upn_masks_to_the_token_its_typed_field_carries() {
+    let address = "synthetic.user@contoso.example";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "upn-e1", "upn-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "userPrincipalName", "value": address }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn.",
+            ),
+            synthetic_event(
+                "upn-e2", "upn-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager retrieve settings succeeded for {address}."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "upn-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted.observations[0]
+        .named("userPrincipalName")
+        .expect("the fixture declares a user principal name")
+        .to_owned();
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative UPN must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(
+        !text.contains(address),
+        "the address must not survive: {text}"
+    );
+    assert!(
+        !text.contains("[upn:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
+/// The same holds for a hardware hash: it is long enough for the opaque-blob
+/// rule to take it, so that rule must hand back the token the typed field
+/// carries rather than a token of its own kind.
+#[test]
+fn a_narrative_hardware_hash_masks_to_the_token_its_typed_field_carries() {
+    let hash = "U1lOVEhFVElDSEFSRFdBUkVIQVNIRk9SRklYVFVSRVVTRU9OTFlaWloK";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "hash-e1", "hash-channel", 1, 103, "available", "parsed",
+                json!([{ "name": "hardwareHash", "value": hash }]),
+                "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedDeviceHardwareHash.",
+            ),
+            synthetic_event(
+                "hash-e2", "hash-channel", 2, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported hardware hash {hash} for this device."),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "hash-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .hardware_hash
+        .clone()
+        .expect("the fixture declares a hardware hash");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = redacted.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "the narrative hash must carry the typed field's token {typed}, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    assert!(!text.contains(hash), "the hash must not survive: {text}");
+    assert!(
+        !text.contains("[blob:"),
+        "one identity must not export under a second token kind: {text}"
+    );
+}
+
+/// Case folding must be Unicode-aware, not ASCII-only. An identity can carry a
+/// non-ASCII letter -- the corpus's own macOS Company Portal fixture names a
+/// real user `élodie.martin@contoso.example` -- and a log line is free to spell
+/// it in another case. Folding ASCII only leaves `É` and `é` distinct, so the
+/// narrative occurrence is neither scrubbed nor matched to its typed token.
+///
+/// The narrative variant differs from the typed value *only* in the case of the
+/// non-ASCII letter, so an ASCII-only fold misses it for exactly that reason.
+#[test]
+fn a_non_ascii_literal_masks_its_differently_cased_occurrence_to_the_same_token() {
+    let device = "PC-ÉLODIE";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "unicode-e1", "unicode-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": device }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "unicode-e2", "unicode-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "unicode-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let message = once.observations[1]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert!(
+        message.contains(&typed),
+        "a differently-cased non-ASCII occurrence must carry the typed field's token {typed}, \
+         got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in [device, "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a non-ASCII literal must not be re-matched on the second pass"
+    );
+}
+
+/// One identity must mint one token, whatever case a non-ASCII letter arrives
+/// in. `mask_value` canonicalizes the value before hashing it and the literal
+/// table keys on that same canonical form, so a typed value and its
+/// differently-cased variant cannot disagree. Were they to, the table would
+/// hold one of the two tokens and put it in every narrative occurrence, while
+/// the other typed field went on showing a token its own free-text mentions do
+/// not match.
+#[test]
+fn one_identity_mints_one_token_whatever_case_a_non_ascii_letter_arrives_in() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            // The same device name, reported twice in two casings.
+            synthetic_event(
+                "case-e1", "case-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "case-e2", "case-channel", 2, 164, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "pc-élodie" }]),
+                "Network is available to attempt policy download.",
+            ),
+            // And both spellings, unlabelled, in one narrative record.
+            synthetic_event(
+                "case-e3", "case-channel", 3, 153, "available", "parsed",
+                json!([]),
+                "Device PC-ÉLODIE is the same record as device pc-élodie.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "case-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let reported: Vec<String> = redacted
+        .observations
+        .iter()
+        .filter_map(|observation| observation.named("deviceName").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        reported.len(),
+        2,
+        "the fixture reports the device name twice"
+    );
+    assert!(reported[0].starts_with("[redacted:"), "got {}", reported[0]);
+    assert_eq!(
+        reported[0], reported[1],
+        "one identity must mint one token whatever case it arrives in"
+    );
+
+    let message = redacted.observations[2]
+        .message
+        .as_deref()
+        .expect("the narrative record carries a message");
+    assert_eq!(
+        message.matches(&reported[0]).count(),
+        2,
+        "both spellings in narrative must carry that one token, got {message}"
+    );
+
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+    for survivor in ["PC-ÉLODIE", "pc-élodie"] {
+        assert!(
+            !text.contains(survivor),
+            "the non-ASCII literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+}
+
+/// A character whose lowercase form is several characters must still line up.
+/// `İ` lowercases to `i` plus U+0307, so a value spelling it one way and a log
+/// line spelling it another used to be compared as one character against a
+/// two-character expansion and never matched at all.
+#[test]
+fn a_literal_that_folds_to_several_characters_matches_its_other_casing() {
+    let folded_spelling = "i\u{307}stanbul-pc";
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "dotted-e1", "dotted-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "İSTANBUL-PC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The named device, in the other casing and with a lowercase ASCII
+            // tail: the `İ` is the only character whose fold expands.
+            synthetic_event(
+                "dotted-e2", "dotted-channel", 2, 164, "available", "parsed",
+                json!([]),
+                "Network is available to attempt policy download for device İstanbul-PC.",
+            ),
+            // And the same value spelled with the expansion written out.
+            synthetic_event(
+                "dotted-e3", "dotted-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &format!(
+                    "AutopilotManager reported the state changed from ProfileState_Unknown \
+                     to ProfileState_Available for {folded_spelling}."
+                ),
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "dotted-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let once = redacted_export_projection(&snapshot);
+
+    let typed = once
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    for index in [1, 2] {
+        let message = once.observations[index]
+            .message
+            .as_deref()
+            .expect("the narrative record carries a message");
+        assert!(
+            message.contains(&typed),
+            "narrative record {index} must carry the typed field's token {typed}, got {message}"
+        );
+    }
+
+    let text = serde_json::to_string(&wire(&once)).expect("redacted export must serialize");
+    for survivor in ["İSTANBUL-PC", "İstanbul-PC", folded_spelling] {
+        assert!(
+            !text.contains(survivor),
+            "the literal {survivor:?} survived the exported projection: {text}"
+        );
+    }
+
+    let twice = redacted_export_projection(&once);
+    assert_eq!(
+        wire(&once),
+        wire(&twice),
+        "a literal that folds to several characters must not be re-matched"
+    );
+}
+
+/// The matcher never normalizes, and this pins that as a decision on record
+/// rather than a surprise: a precomposed `é` and an `e` plus U+0301 are
+/// different text, so a value typed one way and logged the other way keeps its
+/// decomposed spelling in the export. The precomposed spelling in the same
+/// fixture is masked, so the gap is exactly the normalization form and not a
+/// matcher that fails to fold at all.
+///
+/// Normalizing would close the gap and is deliberately not done: it rewrites
+/// the narrative on its way into the export, which is a behaviour change with
+/// its own trade-offs. Anyone who later adds it must delete this test on
+/// purpose.
+#[test]
+fn a_decomposed_spelling_is_left_readable_because_the_matcher_never_normalizes() {
+    let decomposed = "PC-E\u{301}LODIE";
+    let precomposed_narrative =
+        "Network is available to attempt policy download for device PC-élodie.";
+    let decomposed_narrative =
+        format!("Network is available to attempt policy download for device {decomposed}.");
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "form-e1", "form-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "deviceName", "value": "PC-ÉLODIE" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            // The same letters, precomposed, in another casing: masked.
+            synthetic_event(
+                "form-e2", "form-channel", 2, 164, "available", "parsed",
+                json!([]),
+                precomposed_narrative,
+            ),
+            // The same letters decomposed: out of reach by design.
+            synthetic_event(
+                "form-e3", "form-channel", 3, 153, "available", "parsed",
+                json!([]),
+                &decomposed_narrative,
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "form-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+
+    let typed = redacted
+        .identity
+        .device_name
+        .clone()
+        .expect("the fixture declares a device name");
+    assert!(typed.starts_with("[redacted:"), "got {typed}");
+
+    let masked_precomposed = precomposed_narrative.replace("PC-élodie", &typed);
+    assert_eq!(
+        redacted.observations[1].message.as_deref(),
+        Some(masked_precomposed.as_str()),
+        "the precomposed spelling in another casing must still be masked"
+    );
+    assert_eq!(
+        redacted.observations[2].message.as_deref(),
+        Some(decomposed_narrative.as_str()),
+        "the decomposed spelling is documented as out of reach, not silently meant to be masked"
+    );
+}
+
+/// The literal scrub runs last in every free-text pipeline, behind the shaped
+/// rules. Were it first, a tenant domain that suffixes a UPN would be replaced
+/// inside the address, the mail-address rule would no longer match it, and the
+/// local part would ride out in the clear.
+#[test]
+fn a_tenant_domain_literal_does_not_break_the_upn_match_that_precedes_it() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "suffix-e1", "suffix-channel", 1, 103, "available", "parsed",
+            json!([{ "name": "tenantDomain", "value": "contoso.example" }]),
+            "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantUpn; \
+             policy value = synthetic.user@contoso.example.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "suffix-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let redacted = redacted_export_projection(&snapshot);
+    let text = serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+
+    assert!(
+        !text.contains("synthetic.user"),
+        "the local part of a masked UPN must not survive: {text}"
+    );
+    assert!(
+        !text.contains("contoso.example"),
+        "the tenant domain must not survive: {text}"
+    );
+}
+
+// ── Golden maintenance ──────────────────────────────────────────────────────
+
+/// Rewrite every scenario's `findings` golden from the current reducer output.
+///
+/// Marked `#[ignore]` so it never runs beside the readers of the same files:
+/// the harness runs tests in parallel threads, and rewriting an
+/// `expected.json` while another test reads it would race. Regenerate with
+/// `UPDATE_AUTOPILOT_FINDINGS=1 cargo test --test intune_windows_autopilot -- \
+/// --ignored update_findings_golden`, then review the diff. The rewrite
+/// touches the `findings` key and nothing else, so the hand-written semantic
+/// expectations survive and keep cross-checking the regenerated goldens.
+#[test]
+#[ignore = "rewrites goldens; run alone via -- --ignored update_findings_golden"]
+fn update_findings_golden() {
+    if std::env::var("UPDATE_AUTOPILOT_FINDINGS").is_err() {
+        return;
+    }
+    for scenario in SCENARIOS {
+        let snapshot = reduce_autopilot_bundle(&bundle(scenario));
+        let path = scenario_root(scenario).join("expected.json");
+        let mut expected = load_json(&path);
+        // Only `findings` is regenerated. `findingIds` stays hand written on
+        // purpose: it is the cross-check that catches a regeneration which
+        // quietly changed which rules fire.
+        expected["findings"] = wire(&snapshot.findings);
+        write_json(&path, &expected);
+    }
+}
+
+/// Write through a temporary file plus rename so no concurrent reader can ever
+/// observe a truncated golden. `std::fs::write` truncates before it writes.
+fn write_json(path: &Path, value: &Value) {
+    let text = serde_json::to_string_pretty(value).expect("golden must serialize") + "\n";
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, text)
+        .unwrap_or_else(|error| panic!("{} is writable: {error}", temporary.display()));
+    std::fs::rename(&temporary, path)
+        .unwrap_or_else(|error| panic!("{} is replaceable: {error}", path.display()));
+}

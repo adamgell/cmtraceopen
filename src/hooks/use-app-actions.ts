@@ -137,7 +137,10 @@ export interface AppActionHandlers {
   commandState: AppCommandState;
   openSourceFileDialog: () => Promise<void>;
   openSourceFolderDialog: () => Promise<void>;
-  openPathForActiveWorkspace: (path: string) => Promise<void>;
+  openPathForActiveWorkspace: (
+    path: string,
+    trigger?: string,
+  ) => Promise<void>;
   openKnownSourceCatalogAction: (
     action: OpenKnownSourceCatalogAction,
   ) => Promise<void>;
@@ -372,8 +375,8 @@ export function useAppActions(): AppActionHandlers {
       useFilterStore.getState().clearFilter();
 
       try {
-        await loadLogSource(source);
-        return true;
+        const result = await loadLogSource(source);
+        return result !== null;
       } catch (error) {
         console.error("[app-actions] failed to load source", {
           source,
@@ -403,27 +406,55 @@ export function useAppActions(): AppActionHandlers {
     [loadLogWorkspaceSource],
   );
 
+  /**
+   * Opens a path in the workspace that is active, recording it like any other
+   * open.
+   *
+   * `trigger` labels why the path arrived and reaches diagnostics only. It is a
+   * parameter so a path that arrives from somewhere other than a drop does not
+   * have to be reported as one.
+   */
   const openPathForActiveWorkspace = useCallback(
-    async (path: string) => {
+    async (path: string, trigger = "drag-drop.path-open") => {
       if (activeWorkspace === "dsregcmd") {
-        useUiStore
-          .getState()
-          .ensureWorkspaceVisible("dsregcmd", "drag-drop.path-open");
+        useUiStore.getState().ensureWorkspaceVisible("dsregcmd", trigger);
         await analyzeDsregcmdPath(path, { fallbackToFolder: true });
         void recordRecentPath(path, "dsregcmd");
         return;
       }
 
-      if (isIntuneWorkspace(activeWorkspace)) {
+      const workspaceDefinition = getWorkspace(activeWorkspace);
+      if (workspaceDefinition.onOpenPath) {
+        await workspaceDefinition.onOpenPath(path);
+        return;
+      }
+      if (workspaceDefinition.onOpenSource) {
         const pathKind = await inferPathKind(path);
-        const source: LogSource =
-          pathKind === "folder"
-            ? { kind: "folder", path }
-            : { kind: "file", path };
-        await getWorkspace(activeWorkspace).onOpenSource!(
-          source,
-          "drag-drop.path-open",
-        );
+        if (pathKind === "folder") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            trigger,
+          );
+          return;
+        }
+        if (pathKind === "file") {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            trigger,
+          );
+          return;
+        }
+        try {
+          await workspaceDefinition.onOpenSource(
+            { kind: "file", path },
+            trigger,
+          );
+        } catch {
+          await workspaceDefinition.onOpenSource(
+            { kind: "folder", path },
+            trigger,
+          );
+        }
         return;
       }
 
@@ -435,12 +466,12 @@ export function useAppActions(): AppActionHandlers {
         return;
       }
 
-      useUiStore.getState().ensureLogViewVisible("drag-drop.path-open");
+      useUiStore.getState().ensureLogViewVisible(trigger);
       useFilterStore.getState().clearFilter();
-      await loadPathAsLogSource(path, {
+      const result = await loadPathAsLogSource(path, {
         fallbackToFolder: true,
       });
-      if (isRecordableWorkspace(activeWorkspace)) {
+      if (result !== null && isRecordableWorkspace(activeWorkspace)) {
         void recordRecentPath(path, activeWorkspace);
       }
     },

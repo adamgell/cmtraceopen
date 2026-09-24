@@ -1,0 +1,43 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "user-context-uwp-install-success",
+  "workload": "apps/windows/microsoft-store",
+  "description": "A per-user UWP/MSIX Store app staged and registered for the signed-in user, with Intune intent and OS deployment evidence agreeing on the package family.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 698
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "appx-operational.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/appx-operational/current/appx-operational.json",
+      "bytesCopied": 5315
+    }
+  ]
+}

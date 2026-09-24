@@ -395,7 +395,9 @@ fn decode_utf16le_bytes(bytes: &[u8]) -> String {
         return String::new();
     }
     let u16_iter = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]));
     let decoded: String = char::decode_utf16(u16_iter)
         .map(|r| r.unwrap_or('\u{FFFD}'))
@@ -409,7 +411,9 @@ fn decode_utf16le_multi_string(bytes: &[u8]) -> String {
         return String::new();
     }
     let u16_iter: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
 

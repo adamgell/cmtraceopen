@@ -1,0 +1,39 @@
+{"_comment": "SYNTHETIC FIXTURE: report naming a different profile",
+  "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+  "documentVersion": 1,
+  "sections": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rp-s1",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostics-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": null,
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "sectionId": "autopilotProfileRetrieval",
+      "kind": "profileRetrieval",
+      "outcome": "succeeded",
+      "error": null,
+      "values": [
+        {
+          "name": "profileId",
+          "value": "99999999-8888-7777-6666-555555555555"
+        }
+      ],
+      "message": "A deployment profile was retrieved."
+    }
+  ]
+}

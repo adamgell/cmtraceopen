@@ -1,0 +1,99 @@
+{"_comment": "SYNTHETIC FIXTURE: minimal successful channel carrying the device identifier",
+  "autopilotDocument": "autopilot.events",
+  "documentVersion": 1,
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 161,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:08Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:08Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 161,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "profileId",
+          "value": "11111111-2222-3333-4444-555555555555"
+        },
+        {
+          "name": "entraDeviceId",
+          "value": "abcdabcd-1234-5678-9012-abcdabcdabcd"
+        }
+      ],
+      "message": "AutopilotManager retrieve settings succeeded."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 153,
+            "recordId": 2
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:09Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:09Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 153,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 2,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available."
+    }
+  ]
+}

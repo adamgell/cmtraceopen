@@ -681,11 +681,10 @@ fn finding(
     coverage_gap_ids: Vec<String>,
 ) -> Option<IntuneFinding> {
     // The invariant from `intune::evidence`: a finding backed by neither
-    // evidence nor a coverage gap is an assertion, so it is never emitted.
-    if evidence.is_empty() && coverage_gap_ids.is_empty() {
-        return None;
-    }
-    Some(IntuneFinding {
+    // evidence nor a coverage gap is an assertion, so it is never emitted. The
+    // verdict is asked of the owning predicate rather than restated here, so
+    // this lane cannot drift from the definition it cites.
+    let candidate = IntuneFinding {
         finding_id: id.to_owned(),
         severity,
         confidence,
@@ -694,7 +693,8 @@ fn finding(
         recommended_checks: vec![check.to_owned()],
         evidence,
         coverage_gap_ids,
-    })
+    };
+    candidate.is_evidence_backed().then_some(candidate)
 }
 
 fn push(findings: &mut Vec<IntuneFinding>, finding: Option<IntuneFinding>) {
@@ -774,5 +774,83 @@ mod tests {
     #[test]
     fn an_empty_snapshot_produces_no_findings() {
         assert!(derive_findings(&ComplianceSnapshot::default()).is_empty());
+    }
+
+    fn build(
+        evidence: Vec<IntuneEvidenceRef>,
+        coverage_gap_ids: Vec<String>,
+    ) -> Option<IntuneFinding> {
+        finding(
+            "compliance-pin",
+            IntuneFindingSeverity::Warning,
+            IntuneFindingConfidence::Low,
+            "title",
+            "summary",
+            "check",
+            evidence,
+            coverage_gap_ids,
+        )
+    }
+
+    /// Pins the whole input space of the citation guard: two emptiness bits, and
+    /// nothing else. The constructor reads no snapshot, access state, parse state,
+    /// severity or confidence, so these four cells are exhaustive.
+    ///
+    /// Suppression must agree exactly with the negation of the shared invariant
+    /// [`IntuneFinding::is_evidence_backed`], which is what this constructor
+    /// claims to enforce.
+    #[test]
+    fn the_citation_guard_agrees_with_the_shared_invariant_on_every_input() {
+        for (evidence, gaps, expected_backed) in [
+            (Vec::new(), Vec::new(), false),
+            (Vec::new(), vec!["gap".to_owned()], true),
+            (vec![evidence_ref("e1", "compliance")], Vec::new(), true),
+            (
+                vec![evidence_ref("e1", "compliance")],
+                vec!["gap".to_owned()],
+                true,
+            ),
+        ] {
+            let built = build(evidence.clone(), gaps.clone());
+            assert_eq!(
+                built.is_some(),
+                expected_backed,
+                "evidence={evidence:?} gaps={gaps:?}"
+            );
+            if let Some(built) = built {
+                assert!(
+                    built.is_evidence_backed(),
+                    "an emitted finding must satisfy the invariant it was gated on"
+                );
+            }
+        }
+    }
+
+    /// Unlike Autopilot, this constructor does not sort or de-duplicate; each
+    /// rule owns the order of its own citations and consumers sort before
+    /// comparing. Pinned so a future consistency pass cannot quietly adopt the
+    /// other lane's normalization while claiming to touch only the guard. See
+    /// `docs/architecture/shared-vs-workload-invariants.md`.
+    #[test]
+    fn the_constructor_preserves_citation_order_and_duplicates_verbatim() {
+        let evidence = vec![
+            evidence_ref("e2", "compliance"),
+            evidence_ref("e1", "compliance"),
+            evidence_ref("e2", "compliance"),
+        ];
+        let gaps = vec!["b".to_owned(), "a".to_owned(), "b".to_owned()];
+        let built = build(evidence.clone(), gaps.clone()).expect("cited finding");
+        assert_eq!(built.evidence, evidence);
+        assert_eq!(built.coverage_gap_ids, gaps);
+    }
+
+    /// The single recommended check is wrapped into the shared vector field; the
+    /// Autopilot constructor takes a slice instead. The arity difference is the
+    /// reason the two constructors are not one function.
+    #[test]
+    fn the_constructor_wraps_its_single_recommended_check() {
+        let built =
+            build(vec![evidence_ref("e1", "compliance")], Vec::new()).expect("cited finding");
+        assert_eq!(built.recommended_checks, vec!["check".to_owned()]);
     }
 }

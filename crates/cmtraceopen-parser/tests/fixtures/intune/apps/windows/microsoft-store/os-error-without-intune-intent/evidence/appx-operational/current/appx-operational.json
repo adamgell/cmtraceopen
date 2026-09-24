@@ -1,0 +1,127 @@
+{ "_synthetic": "SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only",
+  "kind": "windowsEvents",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "appx-operational:1",
+          "sourceArtifactId": "appx-operational"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "appx-operational",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+            "provider": "Microsoft-Windows-AppXDeployment-Server",
+            "eventId": 401,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:05.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:05.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+      "provider": "Microsoft-Windows-AppXDeployment-Server",
+      "eventId": 401,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Register"
+        },
+        {
+          "name": "DeploymentScope",
+          "value": "User"
+        },
+        {
+          "name": "PackageFamilyName",
+          "value": "Fabrikam.SynthViewer_8synth0abcd3h"
+        },
+        {
+          "name": "Version",
+          "value": "1"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "appx-operational:2",
+          "sourceArtifactId": "appx-operational"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "appx-operational",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+            "provider": "Microsoft-Windows-AppXDeployment-Server",
+            "eventId": 404,
+            "recordId": 2
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:10.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:10.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+      "provider": "Microsoft-Windows-AppXDeployment-Server",
+      "eventId": 404,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 2,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Register"
+        },
+        {
+          "name": "DeploymentScope",
+          "value": "User"
+        },
+        {
+          "name": "PackageFamilyName",
+          "value": "Fabrikam.SynthViewer_8synth0abcd3h"
+        },
+        {
+          "name": "ErrorCode",
+          "value": "0x80073CF9"
+        },
+        {
+          "name": "Version",
+          "value": "1"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

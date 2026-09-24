@@ -206,7 +206,11 @@ fn read_jss_url() -> Option<String> {
         return None;
     }
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if url.is_empty() { None } else { Some(url) }
+    if url.is_empty() {
+        None
+    } else {
+        Some(url)
+    }
 }
 
 fn read_jamf_connect_version() -> Option<String> {
@@ -221,7 +225,11 @@ fn read_jamf_connect_version() -> Option<String> {
         return None;
     }
     let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 fn read_jamf_connect_idp() -> Option<String> {
@@ -230,14 +238,11 @@ fn read_jamf_connect_idp() -> Option<String> {
             continue;
         }
         let print_key = format!("Print :{key}");
-        let output = match output_with_timeout(
-            PLISTBUDDY,
-            &["-c", &print_key, plist],
-            PLISTBUDDY_TIMEOUT,
-        ) {
-            Some(o) => o,
-            None => continue,
-        };
+        let output =
+            match output_with_timeout(PLISTBUDDY, &["-c", &print_key, plist], PLISTBUDDY_TIMEOUT) {
+                Some(o) => o,
+                None => continue,
+            };
         if !output.status.success() {
             continue;
         }
@@ -264,6 +269,10 @@ fn build_summary(
     } else {
         ""
     };
-    let log = if dirs.jamf_log { "" } else { " · jamf.log missing" };
+    let log = if dirs.jamf_log {
+        ""
+    } else {
+        " · jamf.log missing"
+    };
     format!("JAMF binary detected ({v}){connect}{log}")
 }

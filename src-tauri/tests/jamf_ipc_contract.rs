@@ -45,7 +45,10 @@ fn policy_trigger_data_variants_carry_a_value_field() {
 #[test]
 fn policy_result_matches_the_typescript_union() {
     assert_eq!(json(&JamfPolicyResult::Success), r#"{"type":"success"}"#);
-    assert_eq!(json(&JamfPolicyResult::InProgress), r#"{"type":"inProgress"}"#);
+    assert_eq!(
+        json(&JamfPolicyResult::InProgress),
+        r#"{"type":"inProgress"}"#
+    );
     assert_eq!(json(&JamfPolicyResult::Unknown), r#"{"type":"unknown"}"#);
     assert_eq!(
         json(&JamfPolicyResult::Failure("Error running recon".into())),

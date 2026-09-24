@@ -1,0 +1,2 @@
+2026-05-04T11:00:00.1000000Z  ERROR     Event       AppInstall  0    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Install] the service returned 0x80070005 while reading the assignment
+2026-05-04T11:00:01.2000000Z  ERROR     Event       AppInstall  1    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Install] the service returned 0x0ABCDEF1 with no further detail

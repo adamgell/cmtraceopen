@@ -1,0 +1,39 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized configuration report rows, no real device data",
+  "reports": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-service-only",
+          "sourceArtifactId": "intune-setting-report"
+        },
+        "provenance": {
+          "sourceKind": "graph",
+          "sourceArtifactId": "intune-setting-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:22:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:22:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/Policy/Config/DeliveryOptimization/DODownloadMode",
+      "settingId": null,
+      "policyId": "22222222-2222-4222-8222-222222222222",
+      "displayName": null,
+      "outcome": "applied",
+      "value": "2",
+      "error": null,
+      "namedData": []
+    }
+  ]
+}

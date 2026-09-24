@@ -1,0 +1,47 @@
+{ "_synthetic": "SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only",
+  "kind": "installerOutcomes",
+  "outcomes": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "installer-outcome:1",
+          "sourceArtifactId": "installer-outcome"
+        },
+        "provenance": {
+          "sourceKind": "suppliedFact",
+          "sourceArtifactId": "installer-outcome",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:01.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:01.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "appId": "22222222-3333-4444-8555-666666666666",
+      "identity": {
+        "storeProductId": "9WZSYNTH0002",
+        "packageFamilyName": null,
+        "packageFullName": null,
+        "displayName": "Synthetic Viewer"
+      },
+      "action": "install",
+      "exitCode": {
+        "raw": "0",
+        "decimal": 0,
+        "hex": "0x00000000"
+      },
+      "succeeded": true,
+      "namedData": []
+    }
+  ]
+}

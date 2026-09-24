@@ -1,0 +1,57 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "not-applicable",
+  "workload": "apps/windows/win32",
+  "description": "Applicability evaluation rejects the device; no content is acquired and no installer runs.",
+  "artifacts": [
+    {
+      "artifactId": "ime-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "IntuneManagementExtension.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "relativePath": "evidence/ime-current/current/IntuneManagementExtension.log",
+      "bytesCopied": 510
+    },
+    {
+      "artifactId": "app-workload-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "AppWorkload.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AppWorkload.log",
+      "relativePath": "evidence/app-workload-current/current/AppWorkload.log",
+      "bytesCopied": 448
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "AppActionProcessor.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AppActionProcessor.log",
+      "relativePath": "evidence/app-action-processor-current/current/AppActionProcessor.log",
+      "bytesCopied": 468
+    }
+  ]
+}

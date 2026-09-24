@@ -1,0 +1,96 @@
+{
+  "Author": "Hyun Yi @hyuunnn",
+  "Description": "IO Connection",
+  "EventId": 146,
+  "Channel": "Microsoft-Windows-Ntfs/Operational",
+  "Provider": "Microsoft-Windows-Ntfs",
+  "Maps": [
+    {
+      "Property": "PayloadData1",
+      "PropertyValue": "VolumeName: %VolumeName%",
+      "Values": [
+        {
+          "Name": "VolumeName",
+          "Value": "/Event/EventData/Data[@Name=\"VolumeName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData2",
+      "PropertyValue": "IsBootVolume: %IsBootVolume%",
+      "Values": [
+        {
+          "Name": "IsBootVolume",
+          "Value": "/Event/EventData/Data[@Name=\"IsBootVolume\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData3",
+      "PropertyValue": "VendorId: %VendorId%",
+      "Values": [
+        {
+          "Name": "VendorId",
+          "Value": "/Event/EventData/Data[@Name=\"VendorId\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData4",
+      "PropertyValue": "ProductId: %ProductId%",
+      "Values": [
+        {
+          "Name": "ProductId",
+          "Value": "/Event/EventData/Data[@Name=\"ProductId\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData5",
+      "PropertyValue": "DeviceSerialNumber: %DeviceSerialNumber%",
+      "Values": [
+        {
+          "Name": "DeviceSerialNumber",
+          "Value": "/Event/EventData/Data[@Name=\"DeviceSerialNumber\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData6",
+      "PropertyValue": "BusType: %BusType%",
+      "Values": [
+        {
+          "Name": "BusType",
+          "Value": "/Event/EventData/Data[@Name=\"BusType\"]"
+        }
+      ]
+    }
+  ],
+  "Lookups": [
+    {
+      "Name": "BusType",
+      "Default": "Unknown code",
+      "Values": {
+        "0": "The bus type is unknown.",
+        "1": "SCSI",
+        "2": "ATAPI",
+        "3": "ATA",
+        "4": "IEEE 1394",
+        "5": "SSA",
+        "6": "Fibre Channel",
+        "7": "USB",
+        "8": "RAID",
+        "9": "iSCSI",
+        "10": "Serial Attached SCSI (SAS)",
+        "11": "Serial ATA (SATA)",
+        "12": "Secure Digital (SD)",
+        "13": "Multimedia Card (MMC)",
+        "14": "This value is reserved for system use.",
+        "15": "File-Backed Virtual",
+        "16": "Storage Spaces",
+        "17": "NVMe",
+        "18": "This value is reserved for system use."
+      }
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "self-deploying-source-contract-not-captured",
+  "workload": "enrollment/windows/autopilot",
+  "description": "A self-deploying deployment whose source contract this build has not captured. The declaring document uses a kind with no validated rules, so terminal semantics are refused even though a TPM identity failure is visible.",
+  "generatedAtUtc": "2026-07-31T09:30:00Z",
+  "capture": {
+    "collectedAtUtc": "2026-07-31T09:30:00Z",
+    "windowsBuild": "10.0.26100.2314",
+    "autopilotSchemaVersion": "1",
+    "timezone": "UTC"
+  },
+  "artifacts": [
+    {
+      "artifactId": "autopilot-channel",
+      "family": "autopilotEvents",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-events.json",
+      "relativePath": "evidence/autopilot-channel/current/autopilot-events.json",
+      "bytesCopied": 2978,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "self-deploying-contract",
+      "family": "suppliedFact",
+      "sourceKind": "suppliedFact",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "self-deploying-contract.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/self-deploying-contract.json",
+      "relativePath": "evidence/self-deploying-contract/current/self-deploying-contract.json",
+      "bytesCopied": 224,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

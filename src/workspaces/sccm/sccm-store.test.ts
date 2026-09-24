@@ -8,6 +8,7 @@ const discovery: SccmEnvironmentDiscovery = {
   roles: [{ role: "client", basis: "registry" }],
   sources: [],
   issues: [],
+  advancedSources: [],
 };
 
 beforeEach(() => {
@@ -26,6 +27,33 @@ describe("useSccmStore", () => {
       phase: "ready",
       discovery,
       error: "The environment probe failed.",
+    });
+  });
+
+  it("keeps an opaque advanced capability only for the active operation", () => {
+    const store = useSccmStore.getState();
+    const capability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"a".repeat(64)}`,
+      cardId: "reporting",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-reporting",
+      roleScope: "reportingServicesPoint",
+      pathClass: "configuredRoleLogRoot",
+      sourceVersion: null,
+    };
+    store.completeDiscovery(discovery);
+    store.beginAdvancedAuthorization();
+    store.completeAdvancedAuthorization(capability);
+    store.beginAdvancedCapture();
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "capturingAdvanced",
+      advancedCapability: capability,
+    });
+
+    useSccmStore.getState().fail("capture failed");
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "ready",
+      advancedCapability: null,
     });
   });
 

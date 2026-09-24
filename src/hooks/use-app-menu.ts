@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getAvailableWorkspaces, useUiStore } from "../stores/ui-store";
@@ -11,6 +11,15 @@ const MENU_EVENT_APP_ACTION = "app-menu-action";
 
 let appMenuSyncQueue: Promise<void> = Promise.resolve();
 let appMenuSyncWarningShown = false;
+let alwaysOnTopUpdateQueue: Promise<void> = Promise.resolve();
+
+function enqueueAlwaysOnTopUpdate(
+  update: () => Promise<void>,
+): Promise<void> {
+  const nextUpdate = alwaysOnTopUpdateQueue.then(update);
+  alwaysOnTopUpdateQueue = nextUpdate.catch(() => undefined);
+  return nextUpdate;
+}
 
 interface AppMenuActionPayload {
   version: number;
@@ -166,14 +175,11 @@ export function useAppMenu() {
     void enqueueMenuSync(menuState);
   }, [enqueueMenuSync, menuState]);
 
-  useEffect(() => {
-    let disposed = false;
-
-    const handleAction = async (payload: AppMenuActionPayload) => {
-      if (disposed) {
-        return;
-      }
-
+  const latestMenuActionHandlerRef = useRef<
+    (payload: AppMenuActionPayload) => Promise<void>
+  >(async () => undefined);
+  useLayoutEffect(() => {
+    latestMenuActionHandlerRef.current = async (payload) => {
       try {
         switch (payload.action) {
           case "open_log_file_dialog":
@@ -216,9 +222,12 @@ export function useAppMenu() {
             toggleInfoPane();
             return;
           case "toggle_always_on_top": {
-            const next = !useUiStore.getState().alwaysOnTop;
-            useUiStore.getState().setAlwaysOnTop(next);
-            await invoke("set_always_on_top", { enabled: next });
+            const nextToggle = enqueueAlwaysOnTopUpdate(async () => {
+              const next = !useUiStore.getState().alwaysOnTop;
+              await invoke("set_always_on_top", { enabled: next });
+              useUiStore.getState().setAlwaysOnTop(next);
+            });
+            await nextToggle;
             return;
           }
           case "increase_text_size":
@@ -363,33 +372,25 @@ export function useAppMenu() {
             if (!folder || Array.isArray(folder)) return;
             const folderPath = folder as string;
             try {
-              const { listLogFolder } = await import("../lib/commands");
-              const listing = await listLogFolder(folderPath);
-              const childPaths = listing.entries
-                .filter((entry) => !entry.isDir)
-                .map((entry) => entry.path);
-              const sources: { path: string }[] = childPaths.map((path) => ({ path }));
-              // If the folder contains IME logs, add the folder itself as a source
-              // so the backend can detect and apply IME-specialised parsing.
-              const hasIme = childPaths.some((p) => {
-                const lower = p.toLowerCase();
-                return (
-                  lower.endsWith("agentexecutor.log") ||
-                  lower.endsWith("intunemanagementextension.log")
-                );
-              });
-              if (hasIme) sources.push({ path: folderPath });
-              if (sources.length === 0) return;
-              const { buildTimelineFromSources } = await import(
-                "../components/timeline/hooks/useTimelineBundle"
+              const { replaceTimelineSource } = await import(
+                "../workspaces/timeline/open-timeline-source"
               );
-              await buildTimelineFromSources(sources);
-              useUiStore.getState().ensureWorkspaceVisible("timeline", "native-menu.timeline-new-from-folder");
+              useUiStore.getState().ensureWorkspaceVisible(
+                "timeline",
+                "native-menu.timeline-new-from-folder",
+              );
+              await replaceTimelineSource({ kind: "folder", path: folderPath });
             } catch (error) {
               console.error("[app-menu] failed to build timeline from folder", {
                 folderPath,
                 error,
               });
+              const { useTimelineStore } = await import(
+                "../stores/timeline-store"
+              );
+              useTimelineStore.getState().setLoadError(
+                error instanceof Error ? error.message : String(error),
+              );
             }
             return;
           }
@@ -409,16 +410,23 @@ export function useAppMenu() {
         });
       }
     };
+  });
+
+  useEffect(() => {
+    let active = true;
 
     const unlistenActionPromise = listen<AppMenuActionPayload>(
       MENU_EVENT_APP_ACTION,
       async (event) => {
-        await handleAction(event.payload);
+        if (!active) {
+          return;
+        }
+        await latestMenuActionHandlerRef.current(event.payload);
       }
     );
 
     return () => {
-      disposed = true;
+      active = false;
 
       unlistenActionPromise
         .then((unlisten) => unlisten())
@@ -428,30 +436,7 @@ export function useAppMenu() {
           });
         });
     };
-  }, [
-    decreaseLogListTextSize,
-    enqueueMenuSync,
-    findNext,
-    findPrevious,
-    increaseLogListTextSize,
-    openKnownSourceCatalogAction,
-    openRecentEntry,
-    openSourceFileDialog,
-    openSourceFolderDialog,
-    refreshActiveSource,
-    resetLogListTextSize,
-    showSettingsDialog,
-    showAboutDialog,
-    showErrorLookupDialog,
-    showEvidenceBundleDialog,
-    showFilterDialog,
-    showFindBar,
-    switchWorkspace,
-    toggleDetailsPane,
-    toggleInfoPane,
-    togglePauseResume,
-    toggleSidebar,
-  ]);
+  }, []);
 
   // Re-apply the persisted "Always on Top" preference on startup so the window
   // and the native menu checkmark reflect the restored state. Only the enabled
@@ -463,10 +448,8 @@ export function useAppMenu() {
       return;
     }
 
-    let disposed = false;
-    void (async () => {
+    void enqueueAlwaysOnTopUpdate(async () => {
       try {
-        if (disposed) return;
         await invoke("set_always_on_top", { enabled: true });
       } catch (error) {
         console.error(
@@ -474,10 +457,6 @@ export function useAppMenu() {
           error,
         );
       }
-    })();
-
-    return () => {
-      disposed = true;
-    };
+    });
   }, []);
 }

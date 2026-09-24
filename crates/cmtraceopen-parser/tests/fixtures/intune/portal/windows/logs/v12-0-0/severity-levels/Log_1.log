@@ -1,0 +1,6 @@
+2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] refreshing the assigned application list
+2026-05-04T08:12:32.0020000Z  WARNING   Event       None        1    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] catalog response was served from the local cache
+2026-05-04T08:12:33.7710000Z  ERROR     Event       None        2    1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Install] install request rejected by the service
+2026-05-04T08:12:34.0500000Z  VERBOSE   Trace       DeviceSync  3    1a2b3c4d-0001-4000-8000-000000000003  12-0-0  [Sync] scheduling the next sync window
+2026-05-04T08:12:35.1000000Z  INFO      Event       None        4    1a2b3c4d-0001-4000-8000-000000000003  12-0-0  [Sync] the previous attempt failed and has been rescheduled
+2026-05-04T08:12:36.2000000Z  NOTICE    Event       None        5    1a2b3c4d-0001-4000-8000-000000000003  12-0-0  [Sync] an unexpected error was reported by the sync agent

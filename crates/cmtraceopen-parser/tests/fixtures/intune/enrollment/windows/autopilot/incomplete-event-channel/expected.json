@@ -1,0 +1,105 @@
+{
+  "assertions": [
+    "a capped channel cannot support a negative conclusion",
+    "an undocumented event id is retained and never given terminal semantics"
+  ],
+  "confidence": "medium",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "capped"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-acquisition-deferred",
+    "autopilot-evidence-coverage-gap",
+    "autopilot-undocumented-events-retained"
+  ],
+  "findings": [
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        }
+      ],
+      "findingId": "autopilot-acquisition-deferred",
+      "recommendedChecks": [
+        "Re-collect Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot once the device settles, and compare event 100 against a later event 161."
+      ],
+      "severity": "info",
+      "summary": "Acquisition began and the profile was reported as not yet found. Microsoft documents this state as usually transient, so it is not treated as a failure here.",
+      "title": "Autopilot profile acquisition is still retrying"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "autopilot-channel"
+      ],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        }
+      ],
+      "findingId": "autopilot-evidence-coverage-gap",
+      "recommendedChecks": [
+        "Re-collect the cited artifacts, elevated, before ruling anything out.",
+        "microsoft-windows-moderndeployment-diagnostics-provider-autopilot.evtx carries Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot in full."
+      ],
+      "severity": "warning",
+      "summary": "1 expected artifact(s) were missing, truncated, skipped, or unreadable. The absence of a signal in them proves nothing. The artifact was truncated, so the absence of a signal in it proves nothing.",
+      "title": "Expected Autopilot evidence was incomplete"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        }
+      ],
+      "findingId": "autopilot-undocumented-events-retained",
+      "recommendedChecks": [
+        "Read the cited records directly; their message text may still be informative."
+      ],
+      "severity": "info",
+      "summary": "1 record(s) came from the Autopilot channel with an event ID this build has no documented meaning for. They are kept as raw evidence and deliberately given no terminal semantics.",
+      "title": "Autopilot records with no documented meaning were retained"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "retryDeferred",
+  "phase": "profileDiscovery",
+  "profileApplied": false,
+  "profileCandidateState": "pending",
+  "profileRetrieved": false,
+  "registrationState": "unknown",
+  "scenario": "incomplete-event-channel",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 1,
+  "workload": "enrollment/windows/autopilot"
+}

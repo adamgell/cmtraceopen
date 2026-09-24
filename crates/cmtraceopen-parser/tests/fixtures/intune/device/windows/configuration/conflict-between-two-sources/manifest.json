@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "conflict-between-two-sources",
+  "workload": "device/windows/configuration",
+  "description": "Two policies claim one node; the losing row names the winner and the winner's row is present.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "family": "diagnosticReport",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "payload": "reports",
+      "originalBasename": "MDMDiagReport.json",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-diagnostic-report/current/records.json",
+      "bytesCopied": 2388,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-diagnostic-report/MDMDiagReport.json",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

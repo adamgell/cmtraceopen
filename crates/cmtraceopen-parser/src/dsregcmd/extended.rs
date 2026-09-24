@@ -328,7 +328,16 @@ pub fn build_active_diagnostics_rules(
     if let Some(scp) = active.scp_query.as_ref() {
         let is_domain_joined = result.facts.join_state.domain_joined == Some(true);
 
-        if !scp.scp_found && is_domain_joined {
+        // A query that found the SCP object but no keywords is a real
+        // configuration signal, not a tooling failure: report it. Other query
+        // errors (missing AD module, nltest/PowerShell failures) are coverage
+        // gaps and must not be reported as SCP absence. The sentinel text is
+        // produced by the single keywordless path in connectivity::query_scp.
+        let scp_query_failed = scp
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.contains("no keywords"));
+        if !scp.scp_found && is_domain_joined && !scp_query_failed {
             diagnostics.push(issue(
                 "scp-not-found",
                 IntuneDiagnosticSeverity::Error,
@@ -336,7 +345,7 @@ pub fn build_active_diagnostics_rules(
                 "Service Connection Point not found in Active Directory",
                 "The device is domain-joined but no SCP was found for hybrid join configuration. This prevents automatic tenant discovery.",
                 vec![
-                    format!("SCP found: NO"),
+                    "SCP found: NO".to_string(),
                     format!("Error: {}", scp.error.as_deref().unwrap_or("(none)")),
                 ],
                 vec![
@@ -400,8 +409,7 @@ pub fn build_event_log_diagnostics(
         let message_lower = e.message.to_ascii_lowercase();
         (channel_display.contains("time service") || channel_display.contains("system"))
             && (message_lower.contains("time skew")
-                || message_lower.contains("time synchronization")
-                || message_lower.contains("clock"))
+                || message_lower.contains("time synchronization"))
     });
 
     if time_sync_errors && has_join_failures {

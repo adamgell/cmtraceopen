@@ -1,0 +1,22 @@
+{
+  "scenario": "negative-store-looking-text",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "store-agent",
+      "status": "available"
+    }
+  ],
+  "transactions": [],
+  "findings": [],
+  "unkeyedObservationCount": 0,
+  "observationCount": 0,
+  "assertions": [
+    "a file name plus AppX-looking text never confirms a source",
+    "an unrecognized provider on a recognized channel is not Store evidence"
+  ]
+}

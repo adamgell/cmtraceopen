@@ -1,0 +1,60 @@
+{ "_synthetic": "SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only",
+  "kind": "windowsEvents",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "store-agent:1",
+          "sourceArtifactId": "store-agent"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "store-agent",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-StoreAgent/Operational",
+            "provider": "Contoso-Synthetic-Provider",
+            "eventId": 8002,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:05.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:05.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-StoreAgent/Operational",
+      "provider": "Contoso-Synthetic-Provider",
+      "eventId": 8002,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Acquire"
+        },
+        {
+          "name": "PackageFamilyName",
+          "value": "Contoso.SynthStoreApp_9synth0abcd1h"
+        },
+        {
+          "name": "ErrorCode",
+          "value": "0x803F8001"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

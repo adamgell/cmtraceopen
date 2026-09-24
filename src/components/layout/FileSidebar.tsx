@@ -203,8 +203,10 @@ export function LogSidebar() {
       clearFilter();
 
       try {
-        await loadSelectedLogFile(path, activeSource);
-        setLastFailedPath(null);
+        const result = await loadSelectedLogFile(path, activeSource);
+        if (result !== null) {
+          setLastFailedPath(null);
+        }
       } catch (error) {
         setLastFailedPath(path);
         setErrorMessage(
@@ -228,10 +230,12 @@ export function LogSidebar() {
     clearFilter();
 
     try {
-      await loadLogSource(activeSource, {
+      const result = await loadLogSource(activeSource, {
         selectedFilePath: activeFilePath,
       });
-      setLastFailedPath(null);
+      if (result !== null) {
+        setLastFailedPath(null);
+      }
     } catch (error) {
       setRefreshErrorMessage(
         error instanceof Error ? error.message : "Failed to reload source."

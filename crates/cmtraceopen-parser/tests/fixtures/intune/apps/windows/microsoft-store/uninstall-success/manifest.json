@@ -1,0 +1,43 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "uninstall-success",
+  "workload": "apps/windows/microsoft-store",
+  "description": "An uninstall assignment followed by a matching per-user removal.",
+  "artifacts": [
+    {
+      "artifactId": "assignments",
+      "family": "assignment",
+      "sourceKind": "suppliedFact",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "assignments.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/assignments/current/assignments.json",
+      "bytesCopied": 1272
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "appx-operational.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/appx-operational/current/appx-operational.json",
+      "bytesCopied": 3507
+    }
+  ]
+}

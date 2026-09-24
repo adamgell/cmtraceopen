@@ -1,0 +1,83 @@
+{
+  "assertions": [
+    "an ambiguous correlation key produces no linkage at all rather than a guess",
+    "contradictory identifiers suppress every downstream terminal claim"
+  ],
+  "confidence": "high",
+  "conflictIds": [
+    "conflicting-esp-session-id",
+    "conflicting-profile-id"
+  ],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "esp-session-facts",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "esp-session-facts": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "high",
+  "espLinkState": "conflicting",
+  "espSessionIds": [
+    "esp-session-0003",
+    "esp-session-0004"
+  ],
+  "findingIds": [
+    "autopilot-contradictory-sources"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "esp-s1",
+          "sourceArtifactId": "esp-session-facts"
+        },
+        {
+          "evidenceId": "esp-s2",
+          "sourceArtifactId": "esp-session-facts"
+        },
+        {
+          "evidenceId": "rp-s1",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-contradictory-sources",
+      "recommendedChecks": [
+        "Re-collect the Autopilot evidence in one pass so every source describes the same point in time.",
+        "Confirm the bundle was not assembled from two devices or two provisioning attempts."
+      ],
+      "severity": "error",
+      "summary": "A single correlation key resolves to more than one ESP session. 2 distinct profileId values were observed across the supplied sources. No single Autopilot outcome can be asserted while the sources disagree.",
+      "title": "Supplied Autopilot sources contradict each other"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "contradictoryEvidence",
+  "phase": "profileRetrieved",
+  "profileApplied": false,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "unknown",
+  "scenario": "conflicting-profile-session-identifiers",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

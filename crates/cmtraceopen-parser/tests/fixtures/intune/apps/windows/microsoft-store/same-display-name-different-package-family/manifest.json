@@ -1,0 +1,43 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "same-display-name-different-package-family",
+  "workload": "apps/windows/microsoft-store",
+  "description": "Two different packages ship under one display name. They must stay separate, because the display name is not a correlation key.",
+  "artifacts": [
+    {
+      "artifactId": "assignments",
+      "family": "assignment",
+      "sourceKind": "suppliedFact",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "assignments.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/assignments/current/assignments.json",
+      "bytesCopied": 2391
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "appx-operational.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/appx-operational/current/appx-operational.json",
+      "bytesCopied": 3784
+    }
+  ]
+}

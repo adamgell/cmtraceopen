@@ -6,7 +6,14 @@ export type SccmRole =
   | "softwareUpdatePoint"
   | "wsUs"
   | "provider"
-  | "adminService";
+  | "adminService"
+  | "distributionPointPxe"
+  | "certificateRegistrationPoint"
+  | "reportingServicesPoint"
+  | "cloudManagementGatewayConnectionPoint"
+  | "serviceConnectionPoint"
+  | "clientNotificationServer"
+  | "unclassified";
 
 export type SccmDiscoveryBasis = "registry" | "service" | "cim";
 
@@ -66,6 +73,45 @@ export interface SccmEnvironmentDiscovery {
   roles: SccmDetectedRole[];
   sources: SccmSourceStatus[];
   issues: SccmDiscoveryIssue[];
+  advancedSources: SccmAdvancedSourceOption[];
+}
+
+export type SccmAdvancedSourceAvailability =
+  | "observed"
+  | "operatorDeclaredCandidate"
+  | "blocked";
+
+export interface SccmAdvancedSourceOption {
+  cardId: string;
+  cardVersion: string;
+  sourceId: string;
+  roleScopes: string[];
+  pathClasses: string[];
+  sourceVersion: string | null;
+  availability: SccmAdvancedSourceAvailability;
+  maxBytes: number;
+  maxFiles: number;
+  rotations: ["current", "lo_"];
+}
+
+export interface SccmAdvancedCaptureAuthorizationRequest {
+  cardId: string;
+  cardVersion: string;
+  sourceId: string;
+  roleScope: string;
+  pathClass: string;
+  expectedSourceVersion: string | null;
+  selectedRoot: string;
+}
+
+export interface SccmAdvancedCaptureCapability {
+  capabilityHandle: string;
+  cardId: string;
+  cardVersion: string;
+  sourceId: string;
+  roleScope: string;
+  pathClass: string;
+  sourceVersion: string | null;
 }
 
 export interface SccmCaptureResult {

@@ -1,0 +1,2 @@
+2026-05-04T07:59:59.9990000Z  INFO      Event       None        41   1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [Sync] rollover boundary record
+2026-05-04T08:00:00.5000000Z  INFO      Event       None        42   1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [Sync] current file first record

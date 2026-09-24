@@ -1,0 +1,84 @@
+{
+  "scenario": "same-minute-unrelated-apps",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "succeeded",
+      "lastConfirmedPhase": "enforcement",
+      "confidence": "medium",
+      "returnCodeRaw": "0",
+      "returnCodeKind": "success",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": null,
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    },
+    {
+      "appId": "22222222-3333-4444-8555-666666666666",
+      "deploymentTypeId": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "executionContext": "unknown",
+      "outcome": "installerReportedFailure",
+      "lastConfirmedPhase": "enforcement",
+      "confidence": "medium",
+      "returnCodeRaw": "0x80070643",
+      "returnCodeKind": "unmapped",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "the installer-native log named by the install output file record",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "disjointObservations": true,
+  "findings": [
+    {
+      "findingId": "win32-succeeded:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "info",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:4",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "win32-installer-reported-failure:22222222-3333-4444-8555-666666666666:bbbbbbbb-cccc-4ddd-8eee-ffffffffffff:unknown",
+      "severity": "error",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:5",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "no observation is claimed by two transactions",
+    "adjacent timestamps never merge two apps"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

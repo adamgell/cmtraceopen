@@ -1,0 +1,73 @@
+{
+  "scenario": "invalid-offset-and-contradictory-ordering",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "available"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/deliveryoptimization/dodownloadmode",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/DeliveryOptimization/DODownloadMode",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "2",
+      "timeIsReliable": false,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
+      "evidenceIds": [
+        "evt-invalid-offset"
+      ]
+    },
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "1",
+      "timeIsReliable": true,
+      "orderingIsContradictory": true,
+      "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
+      "evidenceIds": [
+        "evt-earlier-record-later-time",
+        "evt-later-record-earlier-time"
+      ]
+    }
+  ],
+  "findingConfidence": {
+    "configuration-device-only-evidence": "high",
+    "configuration-unusable-ordering": "high",
+    "configuration-applied": "high"
+  },
+  "findingIds": [
+    "configuration-device-only-evidence",
+    "configuration-unusable-ordering",
+    "configuration-applied"
+  ],
+  "assertions": [
+    "an unparseable offset makes the record's time unusable for comparison",
+    "record numbers that contradict timestamps are reported, not silently reordered"
+  ]
+}

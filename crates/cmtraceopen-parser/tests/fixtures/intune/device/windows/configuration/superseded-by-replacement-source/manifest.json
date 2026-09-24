@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "superseded-by-replacement-source",
+  "workload": "device/windows/configuration",
+  "description": "A row reports supersedence and names the replacing source, which is itself present.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "family": "diagnosticReport",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "payload": "reports",
+      "originalBasename": "MDMDiagReport.json",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-diagnostic-report/current/records.json",
+      "bytesCopied": 2405,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-diagnostic-report/MDMDiagReport.json",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

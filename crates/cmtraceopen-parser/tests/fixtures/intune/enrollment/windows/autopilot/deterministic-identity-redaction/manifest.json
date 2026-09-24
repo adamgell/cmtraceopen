@@ -1,0 +1,64 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "deterministic-identity-redaction",
+  "workload": "enrollment/windows/autopilot",
+  "description": "An identity-dense bundle. The redacted export removes every serial, hash, device name, tenant domain, user principal name, and profile path, while keeping equal values equal so an explicit correlation still holds after masking.",
+  "generatedAtUtc": "2026-07-31T09:30:00Z",
+  "capture": {
+    "collectedAtUtc": "2026-07-31T09:30:00Z",
+    "windowsBuild": "10.0.26100.2314",
+    "autopilotSchemaVersion": "1",
+    "timezone": "UTC"
+  },
+  "artifacts": [
+    {
+      "artifactId": "autopilot-channel",
+      "family": "autopilotEvents",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-events.json",
+      "relativePath": "evidence/autopilot-channel/current/autopilot-events.json",
+      "bytesCopied": 4930,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "family": "mdmReport",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-report.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-report.json",
+      "relativePath": "evidence/mdm-diagnostics-report/current/autopilot-report.json",
+      "bytesCopied": 3628,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "esp-session-facts",
+      "family": "espSession",
+      "sourceKind": "suppliedFact",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "esp-sessions.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/esp-sessions.json",
+      "relativePath": "evidence/esp-session-facts/current/esp-sessions.json",
+      "bytesCopied": 581,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

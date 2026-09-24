@@ -1,0 +1,60 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "incomplete-event-channel-coverage",
+  "workload": "apps/windows/microsoft-store",
+  "description": "The AppX channel was collected but carries no deployment scope, and the Store channel was denied. The installer family stays unvalidated and is reported.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 510
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "appx-operational.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/appx-operational/current/appx-operational.json",
+      "bytesCopied": 3359
+    },
+    {
+      "artifactId": "store-agent",
+      "family": "store",
+      "sourceKind": "eventLog",
+      "captureState": "accessDenied",
+      "encoding": "utf-8",
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "detail": "The collector could not read the StoreAgent channel",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

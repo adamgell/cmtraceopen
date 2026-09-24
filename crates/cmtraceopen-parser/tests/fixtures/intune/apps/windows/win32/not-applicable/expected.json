@@ -1,0 +1,57 @@
+{
+  "scenario": "not-applicable",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "notApplicable",
+      "lastConfirmedPhase": "assignment",
+      "confidence": "high",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": null,
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-not-applicable:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:2",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "not applicable is a terminal answer distinct from not targeted",
+    "a failed applicability pass does not advance the last confirmed phase"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

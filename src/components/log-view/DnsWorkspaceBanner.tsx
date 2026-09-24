@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { tokens, Button } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
 import { useLogStore } from "../../stores/log-store";
@@ -16,11 +16,15 @@ const DNS_PARSER_KINDS = new Set<ParserKind>(["dnsDebug", "dnsAudit", "dhcp"]);
 
 export function DnsWorkspaceBanner() {
   const parserSelection = useLogStore((s) => s.parserSelection);
+  const openFilePath = useLogStore((s) => s.openFilePath);
   const activeWorkspace = useUiStore((s) => s.activeWorkspace);
-  const [dismissed, setDismissed] = useState(false);
+  const dismissedDnsBannerPaths = useUiStore((s) => s.dismissedDnsBannerPaths);
+  const dismissDnsBannerPath = useUiStore((s) => s.dismissDnsBannerPath);
 
   const parser = parserSelection?.parser;
   const label = parser ? PARSER_LABELS[parser] : undefined;
+  const dismissed =
+    openFilePath !== null && dismissedDnsBannerPaths.includes(openFilePath);
 
   const handleOpenInWorkspace = useCallback(() => {
     const logState = useLogStore.getState();
@@ -33,7 +37,13 @@ export function DnsWorkspaceBanner() {
     useUiStore.getState().ensureWorkspaceVisible("dns-dhcp", "banner");
   }, []);
 
-  if (!label || dismissed || activeWorkspace !== "log" || !parser || !DNS_PARSER_KINDS.has(parser)) {
+  if (
+    !label ||
+    dismissed ||
+    activeWorkspace !== "log" ||
+    !parser ||
+    !DNS_PARSER_KINDS.has(parser)
+  ) {
     return null;
   }
 
@@ -61,7 +71,9 @@ export function DnsWorkspaceBanner() {
         size="small"
         appearance="subtle"
         icon={<DismissRegular />}
-        onClick={() => setDismissed(true)}
+        onClick={() => {
+          if (openFilePath) dismissDnsBannerPath(openFilePath);
+        }}
         aria-label="Dismiss"
       />
     </div>

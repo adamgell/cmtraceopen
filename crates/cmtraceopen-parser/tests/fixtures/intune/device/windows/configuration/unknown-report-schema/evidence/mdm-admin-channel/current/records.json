@@ -1,0 +1,55 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized MDM Admin channel events, no real device data",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "evt-unknown-id",
+          "sourceArtifactId": "mdm-admin-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "mdm-admin-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 150,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+            "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+            "eventId": 1907,
+            "recordId": 150
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:16:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:16:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+      "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+      "eventId": 1907,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 150,
+      "activityId": "66666666-6666-4666-8666-666666666666",
+      "namedData": [
+        {
+          "name": "NodeUri",
+          "value": "./Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate"
+        },
+        {
+          "name": "Detail",
+          "value": "future signal"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

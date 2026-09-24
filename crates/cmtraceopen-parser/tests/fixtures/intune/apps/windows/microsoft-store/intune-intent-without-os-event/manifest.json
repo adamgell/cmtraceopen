@@ -1,0 +1,60 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "intune-intent-without-os-event",
+  "workload": "apps/windows/microsoft-store",
+  "description": "Intune targeted the app and no OS channel was collected. Nothing is concluded about the device; the gap is reported instead.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 510
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "absent",
+      "encoding": "utf-8",
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "detail": "The AppX operational channel was not present in the bundle",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": null,
+      "bytesCopied": 0
+    },
+    {
+      "artifactId": "store-agent",
+      "family": "store",
+      "sourceKind": "eventLog",
+      "captureState": "absent",
+      "encoding": "utf-8",
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "detail": "The StoreAgent channel was not present in the bundle",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

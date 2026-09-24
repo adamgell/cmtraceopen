@@ -1,0 +1,68 @@
+{
+  "assertions": [
+    "an identity mismatch outranks every downstream profile symptom"
+  ],
+  "confidence": "high",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-identity-registration-mismatch"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "rp-s1",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-identity-registration-mismatch",
+      "recommendedChecks": [
+        "Compare the registered serial number and hardware hash in Intune with the device's own values.",
+        "Read Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot events 908 and 171 for the exact token.",
+        "Deregister and re-register the device if the hardware was replaced."
+      ],
+      "severity": "blocker",
+      "summary": "A cited record reports a serial number, product key, or TPM identity that disagrees with the identity registered for this device. Provisioning cannot proceed until the registration matches the hardware.",
+      "title": "The device's hardware identity does not match its Autopilot registration"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "identityRegistrationMismatch",
+  "phase": "profileDiscovery",
+  "profileApplied": false,
+  "profileCandidateState": "pending",
+  "profileRetrieved": false,
+  "registrationState": "mismatch",
+  "scenario": "identity-registration-mismatch",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

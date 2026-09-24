@@ -1,5 +1,6 @@
 //! Privacy-preserving native SCCM discovery and collection.
 
+pub mod advanced_capture;
 mod client_manifest;
 mod discovery;
 mod engine;
@@ -12,6 +13,14 @@ use serde::Serialize;
 
 use super::{SccmCoverageState, SccmRole};
 
+pub use advanced_capture::{
+    advanced_source_contracts, advanced_source_options, capture_advanced_authorized,
+    PrivateAdvancedCaptureAuthorization, PrivateAdvancedSourceFact, SccmAdvancedCapabilityStore,
+    SccmAdvancedCaptureAuthorizationRequest, SccmAdvancedCaptureCapability,
+    SccmAdvancedSourceAvailability, SccmAdvancedSourceContract, SccmAdvancedSourceOption,
+    ADVANCED_CAPABILITY_LIMIT, ADVANCED_CAPABILITY_TTL, ADVANCED_CAPTURE_BYTE_LIMIT,
+    ADVANCED_CAPTURE_FILE_LIMIT,
+};
 pub use discovery::{discover_environment, discover_environment_with, NativeDiscoveryProvider};
 pub(crate) use engine::{capture_discovered_environment, discover_capture_environment};
 pub use engine::{capture_environment, MAX_BYTES_PER_SOURCE, MAX_FRAGMENTS_PER_SOURCE};
@@ -90,6 +99,7 @@ pub struct SccmEnvironmentDiscovery {
     pub roles: Vec<SccmDetectedRole>,
     pub sources: Vec<SccmSourceStatus>,
     pub issues: Vec<SccmDiscoveryIssue>,
+    pub advanced_sources: Vec<SccmAdvancedSourceOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -114,12 +124,25 @@ pub struct PrivateSccmEnvironment {
     pub issues: Vec<SccmDiscoveryIssue>,
     pub private_host: Option<String>,
     pub private_site_code: Option<String>,
+    pub advanced_source_facts: Vec<PrivateAdvancedSourceFact>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SccmCaptureRoot {
     pub role: SccmRole,
     pub path: PathBuf,
+    pub origin: SccmCaptureRootOrigin,
+}
+
+/// Private provenance for a capture root. It must remain attached to the root
+/// so inferred locations cannot later be mistaken for configured evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SccmCaptureRootOrigin {
+    ConfiguredRoleLogDirectory,
+    SiteServerInstallationDirectory,
+    ServiceExecutableDirectory,
+    SiteInstallFallback,
+    DefaultRoleLocation,
 }
 
 pub trait SccmDiscoveryProvider {
@@ -146,6 +169,8 @@ pub enum SccmCollectorError {
     DestinationUnavailable,
     CaptureFailed,
     ManifestValidationFailed,
+    AdvancedAuthorizationRejected,
+    AdvancedCapabilityUnavailable,
 }
 
 impl SccmCollectorError {
@@ -156,6 +181,8 @@ impl SccmCollectorError {
             Self::DestinationUnavailable => "destinationUnavailable",
             Self::CaptureFailed => "captureFailed",
             Self::ManifestValidationFailed => "manifestValidationFailed",
+            Self::AdvancedAuthorizationRejected => "advancedAuthorizationRejected",
+            Self::AdvancedCapabilityUnavailable => "advancedCapabilityUnavailable",
         }
     }
 }

@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "duplicate-display-name-different-csp-paths",
+  "workload": "device/windows/configuration",
+  "description": "One friendly name over two unrelated CSP nodes.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "family": "diagnosticReport",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "payload": "reports",
+      "originalBasename": "MDMDiagReport.json",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-diagnostic-report/current/records.json",
+      "bytesCopied": 2339,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-diagnostic-report/MDMDiagReport.json",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -24,7 +24,8 @@ export type ParserKind =
   | "secureBootLog"
   | "dnsDebug"
   | "dnsAudit"
-  | "cmtLog";
+  | "cmtLog"
+  | "companyPortal";
 export type ParserImplementation =
   | "ccm"
   | "simple"
@@ -43,7 +44,8 @@ export type ParserImplementation =
   | "secureBootLog"
   | "dnsDebug"
   | "dnsAudit"
-  | "cmtLog";
+  | "cmtLog"
+  | "companyPortal";
 export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";
@@ -102,10 +104,17 @@ export interface FolderEntry {
   modifiedUnixMs: number | null;
 }
 
+/** A path-specific diagnostic from folder or bundle traversal. */
+export interface PathDiagnostic {
+  path: string;
+  reason: string;
+}
+
 export interface FolderListingResult {
   sourceKind: LogSourceKind;
   source: LogSource;
   entries: FolderEntry[];
+  childErrors?: PathDiagnostic[];
   bundleMetadata?: EvidenceBundleMetadata | null;
 }
 
@@ -151,6 +160,9 @@ export interface KnownSourceToolbarFamily {
   groups: KnownSourceToolbarGroup[];
 }
 
+/** What a code says about the operation that produced it. */
+export type ErrorCodeOutcome = "failure" | "success" | "successRequiresAction";
+
 export interface ErrorCodeSpan {
   start: number;
   end: number;
@@ -158,6 +170,9 @@ export interface ErrorCodeSpan {
   codeDecimal: string;
   description: string;
   category: string;
+  /** Whether the code reports a failure, a completed operation, or a
+   *  completed operation that still requires action. */
+  outcome: ErrorCodeOutcome;
 }
 
 export interface LogEntry {
@@ -240,18 +255,49 @@ export interface AggregateParsedFileResult {
   byteOffset: number;
 }
 
+/**
+ * One file inside an aggregate folder stream, with the parser that read it.
+ *
+ * The merged stream has no parser selection of its own — each file was read by
+ * whichever parser matched it — so the provenance the status bar reports for
+ * the merged view is derived from these per-file selections.
+ */
+export interface AggregateSourceFile extends AggregateParsedFileResult {
+  formatDetected: LogFormat;
+  parserSelection: ParserSelectionInfo;
+}
+
 export interface AggregateParseResult {
   entries: LogEntry[];
   totalLines: number;
   parseErrors: number;
   folderPath: string;
   files: AggregateParsedFileResult[];
+  childErrors?: PathDiagnostic[];
+}
+
+/** A bounded continuation suffix for an already-rendered logical record. */
+export interface TailEntryAmendment {
+  entryId: number;
+  entryLineNumber: number;
+  continuationStartLine: number;
+  continuationEndLine: number;
+  /** Expected JS/UTF-16 length of the message before this suffix is applied. */
+  messageUtf16Start: number;
+  messageSuffix: string;
+  /** Absolute JS/UTF-16 spans in the amended message. */
+  errorCodeSpans: ErrorCodeSpan[];
 }
 
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
   entries: LogEntry[];
+  amendments: TailEntryAmendment[];
   filePath: string;
+  /** Parse/framing coverage gaps observed in this incremental batch. */
+  parseErrors: number;
+  /** Highest physical source line consumed by this batch. */
+  observedThroughLine: number | null;
   parserSelection?: ParserSelectionInfo;
   /**
    * True when the tailed file was truncated/rotated: `entries` are a fresh read

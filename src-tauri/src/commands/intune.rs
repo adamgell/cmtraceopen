@@ -56,6 +56,110 @@ struct IntuneAnalysisProgressPayload {
     total_files: Option<usize>,
 }
 
+/// Sink for the verbose GUID-enrichment trace, off unless explicitly asked for.
+///
+/// The detail this carries is an organisation's app inventory: every registry
+/// GUID with its application name, every enriched event name, and every download
+/// name and content id. It was written to `%TEMP%/cmtrace-guid-diag.log` on every
+/// analysis run, without the operator asking, and never cleaned up.
+///
+/// Nobody chose that. It is developer instrumentation for diagnosing GUID
+/// enrichment, and the summary an operator actually needs already goes to the
+/// application log. Set `CMTRACE_INTUNE_GUID_DIAG` to collect the verbose trace
+/// while debugging; leave it unset and nothing is written to disk.
+///
+/// Implements `fmt::Write` so the existing `writeln!` call sites are unchanged
+/// and discard when the trace is off.
+struct GuidDiagLog(Option<String>);
+
+impl GuidDiagLog {
+    fn from_env() -> Self {
+        Self(
+            std::env::var_os("CMTRACE_INTUNE_GUID_DIAG")
+                .filter(|value| !value.is_empty())
+                .map(|_| String::new()),
+        )
+    }
+
+    /// The collected trace, or `None` when collection was off.
+    fn contents(&self) -> Option<&str> {
+        self.0.as_deref().filter(|trace| !trace.is_empty())
+    }
+
+    /// Creates the trace file, refusing to write through anything that already exists.
+    ///
+    /// The name carries the process id and a monotonic stamp, and the file is opened with
+    /// `create_new`, so two analyses cannot overwrite each other and the call fails rather than
+    /// following a symlink an unprivileged user planted at a guessable path. The system temp
+    /// directory is world-writable, so a fixed name there is the classic clobber target — and this
+    /// trace is opt-in precisely because its contents are sensitive.
+    fn create_file(&self) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+        Self::create_file_at(Self::trace_path())
+    }
+
+    /// A path no other analysis will pick, in the system temp directory.
+    ///
+    /// The sequence number is what makes that true rather than likely. Two analyses in the same
+    /// process can land inside one clock tick, and a clock can move backwards, either of which
+    /// would repeat a timestamp; because the file is opened exclusively, a repeat does not
+    /// overwrite anything but does lose the trace the operator asked for.
+    fn trace_path() -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        Self::trace_path_for(stamp)
+    }
+
+    /// The naming, with the clock supplied.
+    ///
+    /// Split so the sequence's contribution can be proved: a test that only calls `trace_path`
+    /// passes whether or not the sequence exists, because successive clock reads on a fast machine
+    /// happen to differ anyway. Holding the stamp fixed is the only way to show the collision case
+    /// is handled.
+    fn trace_path_for(stamp: u128) -> std::path::PathBuf {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "cmtrace-guid-diag-{}-{stamp}-{sequence}.log",
+            std::process::id()
+        ))
+    }
+
+    /// Creates `path` exclusively, readable only by the user who ran the analysis.
+    ///
+    /// Split from [`create_file`](Self::create_file) so the exclusive-open behaviour can be
+    /// exercised against a path that already exists, which is the case that matters and which a
+    /// test calling the composed function cannot reach.
+    fn create_file_at(path: std::path::PathBuf) -> std::io::Result<(std::path::PathBuf, fs::File)> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        // The default umask leaves this world-readable, and the temp directory is shared. The
+        // trace holds the app inventory this whole change exists to stop leaking, so on the one
+        // path that does write it, only the owner may read it. Windows inherits the directory
+        // ACL, which is already per-user for the profile temp directory.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let file = options.open(&path)?;
+        Ok((path, file))
+    }
+}
+
+impl FmtWrite for GuidDiagLog {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if let Some(trace) = &mut self.0 {
+            trace.push_str(text);
+        }
+        Ok(())
+    }
+}
+
 /// Analyze Intune Management Extension logs and return structured results.
 ///
 /// Supports either:
@@ -236,7 +340,7 @@ fn analyze_intune_logs_blocking(
     }
 
     // Enrich event and download names using the global GUID registry
-    let mut diag_buffer = String::new();
+    let mut diag_buffer = GuidDiagLog::from_env();
     let mut enriched_events = 0u32;
     let mut enriched_downloads = 0u32;
     let mut missed_events = 0u32;
@@ -347,23 +451,36 @@ fn analyze_intune_logs_blocking(
             "event=guid_enrichment_summary registry={} enriched_events={} missed_events={} enriched_downloads={} missed_downloads={} total_downloads={}",
             guid_registry.len(), enriched_events, missed_events, enriched_downloads, missed_downloads, all_downloads.len()
         );
-        let diag_path = std::env::temp_dir().join("cmtrace-guid-diag.log");
-        if let Ok(mut f) = fs::File::create(&diag_path) {
-            let _ = f.write_all(diag_buffer.as_bytes());
-            log::info!("event=guid_diag_written path=\"{}\"", diag_path.display());
+        if let Some(contents) = diag_buffer.contents() {
+            match diag_buffer.create_file() {
+                // Reported only once the bytes are actually down. Discarding the write result
+                // logged success over a partial file, which is the same "looks fine, is not"
+                // shape this change is about.
+                Ok((diag_path, mut file)) => match file.write_all(contents.as_bytes()) {
+                    Ok(()) => {
+                        log::info!("event=guid_diag_written path=\"{}\"", diag_path.display())
+                    }
+                    Err(error) => log::warn!(
+                        "event=guid_diag_write_failed path=\"{}\" error=\"{error}\"",
+                        diag_path.display()
+                    ),
+                },
+                Err(error) => log::warn!("event=guid_diag_write_failed error=\"{error}\""),
+            }
         }
     }
 
-    // Fallback: synthesize DownloadStat records from ContentDownload events
-    // when the regex-based download_stats extractor found nothing.
-    if all_downloads.is_empty() {
-        all_downloads = synthesize_downloads_from_events(&all_events);
-        if !all_downloads.is_empty() {
-            log::info!(
-                "event=download_synthesized_from_events count={}",
-                all_downloads.len()
-            );
-        }
+    // Synthesize DownloadStat records from ContentDownload events for the
+    // content ids the regex-based extractor produced nothing for. Synthesis
+    // supplements extraction per id rather than being all-or-nothing: a
+    // single spurious extracted stat used to suppress every synthesized
+    // download and collapse the downloads panel.
+    let synthesized_count = merge_synthesized_downloads(&mut all_downloads, &all_events);
+    if synthesized_count > 0 {
+        log::info!(
+            "event=download_synthesized_from_events count={}",
+            synthesized_count
+        );
     }
 
     emit_analysis_progress(
@@ -1146,6 +1263,38 @@ fn is_summary_signal_event(event: &IntuneEvent) -> bool {
 /// the regex-based `download_stats` extractor found nothing (i.e. the log
 /// format didn't match `DOWNLOAD_RE`). Groups events by GUID and picks the
 /// latest status per GUID as the outcome.
+/// Merge event-synthesized download records into the extracted stats.
+///
+/// The regex-based extractor is the higher-fidelity source, so an extracted
+/// stat always wins for its content id; synthesis fills in only the ids the
+/// extractor produced nothing for. Returns how many records were added.
+fn merge_synthesized_downloads(downloads: &mut Vec<DownloadStat>, events: &[IntuneEvent]) -> usize {
+    let extracted_ids: std::collections::HashSet<String> = downloads
+        .iter()
+        .map(|download| download.content_id.clone())
+        .collect();
+    let mut added = 0usize;
+    for stat in synthesize_downloads_from_events(events) {
+        if !extracted_ids.contains(&stat.content_id) {
+            downloads.push(stat);
+            added += 1;
+        }
+    }
+    if added > 0 {
+        // Keep the combined list chronological. The epoch is the ordering
+        // truth — the timestamp *text* is MM-DD-YYYY, which reverses across a
+        // year boundary — and text plus content id are deterministic
+        // tie-breakers for records without a parseable timestamp.
+        downloads.sort_by(|left, right| {
+            left.timestamp_epoch
+                .cmp(&right.timestamp_epoch)
+                .then_with(|| left.timestamp.cmp(&right.timestamp))
+                .then_with(|| left.content_id.cmp(&right.content_id))
+        });
+    }
+    added
+}
+
 fn synthesize_downloads_from_events(events: &[IntuneEvent]) -> Vec<DownloadStat> {
     let mut by_guid: HashMap<String, Vec<&IntuneEvent>> = HashMap::new();
     for event in events {
@@ -1362,6 +1511,158 @@ fn download_signal_rank(state: DownloadSignalState) -> u8 {
 }
 
 #[cfg(test)]
+mod guid_diag_tests {
+    use super::GuidDiagLog;
+    use std::fmt::Write as _;
+    use std::fs;
+
+    /// Serializes the env-var mutation these tests share; cargo runs them on threads.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Restores the variable on drop, so a failing assertion cannot leak the mutation.
+    ///
+    /// A plain restore after `body()` is skipped while unwinding, which would leave the trace
+    /// enabled for every test that ran afterwards and turn one real failure into a cascade of
+    /// unrelated ones.
+    struct EnvRestore {
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", previous),
+                None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
+            }
+        }
+    }
+
+    fn with_var<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let restore = EnvRestore {
+            previous: std::env::var_os("CMTRACE_INTUNE_GUID_DIAG"),
+            _lock: lock,
+        };
+        match value {
+            Some(value) => std::env::set_var("CMTRACE_INTUNE_GUID_DIAG", value),
+            None => std::env::remove_var("CMTRACE_INTUNE_GUID_DIAG"),
+        }
+        let outcome = body();
+        drop(restore);
+        outcome
+    }
+
+    #[test]
+    fn collects_nothing_when_the_trace_was_not_asked_for() {
+        // The trace carries an organisation's app inventory. Unset means nothing is retained, so
+        // there is nothing for the caller to write to disk.
+        with_var(None, || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            assert!(log.contents().is_none(), "no trace may be retained");
+        });
+    }
+
+    #[test]
+    fn an_empty_value_does_not_enable_it() {
+        // CMTRACE_INTUNE_GUID_DIAG= in a shell profile is not a request for the trace.
+        with_var(Some(""), || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            assert!(log.contents().is_none());
+        });
+    }
+
+    #[test]
+    fn collects_the_trace_when_asked_for() {
+        with_var(Some("1"), || {
+            let mut log = GuidDiagLog::from_env();
+            let name = "Contoso Payroll";
+            let _ = writeln!(log, "guid=abc name=\"{name}\"");
+            let trace = log.contents().expect("the trace was requested");
+            assert!(trace.contains("Contoso Payroll"), "got {trace:?}");
+        });
+    }
+
+    #[test]
+    fn an_enabled_trace_that_collected_nothing_reports_no_contents() {
+        // Deliberately a statement about the sink, not about the file. In the real analysis the
+        // pipeline summary always writes once the trace is on, so an enabled run does produce a
+        // file; claiming otherwise here would be a test passing for a reason its name denies.
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            assert!(log.contents().is_none());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_trace_file_is_readable_only_by_its_owner() {
+        // The temp directory is shared and the default umask leaves new files world-readable.
+        // This trace holds the app inventory the whole change exists to stop leaking, so on the
+        // one path that does write it, nobody else on the machine may read it.
+        use std::os::unix::fs::PermissionsExt;
+
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            let (path, _file) = log.create_file().expect("creates");
+            let mode = fs::metadata(&path).expect("stat").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
+            let _ = fs::remove_file(&path);
+        });
+    }
+
+    #[test]
+    fn every_trace_path_is_distinct_even_within_one_clock_tick() {
+        // The stamp is held fixed, which is the whole point: two analyses in one process can land
+        // inside a single tick, and a clock can move backwards. Either repeats a timestamp, and
+        // because the file is opened exclusively a repeat does not overwrite anything but does
+        // lose the trace that was asked for. Calling trace_path in a loop would pass whether or
+        // not the sequence existed, because successive clock reads happen to differ.
+        let paths: std::collections::HashSet<_> =
+            (0..256).map(|_| GuidDiagLog::trace_path_for(42)).collect();
+        assert_eq!(
+            paths.len(),
+            256,
+            "one clock tick must still give distinct paths"
+        );
+    }
+
+    #[test]
+    fn the_trace_file_refuses_to_write_through_something_that_exists() {
+        // The system temp directory is world-writable, so a fixed name there is the classic
+        // clobber and symlink-follow target, and this trace is opt-in precisely because its
+        // contents are sensitive.
+        with_var(Some("1"), || {
+            let log = GuidDiagLog::from_env();
+            let (first_path, _first) = log.create_file().expect("creates");
+            assert!(first_path.exists());
+
+            // A second call must not reuse the name, so no analysis can truncate another's trace.
+            let (second_path, _second) = log.create_file().expect("creates");
+            assert_ne!(first_path, second_path);
+
+            // The helper itself is asked to open a path that already exists. Asserting on
+            // OpenOptions directly would have proved only that the standard library works, and
+            // would still pass if the helper dropped create_new.
+            let refused = GuidDiagLog::create_file_at(first_path.clone());
+            assert!(
+                refused.is_err(),
+                "create_file_at must refuse a path that already exists"
+            );
+
+            let _ = fs::remove_file(&first_path);
+            let _ = fs::remove_file(&second_path);
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{build_summary, build_timestamp_bounds, finalize_coverage, CoverageAccumulator};
     use crate::commands::intune_bundle::collect_input_paths;
@@ -1540,6 +1841,141 @@ mod tests {
         }
     ]
 }"#
+    }
+
+    #[test]
+    fn one_spurious_extracted_stat_does_not_suppress_synthesized_downloads() {
+        // The extractor produced a single (low-quality) stat for app A. The
+        // ContentDownload events cover apps A and B; synthesis must fill in
+        // B instead of being suppressed entirely, and must not duplicate A.
+        let event = |id: u64, guid: &str, status: IntuneStatus| IntuneEvent {
+            id,
+            event_type: IntuneEventType::ContentDownload,
+            name: format!("Download ({guid})"),
+            guid: Some(guid.to_string()),
+            status,
+            start_time: Some("01-15-2024 10:00:05.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        };
+        let guid_a = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let guid_b = "11111111-2222-3333-4444-555555555555";
+        let mut downloads = vec![DownloadStat {
+            content_id: guid_a.to_string(),
+            name: format!("Download ({guid_a})"),
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: 0.0,
+            success: false,
+            timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+            timestamp_epoch: None,
+        }];
+        let events = vec![
+            event(1, guid_a, IntuneStatus::Failed),
+            event(2, guid_b, IntuneStatus::Success),
+        ];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+
+        assert_eq!(added, 1, "only the missing content id is synthesized");
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(
+            downloads
+                .iter()
+                .filter(|download| download.content_id == guid_a)
+                .count(),
+            1,
+            "the extracted stat wins for its own content id"
+        );
+        let synthesized = downloads
+            .iter()
+            .find(|download| download.content_id == guid_b)
+            .expect("the uncovered content id is filled in from events");
+        assert!(synthesized.success);
+    }
+
+    #[test]
+    fn merge_synthesized_downloads_still_covers_the_no_extraction_case() {
+        let mut downloads: Vec<DownloadStat> = Vec::new();
+        let events = vec![IntuneEvent {
+            id: 1,
+            event_type: IntuneEventType::ContentDownload,
+            name: "Download (aaaa)".to_string(),
+            guid: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string()),
+            status: IntuneStatus::Failed,
+            start_time: Some("01-15-2024 10:00:05.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        }];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+        assert_eq!(added, 1);
+        assert_eq!(downloads.len(), 1);
+        assert!(!downloads[0].success);
+    }
+
+    #[test]
+    fn merged_downloads_sort_chronologically_across_a_year_boundary() {
+        // The timestamp *text* is MM-DD-YYYY, so "12-31-2023 …" sorts after
+        // "01-01-2024 …" lexically and a text sort shows reverse chronology
+        // across years. The merge must order by the parsed epoch.
+        let mut downloads = vec![DownloadStat {
+            content_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            name: "Older download".to_string(),
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: 0.0,
+            success: true,
+            timestamp: Some("12-31-2023 23:59:59.000".to_string()),
+            timestamp_epoch: Some(1_704_067_199_000),
+        }];
+        let events = vec![IntuneEvent {
+            id: 1,
+            event_type: IntuneEventType::ContentDownload,
+            name: "Newer download".to_string(),
+            guid: Some("11111111-2222-3333-4444-555555555555".to_string()),
+            status: IntuneStatus::Success,
+            start_time: Some("01-01-2024 00:00:00.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        }];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+        assert_eq!(added, 1);
+        assert_eq!(
+            downloads
+                .iter()
+                .map(|download| download.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Older download", "Newer download"],
+            "the merged list must be chronological, not text-ordered"
+        );
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {

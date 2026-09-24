@@ -1,0 +1,39 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized configuration report rows, no real device data",
+  "reports": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-na",
+          "sourceArtifactId": "mdm-diagnostic-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostic-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:04:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:04:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/BitLocker/RequireDeviceEncryption",
+      "settingId": null,
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "displayName": "Require device encryption",
+      "outcome": "notApplicable",
+      "value": null,
+      "error": null,
+      "namedData": []
+    }
+  ]
+}

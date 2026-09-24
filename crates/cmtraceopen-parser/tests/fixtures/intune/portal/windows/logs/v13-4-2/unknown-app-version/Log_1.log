@@ -1,0 +1,2 @@
+2026-06-01T09:00:00.1000000Z  INFO      Event       None        0    1a2b3c4d-0001-4000-8000-000000000001  13-4-2  [App Catalog] refreshing the assigned application list
+2026-06-01T09:00:01.2000000Z  INFO      Event       None        1    1a2b3c4d-0001-4000-8000-000000000001  13-4-2  [App Catalog] refresh complete

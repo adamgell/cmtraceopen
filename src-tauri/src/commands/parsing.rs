@@ -5,14 +5,19 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::models::log_entry::{LogEntry, LogFormat};
 use crate::state::app_state::AppState;
-use crate::watcher::tail;
+use crate::watcher::tail::{self, TailEntryAmendment};
 
 /// Payload emitted to the frontend when new tail entries arrive.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TailPayload {
     pub entries: Vec<LogEntry>,
+    pub amendments: Vec<TailEntryAmendment>,
     pub file_path: String,
+    /// Parse/framing coverage gaps observed in this incremental batch.
+    pub parse_errors: u32,
+    /// Highest physical source line consumed by this batch.
+    pub observed_through_line: Option<u32>,
     /// True when the tailed file was truncated/rotated: `entries` are a fresh
     /// read from the start of the file and the frontend must replace, not
     /// append to, its existing view for this file.
@@ -45,17 +50,18 @@ pub fn start_tail(
     }
 
     // Tailing reuses the backend-owned parser selection stored during open_log_file.
-    let parser_selection = {
-        let open_files = state
+    let (parser_selection, initial_logical_record) = {
+        let mut open_files = state
             .open_files
             .lock()
             .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-        open_files
-            .get(&path_buf)
-            .map(|f| f.parser_selection.clone())
-            .ok_or_else(|| {
-                crate::error::AppError::InvalidInput(format!("file is not open: {}", path))
-            })?
+        let open_file = open_files.get_mut(&path_buf).ok_or_else(|| {
+            crate::error::AppError::InvalidInput(format!("file is not open: {}", path))
+        })?;
+        let initial_logical_record = (open_file.byte_offset == byte_offset)
+            .then(|| open_file.initial_logical_record.take())
+            .flatten();
+        (open_file.parser_selection.clone(), initial_logical_record)
     };
 
     let file_path_for_event = path.clone();
@@ -65,10 +71,14 @@ pub fn start_tail(
         parser_selection,
         next_id,
         next_line,
+        initial_logical_record,
         move |batch| {
             let payload = TailPayload {
                 entries: batch.entries,
+                amendments: batch.amendments,
                 file_path: file_path_for_event.clone(),
+                parse_errors: batch.parse_errors,
+                observed_through_line: batch.observed_through_line,
                 reset: batch.reset,
             };
             if let Err(e) = app.emit("tail-new-entries", &payload) {

@@ -1,0 +1,71 @@
+{
+  "assertions": [
+    "a retrieval failure is distinct from having no profile candidate at all"
+  ],
+  "confidence": "high",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-profile-retrieval-failed"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-profile-retrieval-failed",
+      "recommendedChecks": [
+        "Read Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot events 160, 100, and 161 in order to see how far acquisition got.",
+        "Confirm the Autopilot service endpoints are reachable from the provisioning network."
+      ],
+      "severity": "blocker",
+      "summary": "A cited record reports that profile retrieval failed after acquisition began, so the device never received a profile to apply. The reported code was 0x80072EE2.",
+      "title": "The Autopilot deployment profile could not be retrieved"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "profileRetrievalFailure",
+  "phase": "profileDiscovery",
+  "profileApplied": false,
+  "profileCandidateState": "pending",
+  "profileRetrieved": false,
+  "registrationState": "registered",
+  "scenario": "profile-retrieval-failure",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

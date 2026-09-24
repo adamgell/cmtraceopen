@@ -12,13 +12,31 @@
 //! a reader can still see that two records mention the same device.
 //!
 //! The projection is idempotent: a replacement token cannot itself match a rule.
-
-use std::sync::OnceLock;
-
-use regex::Regex;
+//!
+//! This module owns only the *projection*: which compliance fields are
+//! classified sensitive is a property of this analyzer's contract. The masking
+//! *grammar* -- which byte patterns are sensitive and what they mask to -- is
+//! not ours. It belongs to
+//! [`crate::intune::apps::windows::common::redact_text`], the single owner
+//! every Windows lane defers to, and it is re-exported below rather than
+//! reimplemented. See `docs/architecture/shared-vs-workload-invariants.md`
+//! divergence 7.
+//!
+//! This lane previously carried a private copy of the grammar, and the copy
+//! drifted in nine places, every one of them in the leaking direction: a SID
+//! with the minimum identifying sub-authority count, the legacy
+//! `Documents and Settings` profile root, JSON-escaped profile paths, device
+//! name fields, UNC server segments, account fields, tenant id fields, inline
+//! credential flags, and MSI property credentials all reached the export
+//! verbatim. Compliance evidence is the worst place for that: a custom
+//! compliance script prints whatever its author decided to print. Parity with
+//! the owner is pinned by
+//! `tests/intune_windows_compliance.rs::the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`.
 
 use super::models::*;
 use crate::intune::evidence::{IntuneFinding, IntuneNamedValue};
+
+pub use crate::intune::apps::windows::common::redact_text;
 
 /// FNV-1a. Stable across runs, platforms, and processes, which the standard
 /// library's `DefaultHasher` explicitly is not.
@@ -29,50 +47,6 @@ fn stable_token(kind: &str, value: &str) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("[{kind}:{hash:016x}]")
-}
-
-/// A user principal name or email address.
-fn upn_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-            .expect("UPN regex must compile")
-    })
-}
-
-/// A Windows security identifier.
-fn sid_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"S-1-(?:\d+-){3,}\d+").expect("SID regex must compile"))
-}
-
-/// The profile segment of a user path, in either slash direction.
-///
-/// The segment is bounded by a separator, a quote, or a line break rather than
-/// by whitespace, because Windows allows spaces in profile directory names. The
-/// leading `[` exclusion is what makes the projection idempotent: an
-/// already-masked `[user:…]` segment must not be masked a second time.
-fn user_path_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?P<prefix>[\\/]Users[\\/])(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)")
-            .expect("user path regex must compile")
-    })
-}
-
-/// Mask the sensitive spans inside a free-text value.
-pub fn redact_text(value: &str) -> String {
-    let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
-        stable_token("upn", &caps[0])
-    });
-    let masked = sid_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        stable_token("sid", &caps[0])
-    });
-    user_path_re()
-        .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            format!("{}{}", &caps["prefix"], stable_token("user", &caps["user"]))
-        })
-        .into_owned()
 }
 
 /// Replace an identifier with a stable token, leaving an already-masked value alone.
@@ -200,39 +174,14 @@ mod tests {
     use super::*;
     use crate::intune::evidence::IntuneEvidenceRef;
 
-    #[test]
-    fn a_upn_is_masked_and_the_same_upn_yields_the_same_token() {
-        let first = redact_text("evaluated for analyst@contoso.invalid");
-        let second = redact_text("reported by analyst@contoso.invalid");
-        assert!(!first.contains("analyst@contoso.invalid"));
-        let token = |text: &str| {
-            text.split('[')
-                .nth(1)
-                .and_then(|rest| rest.split(']').next())
-                .map(str::to_owned)
-        };
-        assert_eq!(token(&first), token(&second));
-    }
-
-    #[test]
-    fn a_sid_is_masked() {
-        let masked = redact_text("owner S-1-5-21-1004336348-1177238915-682003330-512 evaluated");
-        assert!(!masked.contains("S-1-5-21-"), "got {masked}");
-        assert!(masked.contains("[sid:"));
-    }
-
-    #[test]
-    fn a_user_profile_path_with_a_space_is_fully_masked() {
-        let masked = redact_text(r"D:\Users\Jane Roe\policy.json");
-        assert!(!masked.contains("Jane"), "got {masked}");
-        assert!(!masked.contains("Roe"), "got {masked}");
-    }
-
-    #[test]
-    fn redaction_is_idempotent() {
-        let once = redact_text(r"D:\Users\Jane Roe\p.json for analyst@contoso.invalid");
-        assert_eq!(redact_text(&once), once);
-    }
+    // Grammar tests do not live here. UPN, SID, profile path and idempotence
+    // are properties of the owner and are pinned in
+    // `intune::apps::windows::common::redaction`, so a grammar change fails in
+    // one place rather than in five lanes that each copied one case. What this
+    // lane owes is proof that it still defers to that owner, which is asserted
+    // end to end by `the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`
+    // in `tests/intune_windows_compliance.rs`. The tests below cover this
+    // module's actual subject: the projection.
 
     #[test]
     fn script_output_is_replaced_wholesale() {

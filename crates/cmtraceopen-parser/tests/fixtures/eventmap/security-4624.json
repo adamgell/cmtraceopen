@@ -1,0 +1,101 @@
+{
+  "Author": "Eric Zimmerman saericzimmerman@gmail.com",
+  "Description": "Successful logon",
+  "EventId": 4624,
+  "Channel": "Security",
+  "Provider": "Microsoft-Windows-Security-Auditing",
+  "Maps": [
+    {
+      "Property": "UserName",
+      "PropertyValue": "%domain%\\%user%",
+      "Values": [
+        {
+          "Name": "domain",
+          "Value": "/Event/EventData/Data[@Name=\"SubjectDomainName\"]"
+        },
+        {
+          "Name": "user",
+          "Value": "/Event/EventData/Data[@Name=\"SubjectUserName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "RemoteHost",
+      "PropertyValue": "%workstation% (%ipAddress%)",
+      "Values": [
+        {
+          "Name": "ipAddress",
+          "Value": "/Event/EventData/Data[@Name=\"IpAddress\"]"
+        },
+        {
+          "Name": "workstation",
+          "Value": "/Event/EventData/Data[@Name=\"WorkstationName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData1",
+      "PropertyValue": "Target: %TargetDomainName%\\%TargetUserName%",
+      "Values": [
+        {
+          "Name": "TargetDomainName",
+          "Value": "/Event/EventData/Data[@Name=\"TargetDomainName\"]"
+        },
+        {
+          "Name": "TargetUserName",
+          "Value": "/Event/EventData/Data[@Name=\"TargetUserName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData2",
+      "PropertyValue": "LogonType %LogonType%",
+      "Values": [
+        {
+          "Name": "LogonType",
+          "Value": "/Event/EventData/Data[@Name=\"LogonType\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData3",
+      "PropertyValue": "LogonId: %TargetLogonId%",
+      "Values": [
+        {
+          "Name": "TargetLogonId",
+          "Value": "/Event/EventData/Data[@Name=\"TargetLogonId\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData4",
+      "PropertyValue": "AuthenticationPackageName: %AuthenticationPackageName%",
+      "Values": [
+        {
+          "Name": "AuthenticationPackageName",
+          "Value": "/Event/EventData/Data[@Name=\"AuthenticationPackageName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "PayloadData5",
+      "PropertyValue": "LogonProcessName: %LogonProcessName%",
+      "Values": [
+        {
+          "Name": "LogonProcessName",
+          "Value": "/Event/EventData/Data[@Name=\"LogonProcessName\"]"
+        }
+      ]
+    },
+    {
+      "Property": "ExecutableInfo",
+      "PropertyValue": "%ProcessName%",
+      "Values": [
+        {
+          "Name": "ProcessName",
+          "Value": "/Event/EventData/Data[@Name=\"ProcessName\"]"
+        }
+      ]
+    }
+  ]
+}

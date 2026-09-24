@@ -104,7 +104,9 @@ export function DeploymentErrorCard({
               appearance="subtle"
               onClick={() => toggleErrorExpanded(index)}
             >
-              {isExpanded ? "Collapse" : `${file.errorLines.length} errors`}
+              {isExpanded
+                ? "Collapse"
+                : `${file.errorLines.length} error${file.errorLines.length === 1 ? "" : "s"}`}
             </Button>
           )}
         </div>

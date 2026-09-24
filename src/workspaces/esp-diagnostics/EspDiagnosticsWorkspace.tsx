@@ -11,11 +11,11 @@ import {
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import {
+  exportEspSession,
   getEspDiagnosticsSession,
   getEspElevationState,
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
-  writeTextOutputFile,
 } from "../../lib/commands";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -34,11 +34,7 @@ import { useEspDiagnosticsStore } from "./esp-diagnostics-store";
 import { EspPhaseProgress } from "./EspPhaseProgress";
 import { EspWorkloadTable } from "./EspWorkloadTable";
 import { EspWorkspaceHeader } from "./EspWorkspaceHeader";
-import {
-  buildEspSessionCapture,
-  parseEspSessionCapture,
-  serializeEspSessionCapture,
-} from "./esp-session-capture";
+import { parseEspSessionCapture } from "./esp-session-capture";
 import { GraphEnrichmentPanel } from "./GraphEnrichmentPanel";
 import {
   analyzeEspEvidenceSource,
@@ -336,13 +332,11 @@ export function EspDiagnosticsWorkspace() {
     });
     if (!destination) return;
     try {
-      const capture = buildEspSessionCapture(current, {
+      // The backend builds the capture: redaction is applied inside the
+      // parser crate, so no cleartext session can reach the file.
+      await exportEspSession(destination, current, {
         capturedAtUtc: new Date().toISOString(),
       });
-      await writeTextOutputFile(
-        destination,
-        serializeEspSessionCapture(capture),
-      );
     } catch (error) {
       useEspDiagnosticsStore
         .getState()

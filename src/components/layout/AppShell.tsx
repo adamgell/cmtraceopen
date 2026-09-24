@@ -37,6 +37,7 @@ import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
 import { useSysmonAnalysisProgress } from "../../workspaces/sysmon/use-sysmon-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
+import { useClipboardHistoryMirror } from "../../hooks/use-clipboard-history-mirror";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
 import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
@@ -95,6 +96,7 @@ export function AppShell() {
   const showFileAssociationPrompt = useUiStore(
     (s) => s.showFileAssociationPrompt
   );
+  const modalOwner = useUiStore((s) => s.modalOwner);
   const setShowFindBar = useUiStore((s) => s.setShowFindBar);
   const setShowFilterDialog = useUiStore((s) => s.setShowFilterDialog);
   const setShowErrorLookupDialog = useUiStore(
@@ -292,6 +294,9 @@ export function AppShell() {
   useIntuneAnalysisProgress();
   useSysmonAnalysisProgress();
   useKeyboard();
+  // Re-write native WebView copies through the clipboard plugin so they
+  // register in Windows clipboard history (#520)
+  useClipboardHistoryMirror();
   useDragDrop();
   // Handle file path passed via OS file association at startup
   useFileAssociation();
@@ -305,9 +310,6 @@ export function AppShell() {
     const tabs = useUiStore.getState().openTabs;
     if (activeTabIndex < 0 || activeTabIndex >= tabs.length) return;
     const tab = tabs[activeTabIndex];
-    const currentPath = useLogStore.getState().openFilePath;
-    if (currentPath === tab.filePath) return;
-
     useUiStore.getState().ensureLogViewVisible("tab-switch");
     switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
       console.error("[tab-switch] failed to load", tab.filePath, err);
@@ -590,58 +592,62 @@ export function AppShell() {
       )}
 
       <FilterDialog
-        isOpen={showFilterDialog}
+        isOpen={showFilterDialog && modalOwner === "filter"}
         onClose={() => setShowFilterDialog(false)}
         onApply={handleApplyFilter}
         currentClauses={filterClauses}
       />
       <ErrorLookupDialog
-        isOpen={showErrorLookupDialog}
+        isOpen={showErrorLookupDialog && modalOwner === "errorLookup"}
         onClose={() => setShowErrorLookupDialog(false)}
       />
       <AboutDialog
-        isOpen={showAboutDialog}
+        isOpen={showAboutDialog && modalOwner === "about"}
         onClose={() => setShowAboutDialog(false)}
       />
       <SettingsDialog
-        isOpen={showSettingsDialog}
+        isOpen={showSettingsDialog && modalOwner === "settings"}
         onClose={() => setShowSettingsDialog(false)}
       />
       <GuidRegistryDialog
-        isOpen={showGuidRegistryDialog}
+        isOpen={showGuidRegistryDialog && modalOwner === "guidRegistry"}
         onClose={() => setShowGuidRegistryDialog(false)}
       />
       <EvidenceBundleDialog
-        isOpen={showEvidenceBundleDialog}
+        isOpen={showEvidenceBundleDialog && modalOwner === "evidenceBundle"}
         onClose={() => setShowEvidenceBundleDialog(false)}
       />
       <FileAssociationPromptDialog
-        isOpen={showFileAssociationPrompt}
+        isOpen={
+          showFileAssociationPrompt && modalOwner === "fileAssociationPrompt"
+        }
         onClose={() => setShowFileAssociationPrompt(false)}
       />
       {/* Reads its own open state from the store: it is opened from the native
           menu and from source-load failures, not from AppShell. */}
       <RestartAsAdministratorDialog />
       <CollectDiagnosticsDialog
-        isOpen={showCollectDiagnosticsDialog}
+        isOpen={
+          showCollectDiagnosticsDialog && modalOwner === "collectDiagnostics"
+        }
         onClose={() => setShowCollectDiagnosticsDialog(false)}
       />
       <CollectionCompleteDialog
-        result={collectionResult}
+        result={modalOwner === "collectionResult" ? collectionResult : null}
         onClose={() => setCollectionResult(null)}
       />
       <MergeTabsDialog
-        isOpen={showMergeTabsDialog}
+        isOpen={showMergeTabsDialog && modalOwner === "mergeTabs"}
         onClose={() => setShowMergeTabsDialog(false)}
         onMerge={(filePaths) => createMergedTab(filePaths)}
       />
       <DiffConfigDialog
-        isOpen={showDiffConfigDialog}
+        isOpen={showDiffConfigDialog && modalOwner === "diffConfig"}
         onClose={() => setShowDiffConfigDialog(false)}
         onCompare={(sourceA, sourceB) => createDiff(sourceA, sourceB)}
       />
       <UpdateDialog
-        isOpen={showUpdateDialog}
+        isOpen={showUpdateDialog && modalOwner === "update"}
         onClose={() => {
           dismissUpdate();
           setShowUpdateDialog(false);

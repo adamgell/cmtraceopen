@@ -1,0 +1,57 @@
+{
+  "scenario": "complete-success",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "succeeded",
+      "lastConfirmedPhase": "reporting",
+      "confidence": "high",
+      "returnCodeRaw": "0",
+      "returnCodeKind": "success",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": null,
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-succeeded:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:9",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a nonzero-free lifecycle reports the reporting phase as the last confirmed phase",
+    "a successful deployment requests no further evidence"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

@@ -1,0 +1,6 @@
+2026-05-04T09:01:00.1230000Z  INFO      Event       AppInstall  0    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Install] requesting install for the sample line-of-business app
+2026-05-04T09:01:04.9870000Z  ERROR     Event       AppInstall  1    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Install] catalog call failed
+System.Net.Http.HttpRequestException: Response status code does not indicate success: 403 (Forbidden).
+   at Contoso.Sample.PortalClient.CatalogClient.SendAsync()
+   at Contoso.Sample.PortalClient.CatalogClient.GetAppsAsync()
+2026-05-04T09:01:05.0010000Z  INFO      Event       AppInstall  2    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Install] install request abandoned

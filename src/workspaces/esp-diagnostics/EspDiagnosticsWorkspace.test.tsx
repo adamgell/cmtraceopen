@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 import { DEFAULT_LOG_LIST_FONT_SIZE } from "../../lib/log-accessibility";
@@ -2455,5 +2456,75 @@ describe("complete single-page evidence composition", () => {
       .map((element) => element.textContent?.trim().slice(0, 80));
 
     expect(undersizedLabels).toEqual([]);
+  });
+});
+
+describe("ESP session export boundary", () => {
+  const EXPORTED_UPN = "adele.vance@contoso.onmicrosoft.com";
+
+  async function clickExport() {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    vi.mocked(save).mockResolvedValue("/tmp/esp-session.json");
+    showSnapshot(
+      makeSnapshot({
+        identity: {
+          ...makeSnapshot().identity,
+          userPrincipalName: {
+            value: EXPORTED_UPN,
+            sensitivity: "restricted",
+          },
+        },
+      }),
+    );
+    render(<EspDiagnosticsWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Export session" }));
+    await waitFor(() => expect(vi.mocked(save)).toHaveBeenCalled());
+  }
+
+  it("never writes a cleartext session through the generic file writer", async () => {
+    await clickExport();
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === "export_esp_session"),
+      ).toBe(true),
+    );
+
+    // The generic file writer has no redaction boundary, so it must never be
+    // the path a session takes to disk. Serialized-file redaction is proven by
+    // the Rust export-boundary tests rather than re-derived here.
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "write_text_output_file"),
+    ).toBe(false);
+  });
+
+  it("forwards the chosen destination and the displayed snapshot to the backend", async () => {
+    // The frontend's only job at this boundary is forwarding: the path the user
+    // chose and the snapshot they were shown must be exactly what reaches the
+    // backend, whose crate boundary applies the projection.
+    await clickExport();
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(([command]) => command === "export_esp_session"),
+      ).toBe(true),
+    );
+
+    const call = vi
+      .mocked(invoke)
+      .mock.calls.find(([command]) => command === "export_esp_session");
+    const args = call?.[1] as {
+      destination?: string;
+      snapshot?: { identity?: { userPrincipalName?: { value?: string } } };
+    };
+    expect(args?.destination).toBe("/tmp/esp-session.json");
+    expect(args?.snapshot?.identity?.userPrincipalName?.value).toBe(EXPORTED_UPN);
   });
 });

@@ -1,0 +1,57 @@
+{"_comment": "SYNTHETIC FIXTURE: channel naming one profile",
+  "autopilotDocument": "autopilot.events",
+  "documentVersion": 1,
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 161,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:08Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:08Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 161,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "profileId",
+          "value": "11111111-2222-3333-4444-555555555555"
+        },
+        {
+          "name": "enrollmentId",
+          "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        }
+      ],
+      "message": "AutopilotManager retrieve settings succeeded."
+    }
+  ]
+}

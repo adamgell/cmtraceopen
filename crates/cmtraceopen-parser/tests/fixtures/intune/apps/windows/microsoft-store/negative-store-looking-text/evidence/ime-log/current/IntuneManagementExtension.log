@@ -1,0 +1,4 @@
+# SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only
+PackageFamilyName: Contoso.SynthStoreApp_9synth0abcd1h
+Deployment operation Register failed with 0x80073CF9
+Microsoft-Windows-AppXDeployment-Server

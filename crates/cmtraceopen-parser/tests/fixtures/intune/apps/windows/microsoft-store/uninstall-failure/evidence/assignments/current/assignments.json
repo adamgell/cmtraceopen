@@ -1,0 +1,42 @@
+{ "_synthetic": "SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only",
+  "kind": "assignments",
+  "assignments": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "assignments:1",
+          "sourceArtifactId": "assignments"
+        },
+        "provenance": {
+          "sourceKind": "suppliedFact",
+          "sourceArtifactId": "assignments",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:01.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:01.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "identity": {
+        "storeProductId": "9WZSYNTH0001",
+        "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+        "packageFullName": null,
+        "displayName": "Synthetic Store App"
+      },
+      "intent": "uninstall",
+      "targetContext": "user",
+      "namedData": []
+    }
+  ]
+}

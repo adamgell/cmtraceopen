@@ -8,6 +8,13 @@ import type { EspDiagnosticsSnapshot } from "./types";
 // already carries everything the frontend renders -- workloads, findings,
 // activity, raw evidence, AND the Graph overlay (`snapshot.graph`) -- so a single
 // snapshot is a complete, replayable session.
+//
+// This module only READS captures. Writing one is deliberately not possible
+// here: a capture is produced by the `export_esp_session` command, whose
+// `EspSessionCapture` type is the parser crate's export boundary and applies
+// the redaction projection on construction. The frontend used to build and
+// serialize the envelope itself, which is how unredacted sessions reached
+// user-chosen files (issue #549).
 
 export const ESP_SESSION_CAPTURE_KIND = "esp-session-capture" as const;
 export const ESP_SESSION_CAPTURE_VERSION = 1 as const;
@@ -22,30 +29,16 @@ export interface EspSessionCapture {
   version: number;
   capturedAtUtc: string;
   app?: EspSessionCaptureApp | null;
+  /** Written by the export boundary; absent in captures from older builds. */
+  redacted?: boolean;
   snapshot: EspDiagnosticsSnapshot;
 }
 
+/** Provenance the frontend supplies to `export_esp_session`. No device data. */
 export interface EspSessionCaptureMeta {
   capturedAtUtc: string;
   appVersion?: string | null;
   appCommit?: string | null;
-}
-
-export function buildEspSessionCapture(
-  snapshot: EspDiagnosticsSnapshot,
-  meta: EspSessionCaptureMeta,
-): EspSessionCapture {
-  return {
-    kind: ESP_SESSION_CAPTURE_KIND,
-    version: ESP_SESSION_CAPTURE_VERSION,
-    capturedAtUtc: meta.capturedAtUtc,
-    app: { version: meta.appVersion ?? null, commit: meta.appCommit ?? null },
-    snapshot,
-  };
-}
-
-export function serializeEspSessionCapture(capture: EspSessionCapture): string {
-  return JSON.stringify(capture, null, 2);
 }
 
 export type EspSessionCaptureParse =
@@ -66,7 +59,7 @@ function isCaptureEnvelope(
 
 /**
  * Parse a file's text as an ESP session capture. Accepts either the capture
- * envelope written by {@link serializeEspSessionCapture} or a bare
+ * envelope written by the `export_esp_session` command or a bare
  * `EspDiagnosticsSnapshot` (so a snapshot pulled straight off the wire loads
  * too). The snapshot is always revalidated with the same wire guard the live
  * session listener uses, so a schema-drifted or hand-mangled file is rejected

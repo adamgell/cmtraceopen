@@ -1,0 +1,60 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-export-and-redaction",
+  "workload": "apps/windows/microsoft-store",
+  "description": "One artifact could not be interpreted, and the readable IME record quotes a synthetic UPN and profile path that the export projection must mask stably.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 792
+    },
+    {
+      "artifactId": "ime-log-truncated",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension-1.log",
+      "sanitizedSourcePath": null,
+      "detail": "The rotation was truncated mid-record and carries no readable CCM framing",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log-truncated/current/IntuneManagementExtension-1.log",
+      "bytesCopied": 138
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "appx-operational.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/appx-operational/current/appx-operational.json",
+      "bytesCopied": 1927
+    }
+  ]
+}

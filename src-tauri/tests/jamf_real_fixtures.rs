@@ -20,7 +20,16 @@ use app_lib::jamf::self_service::parse_self_service_log_impl;
 use app_lib::macos_diag::profiles::parse_system_profiler_plist;
 
 fn fixture_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("JAMF_DEV_FIXTURES")?);
+    let Some(raw) = std::env::var_os("JAMF_DEV_FIXTURES") else {
+        // Said out loud rather than passing silently. A vacuous pass that reads as a verified one
+        // is the failure this suite exists to catch. Visible with `cargo test -- --nocapture`.
+        eprintln!(
+            "SKIP: JAMF_DEV_FIXTURES is not set, so nothing in this file actually ran. \
+             Point it at an unpacked jamf-dev-fixtures directory to exercise the real parse path."
+        );
+        return None;
+    };
+    let dir = PathBuf::from(raw);
     assert!(
         dir.is_dir(),
         "JAMF_DEV_FIXTURES is set but {} is not a directory",
@@ -117,7 +126,10 @@ fn self_service_log_yields_user_actions() {
     let Some(dir) = fixture_dir() else { return };
     let events = parse_self_service_log_impl(&dir.join("logs/selfservice.log")).expect("parse");
 
-    assert!(!events.is_empty(), "real selfservice.log produced no events");
+    assert!(
+        !events.is_empty(),
+        "real selfservice.log produced no events"
+    );
     assert!(
         events.iter().any(|e| e.action == "triggerPolicy"),
         "capture is known to contain Self Service-initiated installs"
@@ -170,8 +182,8 @@ fn captured_profiles_xml_parses_and_filters_to_jamf() {
         profiles.len()
     );
 
-    let filtered = app_lib::jamf::profiles::filter_jamf_profiles_impl(profiles, None)
-        .expect("filter");
+    let filtered =
+        app_lib::jamf::profiles::filter_jamf_profiles_impl(profiles, None).expect("filter");
     assert!(
         !filtered.profiles.is_empty(),
         "payload-prefix matching found no JAMF profiles in a JAMF capture"

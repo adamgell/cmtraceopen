@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE: generated corpus for issue #357; contains no real tenant, device, user, or token data]LOG]!><time="00:00:00.000+000" date="7-31-2026" component="SyntheticFixture" context="" type="1" thread="1" file="">
+<![LOG[[AppActionProcessor] Idle]LOG]!><time="10:00:02.000+000" date="7-31-2026" component="AppActionProcessor" context="" type="1" thread="20" file="">

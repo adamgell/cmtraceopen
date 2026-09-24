@@ -1,6 +1,9 @@
 # CMTrace Open — Workspace Library
 
 - IF loading the CMTrace Open specialist agent → read [[soul.md]] for identity/rules and [[memory.md]] for durable facts
+- IF integrating SCCM advanced capture PR #500 with current main → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-capture-main-integration.md]]
+- IF reworking SCCM advanced capture PR #500 server-validation gates → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-server-validation-rework.md]]
+- IF repairing SCCM advanced BGB configured-root provenance on PR #500 → read [[docs/superpowers/plans/2026-08-05-sccm-bgb-configured-root-provenance.md]]
 - IF implementing or reviewing SCCM issue #409 server intake synthetic identity grammar → read [[docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md]]
 - IF implementing or reviewing Graph API non-blocking WAM authentication for issue #441 → read [[docs/superpowers/plans/2026-08-05-graph-auth-nonblocking.md]]
 - IF reworking Graph API authentication after the PR #512 critic gate → read [[docs/superpowers/plans/2026-08-05-graph-auth-critic-rework.md]]

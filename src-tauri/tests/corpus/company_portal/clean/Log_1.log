@@ -1,0 +1,3 @@
+2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] refreshing the assigned application list
+2026-05-04T08:12:32.0020000Z  WARNING   Event       None        1    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] catalog response was served from the local cache
+2026-05-04T08:12:33.7710000Z  ERROR     Event       AppInstall  2    1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Install] install request rejected by the service

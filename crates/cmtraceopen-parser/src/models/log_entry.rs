@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 /// Maps directly to CMTrace's type field: 0=Success, 1=Info, 2=Warning, 3=Error.
 /// `Success` corresponds to CCM/PSADT `type="0"` — a completed operation that
 /// OneTrace renders with a green tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Success,
+    /// Default: an unclassified line is informational, which is how every parser already treats
+    /// one it cannot rank.
+    #[default]
     Info,
     Warning,
     Error,
@@ -24,13 +27,17 @@ pub enum EntryKind {
 }
 
 /// Which log format was detected/used to parse this entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogFormat {
     /// CCM/SCCM format: <![LOG[msg]LOG]!><time="..." date="..." ...>
     Ccm,
     /// Simple/legacy format: message$$<Component><timestamp><thread>
     Simple,
-    /// Plain text (no structured format detected)
+    /// Plain text (no structured format detected).
+    ///
+    /// Default, because claiming a structured format that was never detected would be a stronger
+    /// assertion than the evidence supports.
+    #[default]
     Plain,
     /// Generic timestamped format (ISO 8601, slash-dates, syslog, time-only)
     Timestamped,
@@ -67,6 +74,7 @@ pub enum ParserKind {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    CompanyPortal,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -91,6 +99,7 @@ pub enum ParserImplementation {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    CompanyPortal,
 }
 
 /// How the backend arrived at the parser selection.
@@ -152,7 +161,10 @@ pub struct ParserSelectionInfo {
 
 /// A single parsed log entry.
 /// Field names use camelCase for direct JSON serialization to TypeScript.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` exists so tests can construct one by naming only the fields under test; the struct
+/// carries far too many fields to spell out every time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     /// Sequential ID for stable row identity
@@ -307,6 +319,18 @@ pub struct ParseResult {
     pub byte_offset: u64,
 }
 
+/// A path-specific diagnostic returned when listing or parsing a source could not inspect a child.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PathDiagnostic {
+    /// Normalized path string emitted by the parser with platform-native separators and lossy
+    /// conversion for non-Unicode path components.
+    pub path: String,
+    /// Description of why the child could not be inspected, such as access, traversal, or parse
+    /// failure.
+    pub reason: String,
+}
+
 /// Per-file parse metadata for an aggregated folder open.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,4 +351,8 @@ pub struct AggregateParseResult {
     pub parse_errors: u32,
     pub folder_path: String,
     pub files: Vec<AggregateParsedFileResult>,
+    /// Path diagnostics for child paths skipped or failed during folder listing or aggregate
+    /// parsing; each value records the path and reason for that child.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_errors: Vec<PathDiagnostic>,
 }

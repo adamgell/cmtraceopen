@@ -207,8 +207,11 @@ WUfB ring policy values are visible in `MDMDiagHtmlReport.html` under Update CSP
 
 | Source | Path | Format | Purpose |
 |---|---|---|---|
-| CP app logs | `C:\Users\<user>\AppData\Local\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` | Plain text | Per-user CP events, errors, enrollment state |
+| CP app logs | `C:\Users\<user>\AppData\Local\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` | Column-aligned: ISO-8601 UTC, severity, category, scenario, sequence, activity GUID, app version, message | Per-user CP events, errors, enrollment state |
+| CP bridge logs | `...\LocalState\Log.<BridgeName>_<n>.log` (`BridgeLauncher`, `ConfigurationManagerBridge`, `IntuneManagementExtensionBridge`) | Same grammar as the app log | ConfigMgr `root\ccm\ClientSDK` queries and IME service calls made on behalf of CP |
 | MDM diagnostic export | `C:\Users\Public\Public Documents\MDMDiagnostics\` | .cab + .html | Exported via Settings > Accounts > Access work or school > Export management log files |
+
+The record grammar is derived from a single published app-version sample (`12-0-0`), so the parser is version-scoped: a record reporting any other app version still parses but is reported as experimental/low confidence rather than presented as a validated read.
 
 Collect diagnostics from the Company Portal app via **Help & support > Upload logs** or navigate directly to the LocalState folder.
 
@@ -637,7 +640,8 @@ During ADE enrollment, `cloudconfigurationd` fetches the activation record from 
 | Format | File types | Recommended parser | Platform |
 |---|---|---|---|
 | CMTrace (.log) | All IME logs, Panther setup logs | Regex: `<![LOG[<message>]LOG]!><time="HH:MM:SS.mmm" date="MM-DD-YYYY" component="<comp>" context="" type="<1\|2\|3>" thread="<tid>" file="">` | Windows |
-| Plain text (.log) | CBS.log, DISM.log, ReportingEvents.log, MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs | Line-by-line timestamp parsing | Windows |
+| Plain text (.log) | CBS.log, DISM.log, MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs | Line-by-line timestamp parsing | Windows |
+| Tab-delimited update history | ReportingEvents.log | Split on tab; provider, status, and result code per record | Windows |
 | EVTX (binary) | All Windows Event Logs | `Get-WinEvent`, Event Viewer, EvtxECmd | Windows |
 | ETL (binary) | WU ETLs, DO ETLs, WaaSMedic, DiagnosticLogCSP collectors | `tracerpt.exe`, WPA, `Get-WinEvent`, PerfView | Windows |
 | HTML | MDMDiagHtmlReport, GPResult | Browser rendering or HTML parser | Windows |

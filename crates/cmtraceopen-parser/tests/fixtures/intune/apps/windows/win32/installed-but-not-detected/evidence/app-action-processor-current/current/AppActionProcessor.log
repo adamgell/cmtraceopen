@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE: generated corpus for issue #357; contains no real tenant, device, user, or token data]LOG]!><time="00:00:00.000+000" date="7-31-2026" component="SyntheticFixture" context="" type="1" thread="1" file="">
+<![LOG[[AppActionProcessor] Detection state for app with id: 11111111-2222-4333-8444-555555555555 = Not Detected]LOG]!><time="10:00:50.000+000" date="7-31-2026" component="AppActionProcessor" context="" type="1" thread="20" file="">

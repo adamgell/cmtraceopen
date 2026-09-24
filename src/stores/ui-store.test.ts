@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { useUiStore, getAvailableWorkspaces, isIntuneWorkspace } from "./ui-store";
 
 describe("ui-store", () => {
@@ -45,6 +45,37 @@ describe("ui-store", () => {
         localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
       );
       expect(persisted.state?.alwaysOnTop).toBe(true);
+    });
+  });
+
+  describe("DNS banner dismissal", () => {
+    it("keeps dismissed paths in the current session only", async () => {
+      await useUiStore.persist.clearStorage();
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+
+      useUiStore.getState().dismissDnsBannerPath("C:/Logs/DnsServer.log");
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([
+        "C:/Logs/DnsServer.log",
+      ]);
+
+      const persisted = JSON.parse(
+        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
+      );
+      expect(persisted.state?.dismissedDnsBannerPaths).toBeUndefined();
+
+      localStorage.setItem(
+        "cmtraceopen-ui-preferences",
+        JSON.stringify({
+          state: {
+            dismissedDnsBannerPaths: ["C:/Logs/DnsServer.log"],
+          },
+        }),
+      );
+      useUiStore.setState({ dismissedDnsBannerPaths: [] });
+
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().dismissedDnsBannerPaths).toEqual([]);
     });
   });
 
@@ -156,6 +187,52 @@ describe("ui-store", () => {
     });
   });
 
+  describe("log load view visibility", () => {
+    beforeEach(() => {
+      useUiStore.setState({ currentPlatform: "macos" });
+    });
+
+    afterEach(() => {
+      useUiStore.setState({
+        currentPlatform: useUiStore.getInitialState().currentPlatform,
+      });
+    });
+
+    it("keeps the macOS JAMF workspace active when a log opens from its log list", () => {
+      useUiStore.getState().setActiveWorkspace("macos-jamf");
+
+      // Selecting a file in the workspace's own log list loads it and opens a
+      // tab; AppShell's active-tab effect then asks for the log view.
+      useUiStore.getState().openTab("/var/log/jamf/install.log", "install.log");
+      useUiStore.getState().ensureLogViewVisible("tab-switch");
+
+      const state = useUiStore.getState();
+      expect(state.activeTabIndex).toBe(0);
+      expect(state.openTabs[0].filePath).toBe("/var/log/jamf/install.log");
+      expect(state.activeWorkspace).toBe("macos-jamf");
+      expect(state.activeView).toBe("macos-jamf");
+    });
+
+    it("still hands logs from other workspaces to the Log workspace", () => {
+      useUiStore.getState().setActiveWorkspace("macos-diag");
+
+      useUiStore.getState().openTab("/var/log/jamf/install.log", "install.log");
+      useUiStore.getState().ensureLogViewVisible("tab-switch");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
+    });
+
+    it("still leaves the macOS JAMF workspace on an explicit switch", () => {
+      useUiStore.getState().setActiveWorkspace("macos-jamf");
+
+      useUiStore
+        .getState()
+        .ensureWorkspaceVisible("log", "toolbar.workspace-select");
+
+      expect(useUiStore.getState().activeWorkspace).toBe("log");
+    });
+  });
+
   describe("column widths", () => {
     it("sets and retrieves column width", () => {
       useUiStore.getState().setColumnWidth("message", 500);
@@ -190,6 +267,10 @@ describe("ui-store", () => {
   });
 
   describe("dialogs", () => {
+    beforeEach(() => {
+      useUiStore.setState(useUiStore.getInitialState(), true);
+    });
+
     it("closes all transient dialogs", () => {
       useUiStore.getState().setShowFindBar(true);
       useUiStore.getState().setShowFilterDialog(true);
@@ -199,6 +280,114 @@ describe("ui-store", () => {
       const state = useUiStore.getState();
       expect(state.showFindBar).toBe(false);
       expect(state.showFilterDialog).toBe(false);
+    });
+
+    it("queues modal requests in arrival order without discarding their state", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().setElevationPrompt({
+        request: {
+          reason: "explicitMenu",
+          workspace: "log",
+          target: { kind: "workspace" },
+        },
+      });
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-1",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
+      });
+
+      const state = useUiStore.getState();
+      expect(state.modalOwner).toBe("about");
+      expect(state.modalQueue).toEqual(["elevationPrompt", "collectionResult"]);
+      expect(state.showAboutDialog).toBe(true);
+      expect(state.elevationPrompt).not.toBeNull();
+      expect(state.collectionResult?.bundleId).toBe("collection-1");
+    });
+
+    it("promotes the next queued modal when the owner completes", () => {
+      useUiStore.getState().setShowFileAssociationPrompt(true);
+      useUiStore.getState().setShowSettingsDialog(true);
+
+      expect(useUiStore.getState().modalOwner).toBe("fileAssociationPrompt");
+      expect(useUiStore.getState().modalQueue).toEqual(["settings"]);
+
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+
+      expect(useUiStore.getState().modalOwner).toBe("settings");
+      expect(useUiStore.getState().modalQueue).toEqual([]);
+      expect(useUiStore.getState().showSettingsDialog).toBe(true);
+    });
+
+    it("does not enqueue the same pending modal more than once", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().setShowCollectDiagnosticsDialog(true);
+      useUiStore.getState().setShowCollectDiagnosticsDialog(true);
+
+      const state = useUiStore.getState();
+      expect(state.modalOwner).toBe("about");
+      expect(state.modalQueue).toEqual(["collectDiagnostics"]);
+      expect(state.showAboutDialog).toBe(true);
+      expect(state.showCollectDiagnosticsDialog).toBe(true);
+    });
+
+    it("removes a queued local owner and cannot later promote it", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().requestModal("eventLogChannelClear");
+
+      useUiStore.getState().releaseModal("eventLogChannelClear");
+      useUiStore.getState().setShowAboutDialog(false);
+
+      expect(useUiStore.getState().modalOwner).toBeNull();
+      expect(useUiStore.getState().modalQueue).toEqual([]);
+    });
+
+    it("closes transient requests deterministically without losing a collection result", () => {
+      useUiStore.getState().setShowAboutDialog(true);
+      useUiStore.getState().requestModal("eventLogChannelClear");
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-2",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
+      });
+
+      useUiStore.getState().closeTransientDialogs("test");
+
+      const state = useUiStore.getState();
+      expect(state.showAboutDialog).toBe(false);
+      expect(state.modalOwner).toBe("eventLogChannelClear");
+      expect(state.modalQueue).toEqual(["collectionResult"]);
+      expect(state.collectionResult?.bundleId).toBe("collection-2");
+    });
+
+    it("retains a locked registration owner while clearing other transient requests", () => {
+      useUiStore.getState().setShowFileAssociationPrompt(true);
+      useUiStore.getState().setFileAssociationPromptBusy(true);
+      useUiStore.getState().setShowUpdateDialog(true);
+      useUiStore.getState().setCollectionResult({
+        bundlePath: "C:/Temp/diagnostics.zip",
+        bundleId: "collection-after-registration",
+        artifactCounts: { collected: 4, missing: 0, failed: 0, total: 4 },
+        durationMs: 100,
+        gaps: [],
+      });
+
+      useUiStore.getState().closeTransientDialogs("test");
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+
+      const locked = useUiStore.getState();
+      expect(locked.modalOwner).toBe("fileAssociationPrompt");
+      expect(locked.modalQueue).toEqual(["collectionResult"]);
+      expect(locked.showFileAssociationPrompt).toBe(true);
+      expect(locked.showUpdateDialog).toBe(false);
+
+      useUiStore.getState().setFileAssociationPromptBusy(false);
+      useUiStore.getState().setShowFileAssociationPrompt(false);
+      expect(useUiStore.getState().modalOwner).toBe("collectionResult");
     });
   });
 

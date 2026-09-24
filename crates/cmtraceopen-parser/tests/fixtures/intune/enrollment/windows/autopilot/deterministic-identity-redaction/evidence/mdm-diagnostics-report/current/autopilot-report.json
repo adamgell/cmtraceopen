@@ -1,0 +1,125 @@
+{"_comment": "SYNTHETIC FIXTURE: identity facts with a hardware hash and a profile path",
+  "autopilotDocument": "autopilot.identityFacts",
+  "documentVersion": 1,
+  "sections": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rp-s1",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostics-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": null,
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "sectionId": "deviceIdentity",
+      "kind": "deviceIdentity",
+      "outcome": "observed",
+      "error": null,
+      "values": [
+        {
+          "name": "serialNumber",
+          "value": "SYNTH-SERIAL-0001"
+        },
+        {
+          "name": "hardwareHash",
+          "value": "U1lOVEhFVElDSEFSRFdBUkVIQVNIRk9SRklYVFVSRVVTRU9OTFlaWloK"
+        },
+        {
+          "name": "entraDeviceId",
+          "value": "abcdabcd-1234-5678-9012-abcdabcdabcd"
+        },
+        {
+          "name": "tenantDomain",
+          "value": "contoso.example"
+        },
+        {
+          "name": "deviceName",
+          "value": "SYNTH-DEV-01"
+        },
+        {
+          "name": "userPrincipalName",
+          "value": "synthetic.user@example.invalid"
+        }
+      ],
+      "message": "Diagnostics were exported to D:\\Users\\Synthetic Person\\autopilot-diagnostics.log by synthetic.user@example.invalid."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostics-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": null,
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "sectionId": "enrollmentHandoff",
+      "kind": "enrollmentHandoff",
+      "outcome": "observed",
+      "error": null,
+      "values": [
+        {
+          "name": "enrollmentId",
+          "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        }
+      ],
+      "message": "MDM enrollment began for the Autopilot-assigned profile."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostics-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 3,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": null,
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "sectionId": "espHandoff",
+      "kind": "espHandoff",
+      "outcome": "observed",
+      "error": null,
+      "values": [
+        {
+          "name": "entraDeviceId",
+          "value": "abcdabcd-1234-5678-9012-abcdabcdabcd"
+        }
+      ],
+      "message": "Control passed to the Enrollment Status Page."
+    }
+  ]
+}

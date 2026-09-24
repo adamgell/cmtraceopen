@@ -1,0 +1,53 @@
+{
+  "scenario": "unknown-report-schema",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "unsupported"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "commandReceived",
+      "local": "indeterminate",
+      "service": "noEvidence",
+      "resolution": "insufficientEvidence",
+      "sourceIds": [],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": true,
+      "hasUnassessableFailure": false,
+      "evidenceIds": [
+        "evt-unknown-id",
+        "rpt-unsupported"
+      ]
+    }
+  ],
+  "findingConfidence": {
+    "configuration-uninterpretable-evidence": "high",
+    "configuration-unreadable-artifacts": "high",
+    "configuration-artifact-without-usable-records": "high"
+  },
+  "findingIds": [
+    "configuration-uninterpretable-evidence",
+    "configuration-unreadable-artifacts",
+    "configuration-artifact-without-usable-records"
+  ],
+  "assertions": [
+    "an unrecognized event id names the resource without claiming an outcome",
+    "an unsupported schema is retained rather than discarded",
+    "the event channel is reported as available-but-barren rather than left to read as clean"
+  ]
+}

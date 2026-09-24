@@ -1,0 +1,34 @@
+{"_comment": "SYNTHETIC FIXTURE: two ESP sessions sharing one enrollment identifier",
+  "autopilotDocument": "autopilot.espSession",
+  "documentVersion": 1,
+  "sessions": [
+    {
+      "sessionId": "esp-session-0003",
+      "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "correlationId": null,
+      "activityId": null,
+      "entraDeviceId": null,
+      "managedDeviceId": null,
+      "startedAtUtc": "2026-07-31T09:00:20Z",
+      "phase": "deviceSetup",
+      "evidence": {
+        "evidenceId": "esp-s1",
+        "sourceArtifactId": "esp-session-facts"
+      }
+    },
+    {
+      "sessionId": "esp-session-0004",
+      "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "correlationId": null,
+      "activityId": null,
+      "entraDeviceId": null,
+      "managedDeviceId": null,
+      "startedAtUtc": "2026-07-31T09:10:20Z",
+      "phase": "accountSetup",
+      "evidence": {
+        "evidenceId": "esp-s2",
+        "sourceArtifactId": "esp-session-facts"
+      }
+    }
+  ]
+}

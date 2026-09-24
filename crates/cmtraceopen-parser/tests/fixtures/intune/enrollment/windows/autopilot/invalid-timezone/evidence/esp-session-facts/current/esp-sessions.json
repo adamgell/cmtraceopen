@@ -1,0 +1,20 @@
+{"_comment": "SYNTHETIC FIXTURE: an ESP session sharing no identifier with the Autopilot evidence",
+  "autopilotDocument": "autopilot.espSession",
+  "documentVersion": 1,
+  "sessions": [
+    {
+      "sessionId": "esp-session-0005",
+      "enrollmentId": "ffffffff-0000-1111-2222-333333333333",
+      "correlationId": null,
+      "activityId": null,
+      "entraDeviceId": null,
+      "managedDeviceId": null,
+      "startedAtUtc": "2026-07-31T09:00:20Z",
+      "phase": "deviceSetup",
+      "evidence": {
+        "evidenceId": "esp-s1",
+        "sourceArtifactId": "esp-session-facts"
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "assertions": [
+    "an explicit 815 outranks the transient 100 that preceded it"
+  ],
+  "confidence": "high",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-no-profile-candidate"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        }
+      ],
+      "findingId": "autopilot-no-profile-candidate",
+      "recommendedChecks": [
+        "Check the device's Autopilot device record and its group/profile assignment.",
+        "Read Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot events 809 and 815."
+      ],
+      "severity": "blocker",
+      "summary": "A cited record reports that no profile is assigned to the device and that the tenant has no default profile, so there is nothing for Autopilot to apply.",
+      "title": "No Autopilot deployment profile is assigned to this device"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "noProfileCandidate",
+  "phase": "profileDiscovery",
+  "profileApplied": false,
+  "profileCandidateState": "noneAssigned",
+  "profileRetrieved": false,
+  "registrationState": "unknown",
+  "scenario": "no-profile-candidate",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

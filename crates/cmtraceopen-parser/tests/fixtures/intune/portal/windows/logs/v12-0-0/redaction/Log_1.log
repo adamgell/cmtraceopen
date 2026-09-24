@@ -1,0 +1,4 @@
+2026-05-04T16:00:00.1000000Z  INFO      Event       SignIn      0    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [SignIn] signed in adele.vance@contoso.onmicrosoft.com tenantId=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+2026-05-04T16:00:01.2000000Z  INFO      Event       SignIn      1    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [SignIn] token=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.SYNTHETIC.SIGNATURE
+2026-05-04T16:00:02.3000000Z  INFO      Event       DeviceSync  2    1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [Sync] deviceSerialNumber=SYNTHETIC-SERIAL-0F1E2D profile=C:\Users\adele.vance\AppData\Local\Packages
+2026-05-04T16:00:03.4000000Z  INFO      Event       DeviceSync  3    1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [Sync] service endpoint resolved to 203.0.113.10

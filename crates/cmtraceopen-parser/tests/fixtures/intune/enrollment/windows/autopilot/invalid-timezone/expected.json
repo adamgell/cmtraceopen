@@ -1,0 +1,98 @@
+{
+  "assertions": [
+    "an unrecognizable timezone downgrades the time basis instead of being ignored",
+    "ESP facts with no shared key and an unreliable time basis are not even a low-confidence candidate"
+  ],
+  "confidence": "medium",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "esp-session-facts",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "esp-session-facts": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-timestamps-unreliable",
+    "autopilot-phase-completed"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "autopilot-channel",
+        "esp-session-facts",
+        "mdm-diagnostics-report"
+      ],
+      "evidence": [],
+      "findingId": "autopilot-timestamps-unreliable",
+      "recommendedChecks": [
+        "Re-collect with the device's timezone recorded alongside the evidence.",
+        "Prefer sources that emit an explicit UTC offset per record."
+      ],
+      "severity": "warning",
+      "summary": "Ordering fell back to record identity because the declared timezone is not a recognizable UTC offset or region identifier. No conclusion in this analysis relies on wall-clock time, and time-proximity correlation with an ESP session is refused outright.",
+      "title": "The capture declared an unrecognizable timezone"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-phase-completed",
+      "recommendedChecks": [
+        "Review the correlated ESP session for what happened after the handoff."
+      ],
+      "severity": "info",
+      "summary": "A profile was retrieved and applied, and the handoff into enrollment and the Enrollment Status Page was observed. Everything after this point belongs to the ESP analysis, not to Autopilot.",
+      "title": "The local Autopilot phase completed and handed off"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "completed",
+  "phase": "espHandoff",
+  "profileApplied": true,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "unknown",
+  "scenario": "invalid-timezone",
+  "timeBasis": "unreliable",
+  "timezoneState": "invalid",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

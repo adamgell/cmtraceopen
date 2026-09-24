@@ -2248,7 +2248,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
         0x1f83d9ab,
         0x5be0cd19,
     ];
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0.iter() {
         let mut words = [0u32; 64];
         for (index, word) in words.iter_mut().take(16).enumerate() {
             let offset = index * 4;
@@ -2471,11 +2471,14 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
                 }
             }
 
+            // The corpus hashes are computed over forward-slash paths on every
+            // platform; native separators would drift the FNV/SHA fixpoints on
+            // Windows.
             let relative_corpus_path = full_path
                 .strip_prefix(updates_root())
                 .expect("evidence is below updates root")
                 .to_string_lossy()
-                .into_owned();
+                .replace('\\', "/");
             corpus_items.push((relative_corpus_path, bytes));
         }
 

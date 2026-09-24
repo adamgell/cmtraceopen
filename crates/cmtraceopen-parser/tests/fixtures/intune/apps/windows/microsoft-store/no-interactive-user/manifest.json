@@ -1,0 +1,43 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "no-interactive-user",
+  "workload": "apps/windows/microsoft-store",
+  "description": "A user-context package evaluated with nobody signed in. This is a scheduling condition, and the skipped per-user event channel is a coverage gap.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 773
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "skipped",
+      "encoding": "utf-8",
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "detail": "No user session was available to enumerate per-user deployment events",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}
