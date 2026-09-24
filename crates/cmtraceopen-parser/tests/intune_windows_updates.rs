@@ -29,15 +29,15 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::updates::{
     analyze_update_bundle, derive_findings, redacted_export_projection, PolicyChainState,
-    PolicySignal, SupplementalLogKind, UpdateChainState, UpdateEvidenceBundle, UpdateOutcome,
-    UpdatePhase, UpdateSnapshot, UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner,
+    PolicySignal, SupplementalLogKind, UpdateChainState, UpdateEvidenceBundle, UpdatePhase,
+    UpdateSnapshot, UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner,
     EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::IntuneTimestampKind;
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
-    IntuneEvidenceRef, IntuneFindingConfidence, IntuneObservationContext, IntuneParseState,
-    IntuneProvenance, IntuneSensitivity, IntuneSourceKind,
+    IntuneEvidenceRef, IntuneFindingConfidence, IntuneNamedValue, IntuneObservationContext,
+    IntuneParseState, IntuneProvenance, IntuneSensitivity, IntuneSourceKind,
 };
 use serde_json::Value;
 use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
@@ -1044,13 +1044,12 @@ fn an_unplaceable_reading_never_states_the_verdict() {
     let manifest = load_json(&root.join("manifest.json"));
     let expected = load_json(&root.join("expected.json"));
 
-    let unplaceable = |bundle: &mut UpdateEvidenceBundle, index: usize| {
+    let unplaceable = |bundle: &mut UpdateEvidenceBundle, evidence_id: &str| {
         let event = bundle
             .events
             .iter_mut()
-            .filter(|event| event.context.evidence_ref.source_artifact_id == "wu-client-events")
-            .nth(index)
-            .expect("the scenario carries this client event");
+            .find(|event| event.context.evidence_ref.evidence_id == evidence_id)
+            .unwrap_or_else(|| panic!("the scenario carries {evidence_id}"));
         let timestamp = event
             .context
             .source_timestamp
@@ -1063,7 +1062,7 @@ fn an_unplaceable_reading_never_states_the_verdict() {
     // An earlier client record loses its time: the terminal record still states
     // the outcome, so the corpus's verdict has to hold.
     let mut earliest = build_bundle(scenario, &manifest);
-    unplaceable(&mut earliest, 0);
+    unplaceable(&mut earliest, "wu-43");
     let snapshot = analyze_update_bundle(&earliest);
     assert!(
         snapshot
@@ -1083,17 +1082,15 @@ fn an_unplaceable_reading_never_states_the_verdict() {
     // because a reading that cannot be placed cannot be the one the verdict rests
     // on.
     let mut latest = build_bundle(scenario, &manifest);
-    let client_events = latest
-        .events
-        .iter()
-        .filter(|event| event.context.evidence_ref.source_artifact_id == "wu-client-events")
-        .count();
-    unplaceable(&mut latest, client_events - 1);
+    unplaceable(&mut latest, "wu-20");
     let snapshot = analyze_update_bundle(&latest);
     let state = serde_json::to_value(snapshot.update_chain.state).expect("the state serializes");
-    assert_ne!(
-        state, "installFailed",
-        "the unplaceable record's outcome is not the verdict"
+    // The recorded reading, not its absence: wu-43 at 01:10 is the terminal
+    // placed record once wu-20 loses its time, and a negative assertion here let
+    // every other wrong state pass.
+    assert_eq!(
+        state, "inProgress",
+        "the terminal placed reading states the verdict once the later one is unplaceable"
     );
 }
 
@@ -1109,20 +1106,39 @@ fn a_scan_based_no_applicable_update_is_reported() {
     let scenario = "policy-applied-no-applicable-update";
     let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
-    let mut snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));
+    // The phase has to be the input's, not a field set after the reduction: an
+    // observation mutated here would leave the state computed from the
+    // applicability phase and the assertion would not exercise this rule at all.
+    let mut bundle = build_bundle(scenario, &manifest);
+    let event = bundle
+        .events
+        .iter_mut()
+        .find(|event| event.context.evidence_ref.evidence_id == "wu-26")
+        .expect("the scenario carries the scan event");
+    // An adapter's phase is read for an event id this build does not map, which
+    // is the case the rescue exists for: 26 maps, so the override would be
+    // ignored and the test would exercise the mapped path instead.
+    event.event_id = 9999;
+    event.named_data.push(IntuneNamedValue {
+        name: "cmtraceUpdatePhase".to_owned(),
+        value: "scan".to_owned(),
+    });
+    event.named_data.push(IntuneNamedValue {
+        name: "cmtraceUpdateOutcome".to_owned(),
+        value: "notApplicable".to_owned(),
+    });
 
-    let observation = snapshot
+    let snapshot = analyze_update_bundle(&bundle);
+    let scan_observations = snapshot
         .update_chain
         .unkeyed_observations
-        .iter_mut()
-        .find(|observation| {
-            observation.phase == UpdatePhase::Applicability
-                && observation.outcome == UpdateOutcome::NotApplicable
-        })
-        .expect("this scenario reports a not-applicable applicability check");
-    // The same record as the other adapter reports it.
-    observation.phase = UpdatePhase::Scan;
-    snapshot.findings = derive_findings(&snapshot);
+        .iter()
+        .filter(|observation| observation.phase == UpdatePhase::Scan)
+        .count();
+    assert!(
+        scan_observations > 0,
+        "the adapter's phase reached the reduction"
+    );
 
     assert_eq!(
         snapshot.update_chain.state,

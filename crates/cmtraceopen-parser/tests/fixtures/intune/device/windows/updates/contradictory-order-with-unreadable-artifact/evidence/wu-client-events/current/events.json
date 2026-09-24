@@ -131,7 +131,7 @@
           }
         },
         "sourceTimestamp": {
-          "rawText": "2026-07-31T01:00:00Z",
+          "rawText": "2026-07-31T01:00:00+99:00",
           "originalOffset": "+99:00",
           "normalizedUtc": null,
           "kind": "invalid"

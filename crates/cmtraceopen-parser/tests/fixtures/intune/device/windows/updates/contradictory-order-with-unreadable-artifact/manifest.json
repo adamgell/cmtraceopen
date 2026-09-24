@@ -50,7 +50,7 @@
       "originalBasename": "events.json",
       "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
       "relativePath": "evidence/wu-client-events/current/events.json",
-      "bytesCopied": 4927,
+      "bytesCopied": 4932,
       "capturedUtc": "2026-07-31T03:00:00Z",
       "rotation": {
         "kind": "current",
