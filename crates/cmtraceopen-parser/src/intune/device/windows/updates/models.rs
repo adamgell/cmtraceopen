@@ -492,11 +492,17 @@ impl Default for UpdateWorkloadOwner {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdatePhase {
+    /// The client's detection pass. An event 26 reporting `updateCount=0` ends here, and that is what makes the chain `NoApplicableUpdate`.
     Scan,
+    /// Whether a detected update applies to this device. Reaches the same verdict as a scan that found nothing, by a different event.
     Applicability,
+    /// Fetching the payload of an update that applied.
     Download,
+    /// Running the update's own installer.
     Install,
+    /// The restart an install needs before it completes.
     Reboot,
+    /// The client telling the service what it did.
     Reporting,
 }
 
@@ -504,13 +510,19 @@ pub enum UpdatePhase {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateOutcome {
+    /// The stage began and has not reported an end.
     Started,
+    /// The stage completed as intended.
     Succeeded,
+    /// The stage ended in an error.
     Failed,
     /// Held back by an active hours window, deadline, or deferral policy.
     Deferred,
+    /// The stage concluded there was nothing to do.
     NotApplicable,
+    /// Still outstanding, such as a restart that has not happened.
     Pending,
+    /// An outcome the source could not classify. Carried rather than dropped, so the reading is not silently lost.
     Unknown,
 }
 
@@ -557,14 +569,23 @@ impl UpdateObservation {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateTransactionState {
+    /// The scan failed and nothing keyed follows it.
     ScanFailed,
+    /// Nothing applied to this update. Per-update scope: `UpdateChainState::NoApplicableUpdate` says the same of the device.
     NoApplicableUpdate,
+    /// The payload did not arrive.
     DownloadFailed,
+    /// The installer reported an error.
     InstallFailed,
+    /// Held back by active hours, a deadline, or policy.
     Deferred,
+    /// Installed, waiting on a restart to complete.
     RebootPending,
+    /// Installed and complete.
     Installed,
+    /// Readings exist and none of them is terminal.
     InProgress,
+    /// Readings exist but none can be placed in order, so no outcome is claimed.
     InsufficientEvidence,
 }
 
@@ -627,13 +648,21 @@ pub enum UpdateChainState {
     NotObserved,
     /// Update-client evidence exists but nothing terminal can be read from it.
     InsufficientEvidence,
+    /// The device's own scan failed.
     ScanFailed,
+    /// Nothing applied to the device. Device scope: `UpdateTransactionState::NoApplicableUpdate` says it of one update.
     NoApplicableUpdate,
+    /// A download failed and nothing terminal follows it.
     DownloadFailed,
+    /// An install failed and nothing terminal follows it.
     InstallFailed,
+    /// Held back by active hours, a deadline, or policy.
     Deferred,
+    /// Installed, waiting on a restart.
     RebootPending,
+    /// The device's update execution completed.
     Installed,
+    /// Work is underway and nothing terminal has been read.
     InProgress,
 }
 

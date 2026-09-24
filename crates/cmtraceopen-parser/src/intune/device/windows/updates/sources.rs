@@ -657,7 +657,9 @@ pub fn workload_owner_from(named_data: &[IntuneNamedValue]) -> Option<UpdateWork
 /// Outcome of classifying one event that is not from a modeled provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventClassification {
+    /// A policy-chain reading, routed to the policy chain.
     Policy(Box<PolicyObservation>),
+    /// An update-chain reading, routed to the update chain.
     Update(Box<UpdateObservation>),
     /// A modeled provider, but an event id this build does not map.
     UnmappedEventId(u32),
