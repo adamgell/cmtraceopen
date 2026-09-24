@@ -219,11 +219,35 @@ fn redact_context(context: &mut IntuneObservationContext) {
 ///
 /// The names are what make an export diagnosable ("this record carried a
 /// serviceGuid"); the values are what can leak.
+/// Whether a name reads as a field label, and is therefore safe to export.
+///
+/// The name slot holds field names in a capture, so the export keeps a name that
+/// looks like one. It is not a whitelist of this build's constants: the corpus
+/// carries names we do not define (`Message5` and `HexInt1`, both positional forms
+/// the event payload uses, and vendor fields such as `updatelist`), and masking
+/// those would cost legibility for nothing.
+///
+/// What the rule excludes is the identity shapes — a UPN (`@`), a domain-qualified
+/// account (`\`), a URI or path (`/`, `:`), a dotted display name (`.`). A name in
+/// one of those shapes is a *value* someone filed in the name slot, and the value
+/// check next door cannot see it because it only ever inspects the value.
+fn reads_as_field_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
 fn redact_named(values: &[IntuneNamedValue]) -> Vec<IntuneNamedValue> {
     values
         .iter()
         .map(|entry| IntuneNamedValue {
-            name: entry.name.clone(),
+            name: if reads_as_field_name(&entry.name) {
+                entry.name.clone()
+            } else {
+                REDACTED.to_owned()
+            },
             value: if is_public_named_value(&entry.name, &entry.value) {
                 entry.value.clone()
             } else {
@@ -296,6 +320,50 @@ pub fn is_public(context: &IntuneObservationContext) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_that_is_not_a_field_name_is_masked() {
+        // The value check cannot see these: the identity is in the name slot.
+        let masked = [
+            "adam.admin@contoso.example.com",
+            r"contoso\adam.admin",
+            "adam.admin",
+            "./Device/Vendor/MSFT/Policy/Config/Update/UpdateServiceUrl",
+        ];
+        // Names the corpus actually carries, which must survive or the export
+        // stops describing the capture.
+        let kept = [
+            "updateGuid",
+            "Message5",
+            "HexInt1",
+            "updatelist",
+            "tenantDisplayName",
+        ];
+
+        for name in masked {
+            let values = vec![IntuneNamedValue {
+                name: name.to_owned(),
+                value: "1".to_owned(),
+            }];
+            assert_eq!(
+                redact_named(&values)[0].name,
+                REDACTED,
+                "{name} is an identity shape, not a field name"
+            );
+        }
+        for name in kept {
+            let values = vec![IntuneNamedValue {
+                name: name.to_owned(),
+                value: "1".to_owned(),
+            }];
+            assert_eq!(
+                redact_named(&values)[0].name,
+                name,
+                "{name} is a field the capture carries"
+            );
+        }
+    }
+
     use crate::intune::evidence::{
         IntuneAccessState, IntuneEvidenceRef, IntuneParseState, IntuneProvenance, IntuneSourceKind,
     };
