@@ -347,6 +347,64 @@ beforeEach(() => {
   useDsregcmdStore.getState().clear();
 });
 
+describe("DsregcmdSidebar export control", () => {
+  function seedBundle(bundlePath: string | null) {
+    seedReady();
+    useDsregcmdStore.setState({
+      sourceContext: { ...sourceContext(), bundlePath },
+    });
+  }
+
+  it("reports what it wrote, and names what it could not project", async () => {
+    seedBundle("C:\\temp\\capture");
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    invokeMock.mockImplementation((command: string) =>
+      command === "project_dsregcmd_capture_bundle"
+        ? Promise.resolve({
+            destination: "C:\\temp\\capture-shareable",
+            projectedFiles: 12,
+            unprojectedFiles: ["evidence/registry/device.reg"],
+          })
+        : Promise.resolve(null),
+    );
+
+    render(<DsregcmdSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: /export redacted copy/i }));
+
+    expect(await screen.findByText(/Wrote 12 projected files/)).toBeTruthy();
+    expect(screen.getByText(/capture-shareable/)).toBeTruthy();
+    expect(
+      screen.getByText(/not projected, copied as-is: evidence\/registry\/device\.reg/),
+    ).toBeTruthy();
+  });
+
+  it("refuses a result it cannot read rather than showing half of it", async () => {
+    seedBundle("C:\\temp\\capture");
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    // A payload missing the fields the control renders: `projectedFiles` would be
+    // `undefined` in the message the engineer reads.
+    invokeMock.mockImplementation((command: string) =>
+      command === "project_dsregcmd_capture_bundle"
+        ? Promise.resolve({ destination: "C:\\temp\\capture-shareable" })
+        : Promise.resolve(null),
+    );
+
+    render(<DsregcmdSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: /export redacted copy/i }));
+
+    expect(
+      await screen.findByText(/returned a result this build cannot read/),
+    ).toBeTruthy();
+  });
+
+  it("offers nothing to export when no bundle was loaded", () => {
+    seedBundle(null);
+    render(<DsregcmdSidebar />);
+
+    expect(screen.queryByRole("button", { name: /export redacted copy/i })).toBeNull();
+  });
+});
+
 describe("DsregcmdWorkspace fixtures", () => {
   it("DSREG-003 shows health cards, issues overview, and sidebar findings", () => {
     seedReady();
