@@ -109,6 +109,8 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ## Testing
 
 - **Unit/integration tests**: `src-tauri/tests/` — parser regression tests with synthetic fixtures
+- **Frontend tests**: `npm test` — vitest suites under `src/` (`test:watch`, `test:coverage`)
+- **End-to-end**: `npm run test:e2e` — Playwright specs in `e2e/` (`test:e2e:ui`, `test:e2e:debug`). CI runs this as its own job
 - **Benchmarks**: `src-tauri/benches/intune_pipeline.rs` — Criterion benchmarks for the Intune pipeline (10K records)
 - Run a single test: `cargo test test_name` from `src-tauri/`
 - Run benchmarks: `cargo bench` from `src-tauri/`
