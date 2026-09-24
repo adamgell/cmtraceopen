@@ -103,7 +103,7 @@ The repo has an internal parallel agent team structure documented under `.Clairv
 
 Staff notes live in each member's subdirectory:
 - **Roger:** SCCM Epic #317, issues #318–#335, recovery branches, execution planning
-- **Theo:** Docs-audit phases (phase 2 = `docs/audit-phase2`, phase 3 = `docs/audit-phase3`)
+- **Theo:** Docs-accuracy audits. The audit notes themselves were never committed to this repository - `docs/audit-phase2` and `docs/audit-phase3` do not exist and never have - so there is nothing to read here for them.
 
 ## Ecosystem State: The Worktree Forest
 
