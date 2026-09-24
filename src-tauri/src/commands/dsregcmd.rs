@@ -542,6 +542,7 @@ fn project_capture_bundle_impl(
             capture_path.display()
         ))
     })?;
+    let literals = bundle_literals(root, &capture);
 
     let destination = shareable_sibling(root);
     if destination.exists() {
@@ -563,6 +564,7 @@ fn project_capture_bundle_impl(
         root,
         root,
         &destination,
+        &literals,
         &capture,
         &capture_path,
         &mut projected_files,
@@ -587,6 +589,7 @@ fn project_bundle_dir(
     root: &Path,
     directory: &Path,
     destination: &Path,
+    literals: &cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
     capture: &str,
     capture_path: &Path,
     projected_files: &mut usize,
@@ -628,6 +631,7 @@ fn project_bundle_dir(
                 root,
                 &path,
                 destination,
+                literals,
                 capture,
                 capture_path,
                 projected_files,
@@ -645,11 +649,9 @@ fn project_bundle_dir(
         let projected = if path == capture_path {
             // The capture is the file every other literal was read from, so its
             // own projection is the status-text projection.
-            Some(
-                cmtraceopen_parser::dsregcmd::redaction::redacted_status_text(capture).into_bytes(),
-            )
+            Some(literals.scrub(capture).into_bytes())
         } else {
-            project_artifact_bytes(capture, &bytes)
+            project_artifact_bytes(literals, &bytes)
         };
         match projected {
             Some(bytes) => {
@@ -692,16 +694,15 @@ fn projection_relative_path(relative: &Path) -> String {
 ///
 /// Registry evidence is written as UTF-16, so a UTF-8 read is not enough to see
 /// the identities inside it. Anything else is left for the caller to report.
-fn project_artifact_bytes(capture: &str, bytes: &[u8]) -> Option<Vec<u8>> {
+fn project_artifact_bytes(
+    literals: &cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
+    bytes: &[u8],
+) -> Option<Vec<u8>> {
     if let Ok(text) = std::str::from_utf8(bytes) {
-        return Some(
-            cmtraceopen_parser::dsregcmd::redaction::redacted_capture_artifact(capture, text)
-                .into_bytes(),
-        );
+        return Some(literals.scrub(text).into_bytes());
     }
     let (text, little_endian) = decode_utf16(bytes)?;
-    let projected =
-        cmtraceopen_parser::dsregcmd::redaction::redacted_capture_artifact(capture, &text);
+    let projected = literals.scrub(&text);
     Some(encode_utf16(&projected, little_endian))
 }
 
@@ -744,6 +745,103 @@ fn encode_utf16(text: &str, little_endian: bool) -> Vec<u8> {
         });
     }
     out
+}
+
+/// The identity keys the evidence artifacts state their values under.
+///
+/// This application writes the bundle, so these are its own keys: the SCP query
+/// names the tenant it answered for, and the event log names the computer that
+/// recorded it. A value under any other key is left to the shared grammar.
+const BUNDLE_IDENTITY_KEYS: [(&str, cmtraceopen_parser::dsregcmd::redaction::IdentityKind); 3] = [
+    (
+        "tenantDomain",
+        cmtraceopen_parser::dsregcmd::redaction::IdentityKind::Tenant,
+    ),
+    (
+        "azureAdId",
+        cmtraceopen_parser::dsregcmd::redaction::IdentityKind::Tenant,
+    ),
+    (
+        "computer",
+        cmtraceopen_parser::dsregcmd::redaction::IdentityKind::Host,
+    ),
+];
+
+/// Every identity a bundle carries, from its capture and its evidence.
+///
+/// The capture alone is not enough: the SCP evidence names a tenant and an Entra
+/// id that no parsed fact holds, and a bare DNS name has no shape for the shared
+/// grammar to key on.
+fn bundle_literals(
+    root: &Path,
+    capture: &str,
+) -> cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals {
+    let mut literals =
+        cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals::from_capture(capture);
+    collect_artifact_identities(root, &mut literals);
+    literals
+}
+
+fn collect_artifact_identities(
+    directory: &Path,
+    literals: &mut cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
+) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_artifact_identities(&path, literals);
+            continue;
+        }
+        if !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        collect_identities_in(&value, literals);
+    }
+}
+
+fn collect_identities_in(
+    value: &serde_json::Value,
+    literals: &mut cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
+) {
+    match value {
+        serde_json::Value::Object(members) => {
+            for (key, member) in members {
+                if let Some((_, kind)) = BUNDLE_IDENTITY_KEYS
+                    .iter()
+                    .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+                {
+                    if let Some(text) = member.as_str() {
+                        literals.add(text, *kind);
+                    }
+                }
+                collect_identities_in(member, literals);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_identities_in(item, literals);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The capture a bundle's identities are read from.
@@ -1616,6 +1714,51 @@ mod tests {
     const PROJECTION_CAPTURE: &str = " TenantName : Contoso Ltd\n DomainName : contoso.example\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n";
     const PROJECTION_ARTIFACT: &str =
         r#"{"domain":"contoso.example","device":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#;
+
+    /// Evidence the capture never names is projected too.
+    ///
+    /// A bundle is not only its capture: the SCP query names a tenant domain and
+    /// an Entra id that no parsed fact holds. Red on the commit before this one,
+    /// where the table came from the capture alone:
+    /// `{"tenantDomain":"tenant.example.invalid","azureAdId":"aaaaaaaa-…"}`.
+    #[test]
+    fn projecting_a_bundle_scrubs_evidence_the_capture_never_names() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let command_output = root.join("evidence").join("command-output");
+        let connectivity = root.join("evidence").join("connectivity");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        std::fs::create_dir_all(&connectivity).expect("create connectivity dir");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        std::fs::write(
+            connectivity.join("scp-query.json"),
+            r#"{"tenantDomain":"tenant.example.invalid","azureAdId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#,
+        )
+        .expect("write scp evidence");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let scp = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("connectivity")
+                .join("scp-query.json"),
+        )
+        .expect("read projected scp evidence");
+        assert!(
+            !scp.contains("tenant.example.invalid"),
+            "the tenant domain survives: {scp}"
+        );
+        assert!(
+            !scp.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "the Entra id survives: {scp}"
+        );
+    }
 
     fn write_projection_bundle(root: &std::path::Path) {
         let command_output = root.join("evidence").join("command-output");
