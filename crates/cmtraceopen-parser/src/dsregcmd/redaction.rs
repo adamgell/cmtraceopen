@@ -169,6 +169,12 @@ struct IdentityLiterals {
 /// of those inside `[host:0123456789abcdef]` would leave a nested token where the
 /// projection promised a stable one.
 fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
+    // Every step here is bounded, and the walk only moves forward: a field full
+    // of `[` and no colon must not cost a scan to the end of the text for each
+    // one. The kind is short by construction and the body is exactly sixteen hex
+    // characters, so both searches are constant-length.
+    const MAX_KIND_BYTES: usize = 24;
+    const TOKEN_BODY_BYTES: usize = 16;
     let bytes = value.as_bytes();
     let mut spans = Vec::new();
     let mut index = 0;
@@ -177,28 +183,32 @@ fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
             index += 1;
             continue;
         }
-        let Some(colon) = value[index..].find(':').map(|offset| index + offset) else {
+        let window_end = (index + 1 + MAX_KIND_BYTES).min(bytes.len());
+        let mut colon = None;
+        for (offset, byte) in bytes[index + 1..window_end].iter().enumerate() {
+            match *byte {
+                b':' => {
+                    colon = Some(index + 1 + offset);
+                    break;
+                }
+                byte if byte.is_ascii_lowercase() || byte == b'_' => {}
+                _ => break,
+            }
+        }
+        let Some(colon) = colon else {
             index += 1;
             continue;
         };
-        let kind = &value[index + 1..colon];
-        let close = value[colon + 1..]
-            .find(']')
-            .map(|offset| colon + 1 + offset);
-        let Some(end) = close else {
-            index += 1;
-            continue;
-        };
-        let body = &value[colon + 1..end];
-        if !kind.is_empty()
-            && kind
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-            && body.len() == 16
-            && body.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            spans.push((index, end + 1));
-            index = end + 1;
+        let body_start = colon + 1;
+        let body_end = body_start + TOKEN_BODY_BYTES;
+        let is_token = body_end < bytes.len()
+            && bytes[body_end] == b']'
+            && bytes[body_start..body_end]
+                .iter()
+                .all(|byte| byte.is_ascii_hexdigit());
+        if is_token {
+            spans.push((index, body_end + 1));
+            index = body_end + 1;
             continue;
         }
         index += 1;
@@ -1228,6 +1238,22 @@ mod tests {
 
     /// A classified value that is also a token's kind word cannot edit a token.
     ///
+    /// Many `[` characters with no colon are walked once, not rescanned.
+    ///
+    /// The scan is bounded and only moves forward, so a field of brackets costs a
+    /// single pass; this pins the behaviour, not a timing.
+    #[test]
+    fn a_field_of_brackets_is_walked_without_minting_a_token() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("host", KIND_HOST);
+
+        let text = format!("{}host [host:0123456789abcdef]", "[".repeat(64));
+        let scrubbed = literals.scrub(&text);
+
+        assert!(scrubbed.contains("[host:0123456789abcdef]"), "{scrubbed}");
+        assert!(!scrubbed.contains("[ host"), "{scrubbed}");
+    }
+
     /// Four-byte identifiers are admitted now, and `host` is one: without this,
     /// a grammar-produced `[host:…]` token in the same text would be scrubbed
     /// from the inside and come out malformed.
