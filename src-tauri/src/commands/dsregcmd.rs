@@ -1972,7 +1972,14 @@ mod tests {
         let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
 
         assert_eq!(projection.projected_files, 2, "{projection:?}");
-        // Sorted: the filesystem's own order must not reach the caller.
+        // The list is sorted, because the filesystem's own order is not a
+        // contract. The property is asserted as well as one vector, so that a
+        // directory which happens to return sorted names cannot let the vector
+        // pass without the sort.
+        assert!(
+            projection.unprojected_files.is_sorted(),
+            "the report is sorted: {projection:?}"
+        );
         assert_eq!(
             projection.unprojected_files,
             vec![
