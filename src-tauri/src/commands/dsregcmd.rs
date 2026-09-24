@@ -590,6 +590,11 @@ fn project_capture_bundle_impl(
         return Err(error);
     }
 
+    // The walk reads directories in whatever order the filesystem returns, so
+    // the report is sorted: a caller comparing two runs of the same bundle
+    // should not see the list move.
+    unprojected_files.sort();
+
     Ok(CaptureBundleProjection {
         destination: destination.display().to_string(),
         projected_files,
