@@ -216,30 +216,30 @@ describe("MacosDiagWorkspace fixtures", () => {
     seedReadyEnvironment();
     render(<MacosDiagWorkspace />);
 
-    expect(screen.getByRole("button", { name: /Intune Logs/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Profiles & MDM/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Defender/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Packages/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Unified Log/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Intune Logs/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Profiles & MDM/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Defender/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Packages/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Unified Log/ })).toBeInTheDocument();
 
     expect(screen.getByText("Discovered Log Files")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open in log viewer" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Profiles & MDM/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Profiles & MDM/ }));
     expect(screen.getByText(/Installed Configuration Profiles/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy all" })).toBeInTheDocument();
     expect(screen.getByText(/Enrolled via Device/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Defender/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Defender/ }));
     expect(screen.getByText("Defender Health: OK")).toBeInTheDocument();
     expect(screen.getByText("Real-time Protection")).toBeInTheDocument();
     expect(screen.getByText("Definitions")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Packages/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Packages/ }));
     expect(screen.getByText("Microsoft Packages")).toBeInTheDocument();
     expect(screen.getAllByText("com.microsoft.wdav").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Unified Log/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Unified Log/ }));
     expect(screen.getByText("Hide NSURLSession noise")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run Query" })).toBeInTheDocument();
     expect(screen.getByText("MDM Client (mdmclient)")).toBeInTheDocument();
