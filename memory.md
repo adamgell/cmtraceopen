@@ -111,7 +111,11 @@ Staff notes live in each member's subdirectory:
 
 `cmtraceopen` has an extraordinary development footprint across multiple git worktree directories. This is not just "developed in Claude/Codex" — it IS a parallel development ecosystem.
 
-- **450+ git worktrees** total across `.worktrees/`, `/private/tmp/cmtraceopen-*`, `~/.codex/worktrees/`, and the root repo's own `.claude/worktrees/`
+- **~65 git worktrees** total, measured 2026-09-24 — counted rather than described, because the
+  previous figure here read "450+": 34 in `.worktrees/` (35 registered with `git worktree list`),
+  28 in `~/.codex/worktrees/`, one in `/private/tmp/cmtraceopen-*`, and one each in the repo's own
+  and `~/.claude/` worktree directories. The forest is real; it is a seventh of the size this line
+  used to claim, which is what cleaning up merged lanes does to a count nobody retakes.
 - **246 SCCM branches** for issues #318 through #482 (diagnostic program: client health, intake, policy, DP, SUP, hierarchy, cross-side correlation)
 - **~40 Intune branches** covering IME corrections, Company Portal multi-platform (Windows/macOS/iOS/Android), WUfB recovery, device inventory
 - Many worktrees have **1,000+ commits** from main — deep parallel feature development with real code changes and merge activity
