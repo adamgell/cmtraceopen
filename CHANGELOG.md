@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Removed a stubbed WhatIf filter and an unproduced source status**: `WhatIfFilter` and its store field, setter, default and reset had no reader; `SourceStatusKind` carried `"auto-selected-file"`, which nothing constructs or compares.
+
 - **Second launch opens in the running window (#565)**: A second launch, whether a file-association double-click or a path on the command line, hands its files to the window that is already open, which raises itself and opens them like any other path, instead of leaving a second window behind. An elevated restart is a replacement rather than a second launch, so it never routes itself.
 - **Updater manifest publisher**: The `publish-updater-manifest` job in both release workflows called its local action without checking the repository out first, so it died at load time with `Can't find 'action.yml'` and `latest.json` was never published by that path — the job had never once succeeded. Both callers now check out, and a workflow-contract test fails naming any job that runs a local action without doing so.
 - **DsRegCmd export boundary (#556)**: The analysis the workspace receives is now a redacted projection, so the JSON summary, the rendered summary and the raw status text copied from the workspace no longer carry the tenant id, tenant domain, device id, thumbprint, user principal name or user SID. The unprojected form is reachable only from `analyze_text_preserving_local_values`, which the rules evaluate against inside the crate.
