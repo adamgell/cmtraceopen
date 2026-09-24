@@ -1,6 +1,10 @@
 use super::models::{MacosEnrollmentStatus, MacosProfilesResult};
+
 #[cfg(any(target_os = "macos", test))]
 use super::models::{MacosMdmPayload, MacosMdmProfile};
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -227,9 +231,12 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
 
     // --- Collect profiles via system_profiler XML plist output ---
     let profiles = {
-        let output = Command::new("system_profiler")
-            .args(["SPConfigurationProfileDataType", "-xml"])
-            .output();
+        let output = run_bounded_command(
+            Command::new("system_profiler").args(["SPConfigurationProfileDataType", "-xml"]),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
 
         match output {
             Ok(out) if out.status.success() => parse_system_profiler_plist(&out.stdout),
@@ -250,17 +257,23 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
     };
 
     // --- Collect raw text output for display ---
-    let raw_output = Command::new("system_profiler")
-        .args(["SPConfigurationProfileDataType"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+    let raw_output = run_bounded_command(
+        Command::new("system_profiler").args(["SPConfigurationProfileDataType"]),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    .unwrap_or_default();
 
     // --- Enrollment status ---
     let enrollment_status = {
-        let output = Command::new("profiles")
-            .args(["status", "-type", "enrollment"])
-            .output();
+        let output = run_bounded_command(
+            Command::new("profiles").args(["status", "-type", "enrollment"]),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
         match output {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);

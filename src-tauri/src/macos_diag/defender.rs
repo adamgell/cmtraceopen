@@ -1,6 +1,10 @@
 use super::models::{MacosDefenderHealthStatus, MacosDefenderResult};
+
 #[cfg(target_os = "macos")]
 use super::{environment::scan_log_directory, models::MacosLogFileEntry};
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -91,7 +95,12 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppE
 
     // --- Health ---
     let health = {
-        let output = Command::new("mdatp").arg("health").output();
+        let output = run_bounded_command(
+            Command::new("mdatp").arg("health"),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);

@@ -36,187 +36,39 @@ const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 #[cfg(target_os = "windows")]
 const MAX_COMMAND_ERROR_BYTES: usize = 16 * 1024;
 
-#[cfg(any(target_os = "windows", test))]
-#[derive(Debug)]
-struct BoundedCommandOutput {
-    status: std::process::ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-}
-
-#[cfg(any(target_os = "windows", test))]
-#[derive(Debug)]
-struct BoundedReaderOutput {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
+/// Run a Delivery Optimization command under a deadline with capped output.
+///
+/// The mechanics live in [`crate::process_util::run_bounded_command`], which
+/// every bounded subprocess in the app goes through so the deadline, the pipe
+/// draining and the no-window flag exist once. This maps its errors onto the
+/// vocabulary the ESP rules already speak.
 #[cfg(any(target_os = "windows", test))]
 fn run_bounded_command(
-    mut command: std::process::Command,
+    command: std::process::Command,
     timeout: Duration,
     max_stdout_bytes: usize,
     max_stderr_bytes: usize,
-) -> Result<BoundedCommandOutput, SystemReadError> {
-    use std::io::ErrorKind;
-    use std::process::Stdio;
-    use std::time::Instant;
-
-    if timeout.is_zero() {
-        return Err(SystemReadError::TimedOut);
-    }
-
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // Every bounded ESP subprocess is spawned here, so hide the console window
-    // at this choke point to keep console tools (powershell.exe, etc.) from
-    // flashing a window when ESP diagnostics start. No-op off Windows.
-    crate::process_util::apply_hidden_window(&mut command);
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Err(SystemReadError::Missing),
-        Err(_) => {
-            return Err(SystemReadError::Failed(
-                "Delivery Optimization command could not start".to_string(),
-            ))
-        }
-    };
-
-    let stdout = child.stdout.take().ok_or_else(|| {
-        SystemReadError::Failed("Delivery Optimization stdout pipe was unavailable".to_string())
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        SystemReadError::Failed("Delivery Optimization stderr pipe was unavailable".to_string())
-    })?;
-    let stdout_reader = match spawn_bounded_reader(stdout, max_stdout_bytes, "stdout") {
-        Ok(reader) => reader,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
-    let stderr_reader = match spawn_bounded_reader(stderr, max_stderr_bytes, "stderr") {
-        Ok(reader) => reader,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            return Err(error);
-        }
-    };
-
-    let deadline = Instant::now() + timeout;
-    let (status, timed_out) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break (status, false),
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let status = child.wait().map_err(|_| {
-                    SystemReadError::Failed(
-                        "Delivery Optimization command could not be reaped after timeout"
-                            .to_string(),
-                    )
-                })?;
-                break (status, true);
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(SystemReadError::Failed(
-                    "Delivery Optimization command wait failed".to_string(),
-                ));
-            }
-        }
-    };
-
-    let stdout = join_bounded_reader(stdout_reader, "stdout")?;
-    let stderr = join_bounded_reader(stderr_reader, "stderr")?;
-    if timed_out {
-        return Err(SystemReadError::TimedOut);
-    }
-
-    Ok(BoundedCommandOutput {
-        status,
-        stdout: stdout.bytes,
-        stderr: stderr.bytes,
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
+) -> Result<crate::process_util::BoundedCommandOutput, SystemReadError> {
+    let mut command = command;
+    crate::process_util::run_bounded_command(
+        &mut command,
+        timeout,
+        max_stdout_bytes,
+        max_stderr_bytes,
+    )
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => SystemReadError::Missing,
+        std::io::ErrorKind::TimedOut => SystemReadError::TimedOut,
+        _ => SystemReadError::Failed(format!(
+            "Delivery Optimization command did not complete: {error}"
+        )),
     })
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn spawn_bounded_reader<R>(
-    reader: R,
-    max_bytes: usize,
-    stream_name: &str,
-) -> Result<std::thread::JoinHandle<std::io::Result<BoundedReaderOutput>>, SystemReadError>
-where
-    R: std::io::Read + Send + 'static,
-{
-    std::thread::Builder::new()
-        .name(format!("esp-command-{stream_name}"))
-        .spawn(move || drain_bounded_reader(reader, max_bytes))
-        .map_err(|_| {
-            SystemReadError::Failed(format!(
-                "Delivery Optimization {stream_name} reader could not start"
-            ))
-        })
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn drain_bounded_reader(
-    mut reader: impl std::io::Read,
-    max_bytes: usize,
-) -> std::io::Result<BoundedReaderOutput> {
-    let mut bytes = Vec::with_capacity(max_bytes.min(8 * 1024));
-    let mut truncated = false;
-    let mut buffer = [0_u8; 8 * 1024];
-
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        let remaining = max_bytes.saturating_sub(bytes.len());
-        let retained = remaining.min(read);
-        bytes.extend_from_slice(&buffer[..retained]);
-        truncated |= retained < read;
-    }
-
-    Ok(BoundedReaderOutput { bytes, truncated })
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn join_bounded_reader(
-    reader: std::thread::JoinHandle<std::io::Result<BoundedReaderOutput>>,
-    stream_name: &str,
-) -> Result<BoundedReaderOutput, SystemReadError> {
-    reader
-        .join()
-        .map_err(|_| {
-            SystemReadError::Failed(format!(
-                "Delivery Optimization {stream_name} reader stopped unexpectedly"
-            ))
-        })?
-        .map_err(|_| {
-            SystemReadError::Failed(format!(
-                "Delivery Optimization {stream_name} could not be read"
-            ))
-        })
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn classify_delivery_command_failure(output: &BoundedCommandOutput) -> SystemReadError {
+fn classify_delivery_command_failure(
+    output: &crate::process_util::BoundedCommandOutput,
+) -> SystemReadError {
     if structured_hresult(&output.stderr).is_some_and(|code| windows_hresult_matches(code, 5)) {
         SystemReadError::PermissionDenied
     } else {
@@ -2407,6 +2259,16 @@ mod tests {
         assert!(!DELIVERY_OPTIMIZATION_SCRIPT.contains("$events=@(Get-DeliveryOptimizationLog"));
     }
 
+    #[test]
+    fn a_missing_program_maps_to_the_missing_vocabulary() {
+        let command = std::process::Command::new("cmtraceopen-no-such-program-xyz");
+
+        let error = run_bounded_command(command, Duration::from_secs(1), 4 * 1024, 4 * 1024)
+            .expect_err("a program that does not exist must not be reported as success");
+
+        assert_eq!(error, SystemReadError::Missing);
+    }
+
     #[cfg(unix)]
     #[test]
     fn bounded_command_drains_output_larger_than_pipe_capacity_before_waiting() {
@@ -2469,27 +2331,6 @@ mod tests {
 
         assert_eq!(error, SystemReadError::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
-    }
-
-    #[test]
-    fn bounded_commands_hide_the_console_window_before_spawning() {
-        // Every bounded ESP subprocess must route through the CREATE_NO_WINDOW
-        // choke point so no console window flashes when ESP diagnostics start.
-        // The flag is a no-op off Windows, so assert structurally that the spawn
-        // path applies it: the real call at the spawn site must precede the
-        // child spawn, so the earliest `apply_hidden_window` in this file wins
-        // over this test's own literal (which appears after `command.spawn()`).
-        let source = include_str!("system.rs");
-        let hide_index = source
-            .find("apply_hidden_window(&mut command)")
-            .expect("run_bounded_command must hide the console window before spawning");
-        let spawn_index = source
-            .find("command.spawn()")
-            .expect("run_bounded_command spawns the child via command.spawn()");
-        assert!(
-            hide_index < spawn_index,
-            "apply_hidden_window must run before command.spawn()"
-        );
     }
 
     #[test]
