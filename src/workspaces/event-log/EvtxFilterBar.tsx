@@ -30,6 +30,7 @@ import {
   availableColumns,
   discoverInsertionStrings,
   discoverMappedProperties,
+  retainedInsertionStrings,
   type EvtxColumnId,
 } from "./evtx-columns";
 import {
@@ -140,15 +141,20 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   const controlFontSize = `${Math.max(11, listMetrics.fontSize - 1)}px`;
   const separatorHeight = `${listMetrics.rowLineHeight}px`;
   const records = useEvtxStore((s) => s.records);
+  const columnConfig = useEvtxStore((s) => s.columnConfig);
   // Map columns are offered only when a loaded map actually produced them, so the chooser does not
-  // fill with columns that are empty for the log in front of the operator.
+  // fill with columns that are empty for the log in front of the operator. Insertion strings the
+  // operator already arranged stay offered even when the records in front of them are narrower.
   const choosableColumns = useMemo(
     () =>
       availableColumns(
         discoverMappedProperties(records),
-        discoverInsertionStrings(records)
+        Math.max(
+          discoverInsertionStrings(records),
+          retainedInsertionStrings(columnConfig)
+        )
       ),
-    [records]
+    [records, columnConfig]
   );
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
@@ -175,7 +181,6 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   // operator saw.
   const orderedFilters = useMemo(() => orderFilters(savedFilters), [savedFilters]);
 
-  const columnConfig = useEvtxStore((s) => s.columnConfig);
   const toggleColumnVisible = useEvtxStore((s) => s.toggleColumnVisible);
   const moveColumnBy = useEvtxStore((s) => s.moveColumnBy);
   const resetColumns = useEvtxStore((s) => s.resetColumns);

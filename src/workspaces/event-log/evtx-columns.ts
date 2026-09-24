@@ -123,6 +123,25 @@ export function discoverInsertionStrings(records: readonly EvtxRecord[]): number
   return Math.min(widest, MAX_INSERTION_STRING_COLUMNS);
 }
 
+/**
+ * The highest insertion-string position a stored configuration still refers to.
+ *
+ * A configuration outlives the records it was arranged against. An operator who
+ * shows `String 3` and then opens a file carrying two values must still find that
+ * column in the chooser: dropping it from the offer list means hiding it once
+ * loses it for good, with no way back.
+ */
+export function retainedInsertionStrings(config: EvtxColumnConfig): number {
+  let highest = 0;
+  const consider = (id: string) => {
+    const position = stringColumnPosition(id);
+    if (position !== null && position > highest) highest = position;
+  };
+  for (const id of config.order) consider(id);
+  for (const id of Object.keys(config.widths)) consider(id);
+  return highest;
+}
+
 /** A renderable spec for an insertion-string column, derived from its id alone. */
 function stringColumnSpec(id: EvtxStringColumnId): EvtxColumnSpec {
   return {

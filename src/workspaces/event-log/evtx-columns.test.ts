@@ -11,6 +11,7 @@ import {
   EVTX_COLUMNS,
   MAX_INSERTION_STRING_COLUMNS,
   moveColumn,
+  retainedInsertionStrings,
   sanitizeColumnConfig,
   type EvtxColumnId,
   type EvtxColumnSpec,
@@ -325,6 +326,25 @@ describe("insertion-string columns", () => {
     expect(visibleColumns(config(["string:2"])).map((spec) => spec.label)).toEqual([
       "String 2",
     ]);
+  });
+
+  it("keeps an arranged column offerable when the records are narrower", () => {
+    const arranged = sanitizeColumnConfig({ order: ["level", "string:3"] });
+    expect(retainedInsertionStrings(arranged)).toBe(3);
+
+    const narrowerRecords = [record({ eventData: [field("A", "1")] })];
+    const offered = availableColumns(
+      [],
+      Math.max(
+        discoverInsertionStrings(narrowerRecords),
+        retainedInsertionStrings(arranged)
+      )
+    ).map((column) => column.id);
+    expect(offered).toContain("string:3");
+    expect(offered).not.toContain("string:4");
+
+    // A hidden column keeps its width, so it stays offerable too.
+    expect(retainedInsertionStrings(config([], { "string:4": 90 }))).toBe(4);
   });
 
   it("is hidden until an operator asks for it", () => {
