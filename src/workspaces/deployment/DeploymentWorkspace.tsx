@@ -269,6 +269,30 @@ export function DeploymentWorkspace() {
         unknown={result.unknown}
       />
 
+      {result.scanLimitations.length > 0 && (
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 6,
+            background: tokens.colorNeutralBackground3,
+            fontSize: "12px",
+            lineHeight: 1.5,
+            color: tokens.colorPaletteMarigoldForeground2,
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            This scan stopped early
+          </div>
+          {result.scanLimitations.map((limitation) => (
+            <div key={limitation}>{limitation}</div>
+          ))}
+          <div style={{ color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+            Logs past that bound are not part of this analysis, so the counts
+            below are of what was read rather than of the folder.
+          </div>
+        </div>
+      )}
+
       {failedFiles.length > 0 && (
         <div>
           <div

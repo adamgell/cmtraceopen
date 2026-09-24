@@ -76,6 +76,9 @@ pub struct DeploymentLogFile {
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentAnalysisResult {
     pub folder_path: String,
+    /// Budgets this scan stopped at, in the analyst's words. A walk that gave up
+    /// early and a walk that found everything must not look the same.
+    pub scan_limitations: Vec<String>,
     pub files: Vec<DeploymentLogFile>,
     pub total_files: usize,
     pub succeeded: usize,
@@ -616,17 +619,84 @@ fn analyze_single_file(file_path: &str) -> DeploymentLogFile {
 
 // ── Recursive file enumeration ──────────────────────────────────────────
 
-fn collect_log_files(dir: &Path, out: &mut Vec<String>) {
+/// How deep the walk descends and how many log files it collects.
+///
+/// The walk runs inside a synchronous command, so it holds the main thread: an
+/// unbounded tree freezes the window for as long as the tree takes, and a
+/// directory symlink or junction pointing at an ancestor recurses until the
+/// stack ends the process.
+///
+/// Both are budgets, not silent truncation. What they drop is recorded on the
+/// result, because a partial scan that reads like a complete one is the same
+/// defect as reporting a coverage gap as a clean result.
+pub const MAX_DEPLOYMENT_SCAN_DEPTH: usize = 32;
+pub const MAX_DEPLOYMENT_LOG_FILES: usize = 5_000;
+
+/// Budgets a walk has stopped at, recorded once each.
+#[derive(Debug, Default)]
+struct ScanLimitations {
+    limitations: Vec<String>,
+}
+
+impl ScanLimitations {
+    fn record(&mut self, limitation: impl Into<String>) {
+        let limitation = limitation.into();
+        if !self.limitations.contains(&limitation) {
+            self.limitations.push(limitation);
+        }
+    }
+
+    fn into_inner(self) -> Vec<String> {
+        self.limitations
+    }
+}
+
+fn collect_log_files(
+    dir: &Path,
+    out: &mut Vec<String>,
+    depth: usize,
+    limitations: &mut ScanLimitations,
+) {
+    if out.len() >= MAX_DEPLOYMENT_LOG_FILES {
+        limitations.record(format!(
+            "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+        ));
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
 
     for entry in entries.flatten() {
+        if out.len() >= MAX_DEPLOYMENT_LOG_FILES {
+            limitations.record(format!(
+                "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+            ));
+            return;
+        }
+
         let path = entry.path();
-        if path.is_dir() {
-            collect_log_files(&path, out);
-        } else if path.is_file() {
+        // Read the link rather than its target: a junction or symlink that leads
+        // back to an ancestor is a cycle, and `is_reparse_point` is the check the
+        // collector already uses for the same reason.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if crate::sccm::private_fs::is_reparse_point(&metadata) {
+            continue;
+        }
+
+        if metadata.is_dir() {
+            if depth >= MAX_DEPLOYMENT_SCAN_DEPTH {
+                limitations.record(format!(
+                    "Depth budget of {MAX_DEPLOYMENT_SCAN_DEPTH} was exhausted."
+                ));
+                continue;
+            }
+            collect_log_files(&path, out, depth + 1, limitations);
+        } else if metadata.is_file() {
             if let Some(ext) = path.extension() {
                 if ext.to_string_lossy().to_ascii_lowercase() == "log" {
                     out.push(path.to_string_lossy().to_string());
@@ -651,11 +721,14 @@ pub fn analyze_deployment_folder(
     }
 
     let mut log_files = Vec::new();
-    collect_log_files(dir, &mut log_files);
+    let mut limitations = ScanLimitations::default();
+    collect_log_files(dir, &mut log_files, 0, &mut limitations);
+    let scan_limitations = limitations.into_inner();
 
     if log_files.is_empty() {
         return Ok(DeploymentAnalysisResult {
             folder_path,
+            scan_limitations,
             files: Vec::new(),
             total_files: 0,
             succeeded: 0,
@@ -689,6 +762,7 @@ pub fn analyze_deployment_folder(
 
     Ok(DeploymentAnalysisResult {
         folder_path,
+        scan_limitations,
         files,
         total_files,
         succeeded,
@@ -1025,5 +1099,102 @@ mod tests {
         let (start, end) = extract_timestamps(&[e1, e2]);
         assert_eq!(start.as_deref(), Some("2025-11-25 01:55:42.000"));
         assert_eq!(end.as_deref(), Some("2025-11-25 02:10:00.000"));
+    }
+
+    // ── Deployment folder scan budgets ──────────────────────────────────
+
+    fn scan(dir: &Path) -> (Vec<String>, Vec<String>) {
+        let mut out = Vec::new();
+        let mut limitations = ScanLimitations::default();
+        collect_log_files(dir, &mut out, 0, &mut limitations);
+        (out, limitations.into_inner())
+    }
+
+    #[test]
+    fn a_folder_nested_within_the_budget_is_walked() {
+        let root = tempfile::tempdir().unwrap();
+        let deep = root.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("deploy.log"), b"").unwrap();
+        std::fs::write(root.path().join("root.log"), b"").unwrap();
+        std::fs::write(root.path().join("notes.txt"), b"").unwrap();
+
+        let (files, limitations) = scan(root.path());
+
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(limitations.is_empty(), "{limitations:?}");
+    }
+
+    #[test]
+    fn a_tree_deeper_than_the_budget_stops_and_reports_the_bound() {
+        let root = tempfile::tempdir().unwrap();
+        // One directory per level, each holding a log, past the depth budget.
+        let mut dir = root.path().to_path_buf();
+        for level in 0..MAX_DEPLOYMENT_SCAN_DEPTH + 2 {
+            dir = dir.join(format!("level{level}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("deploy.log"), b"").unwrap();
+        }
+
+        let (files, limitations) = scan(root.path());
+
+        // Stopping is the fix; looking like a complete scan is the defect.
+        assert_eq!(files.len(), MAX_DEPLOYMENT_SCAN_DEPTH, "{files:?}");
+        assert_eq!(
+            limitations,
+            vec![format!(
+                "Depth budget of {MAX_DEPLOYMENT_SCAN_DEPTH} was exhausted."
+            )]
+        );
+    }
+
+    #[test]
+    fn an_exhausted_file_budget_is_reported_rather_than_silently_short() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("deploy.log"), b"").unwrap();
+
+        let mut out: Vec<String> = (0..MAX_DEPLOYMENT_LOG_FILES)
+            .map(|i| format!("/already/{i}.log"))
+            .collect();
+        let mut limitations = ScanLimitations::default();
+        collect_log_files(root.path(), &mut out, 0, &mut limitations);
+
+        assert_eq!(out.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert_eq!(
+            limitations.into_inner(),
+            vec![format!(
+                "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+            )]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_back_to_an_ancestor_is_not_followed() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("deploy.log"), b"").unwrap();
+        // The cycle the old walk recursed into until the stack ended it.
+        std::os::unix::fs::symlink(root.path(), root.path().join("loop")).unwrap();
+
+        let (files, _) = scan(root.path());
+
+        assert_eq!(files.len(), 1, "{files:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_log_file_is_not_collected() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("real.log"), b"").unwrap();
+        std::os::unix::fs::symlink(target.join("real.log"), root.path().join("linked.log"))
+            .unwrap();
+
+        let (files, _) = scan(root.path());
+
+        // The collector's stance: a link is not a log this folder holds.
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(files[0].ends_with("real.log"), "{files:?}");
     }
 }

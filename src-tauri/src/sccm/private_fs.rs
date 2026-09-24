@@ -651,7 +651,7 @@ fn require_single_link(_file: &File) -> io::Result<()> {
     ))
 }
 
-pub(super) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }

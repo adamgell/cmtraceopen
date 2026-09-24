@@ -35,6 +35,7 @@ function file(overrides: Partial<DeploymentLogFile> = {}): DeploymentLogFile {
 function readyResult(): DeploymentAnalysisResult {
   return {
     folderPath: "C:\\Windows\\Logs\\Software",
+    scanLimitations: [],
     files: [
       file({
         path: "C:\\Windows\\Logs\\Software\\fail.log",
@@ -102,6 +103,36 @@ beforeEach(() => {
 });
 
 describe("DeploymentWorkspace fixtures", () => {
+  it("says when the scan stopped early instead of reporting a partial folder as read", () => {
+    useDeploymentStore.setState({
+      phase: "ready",
+      result: {
+        ...readyResult(),
+        scanLimitations: ["Depth budget of 32 was exhausted."],
+      },
+      errorMessage: null,
+      expandedErrorIndex: null,
+    });
+    render(<DeploymentWorkspace />);
+
+    expect(screen.getByText("This scan stopped early")).toBeInTheDocument();
+    expect(
+      screen.getByText("Depth budget of 32 was exhausted."),
+    ).toBeInTheDocument();
+    // The consequence matters as much as the cause: the counts are of what was
+    // read, not of the folder.
+    expect(
+      screen.getByText(/are not part of this analysis/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not claim a bounded scan when the walk finished", () => {
+    seedReady();
+    render(<DeploymentWorkspace />);
+
+    expect(screen.queryByText("This scan stopped early")).toBeNull();
+  });
+
   it("DEP-001 shows folder analysis inventory and outcome counts", () => {
     seedReady();
     render(<DeploymentWorkspace />);

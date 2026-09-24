@@ -8,7 +8,7 @@ pub mod collector;
 mod contract;
 mod discovery;
 mod manifest;
-mod private_fs;
+pub(crate) mod private_fs;
 
 pub use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation};
 pub use contract::*;

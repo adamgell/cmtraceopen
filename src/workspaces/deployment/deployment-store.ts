@@ -31,6 +31,8 @@ export interface DeploymentErrorLine {
 
 export interface DeploymentAnalysisResult {
   folderPath: string;
+  /** Budgets the backend scan stopped at. Empty when it walked everything. */
+  scanLimitations: string[];
   files: DeploymentLogFile[];
   totalFiles: number;
   succeeded: number;
