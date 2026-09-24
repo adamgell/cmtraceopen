@@ -324,6 +324,21 @@ pub fn error_code(raw: &str) -> Option<IntuneErrorCode> {
     })
 }
 
+/// The revision number a named value states, or nothing when it states none.
+///
+/// A revision is a number, so a value that is not one is not a revision: it would
+/// otherwise reach the update key and the finding ids built from its label, where
+/// `KB123.alpha` reads as a version that does not exist. Leading zeros are folded
+/// for the same reason `normalize_guid` folds casing -- one revision written two
+/// ways is one identity.
+fn normalize_revision(value: &str) -> Option<String> {
+    value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .map(|number| number.to_string())
+}
+
 /// Extract an update identity from named data first, then from free text.
 ///
 /// Named data wins because it is structured; free text is a fallback for
@@ -334,7 +349,9 @@ pub fn update_key_from(named_data: &[IntuneNamedValue], text: Option<&str>) -> U
         kb_article: named(named_data, NAMED_KB_ARTICLE_IDS)
             .as_deref()
             .and_then(first_kb),
-        revision: named(named_data, NAMED_UPDATE_REVISION),
+        revision: named(named_data, NAMED_UPDATE_REVISION)
+            .as_deref()
+            .and_then(normalize_revision),
     };
 
     if let Some(text) = text {
@@ -960,6 +977,42 @@ mod tests {
             name: name.to_owned(),
             value: value.to_owned(),
         }
+    }
+
+    /// A revision that is not a number is not a revision.
+    #[test]
+    fn a_named_revision_that_is_not_a_number_is_not_kept() {
+        let key = update_key_from(
+            &[IntuneNamedValue {
+                name: NAMED_UPDATE_REVISION.to_owned(),
+                value: "alpha".to_owned(),
+            }],
+            None,
+        );
+
+        assert_eq!(key.revision, None);
+        assert_eq!(key.label(), "unidentified");
+    }
+
+    /// One revision written two ways is one identity.
+    #[test]
+    fn a_named_revision_is_folded_to_its_number() {
+        let key = update_key_from(
+            &[
+                IntuneNamedValue {
+                    name: NAMED_KB_ARTICLE_IDS.to_owned(),
+                    value: "KB123456".to_owned(),
+                },
+                IntuneNamedValue {
+                    name: NAMED_UPDATE_REVISION.to_owned(),
+                    value: "001".to_owned(),
+                },
+            ],
+            None,
+        );
+
+        assert_eq!(key.revision.as_deref(), Some("1"));
+        assert_eq!(key.label(), "KB123456.1");
     }
 
     #[test]
