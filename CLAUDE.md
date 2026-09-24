@@ -70,7 +70,22 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
+| `event_log/` | Event Viewer: bounded channel queries, live tail, capture, archive, export |
+| `sccm/` | Client and server diagnostics, plus the private bundle store |
+| `secureboot/` | Secure Boot certificate detect/remediate scripts and the elevated runner |
+| `esp/` | Autopilot ESP/Bootstrapping analysis: process, registry, bundle, system facts |
+| `collector/` | Evidence collection: artifact staging and bundle assembly |
+| `timeline/` | Cross-source incident correlation and timeline building |
+| `elevation/` | Restart-as-administrator: one-time restore tickets, validated requests |
+| `jamf/` | Jamf Connect and macOS MDM policy log analysis |
+| `macos_diag/` | macOS diagnostics via native tools (`pkgutil`, `profiles`, `system_profiler`, `mdatp`) |
+| `graph_api/` | Microsoft Graph integration — opt-in, Windows-only WAM token path. The app's only network egress besides the updater |
 | `menu.rs` | Native application menu |
+
+The Parser Architecture section below covers `src-tauri/src/parser/`. The pure parser library that
+`crates/cmtraceopen-parser/` builds is separate and stays wasm32-compatible: no OS I/O, registry, WMI,
+network, or Tauri in that crate, which `cargo check -p cmtraceopen-parser --target wasm32-unknown-unknown`
+enforces.
 
 ### Frontend Module Map (`src/`)
 

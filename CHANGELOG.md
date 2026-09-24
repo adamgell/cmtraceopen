@@ -40,6 +40,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Backend module map completed**: `CLAUDE.md`'s backend table listed ten modules and omitted thirteen, including `event_log`, `sccm`, `secureboot`, `esp`, `collector`, `graph_api`, `elevation`, `jamf`, `macos_diag`, and `timeline`. The map now covers the backend, and names `graph_api` as the app's only network egress besides the updater.
+
 - **Device Inventory framing (#511)**: Logical-record framing for Device Inventory is lossless and bounded so oversized or partial continuations cannot starve the open/tail paths or drop producer evidence.
 - **Intune inventory rotation detection (#509)**: Narrow rotation-failure detection so generic `Failed …` lines are not misclassified as Device Inventory rotation failures, and align open-path continuation bounds with the tail path.
 - **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
