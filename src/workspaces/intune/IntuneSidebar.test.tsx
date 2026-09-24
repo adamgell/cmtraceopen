@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntuneSidebar } from "./IntuneSidebar";
 import { getWorkspace, workspaceRegistry } from "../registry";
 import { useUiStore } from "../../stores/ui-store";
+import { useIntuneStore } from "./intune-store";
 
 vi.mock("../../hooks/use-app-actions", () => ({
   useAppActions: () => ({
@@ -35,8 +36,14 @@ describe("IntuneSidebar workspace name", () => {
     // The sidebar used to carry its own copy of the name, which is how the
     // workspace's development name reached users. Renaming the definition alone
     // must be enough to change what the sidebar says.
-    // Both the title and the badge render it, and neither has its own copy.
-    expect(screen.getAllByText("Renamed In Test").length).toBeGreaterThan(0);
+    // The sidebar names the workspace in two places: the title and the badge. The
+    // title falls back to the workspace name only when no source path is set, so
+    // state that precondition rather than assuming it.
+    expect(useIntuneStore.getState().analysisState.requestedPath).toBeNull();
+
+    // A count, not a presence check: presence passes when only one of the two
+    // reads the definition, which is the drift this test exists to catch.
+    expect(screen.getAllByText("Renamed In Test")).toHaveLength(2);
     expect(screen.queryByText(asDefined.label)).toBeNull();
   });
 });
