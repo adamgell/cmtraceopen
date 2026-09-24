@@ -382,10 +382,62 @@ pub fn redacted_status_text(input: &str) -> String {
 /// that order, so a tenant domain is not scrubbed out of a principal name before
 /// the mail-address rule has seen it.
 pub fn redacted_capture_artifact(capture: &str, artifact: &str) -> String {
-    Projection {
-        literals: capture_literals(capture),
+    CaptureLiterals::from_capture(capture).scrub(artifact)
+}
+
+/// The kind of identity a literal is, which decides the token it reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityKind {
+    Tenant,
+    Device,
+    Thumbprint,
+    Upn,
+    Host,
+}
+
+impl IdentityKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tenant => KIND_TENANT,
+            Self::Device => KIND_DEVICE,
+            Self::Thumbprint => KIND_THUMBPRINT,
+            Self::Upn => KIND_UPN,
+            Self::Host => KIND_HOST,
+        }
     }
-    .text(artifact)
+}
+
+/// The literals one hand-off scrubs, built from a capture and the evidence
+/// handed over beside it.
+///
+/// A bundle is not only its capture. SCP evidence names a tenant and an Entra id
+/// that the capture's facts may never mention, and an event log names the
+/// computer; a table built from the capture alone hands those values over in the
+/// clear. [`CaptureLiterals::add`] is where a caller says what else the hand-off
+/// carries, and the kind it passes decides the token, so one identity reaches one
+/// token wherever it appears.
+#[derive(Default)]
+pub struct CaptureLiterals {
+    literals: IdentityLiterals,
+}
+
+impl CaptureLiterals {
+    /// The literals the capture itself names.
+    pub fn from_capture(capture: &str) -> Self {
+        Self {
+            literals: capture_literals(capture),
+        }
+    }
+
+    /// Add one identity the capture does not name, from the evidence beside it.
+    pub fn add(&mut self, value: &str, kind: IdentityKind) {
+        self.literals.push(value, kind.name());
+    }
+
+    /// Project one artifact with every literal this hand-off carries.
+    pub fn scrub(&self, value: &str) -> String {
+        self.literals.scrub(&redact_text(value))
+    }
 }
 
 impl Projection {
@@ -1087,6 +1139,43 @@ mod tests {
             !json(&published).contains("[tenant:"),
             "the export claims a tenant identity the capture never held: {}",
             json(&published)
+        );
+    }
+
+    /// An identity the capture never names is scrubbed when the caller adds it.
+    ///
+    /// This is the bundle case: the SCP evidence names a tenant the capture's own
+    /// facts do not, so a table built from the capture alone hands it over.
+    #[test]
+    fn a_literal_the_capture_does_not_name_is_scrubbed_too() {
+        let capture = " DomainName : contoso.example\n";
+        let artifact = r#"{"tenantDomain":"tenant.example.invalid","deviceId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#;
+
+        let alone = super::redacted_capture_artifact(capture, artifact);
+
+        let mut literals = super::CaptureLiterals::from_capture(capture);
+        literals.add("tenant.example.invalid", super::IdentityKind::Tenant);
+        literals.add(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            super::IdentityKind::Device,
+        );
+        let projected = literals.scrub(artifact);
+
+        // The shaped rules catch the GUID and cannot catch the bare domain: a
+        // DNS name has no shape to key on, which is why the table has to carry
+        // it. This is the reviewer's point, pinned as a difference.
+        assert!(
+            alone.contains("tenant.example.invalid"),
+            "a bare domain is not shaped, so the capture's table cannot close it: {alone}"
+        );
+        assert!(
+            !alone.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "the shaped rules do catch it: {alone}"
+        );
+        assert!(!projected.contains("tenant.example.invalid"), "{projected}");
+        assert!(
+            !projected.contains("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "{projected}"
         );
     }
 
