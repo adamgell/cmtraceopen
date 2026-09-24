@@ -152,10 +152,27 @@ pub fn redact_dsregcmd_status_text(input: String) -> String {
 static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// A gate a test can hold the next simulated stage open with.
+///
+/// A sleep models slow storage but not *observable* slow storage: a test inside the
+/// same runtime cannot ask anything while the thread is asleep in it. A gate lets the
+/// assertion happen while the stage is still running.
+#[cfg(debug_assertions)]
+static SIMULATED_BUNDLE_IO_GATE: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>> =
+    std::sync::Mutex::new(None);
+
 /// Read by the responsiveness test, so they exist for tests only.
 #[cfg(all(debug_assertions, test))]
 fn simulated_bundle_io_stages_entered() -> usize {
     SIMULATED_BUNDLE_IO_STAGES.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Hold the next simulated stage until the returned sender fires.
+#[cfg(all(debug_assertions, test))]
+fn hold_next_simulated_bundle_io_stage() -> std::sync::mpsc::Sender<()> {
+    let (release, hold) = std::sync::mpsc::channel();
+    *SIMULATED_BUNDLE_IO_GATE.lock().expect("lock the gate") = Some(hold);
+    release
 }
 
 #[cfg(debug_assertions)]
@@ -173,6 +190,15 @@ fn simulate_bundle_io_delay(stage: &str) {
     // assertion about responsiveness is about, and a counter is the smallest way to
     // observe it from outside.
     SIMULATED_BUNDLE_IO_STAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    // A held stage waits for the test rather than for the clock.
+    let held = SIMULATED_BUNDLE_IO_GATE
+        .lock()
+        .ok()
+        .and_then(|mut gate| gate.take());
+    if let Some(hold) = held {
+        let _ = hold.recv();
+    }
 
     log::debug!(
         "event=dsregcmd_simulated_bundle_io stage={} delay_ms={}",
@@ -1465,99 +1491,78 @@ mod tests {
         let _env_guard = dsregcmd_test_env_lock()
             .lock()
             .expect("lock dsregcmd env guard");
-        let _simulated_io = SimulatedBundleIoEnvGuard::set(150);
+        let _simulated_io = SimulatedBundleIoEnvGuard::set(20);
         let bundle = build_dsregcmd_bundle_fixture();
 
-        // A current-thread runtime models Tauri's serialized command dispatch:
-        // one worker runs everything. Before the seam moved the analysis to
-        // the blocking pool, a synchronous command stalled every other queued
-        // task for the full analysis duration.
+        // The runtime runs on its own OS thread so that the assertions happen
+        // *outside* it. That is the whole point: a test inside a current-thread
+        // runtime cannot observe anything while a synchronous analysis blocks that
+        // thread, which is why three earlier versions of this assertion passed with
+        // the blocking-pool seam reverted.
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build current-thread runtime");
-        runtime.block_on(async move {
-            super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
-            let analysis_started = Instant::now();
-            let analysis = tokio::spawn(async move {
-                analyze_dsregcmd(
-                    DSREGCMD_SAMPLE.to_string(),
-                    Some(bundle.path().to_string_lossy().to_string()),
-                )
-                .await
-            });
+        let handle = runtime.handle().clone();
+        let (unrelated_ran, unrelated_wait) = std::sync::mpsc::channel::<Instant>();
+        // The next simulated stage waits for this test rather than for the clock.
+        let release = super::hold_next_simulated_bundle_io_stage();
 
-            // Wait for a simulated I/O stage to be *running*, then ask whether the
-            // unrelated task has run yet. Asserting it ran before the whole analysis
-            // finished was weaker: it could run in the window before the slow work
-            // started, while the command thread was still about to be blocked.
-            let entered = tokio::time::timeout(Duration::from_secs(5), async {
+        super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
+        let analysis_started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                let analysis = tokio::spawn(async move {
+                    analyze_dsregcmd(
+                        DSREGCMD_SAMPLE.to_string(),
+                        Some(bundle.path().to_string_lossy().to_string()),
+                    )
+                    .await
+                });
                 while super::simulated_bundle_io_stages_entered() == 0 {
                     tokio::task::yield_now().await;
                 }
+                handle.spawn(async move {
+                    let _ = unrelated_ran.send(Instant::now());
+                });
+                analysis
+                    .await
+                    .expect("join the analysis task")
+                    .expect("analyze dsregcmd bundle fixture")
             })
-            .await;
-            assert!(
-                entered.is_ok(),
-                "no simulated I/O stage started, so the wait never had anything to observe"
-            );
-            // The measurement is the *stage counter*: the unrelated task is created
-            // inside a stage, and it has to complete before the next stage begins.
-            //
-            // Known limitation, and the reason this finding is still open: in a
-            // current-thread runtime a synchronous analysis blocks the only thread,
-            // which prevents the *observation* as much as the responsiveness. So this
-            // cannot fail when the analysis moves back onto the command thread -- it
-            // was checked by reverting that seam and watching it pass. Discriminating
-            // it needs the runtime on its own OS thread and a stage the test itself
-            // gates, so the assertion can be made while the stage is blocked.
-            // Two earlier versions passed with the analysis back on the command
-            // thread -- a task spawned before the analysis could be polled in the
-            // window before the slow work started, and a task created during a stage
-            // could be polled between stages. Neither asked whether the command
-            // thread was busy *at that moment*; this does, because a thread asleep
-            // inside a stage cannot schedule anything until that stage ends.
-            let stages_before = super::simulated_bundle_io_stages_entered();
-            let unrelated_completed_at = tokio::spawn(async { Instant::now() })
-                .await
-                .expect("join the unrelated task");
-            let stages_after = super::simulated_bundle_io_stages_entered();
-
-            let result = analysis
-                .await
-                .expect("join the analysis task")
-                .expect("analyze dsregcmd bundle fixture");
-            let total_analysis_duration = analysis_started.elapsed();
-
-            assert_eq!(
-                stages_before, stages_after,
-                "the unrelated task did not complete inside the stage it was created in: \
-                 stages went from {stages_before} to {stages_after}, which means the command \
-                 thread was busy in the simulated I/O instead of scheduling it"
-            );
-
-            assert!(result.active_evidence.is_some(), "expected active evidence");
-            assert!(
-                result.scheduled_task_evidence.is_some(),
-                "expected scheduled task evidence"
-            );
-            assert!(
-                result.event_log_analysis.is_some(),
-                "expected event log analysis"
-            );
-
-            println!(
-                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} stages={}",
-                total_analysis_duration.as_millis(),
-                super::simulated_bundle_io_stages_entered()
-            );
-
-            assert!(
-                total_analysis_duration >= Duration::from_millis(7 * 140),
-                "expected simulated bundle analysis to take at least 980ms, saw {:?}",
-                total_analysis_duration
-            );
         });
+
+        // Wait until a stage is held, then ask whether the runtime scheduled the
+        // unrelated task while it was held. A runtime blocked *inside* the stage
+        // cannot; one whose slow work sits on the blocking pool can.
+        while super::simulated_bundle_io_stages_entered() == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let observed = unrelated_wait.recv_timeout(Duration::from_millis(2_000));
+        let _ = release.send(());
+        let result = worker.join().expect("join the runtime thread");
+        let total_analysis_duration = analysis_started.elapsed();
+
+        println!(
+            "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} stages={}",
+            total_analysis_duration.as_millis(),
+            super::simulated_bundle_io_stages_entered()
+        );
+
+        assert!(
+            observed.is_ok(),
+            "the runtime did not schedule the unrelated task while a simulated I/O stage \
+             was held: the command thread was blocked in the slow work"
+        );
+        assert!(result.active_evidence.is_some(), "expected active evidence");
+        assert!(
+            result.scheduled_task_evidence.is_some(),
+            "expected scheduled task evidence"
+        );
+        assert!(
+            result.event_log_analysis.is_some(),
+            "expected event log analysis"
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
