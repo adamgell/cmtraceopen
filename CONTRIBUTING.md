@@ -60,11 +60,24 @@ npx tsc --noEmit
 
 ### CI Checks
 
-Pull requests must pass:
+Pull requests must pass seven jobs:
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+1. **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
+2. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
+3. **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+4. **TypeScript Check** — `npx tsc --noEmit`.
+5. **E2E (Playwright)** — `npm run test:e2e`.
+6. **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+7. **Build** — macOS-arm64, Windows-x64, Linux-x64.
+
+## Changelog
+
+Every user-visible change gets an entry in `CHANGELOG.md` under `## [Unreleased]`, added in the
+pull request that makes the change. The section documents fixes as well as features, including
+internal ones — the updater-manifest job and the supply-chain bump are both in it — so the test
+is whether a reader of the changelog would otherwise not know it happened.
+
+Keep entries to what changed and why it mattered; the diff is the record of how.
 
 ## MCP Servers (optional)
 
