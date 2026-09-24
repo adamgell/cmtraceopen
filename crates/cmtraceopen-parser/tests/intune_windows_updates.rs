@@ -30,12 +30,13 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::intune::device::windows::updates::{
     analyze_update_bundle, redacted_export_projection, PolicyChainState, SupplementalLogKind,
     UpdateChainState, UpdateEvidenceBundle, UpdateSnapshot, UpdateSource, UpdateSupplementalLog,
-    EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
+    UpdateWorkloadOwner, EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED,
+    UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::{
-    IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneEvidenceRef,
-    IntuneFindingConfidence, IntuneObservationContext, IntuneParseState, IntuneProvenance,
-    IntuneSensitivity, IntuneSourceKind,
+    IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
+    IntuneEvidenceRef, IntuneFindingConfidence, IntuneObservationContext, IntuneParseState,
+    IntuneProvenance, IntuneSensitivity, IntuneSourceKind,
 };
 use serde_json::Value;
 use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
@@ -1044,12 +1045,36 @@ fn identity_in_caller_supplied_text_does_not_survive_the_export() {
 
     let upn = "adam.admin@contoso.example.com";
     let profile = r"C:\Users\adam.admin\AppData\Local\Temp";
+    let tenant = "tenant.example.invalid";
     snapshot.policy_chain.observations[0].policy_id = Some(upn.to_owned());
     snapshot.policy_chain.observations[0].source = Some(UpdateSource::Unknown(profile.to_owned()));
+    // An error token the reader could not parse as a code is text from the
+    // capture, in a policy finding's citation as much as in a transaction's.
+    snapshot.policy_chain.observations[0].error = Some(IntuneErrorCode {
+        raw: profile.to_owned(),
+        decimal: None,
+        hex: None,
+    });
     snapshot.update_chain.transactions[0].title = Some(format!("Cumulative update for {upn}"));
     snapshot.findings[0].summary = format!("Reported by {upn} from {profile}");
     snapshot.input_coverage.unknown_providers = vec![format!("Provider mentioning {upn}")];
     snapshot.input_coverage.extraction_profile = Some(format!("profile-for-{upn}"));
+    // The device record carries the same two vocabulary values the policy chain
+    // does, so masking one and not the other published the value anyway.
+    snapshot.device.update_workload_owner = Some(UpdateWorkloadOwner::Unknown(upn.to_owned()));
+    snapshot.device.expected_update_source = Some(UpdateSource::Unknown(tenant.to_owned()));
+    snapshot.policy_chain.effective_source.expected =
+        Some(UpdateSource::Unknown(tenant.to_owned()));
+    // A reading with no update identity keeps its error token in the same place.
+    assert!(
+        !snapshot.update_chain.unkeyed_observations.is_empty(),
+        "{scenario}: this test needs a device-level reading"
+    );
+    snapshot.update_chain.unkeyed_observations[0].error = Some(IntuneErrorCode {
+        raw: upn.to_owned(),
+        decimal: None,
+        hex: None,
+    });
 
     let raw = serde_json::to_string(&snapshot).expect("snapshot serializes");
     assert!(
@@ -1063,6 +1088,10 @@ fn identity_in_caller_supplied_text_does_not_survive_the_export() {
     assert!(
         !exported.contains("adam.admin"),
         "a user profile name survived the export"
+    );
+    assert!(
+        !exported.contains(tenant),
+        "a value this leaf did not recognize as a vocabulary term survived the export"
     );
 }
 

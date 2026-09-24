@@ -8,12 +8,15 @@
 //!
 //! * **Values this leaf classifies** are masked wholesale -- policy values,
 //!   named-value content outside the Microsoft-defined identifiers, the policy
-//!   id, and artifact `detail` free text.
+//!   id, artifact `detail` free text, and any value in a field that expects one
+//!   of a known few (`UpdateSource::Unknown`, `UpdateWorkloadOwner::Unknown`,
+//!   `ServiceReportedState::Unknown`). An unrecognized value is not a validated
+//!   term, so it gets the same default-deny as a named value.
 //! * **Text a capture supplied** that the export keeps for diagnosis -- update
-//!   titles, finding text, unknown vocabulary values, unreadable error tokens,
-//!   unknown provider names -- is scrubbed through the shared Intune text
-//!   grammar ([`redact_text`]) rather than trusted because of the field it sits
-//!   in. A title is a product string in practice, but "in practice" is not an
+//!   titles, finding text, unknown provider names, an error token that did not
+//!   read as a code -- is scrubbed through the shared Intune text grammar
+//!   ([`redact_text`]) rather than trusted because of the field it sits in. A
+//!   title is a product string in practice, but "in practice" is not an
 //!   enforcement, and the same field can carry a UPN, a path, or a secret.
 //!
 //! What deliberately survives, because a finding cannot be traced without it:
@@ -62,6 +65,9 @@ pub fn redacted_export_projection(snapshot: &UpdateSnapshot) -> UpdateSnapshot {
         // kind of tenant-bearing value this projection promises not to carry.
         mask_present(&mut observation.policy_id);
         mask_unknown_source(&mut observation.source);
+        // An error token that did not read as a code is text from the capture,
+        // wherever it sits -- policy findings cite these too.
+        mask_unreadable_error(&mut observation.error);
         observation.named_data = redact_named(&observation.named_data);
     }
 
@@ -69,6 +75,7 @@ pub fn redacted_export_projection(snapshot: &UpdateSnapshot) -> UpdateSnapshot {
         mask_all(&mut conflict.policy_ids);
     }
     mask_unknown_owner(&mut projected.policy_chain.workload_owner);
+    mask_unknown_source(&mut projected.policy_chain.effective_source.expected);
     mask_unknown_source(&mut projected.policy_chain.effective_source.configured);
     mask_unknown_source(&mut projected.policy_chain.effective_source.scanned);
 
@@ -76,6 +83,7 @@ pub fn redacted_export_projection(snapshot: &UpdateSnapshot) -> UpdateSnapshot {
         redact_context(&mut observation.context);
         mask_unknown_source(&mut observation.source);
         scrub_text_option(&mut observation.title);
+        mask_unreadable_error(&mut observation.error);
         observation.named_data = redact_named(&observation.named_data);
     }
 
@@ -128,25 +136,27 @@ fn scrub_text_option(value: &mut Option<String>) {
     }
 }
 
-/// Scrub a vocabulary value this build did not recognize.
+/// Mask a vocabulary value this build did not recognize.
 ///
-/// "Unrecognized" is a statement about this build's vocabulary, not about the
-/// value: whatever the capture wrote there is still text from the capture.
+/// "Unrecognized" is a statement about this build's vocabulary, so the value is
+/// not a validated term at all: it is text from the capture sitting in a field
+/// that expects one of a known few. The same default-deny this leaf applies to
+/// named values applies here, and the field still says a value was there.
 fn mask_unknown_source(source: &mut Option<UpdateSource>) {
-    if let Some(UpdateSource::Unknown(raw)) = source {
-        *raw = redact_text(raw);
+    if let Some(UpdateSource::Unknown(_)) = source {
+        *source = Some(UpdateSource::Unknown(REDACTED.to_owned()));
     }
 }
 
 fn mask_unknown_owner(owner: &mut UpdateWorkloadOwner) {
-    if let UpdateWorkloadOwner::Unknown(raw) = owner {
-        *raw = redact_text(raw);
+    if let UpdateWorkloadOwner::Unknown(_) = owner {
+        *owner = UpdateWorkloadOwner::Unknown(REDACTED.to_owned());
     }
 }
 
 fn mask_unknown_service_state(state: &mut Option<ServiceReportedState>) {
-    if let Some(ServiceReportedState::Unknown(raw)) = state {
-        *raw = redact_text(raw);
+    if let Some(ServiceReportedState::Unknown(_)) = state {
+        *state = Some(ServiceReportedState::Unknown(REDACTED.to_owned()));
     }
 }
 
@@ -169,6 +179,13 @@ fn redact_device(device: &UpdateDeviceFacts) -> UpdateDeviceFacts {
     if let Some(context) = redacted.context.as_mut() {
         redact_context(context);
     }
+    // The device record carries the same two vocabulary values the policy chain
+    // does. Masking them there and not here published one value twice, in one
+    // form masked and in the other in the clear.
+    if let Some(owner) = redacted.update_workload_owner.as_mut() {
+        mask_unknown_owner(owner);
+    }
+    mask_unknown_source(&mut redacted.expected_update_source);
     redacted.named_data = redact_named(&device.named_data);
     redacted
 }
