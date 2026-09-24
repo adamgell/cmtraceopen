@@ -19,6 +19,17 @@ pub fn run_remediation() -> Result<ScriptExecutionResult, AppError> {
     run_script(REMEDIATE_SCRIPT)
 }
 
+/// Quote a value for interpolation inside a single-quoted PowerShell string.
+///
+/// PowerShell escapes a literal `'` by doubling it, so `O'Brien` becomes
+/// `'O''Brien'`. Temp paths carry the user name, so an apostrophe in it would
+/// otherwise terminate the string early and turn path text into PowerShell
+/// syntax — inside a process that runs elevated.
+#[cfg(any(target_os = "windows", test))]
+fn ps_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 // ---------------------------------------------------------------------------
 // Platform implementation
 // ---------------------------------------------------------------------------
@@ -67,8 +78,12 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     // It runs the real script, redirects all streams (including Write-Host
     // via *>&1) to the stdout capture file, and writes the exit code.
     let wrapper_content = format!(
-        "& '{script_path_str}' *> '{stdout_str}' 2> '{stderr_str}'\r\n\
-         $LASTEXITCODE | Out-File -FilePath '{exitcode_str}' -Encoding ascii -NoNewline\r\n",
+        "& {} *> {} 2> {}\r\n\
+         $LASTEXITCODE | Out-File -FilePath {} -Encoding ascii -NoNewline\r\n",
+        ps_single_quote(&script_path_str),
+        ps_single_quote(&stdout_str),
+        ps_single_quote(&stderr_str),
+        ps_single_quote(&exitcode_str),
     );
 
     let mut wrapper_file = tempfile::Builder::new()
@@ -94,8 +109,9 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
             "-Command",
             &format!(
                 "Start-Process -FilePath 'powershell.exe' \
-                 -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{wrapper_path_str}' \
-                 -Verb RunAs -WindowStyle Hidden -Wait"
+                 -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',{} \
+                 -Verb RunAs -WindowStyle Hidden -Wait",
+                ps_single_quote(&wrapper_path_str),
             ),
         ])
         .output()
@@ -128,4 +144,41 @@ fn run_script(_script_content: &str) -> Result<ScriptExecutionResult, AppError> 
     Err(AppError::PlatformUnsupported(
         "Secure Boot script execution requires Windows".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ps_single_quote;
+
+    #[test]
+    fn quotes_a_plain_path() {
+        assert_eq!(
+            ps_single_quote(r"C:\Windows\Temp\script.ps1"),
+            r"'C:\Windows\Temp\script.ps1'"
+        );
+    }
+
+    #[test]
+    fn doubles_an_apostrophe_so_the_string_does_not_terminate_early() {
+        // A user name reaches every temp path. `O'Brien` would otherwise close
+        // the PowerShell string at the apostrophe and turn the rest of the
+        // path into syntax, inside a process launched elevated.
+        assert_eq!(
+            ps_single_quote(r"C:\Users\O'Brien\AppData\Local\Temp\x.ps1"),
+            r"'C:\Users\O''Brien\AppData\Local\Temp\x.ps1'"
+        );
+    }
+
+    #[test]
+    fn output_quotes_stay_balanced_for_a_realistic_temp_path() {
+        // The observable invariant: an unescaped apostrophe leaves an odd
+        // number of single quotes, which is what breaks the interpreter.
+        let quoted = ps_single_quote(r"C:\Users\O'Brien\AppData\Local\Temp\wrapper.ps1");
+        assert_eq!(quoted.matches('\'').count() % 2, 0, "{quoted}");
+    }
+
+    #[test]
+    fn handles_a_value_that_is_only_an_apostrophe() {
+        assert_eq!(ps_single_quote("'"), "''''");
+    }
 }
