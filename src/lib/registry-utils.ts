@@ -9,6 +9,9 @@ import type {
  */
 export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
   const roots: RegistryTreeNode[] = [];
+  // Keyed on the lowercased path: registry keys are case-insensitive, so
+  // `HKLM\SOFTWARE` and `hklm\SOFTWARE` are one key and must not become two
+  // subtrees. Display keeps the first-seen casing rather than imposing lowercase.
   const nodeMap = new Map<string, RegistryTreeNode>();
 
   for (let i = 0; i < keys.length; i++) {
@@ -19,11 +22,12 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
     for (let j = 0; j < parts.length; j++) {
       const parentPath = currentPath;
       currentPath = j === 0 ? parts[j] : currentPath + "\\" + parts[j];
+      const lookupKey = currentPath.toLowerCase();
 
-      if (nodeMap.has(currentPath)) {
+      if (nodeMap.has(lookupKey)) {
         // Node already exists — update keyIndex if this is the exact key
         if (j === parts.length - 1) {
-          nodeMap.get(currentPath)!.keyIndex = i;
+          nodeMap.get(lookupKey)!.keyIndex = i;
         }
         continue;
       }
@@ -34,12 +38,12 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
         children: [],
         keyIndex: j === parts.length - 1 ? i : null,
       };
-      nodeMap.set(currentPath, node);
+      nodeMap.set(lookupKey, node);
 
       if (j === 0) {
         roots.push(node);
       } else {
-        const parent = nodeMap.get(parentPath);
+        const parent = nodeMap.get(parentPath.toLowerCase());
         if (parent) {
           parent.children.push(node);
         }
