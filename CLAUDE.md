@@ -94,10 +94,12 @@ enforces.
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `workspaces/` | The analysis surfaces, one directory each: `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
+| `components/panels/` | Docked analysis panels shared across workspaces |
+| `components/registry-view/` | Rendered registry-source views |
+| `components/timeline/` | Shared timeline rendering |
+| `components/common/` | Cross-workspace primitives |
+| `stores/` | 6 Zustand stores: `log`, `filter`, `marker`, `registry`, `timeline`, `ui` |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
