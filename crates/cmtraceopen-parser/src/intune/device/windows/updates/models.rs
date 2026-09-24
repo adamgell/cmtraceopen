@@ -27,6 +27,16 @@ use crate::intune::normalized::{NormalizedSettingReport, NormalizedWindowsEvent}
 /// Schema version of every serialized type in this leaf.
 pub const INTUNE_WINDOWS_UPDATES_SCHEMA_VERSION: u32 = 1;
 
+/// The extraction profile this build produces and understands.
+///
+/// The schema version says what the envelope looks like; the profile says which
+/// extraction decisions produced its contents. Two bundles can agree on the
+/// envelope and still differ in what was extracted from the device, so a
+/// snapshot that never states its profile cannot be reproduced or compared.
+/// A bundle that declares a different profile is still analyzed, and says so in
+/// its input coverage rather than being silently read as if it were this one.
+pub const UPDATES_EXTRACTION_PROFILE: &str = "intune-windows-updates-1";
+
 // ── Sources ─────────────────────────────────────────────────────────────────
 
 intune_raw_preserving_string_enum! {
@@ -164,6 +174,11 @@ pub struct UpdateServiceReport {
 pub struct UpdateEvidenceBundle {
     #[serde(default)]
     pub schema_version: u32,
+    /// The extraction profile the capture tool used; see
+    /// [`UPDATES_EXTRACTION_PROFILE`]. `None` means the bundle did not state one,
+    /// which is not the same as stating this build's profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile: Option<String>,
     #[serde(default)]
     pub generated_at_utc: String,
     #[serde(default)]
@@ -214,15 +229,18 @@ impl UpdateKey {
     /// Time proximity is never enough, so this deliberately has no timestamp
     /// input. Two keys join when they share an `update_id`, or when they share a
     /// `kb_article` and neither carries a *conflicting* `update_id` — and in
-    /// both cases their revisions must agree. A key with nothing identified
-    /// joins nothing, including another empty key.
+    /// both cases their revisions must agree, and a KB the two name differently
+    /// under one id keeps them apart. A key with nothing identified joins
+    /// nothing, including another empty key.
     pub fn joins(&self, other: &Self) -> bool {
         if !self.is_identified() || !other.is_identified() {
             return false;
         }
         match (&self.update_id, &other.update_id) {
             (Some(left), Some(right)) => {
-                left.eq_ignore_ascii_case(right) && self.revision_agrees(other)
+                left.eq_ignore_ascii_case(right)
+                    && self.revision_agrees(other)
+                    && self.kb_agrees(other)
             }
             _ => match (&self.kb_article, &other.kb_article) {
                 // A KB match alone is not enough: a different revision of the
@@ -241,6 +259,19 @@ impl UpdateKey {
     fn revision_agrees(&self, other: &Self) -> bool {
         match (&self.revision, &other.revision) {
             (Some(left), Some(right)) => left == right,
+            _ => true,
+        }
+    }
+
+    /// A KB disagreement under one update id is not a match either.
+    ///
+    /// One revision cannot carry two KB numbers, so two records that share an
+    /// update id but name different KBs are not two views of one update. Joining
+    /// them puts two labels on one transaction and hides whichever record lost:
+    /// they stay separate until something states which label is the real one.
+    fn kb_agrees(&self, other: &Self) -> bool {
+        match (&self.kb_article, &other.kb_article) {
+            (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
             _ => true,
         }
     }
@@ -664,6 +695,16 @@ pub struct UpdateInputCoverage {
     /// exclusion visible instead of letting the evidence look absent.
     #[serde(default)]
     pub unusable_records: u32,
+    /// The extraction profile the bundle declared, when it declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_profile: Option<String>,
+    /// Whether that profile is one this build knows how to extract.
+    ///
+    /// A bundle extracted by a different profile is still analyzed, but its
+    /// records were read with this build's rules: fields the other profile added
+    /// are absent rather than empty, and a reader has to be told that.
+    #[serde(default)]
+    pub extraction_profile_unsupported: bool,
     /// Evidence refs for the unclassified records, so a finding can cite them.
     pub evidence: Vec<IntuneEvidenceRef>,
 }
@@ -723,6 +764,33 @@ mod tests {
             revision: Some("2".to_owned()),
         };
         assert!(!left.joins(&right));
+    }
+
+    #[test]
+    fn keys_do_not_join_when_one_update_id_carries_two_kb_labels() {
+        let left = UpdateKey {
+            update_id: Some("{aaaaaaaa-0000-0000-0000-000000000001}".to_owned()),
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        let conflicting = UpdateKey {
+            update_id: Some("{aaaaaaaa-0000-0000-0000-000000000001}".to_owned()),
+            kb_article: Some("KB5000002".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        assert!(
+            !left.joins(&conflicting),
+            "one revision cannot carry two KB labels, so the records stay apart"
+        );
+
+        let agreeing = UpdateKey {
+            kb_article: Some("KB5000001".to_owned()),
+            ..conflicting
+        };
+        assert!(
+            left.joins(&agreeing),
+            "a shared id, revision, and KB label is one update"
+        );
     }
 
     #[test]

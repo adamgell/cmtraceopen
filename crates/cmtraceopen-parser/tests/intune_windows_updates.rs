@@ -801,6 +801,93 @@ fn a_record_that_could_not_be_read_never_establishes_a_state() {
     );
 }
 
+/// "No restart is pending" is a claim about the device, and a capture that lost
+/// or truncated the client's own records cannot support it: the absence of a
+/// pending record there is not evidence that the restart completed.
+#[test]
+fn a_truncated_client_capture_cannot_claim_no_restart_is_pending() {
+    let scenario = "policy-applied-update-installed-reboot-complete";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let bundle = build_bundle(scenario, &manifest);
+    assert_eq!(
+        analyze_update_bundle(&bundle).update_chain.reboot_pending,
+        Some(false),
+        "{scenario}: the complete capture can support the claim"
+    );
+
+    let mut capped = bundle.clone();
+    for entry in &mut capped.coverage {
+        if entry.family == "windowsUpdateClient" {
+            entry.status = IntuneArtifactStatus::Capped;
+        }
+    }
+    assert_eq!(
+        analyze_update_bundle(&capped).update_chain.reboot_pending,
+        None,
+        "{scenario}: a truncated client capture must not claim that no restart is pending"
+    );
+}
+
+/// An unusable artifact that could never have carried policy does not explain a
+/// silent policy chain.
+///
+/// Pooling every unusable artifact into the policy finding made a missing
+/// supplemental servicing log read as the reason no policy record was seen.
+#[test]
+fn an_unusable_servicing_log_does_not_explain_a_missing_policy_record() {
+    let servicing_only = UpdateEvidenceBundle {
+        coverage: vec![coverage_entry(
+            "cbs-log",
+            "servicing",
+            IntuneArtifactStatus::Missing,
+        )],
+        ..Default::default()
+    };
+    assert!(
+        !has_policy_not_observed(&analyze_update_bundle(&servicing_only)),
+        "a missing servicing log must not be cited as the reason no policy record was seen"
+    );
+
+    let with_policy_gap = UpdateEvidenceBundle {
+        coverage: vec![
+            coverage_entry("cbs-log", "servicing", IntuneArtifactStatus::Missing),
+            coverage_entry(
+                "mdm-admin-events",
+                "mdmDiagnostics",
+                IntuneArtifactStatus::Missing,
+            ),
+        ],
+        ..Default::default()
+    };
+    assert!(
+        has_policy_not_observed(&analyze_update_bundle(&with_policy_gap)),
+        "a missing policy-bearing artifact does explain it"
+    );
+}
+
+fn coverage_entry(
+    artifact_id: &str,
+    family: &str,
+    status: IntuneArtifactStatus,
+) -> IntuneArtifactCoverage {
+    IntuneArtifactCoverage {
+        artifact_id: artifact_id.to_owned(),
+        family: family.to_owned(),
+        status,
+        detail: None,
+        observed_at_utc: "2026-07-31T03:00:00Z".to_owned(),
+        evidence: Vec::new(),
+    }
+}
+
+fn has_policy_not_observed(snapshot: &UpdateSnapshot) -> bool {
+    snapshot
+        .findings
+        .iter()
+        .any(|finding| finding.finding_id == "intune/windows/updates/policy/not-observed")
+}
+
 /// The snapshot is a function of the readings, not of the order the caller
 /// happened to collect them in.
 ///

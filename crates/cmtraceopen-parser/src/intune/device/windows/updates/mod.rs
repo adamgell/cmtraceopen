@@ -151,6 +151,38 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_this_build_does_not_know_is_reported_rather_than_ignored() {
+        let bundle = parse_update_bundle(r#"{"extractionProfile": "future-profile-v99"}"#).unwrap();
+        let snapshot = analyze_update_bundle(&bundle);
+        assert_eq!(
+            snapshot.input_coverage.extraction_profile.as_deref(),
+            Some("future-profile-v99")
+        );
+        assert!(
+            snapshot.input_coverage.extraction_profile_unsupported,
+            "a profile this build does not produce has to be stated, not assumed away"
+        );
+    }
+
+    #[test]
+    fn this_builds_own_profile_is_not_flagged() {
+        let json = format!(r#"{{"extractionProfile": "{UPDATES_EXTRACTION_PROFILE}"}}"#);
+        let snapshot = analyze_update_bundle(&parse_update_bundle(&json).unwrap());
+        assert_eq!(
+            snapshot.input_coverage.extraction_profile.as_deref(),
+            Some(UPDATES_EXTRACTION_PROFILE)
+        );
+        assert!(!snapshot.input_coverage.extraction_profile_unsupported);
+    }
+
+    #[test]
+    fn a_bundle_that_states_no_profile_claims_nothing_about_one() {
+        let snapshot = analyze_update_bundle(&parse_update_bundle("{}").unwrap());
+        assert_eq!(snapshot.input_coverage.extraction_profile, None);
+        assert!(!snapshot.input_coverage.extraction_profile_unsupported);
+    }
+
+    #[test]
     fn an_empty_bundle_reduces_to_two_unobserved_chains() {
         let snapshot = analyze_update_bundle(&parse_update_bundle("{}").unwrap());
         assert_eq!(snapshot.policy_chain.state, PolicyChainState::NotObserved);

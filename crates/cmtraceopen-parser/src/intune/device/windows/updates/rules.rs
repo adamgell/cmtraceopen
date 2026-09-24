@@ -138,12 +138,35 @@ fn client_evidence(
     from_unkeyed.chain(from_transactions).collect()
 }
 
+/// Families whose artifacts could have carried policy evidence.
+///
+/// A missing supplemental servicing log cannot explain a silent policy chain:
+/// CBS and DISM corroborate what the update client did and never carry policy.
+/// Pooling every unusable artifact into the policy finding let an unrelated gap
+/// read as the reason no policy record was seen.
+const POLICY_FAMILIES: [&str; 3] = ["mdmDiagnostics", "registry", "suppliedFact"];
+
 /// Artifact ids that were not usable, used as coverage-gap citations.
 fn coverage_gap_ids(snapshot: &UpdateSnapshot) -> Vec<String> {
     snapshot
         .coverage
         .iter()
         .filter(|entry| entry.status != IntuneArtifactStatus::Available)
+        .map(|entry| entry.artifact_id.clone())
+        .collect()
+}
+
+/// The same list, restricted to the artifacts that could have carried policy.
+fn policy_coverage_gap_ids(snapshot: &UpdateSnapshot) -> Vec<String> {
+    snapshot
+        .coverage
+        .iter()
+        .filter(|entry| entry.status != IntuneArtifactStatus::Available)
+        .filter(|entry| {
+            POLICY_FAMILIES
+                .iter()
+                .any(|family| entry.family.eq_ignore_ascii_case(family))
+        })
         .map(|entry| entry.artifact_id.clone())
         .collect()
 }
@@ -357,7 +380,7 @@ fn push_policy_not_observed(snapshot: &UpdateSnapshot, findings: &mut Vec<Intune
     if snapshot.policy_chain.state != PolicyChainState::NotObserved {
         return;
     }
-    let gaps = coverage_gap_ids(snapshot);
+    let gaps = policy_coverage_gap_ids(snapshot);
     if gaps.is_empty() {
         return;
     }

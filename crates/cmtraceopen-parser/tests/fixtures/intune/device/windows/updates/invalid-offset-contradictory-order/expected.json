@@ -32,7 +32,7 @@
   },
   "updateChain": {
     "state": "inProgress",
-    "rebootPending": false,
+    "rebootPending": null,
     "unkeyedObservationCount": 0,
     "transactions": [
       {
@@ -94,6 +94,7 @@
   "assertions": [
     "an impossible phase ordering caps the transaction's confidence",
     "the terminal state follows the records' own timestamps, not the order the artifact listed them in: the install at 01:00 is earlier, so the download that started at 02:00 is the client's last statement and no install is claimed",
+    "an unreadable client artifact means no restart can be claimed either way, so rebootPending stays unknown rather than false",
     "a parseFailed artifact keeps its bytes and reports parseFailed coverage"
   ]
 }

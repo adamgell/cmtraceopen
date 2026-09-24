@@ -62,15 +62,6 @@
   },
   "findings": [
     {
-      "findingId": "intune/windows/updates/policy/not-observed",
-      "severity": "warning",
-      "confidence": "medium",
-      "evidence": [],
-      "coverageGapIds": [
-        "windows-update-log"
-      ]
-    },
-    {
       "findingId": "intune/windows/updates/update/install-failed/KB5000010.1",
       "severity": "error",
       "confidence": "high",
@@ -115,6 +106,7 @@
   "assertions": [
     "a corroborating line is cited by file and line, not by file alone",
     "only the KB is read out of supplemental free text; a bare GUID is not an update identity",
-    "a capped supplemental artifact still reports capped coverage"
+    "a capped supplemental artifact still reports capped coverage",
+    "a capped supplemental log cannot explain a silent policy chain: no policy artifact was expected here, so no policy-not-observed finding is emitted"
   ]
 }

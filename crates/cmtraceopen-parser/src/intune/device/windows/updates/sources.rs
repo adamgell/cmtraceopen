@@ -330,7 +330,7 @@ pub fn error_code(raw: &str) -> Option<IntuneErrorCode> {
 /// supplemental formats that carry no schema at all.
 pub fn update_key_from(named_data: &[IntuneNamedValue], text: Option<&str>) -> UpdateKey {
     let mut key = UpdateKey {
-        update_id: named(named_data, NAMED_UPDATE_GUID).map(|value| normalize_guid(&value)),
+        update_id: named(named_data, NAMED_UPDATE_GUID).and_then(|value| normalize_guid(&value)),
         kb_article: named(named_data, NAMED_KB_ARTICLE_IDS)
             .as_deref()
             .and_then(first_kb),
@@ -344,7 +344,7 @@ pub fn update_key_from(named_data: &[IntuneNamedValue], text: Option<&str>) -> U
         if key.update_id.is_none() {
             key.update_id = guid_re()
                 .find(text)
-                .map(|found| normalize_guid(found.as_str()));
+                .and_then(|found| normalize_guid(found.as_str()));
         }
     }
 
@@ -357,11 +357,24 @@ pub fn update_key_from(named_data: &[IntuneNamedValue], text: Option<&str>) -> U
     key
 }
 
-/// Canonical GUID form: lowercase, brace-wrapped. Sources write it both ways and
-/// a key that differs only in punctuation would fail to join itself.
-fn normalize_guid(raw: &str) -> String {
+/// Canonical form of a supplied update id, or `None` when it is not a GUID.
+///
+/// Sources write the same id both ways, so the canonical form is lowercase and
+/// brace-wrapped: a key that differs only in punctuation would fail to join
+/// itself.
+///
+/// The value arrives from the adapter, which reads it out of a record's named
+/// data. A value that is not GUID-shaped cannot identify an update: accepting it
+/// made one arbitrary string a correlation key for every record that happened to
+/// carry the same string. The value itself still reaches the export through the
+/// record's named data, so nothing is hidden by refusing to use it as a key.
+fn normalize_guid(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_start_matches('{').trim_end_matches('}');
-    format!("{{{}}}", trimmed.to_ascii_lowercase())
+    let candidate = guid_re().find(trimmed)?;
+    if candidate.as_str().len() != trimmed.len() {
+        return None;
+    }
+    Some(format!("{{{}}}", trimmed.to_ascii_lowercase()))
 }
 
 fn first_kb(text: &str) -> Option<String> {
@@ -982,6 +995,35 @@ mod tests {
             }
             other => panic!("expected an update observation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_supplied_update_id_that_is_not_a_guid_is_not_an_identifier() {
+        let unshaped = classify_update_client_event(&event(
+            WINDOWS_UPDATE_CLIENT_PROVIDER,
+            19,
+            vec![value(NAMED_UPDATE_GUID, "not-a-guid")],
+        ))
+        .expect("event 19 is a mapped update-client event");
+        assert!(
+            unshaped.key.update_id.is_none(),
+            "a value that is not GUID-shaped cannot identify an update"
+        );
+
+        // The same value in the shape the client writes still becomes the key.
+        let shaped = classify_update_client_event(&event(
+            WINDOWS_UPDATE_CLIENT_PROVIDER,
+            19,
+            vec![value(
+                NAMED_UPDATE_GUID,
+                "{AAAAAAAA-0000-0000-0000-000000000001}",
+            )],
+        ))
+        .expect("event 19 is a mapped update-client event");
+        assert_eq!(
+            shaped.key.update_id.as_deref(),
+            Some("{aaaaaaaa-0000-0000-0000-000000000001}")
+        );
     }
 
     #[test]

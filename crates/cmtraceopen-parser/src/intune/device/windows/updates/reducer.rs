@@ -16,8 +16,8 @@ use std::collections::{BTreeSet, HashSet};
 use chrono::{DateTime, Utc};
 
 use crate::intune::evidence::{
-    IntuneAccessState, IntuneArtifactCoverage, IntuneEvidenceRef, IntuneFindingConfidence,
-    IntuneObservationContext, IntuneParseState, IntuneTimestampKind,
+    IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneEvidenceRef,
+    IntuneFindingConfidence, IntuneObservationContext, IntuneParseState, IntuneTimestampKind,
 };
 
 use super::models::*;
@@ -99,6 +99,11 @@ pub fn reduce_bundle(bundle: &UpdateEvidenceBundle) -> UpdateSnapshot {
 
     input_coverage.unmapped_event_id_list = unmapped_ids.into_iter().collect();
     input_coverage.unknown_providers = unknown_providers.into_iter().collect();
+    input_coverage.extraction_profile = bundle.extraction_profile.clone();
+    input_coverage.extraction_profile_unsupported = bundle
+        .extraction_profile
+        .as_deref()
+        .is_some_and(|profile| !profile.eq_ignore_ascii_case(UPDATES_EXTRACTION_PROFILE));
     sort_evidence(&mut input_coverage.evidence);
 
     // Both chains read their readings in canonical order, never in the order
@@ -514,7 +519,7 @@ fn build_update_chain(
     let device_signals = device_level_signals(&unkeyed);
     let state = chain_state(&transactions, &device_signals);
 
-    let reboot_pending = reboot_pending_flag(&transactions, &device_signals);
+    let reboot_pending = reboot_pending_flag(&transactions, &device_signals, &bundle.coverage);
 
     let mut evidence: Vec<IntuneEvidenceRef> = transactions
         .iter()
@@ -824,9 +829,31 @@ fn chain_state(transactions: &[UpdateTransaction], signals: &DeviceSignals) -> U
     UpdateChainState::NotObserved
 }
 
+/// The artifact family that carries the update client's own readings.
+///
+/// Only this family can establish a pending restart. Supplemental readings --
+/// the update-agent log and the servicing logs -- corroborate and never
+/// establish one, so a truncated or unparseable supplemental artifact cannot
+/// invalidate a claim the client channel itself supports.
+const CLIENT_FAMILY: &str = "windowsUpdateClient";
+
+/// Whether the capture lost or truncated an artifact that carries the client's
+/// own readings.
+///
+/// `rebootPending: false` is a claim that no restart is pending. A capture that
+/// could not read, or truncated, the client's own records cannot support that
+/// claim: the absence of a pending record there is not evidence of completion.
+fn client_capture_is_incomplete(coverage: &[IntuneArtifactCoverage]) -> bool {
+    coverage.iter().any(|entry| {
+        entry.status != IntuneArtifactStatus::Available
+            && entry.family.eq_ignore_ascii_case(CLIENT_FAMILY)
+    })
+}
+
 fn reboot_pending_flag(
     transactions: &[UpdateTransaction],
     signals: &DeviceSignals,
+    coverage: &[IntuneArtifactCoverage],
 ) -> Option<bool> {
     if signals.reboot_pending.is_some()
         || transactions
@@ -836,6 +863,9 @@ fn reboot_pending_flag(
         return Some(true);
     }
     if transactions.is_empty() && !signals.client_evidence_present {
+        return None;
+    }
+    if client_capture_is_incomplete(coverage) {
         return None;
     }
     Some(false)

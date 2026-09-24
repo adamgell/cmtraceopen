@@ -37,15 +37,6 @@
   },
   "findings": [
     {
-      "findingId": "intune/windows/updates/policy/not-observed",
-      "severity": "warning",
-      "confidence": "medium",
-      "evidence": [],
-      "coverageGapIds": [
-        "wu-etl-trace"
-      ]
-    },
-    {
       "findingId": "intune/windows/updates/evidence/unknown-schema",
       "severity": "info",
       "confidence": "high",
@@ -77,6 +68,7 @@
   ],
   "assertions": [
     "event id 27 has no documented meaning and is therefore left unmapped",
-    "an unmodeled provider never lands in either chain"
+    "an unmodeled provider never lands in either chain",
+    "a policy-not-observed finding needs a policy-bearing gap to explain it: a missing artifact that could never carry policy is not cited here"
   ]
 }
