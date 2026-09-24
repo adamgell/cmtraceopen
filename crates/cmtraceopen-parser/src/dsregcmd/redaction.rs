@@ -161,6 +161,51 @@ struct IdentityLiterals {
     values: Vec<(String, String)>,
 }
 
+/// The spans of replacement tokens already present in a value.
+///
+/// A token is `[kind:16 hex]` -- what [`identity_token`] mints -- and the literal
+/// scrub must not edit inside one. A classified value can be a kind word: `host`
+/// and `user` are four bytes, which the identifier floor admits, and matching one
+/// of those inside `[host:0123456789abcdef]` would leave a nested token where the
+/// projection promised a stable one.
+fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
+    let bytes = value.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'[' {
+            index += 1;
+            continue;
+        }
+        let Some(colon) = value[index..].find(':').map(|offset| index + offset) else {
+            index += 1;
+            continue;
+        };
+        let kind = &value[index + 1..colon];
+        let close = value[colon + 1..]
+            .find(']')
+            .map(|offset| colon + 1 + offset);
+        let Some(end) = close else {
+            index += 1;
+            continue;
+        };
+        let body = &value[colon + 1..end];
+        if !kind.is_empty()
+            && kind
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            && body.len() == 16
+            && body.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            spans.push((index, end + 1));
+            index = end + 1;
+            continue;
+        }
+        index += 1;
+    }
+    spans
+}
+
 impl IdentityLiterals {
     /// Classify one identifier: a domain, tenant id, device id, thumbprint,
     /// UPN or host name.
@@ -241,10 +286,16 @@ impl IdentityLiterals {
         // One folded view of the text, shared by every literal. The fold is the
         // grammar's, not this lane's.
         let folded = fold_with_offsets(value);
+        // A token this pass mints is not text to scrub: a classified value
+        // that happens to be a token's kind word (`host`, `user`) would
+        // otherwise rewrite the token from the inside.
+        let tokens = replacement_token_spans(value);
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) = self.leftmost_longest_match(value, &folded, cursor) {
+        while let Some((start, end, token)) =
+            self.leftmost_longest_match(value, &folded, cursor, &tokens)
+        {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -265,10 +316,26 @@ impl IdentityLiterals {
         haystack: &str,
         folded: &[FoldedChar],
         cursor: usize,
+        tokens: &[(usize, usize)],
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
         for (literal, token) in &self.values {
-            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
+            // A candidate inside an already-minted token is not a mention of the
+            // identity; the next one after that token may be.
+            let mut search = cursor;
+            let found = loop {
+                let Some(candidate) = find_ignore_case(haystack, literal, folded, search) else {
+                    break None;
+                };
+                match tokens
+                    .iter()
+                    .find(|(start, end)| candidate.0 >= *start && candidate.0 < *end)
+                {
+                    Some((_, end)) => search = *end,
+                    None => break Some(candidate),
+                }
+            };
+            let Some((start, end)) = found else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
@@ -1157,6 +1224,28 @@ mod tests {
 
         assert_eq!(literals.values.len(), 0, "nothing was classified");
         assert_eq!(literals.token_for("ad"), None);
+    }
+
+    /// A classified value that is also a token's kind word cannot edit a token.
+    ///
+    /// Four-byte identifiers are admitted now, and `host` is one: without this,
+    /// a grammar-produced `[host:…]` token in the same text would be scrubbed
+    /// from the inside and come out malformed.
+    #[test]
+    fn a_short_identifier_does_not_rewrite_a_replacement_token() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("host", KIND_HOST);
+
+        let scrubbed = literals.scrub("The host left; [host:0123456789abcdef] names it.");
+
+        assert!(
+            scrubbed.contains("[host:0123456789abcdef]"),
+            "the minted token survives: {scrubbed}"
+        );
+        assert!(
+            !scrubbed.contains("The host left"),
+            "the mention is still scrubbed: {scrubbed}"
+        );
     }
 
     /// A display name shorter than the floor is still left alone in prose.
