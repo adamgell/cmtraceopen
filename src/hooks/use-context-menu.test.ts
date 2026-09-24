@@ -56,6 +56,7 @@ function entry(overrides: Partial<LogEntry> = {}): LogEntry {
         codeDecimal: "2147942405",
         description: "Access is denied.",
         category: "Win32",
+        outcome: "failure",
       },
     ],
     ...overrides,
