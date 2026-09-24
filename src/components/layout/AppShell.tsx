@@ -33,6 +33,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
+import { WorkspaceErrorBoundary } from "./WorkspaceErrorBoundary";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
 import { useSysmonAnalysisProgress } from "../../workspaces/sysmon/use-sysmon-analysis-progress";
@@ -463,12 +464,17 @@ export function AppShell() {
           }}
         >
           <Suspense fallback={null}>
-            <WorkspaceComponent />
+            {/* Keyed on the workspace so switching away clears a caught error. */}
+            <WorkspaceErrorBoundary workspaceId={activeView} key={activeView}>
+              <WorkspaceComponent />
+            </WorkspaceErrorBoundary>
           </Suspense>
         </div>
         {WorkspaceDock ? (
           <Suspense fallback={null}>
-            <WorkspaceDock />
+            <WorkspaceErrorBoundary workspaceId={`${activeView}:dock`} key={`${activeView}:dock`}>
+              <WorkspaceDock />
+            </WorkspaceErrorBoundary>
           </Suspense>
         ) : null}
       </div>
