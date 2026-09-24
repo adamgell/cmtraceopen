@@ -840,7 +840,7 @@ fn collect_artifact_identities(
             // Decoded, not read as UTF-8: the walk itself decodes and writes this
             // same file, so skipping a UTF-16 one here left identities in the copy
             // that the projection had the means to remove.
-            let Ok(bytes) = read_bundle_file(&path) else {
+            let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
             let Some(text) = decode_artifact_text(&bytes) else {
@@ -854,7 +854,7 @@ fn collect_artifact_identities(
         }
         // Everything else is text this walk can read: registry dumps and command
         // output name the same identities in a labelled form.
-        let Ok(bytes) = read_bundle_file(&path) else {
+        let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
         if let Some(text) = decode_artifact_text(&bytes) {
