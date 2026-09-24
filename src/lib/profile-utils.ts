@@ -273,10 +273,28 @@ export interface ParsedPayload {
 function extractBracedBlock(data: string, startIndex: number): string | null {
   let depth = 1;
   let i = startIndex;
+  // Braces inside a quoted value are content, not structure. Payload values
+  // routinely contain them - "https://x/{0}/r", filter expressions, regexes -
+  // and counting one as a delimiter ended the block early, silently dropping
+  // every entry that followed it.
+  let inString = false;
+  let escaped = false;
+
   while (i < data.length && depth > 0) {
-    if (data[i] === "{") {
+    const char = data[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
       depth++;
-    } else if (data[i] === "}") {
+    } else if (char === "}") {
       depth--;
     }
     if (depth > 0) {
