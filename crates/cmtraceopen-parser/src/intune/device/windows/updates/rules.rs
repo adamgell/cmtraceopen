@@ -465,11 +465,20 @@ fn push_no_applicable_update(snapshot: &UpdateSnapshot, findings: &mut Vec<Intun
     if snapshot.update_chain.state != UpdateChainState::NoApplicableUpdate {
         return;
     }
-    let evidence = client_evidence(
+    // One verdict, two spellings: an adapter may report that detection found
+    // nothing applicable as a scan outcome rather than an applicability one, and
+    // the chain state is the same either way. Reading only the applicability
+    // phase left the state reported with no finding to explain it.
+    let mut evidence = client_evidence(
         snapshot,
         UpdatePhase::Applicability,
         UpdateOutcome::NotApplicable,
     );
+    evidence.extend(client_evidence(
+        snapshot,
+        UpdatePhase::Scan,
+        UpdateOutcome::NotApplicable,
+    ));
     if evidence.is_empty() {
         return;
     }

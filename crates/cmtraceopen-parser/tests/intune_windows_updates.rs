@@ -29,9 +29,9 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::updates::{
     analyze_update_bundle, derive_findings, redacted_export_projection, PolicyChainState,
-    PolicySignal, SupplementalLogKind, UpdateChainState, UpdateEvidenceBundle, UpdateSnapshot,
-    UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner, EVIDENCE_FINDING_PREFIX,
-    POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
+    PolicySignal, SupplementalLogKind, UpdateChainState, UpdateEvidenceBundle, UpdateOutcome,
+    UpdatePhase, UpdateSnapshot, UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner,
+    EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
@@ -1026,6 +1026,48 @@ fn the_reporting_mismatch_does_not_claim_which_reading_is_current() {
         !mismatch.summary.contains("more recent"),
         "the mismatch summary claims recency without comparing timestamps: {}",
         mismatch.summary
+    );
+}
+
+/// The scan phase reports the same verdict as the applicability phase.
+///
+/// An adapter can say `cmtraceUpdatePhase=scan` with
+/// `cmtraceUpdateOutcome=notApplicable`, which puts the chain in
+/// `NoApplicableUpdate` exactly as an applicability check does. The rule has to
+/// find evidence for that state whichever phase produced it, or the snapshot
+/// reports a state that no finding explains.
+#[test]
+fn a_scan_based_no_applicable_update_is_reported() {
+    let scenario = "policy-applied-no-applicable-update";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));
+
+    let observation = snapshot
+        .update_chain
+        .unkeyed_observations
+        .iter_mut()
+        .find(|observation| {
+            observation.phase == UpdatePhase::Applicability
+                && observation.outcome == UpdateOutcome::NotApplicable
+        })
+        .expect("this scenario reports a not-applicable applicability check");
+    // The same record as the other adapter reports it.
+    observation.phase = UpdatePhase::Scan;
+    snapshot.findings = derive_findings(&snapshot);
+
+    assert_eq!(
+        snapshot.update_chain.state,
+        UpdateChainState::NoApplicableUpdate
+    );
+    let ids: Vec<String> = snapshot
+        .findings
+        .iter()
+        .map(|finding| finding.finding_id.clone())
+        .collect();
+    assert!(
+        ids.iter().any(|id| id.ends_with("/no-applicable-update")),
+        "the state is reported, so a finding must explain it: {ids:?}"
     );
 }
 
