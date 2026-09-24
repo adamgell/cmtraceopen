@@ -1,6 +1,6 @@
 cask "cmtrace-open" do
-  version "1.5.0"
-  sha256 "f84eda748efa13087ed4283ff69e4080898388f02702917592c0582e3f3ecb04"
+  version "1.6.0"
+  sha256 "e0a5b55d64bf5d0c5aa2e62fad4aced7ee95865f89683a3cbd8fe4a8bcbe1ac1"
 
   url "https://github.com/adamgell/cmtraceopen/releases/download/v#{version}/CMTrace.Open_#{version}_aarch64.dmg",
       verified: "github.com/adamgell/cmtraceopen/"
