@@ -575,7 +575,13 @@ pub fn classify_registry_fact(fact: &UpdateRegistryFact) -> Option<PolicyObserva
             "0" => Some(UpdateSource::WindowsUpdateForBusiness),
             _ => None,
         }
-    } else if key.eq_ignore_ascii_case(WSUS_POLICY_KEY)
+    } else if (key.eq_ignore_ascii_case(WSUS_POLICY_KEY)
+        // The CSP writes the same policy the group policy does, under the
+        // PolicyManager mirror of the key: 0 selects Windows Update, 1 (the
+        // default) selects WSUS. Reading only the group-policy key left a
+        // `PolicyManager` scan source classified as a merely applied setting, so
+        // the device's effective source was never assessed from it.
+        || key.eq_ignore_ascii_case(POLICY_MANAGER_UPDATE_KEY))
         && POLICY_DRIVEN_SOURCE_VALUES
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(value_name))
@@ -980,6 +986,31 @@ mod tests {
     }
 
     /// A revision that is not a number is not a revision.
+    /// The policy-driven source is decided the same way under PolicyManager.
+    ///
+    /// The CSP writes the same policy the group policy does -- 0 selects Windows
+    /// Update, 1 selects WSUS -- so a PolicyManager value of 0 is a statement
+    /// about the effective source, not merely an applied setting.
+    #[test]
+    fn a_policy_manager_scan_source_value_is_an_effective_source() {
+        let fact = serde_json::from_str::<UpdateRegistryFact>(&FACT.replace(
+            "PLACEHOLDER_KEY",
+            &POLICY_MANAGER_UPDATE_KEY.replace('\\', "\\\\"),
+        ))
+        .expect("the corpus fact deserializes");
+
+        let observation = classify_registry_fact(&fact).expect("the value is classified");
+
+        assert_eq!(observation.signal, PolicySignal::EffectiveSource);
+        assert_eq!(
+            observation.source,
+            Some(UpdateSource::WindowsUpdateForBusiness)
+        );
+    }
+
+    /// A registry fact from the corpus, with its key left for the test to place.
+    const FACT: &str = r#"{"context":{"evidenceRef":{"evidenceId":"reg-scan-source","sourceArtifactId":"policy-registry"},"provenance":{"sourceKind":"registry","sourceArtifactId":"policy-registry","filePath":null,"lineNumber":null,"recordNumber":null,"registry":{"hive":"HKEY_LOCAL_MACHINE","key":"PLACEHOLDER_KEY","valueName":"SetPolicyDrivenUpdateSourceForQualityUpdates"},"event":null},"sourceTimestamp":{"rawText":"2026-07-31T00:40:00Z","originalOffset":null,"normalizedUtc":"2026-07-31T00:40:00Z","kind":"utc"},"observedAtUtc":"2026-07-31T03:00:00Z","sensitivity":"public","parseState":"parsed","accessState":"available"},"value":"0","namedData":[]}"#;
+
     #[test]
     fn a_named_revision_that_is_not_a_number_is_not_kept() {
         let key = update_key_from(
