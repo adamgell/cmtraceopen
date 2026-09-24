@@ -22,12 +22,12 @@ CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all
 | Theme objects, brand ramps | `src/lib/themes/*` | `02-color-themes.html`, `tokens.css` |
 | Semantic color tokens | `src/lib/themes/*-theme.ts` | `03-color-tokens.html`, `tokens.css` |
 | Type ramp & families | `src/lib/themes/typography.ts` | `04-typography.html` |
-| Log row metrics | `src/lib/log-list-metrics.ts` (`getLogListMetrics()`) | `04-typography.html`, `09-components-log-grid.html` |
-| Spacing / radius / shadow | `src/lib/themes/tokens.ts` | `05-spacing-radius-shadow.html` |
-| Motion durations & curves | `src/lib/themes/motion.ts` | `06-motion.html` |
+| Log row metrics | `src/lib/log-accessibility.ts` (`getLogListMetrics()`) | `04-typography.html`, `09-components-log-grid.html` |
+| Spacing / radius / shadow | `src/lib/themes/tokens.css` | `05-spacing-radius-shadow.html` |
+| Motion durations & curves | *(no such file found on 2026-09-24 — this row needs re-pointing)* | `06-motion.html` |
 | Icons | `@fluentui/react-icons` | `07-iconography.html` |
 | Buttons, inputs, badges | `src/components/ui/*` | `08-components-buttons-inputs.html` |
-| Log row, gutter, markers | `src/components/log/LogRow.tsx`, `LogGutter.tsx` | `09-components-log-grid.html` |
+| Log row, gutter, markers | `src/components/log-view/LogRow.tsx` (the gutter is a slot in the row, not a separate component) | `09-components-log-grid.html` |
 | Toolbar, tabs, status bar | `src/components/chrome/*` | `10-components-chrome.html` |
 | Dialogs, settings, find | `src/components/dialogs/*` | `11-components-dialogs.html` |
 | Full app reference | `src/App.tsx` | `ui-kit.html` |
