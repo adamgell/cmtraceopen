@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **The four downloaded CI tools are verified, and two are pinned**: every Action in this repository was SHA-pinned while the executables the pipeline downloads and runs were not, and the Master Packager MSI was installed in the job that holds the update-signing key. Each download now has its SHA-256 recorded and checked before anything is executed, `komac` is pinned to a version and the digest that release publishes instead of following `releases/latest`, and the Scoop installer is fetched from a pinned commit rather than a URL that redirects to `master` ([#691](https://github.com/adamgell/cmtraceopen/issues/691)).
+
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 

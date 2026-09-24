@@ -35,11 +35,19 @@ jobs:
       - name: Install komac
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/russellbanks/Komac/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "^komac-\d.*x86_64.*windows.*\.exe$" -and $_.name -notlike "*setup*" } | Select-Object -First 1
-          if (-not $asset) { throw "Could not find Komac portable exe in latest release" }
-          Write-Host "Downloading $($asset.name) from $($release.tag_name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile komac.exe
+          # Pinned rather than following `latest`, which let the publisher choose the
+          # tool version at run time. The digest is the one that release publishes.
+          $komacVersion = "2.16.0"
+          $komacAsset = "komac-$komacVersion-x86_64-pc-windows-msvc.exe"
+          $komacSha256 = "bdc45baf028f750da7519cc8a5f2eab5dfef46dfe88650eeb0d0a9bf51446e4f"
+          $komacUrl = "https://github.com/russellbanks/Komac/releases/download/v$komacVersion/$komacAsset"
+          Write-Host "Downloading $komacAsset"
+          Invoke-WebRequest -Uri $komacUrl -OutFile komac.exe
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath komac.exe).Hash.ToLowerInvariant()
+          if ($actual -ne $komacSha256) {
+            Remove-Item -LiteralPath komac.exe -Force -ErrorAction SilentlyContinue
+            throw "Komac $komacVersion digest mismatch: expected $komacSha256, got $actual"
+          }
           $komacDir = "$env:RUNNER_TEMP\komac"
           New-Item -ItemType Directory -Path $komacDir -Force | Out-Null
           Move-Item -Path .\komac.exe -Destination "$komacDir\komac.exe"

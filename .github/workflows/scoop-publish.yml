@@ -67,7 +67,16 @@ jobs:
       - name: Install Scoop
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri https://get.scoop.sh -OutFile install-scoop.ps1
+          # `get.scoop.sh` redirects to `master`, so the script this runs was chosen
+          # by whoever last pushed. The commit is pinned and the content verified.
+          $scoopInstallerUrl = "https://raw.githubusercontent.com/ScoopInstaller/Install/1e2f334083d609986d8c8bc9e31ae8e87c39fab4/install.ps1"
+          $scoopInstallerSha256 = "94f983b190438311e006b957db7c8422709e0ba62a6c2ac04e278164108f2512"
+          Invoke-WebRequest -Uri $scoopInstallerUrl -OutFile install-scoop.ps1
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath install-scoop.ps1).Hash.ToLowerInvariant()
+          if ($actual -ne $scoopInstallerSha256) {
+            Remove-Item -LiteralPath install-scoop.ps1 -Force -ErrorAction SilentlyContinue
+            throw "Scoop installer digest mismatch: expected $scoopInstallerSha256, got $actual"
+          }
           # GitHub runners execute as a local administrator, which the installer
           # refuses without this switch.
           ./install-scoop.ps1 -RunAsAdmin
