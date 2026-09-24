@@ -267,26 +267,63 @@ export interface ParsedPayload {
 }
 
 /**
- * Given a starting index just after an opening '{', find the matching '}'.
+ * The index of the delimiter that closes the block opened at `openIndex`,
+ * ignoring delimiters that sit inside a quoted value.
+ *
+ * A payload value can hold a brace: a template URL (`https://x/{0}/r`), a
+ * regex, a filter expression. Counting one as structure ends the block early,
+ * and every setting after it is dropped without a word — worse in a viewer than
+ * a parse error, because the profile still looks complete.
+ *
+ * A backslash escape inside a quoted value (`\"`) is a character rather than
+ * the end of the value, so it cannot close the region either.
+ */
+function findClosingDelimiter(
+  text: string,
+  openIndex: number,
+  open: string,
+  close: string,
+): number | null {
+  let depth = 0;
+  let inQuote = false;
+  for (let i = openIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuote) {
+      if (ch === "\\") {
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inQuote = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuote = true;
+      continue;
+    }
+    if (ch === open) {
+      depth++;
+    } else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Given the index of an opening '{', find the matching '}'.
  * Returns the content between the braces (exclusive), or null if unmatched.
  */
-function extractBracedBlock(data: string, startIndex: number): string | null {
-  let depth = 1;
-  let i = startIndex;
-  while (i < data.length && depth > 0) {
-    if (data[i] === "{") {
-      depth++;
-    } else if (data[i] === "}") {
-      depth--;
-    }
-    if (depth > 0) {
-      i++;
-    }
-  }
-  if (depth !== 0) {
+function extractBracedBlock(data: string, openIndex: number): string | null {
+  const close = findClosingDelimiter(data, openIndex, "{", "}");
+  if (close === null) {
     return null;
   }
-  return data.slice(startIndex, i);
+  return data.slice(openIndex + 1, close);
 }
 
 /**
@@ -300,20 +337,19 @@ function collectBalancedBlock(
   open: string,
   close: string,
 ): { block: string; nextIdx: number } {
-  let depth = 0;
-  let block = "";
-  for (let j = startIdx; j < lines.length; j++) {
-    const l = lines[j];
-    for (const ch of l) {
-      if (ch === open) depth++;
-      if (ch === close) depth--;
-    }
-    block += l + "\n";
-    if (depth === 0) {
-      return { block, nextIdx: j + 1 };
-    }
+  const text = lines.slice(startIdx).join("\n");
+  const openAt = text.indexOf(open);
+  const closeAt =
+    openAt === -1 ? null : findClosingDelimiter(text, openAt, open, close);
+  if (closeAt === null) {
+    // Unmatched, as before: the rest of the payload is the block.
+    return { block: text + "\n", nextIdx: lines.length };
   }
-  return { block, nextIdx: lines.length };
+
+  // Include the whole line the block closes on, and continue after it.
+  const lineEnd = text.indexOf("\n", closeAt);
+  const block = lineEnd === -1 ? text : text.slice(0, lineEnd + 1);
+  return { block, nextIdx: startIdx + block.split("\n").length - 1 };
 }
 
 /**
@@ -335,7 +371,7 @@ function parseArrayOfDicts(raw: string, arrayKey: string): ParsedPayloadEntry[] 
   while (pos < inner.length) {
     const braceStart = inner.indexOf("{", pos);
     if (braceStart < 0) break;
-    const block = extractBracedBlock(inner, braceStart + 1);
+    const block = extractBracedBlock(inner, braceStart);
     if (!block) break;
     pos = braceStart + 1 + block.length + 1;
 
@@ -506,7 +542,7 @@ export function parsePayloadData(data: string): ParsedPayload {
     }
     // Extract the mcx_preference_settings block
     const mcxStart = mcxMatch.index! + mcxMatch[0].length;
-    const settingsBlock = extractBracedBlock(data, mcxStart);
+    const settingsBlock = extractBracedBlock(data, mcxStart - 1);
     if (settingsBlock) {
       result.entries = parseFlatDict(settingsBlock);
       enrichEntries(result.entries);
