@@ -40,6 +40,7 @@ import {
   analyzeEspEvidenceSource,
   ESP_EVIDENCE_SOURCE_ERROR,
   resolveEspEvidenceSource,
+  supportsEspLiveAcquisition,
 } from "./index";
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
@@ -204,7 +205,9 @@ export function EspDiagnosticsWorkspace() {
     [snapshot],
   );
   const showActions =
-    currentPlatform === "windows" && !isReplaySession && failedApps.length > 0;
+    supportsEspLiveAcquisition(currentPlatform) &&
+    !isReplaySession &&
+    failedApps.length > 0;
   const navSections = useMemo(
     () => [
       { id: "esp-action-center-heading", label: "Action center" },
@@ -219,7 +222,7 @@ export function EspDiagnosticsWorkspace() {
     ],
     [showActions],
   );
-  const liveSupported = currentPlatform === "windows";
+  const liveSupported = supportsEspLiveAcquisition(currentPlatform);
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
   // Elevation is a constant property of the running process. The standalone
   // probe and the (collected-later) snapshot both derive from the same process
@@ -247,7 +250,7 @@ export function EspDiagnosticsWorkspace() {
       : null;
 
   useEffect(() => {
-    if (currentPlatform !== "windows") {
+    if (!supportsEspLiveAcquisition(currentPlatform)) {
       setElevationProbe(null);
       return;
     }

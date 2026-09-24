@@ -13,13 +13,11 @@ export const sccmWorkspace: WorkspaceDefinition = {
   ),
   capabilities: {
     sidebar: false,
-    liveAcquisition: true,
     tabStrip: false,
     findBar: false,
     detailsPane: false,
     infoPane: false,
     footerBar: false,
-    multiFileDrop: false,
     fontSizing: false,
     knownSources: false,
   },
