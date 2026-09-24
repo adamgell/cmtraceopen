@@ -2,6 +2,10 @@ use super::models::{MacosPackageFiles, MacosPackageInfo, MacosPackagesResult};
 use regex::Regex;
 use std::sync::OnceLock;
 
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
 use crate::process_util::{
     run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
 };
