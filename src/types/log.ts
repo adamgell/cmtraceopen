@@ -245,6 +245,11 @@ export interface ParseResult {
   filePath: string;
   fileSize: number;
   byteOffset: number;
+  /**
+   * Last-modified time in milliseconds since the Unix epoch, or null when the
+   * platform could not supply one. Absent on responses from older backends.
+   */
+  modifiedUnixMs?: number | null;
 }
 
 export interface AggregateParsedFileResult {

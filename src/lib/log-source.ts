@@ -976,7 +976,11 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
       name: r.filePath.split(/[\\/]/).pop() ?? r.filePath,
       isDir: false,
       sizeBytes: r.fileSize,
-      modifiedUnixMs: 0,
+      // The parse reports the time it stat'ed for the size, so the lane shows a
+      // real time instead of a zero the renderer treats as absent. Null stays
+      // null: a platform that cannot supply a time must read as unknown rather
+      // than as epoch zero.
+      modifiedUnixMs: r.modifiedUnixMs ?? null,
     }));
 
     if (!isCurrentTabSwitch(loadGeneration)) return false;

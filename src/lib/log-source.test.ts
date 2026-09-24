@@ -1065,3 +1065,53 @@ describe("source loading progress ownership", () => {
     await expect(staleLoad).resolves.toBe(false);
   });
 });
+
+describe("multi-file modified time", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    useLogStore.getState().clear();
+    commands.stopTail.mockResolvedValue(undefined);
+  });
+
+  it("shows the time the parse reported instead of rendering every file as unknown", async () => {
+    // Two paths is what selects the aggregate lane; one path takes the
+    // single-file flow, which already had a real time.
+    const parsed: ParseResult = {
+      ...parseResult,
+      filePath: "C:\\Logs\\a.log",
+      modifiedUnixMs: 1_700_000_000_000,
+    };
+    const sibling: ParseResult = {
+      ...parseResult,
+      filePath: "C:\\Logs\\second.log",
+      modifiedUnixMs: 1_700_000_001_000,
+    };
+    commands.parseFilesBatch.mockResolvedValue([parsed, sibling]);
+
+    await loadFilesAsLogSource(["C:\\Logs\\a.log", "C:\\Logs\\second.log"]);
+
+    // The lane used to write 0 here, which the sidebar renders as "unavailable"
+    // for every file in a multi-file open.
+    expect(useLogStore.getState().sourceEntries[0].modifiedUnixMs).toBe(
+      1_700_000_000_000,
+    );
+  });
+
+  it("keeps an unknown time unknown rather than inventing epoch zero", async () => {
+    const parsed: ParseResult = {
+      ...parseResult,
+      filePath: "C:\\Logs\\b.log",
+      modifiedUnixMs: null,
+    };
+    const sibling: ParseResult = {
+      ...parseResult,
+      filePath: "C:\\Logs\\second.log",
+      modifiedUnixMs: null,
+    };
+    commands.parseFilesBatch.mockResolvedValue([parsed, sibling]);
+
+    await loadFilesAsLogSource(["C:\\Logs\\b.log", "C:\\Logs\\second.log"]);
+
+    expect(useLogStore.getState().sourceEntries[0].modifiedUnixMs).toBeNull();
+  });
+});

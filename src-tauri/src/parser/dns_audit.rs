@@ -105,6 +105,7 @@ pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
         file_path: path.to_string(),
         file_size,
         byte_offset: file_size,
+        modified_unix_ms: None,
     })
 }
 

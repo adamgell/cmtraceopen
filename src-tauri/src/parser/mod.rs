@@ -65,10 +65,20 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
     }
 
     let content = read_file_content(path)?;
-    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    Ok(cmtraceopen_parser::parser::parse_content(
-        &content, path, file_size,
-    ))
+    // One stat supplies both the size the parser is handed and the modified time
+    // the sidebar shows, so the two cannot describe different versions of a file.
+    let metadata = std::fs::metadata(path).ok();
+    let file_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let modified_unix_ms = metadata
+        .as_ref()
+        .and_then(crate::commands::file_ops::metadata_modified_unix_ms);
+    let (mut result, selection) =
+        cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    // The crate reads no metadata, so the time is filled in here rather than there.
+    // `None` stays `None`: a platform that cannot supply a time must show as
+    // unknown, not as epoch zero.
+    result.modified_unix_ms = modified_unix_ms;
+    Ok((result, selection))
 }
 
 /// Read file content, handling BOM and encoding fallback.

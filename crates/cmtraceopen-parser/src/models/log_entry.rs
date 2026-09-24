@@ -317,6 +317,12 @@ pub struct ParseResult {
     pub file_size: u64,
     /// Byte offset where parsing ended — used as the starting point for tailing
     pub byte_offset: u64,
+    /// Last-modified time of the file, in milliseconds since the Unix epoch.
+    ///
+    /// Supplied by the caller the same way `file_size` is: this crate reads no
+    /// metadata. `None` means the platform could not supply a time, which callers
+    /// must show as unknown rather than as epoch zero.
+    pub modified_unix_ms: Option<u64>,
 }
 
 /// A path-specific diagnostic returned when listing or parsing a source could not inspect a child.
