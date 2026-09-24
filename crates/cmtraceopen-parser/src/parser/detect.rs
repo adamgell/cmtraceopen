@@ -866,8 +866,8 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
 
     #[test]
     fn test_detect_reporting_events_from_path_and_content() {
-        let content = "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t1\t{22222222-2222-2222-2222-222222222222}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\tInstallation Successful: KB5034123\n\
-                        {33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456\t2\tSoftware Update\t3\t{44444444-4444-4444-4444-444444444444}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034441";
+        let content = "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00.123-0500\t1\t183\t[AGENT_INSTALLING_SUCCEEDED]\t101\t{22222222-2222-2222-2222-222222222222}\t1\t0\tWindows Update Agent\tSuccess\tContent Install\tInstallation Successful: KB5034123\tAAAAAAAAAAAAAAAA.1.0.0.3.0\n\
+                        {33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456-0500\t1\t162\t[AGENT_DOWNLOAD_FAILED]\t101\t{44444444-4444-4444-4444-444444444444}\t1\t80240022\tWindows Update Agent\tFailure\tContent Download\tDownload failed for KB5034441\tBBBBBBBBBBBBBBBB.1.0.0.5.1";
 
         let detected = detect_parser(
             "C:/Windows/SoftwareDistribution/ReportingEvents.log",
@@ -891,8 +891,8 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
 
     #[test]
     fn test_detect_reporting_events_from_content_without_path_hint() {
-        let content = "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t1\t{22222222-2222-2222-2222-222222222222}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\tInstallation Successful: KB5034123\n\
-                        {33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456\t2\tSoftware Update\t3\t{44444444-4444-4444-4444-444444444444}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034441";
+        let content = "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00.123-0500\t1\t183\t[AGENT_INSTALLING_SUCCEEDED]\t101\t{22222222-2222-2222-2222-222222222222}\t1\t0\tWindows Update Agent\tSuccess\tContent Install\tInstallation Successful: KB5034123\tAAAAAAAAAAAAAAAA.1.0.0.3.0\n\
+                        {33333333-3333-3333-3333-333333333333}\t2024-01-15 08:05:00:456-0500\t1\t162\t[AGENT_DOWNLOAD_FAILED]\t101\t{44444444-4444-4444-4444-444444444444}\t1\t80240022\tWindows Update Agent\tFailure\tContent Download\tDownload failed for KB5034441\tBBBBBBBBBBBBBBBB.1.0.0.5.1";
 
         let detected = detect_parser("C:/Temp/update-history.txt", content);
 

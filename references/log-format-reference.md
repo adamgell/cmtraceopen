@@ -526,24 +526,32 @@ YYYY-MM-DD HH:MM:SS, Error                 DPX    Failed to extract package. Err
 **Encoding**: ANSI / UTF-8
 **Rotation**: None. Grows until SoftwareDistribution folder is cleared.
 
+The Windows Update client's own transaction report: one tab-delimited record per
+scan, download, install, and report step, with the agent's own verdict and result
+code. It is the fastest way to see what Windows Update did and why.
+
 ### Line Format
 
 ```
-{<GUID>}	YYYY-MM-DD HH:MM:SS:mmm[+-]HHMM	<EventID>	<Category>	<Level>	<Agent>	<hr=0xNNNNNNNN>	<Message>
+{<RecordGUID>}	<timestamp><offset>	<Version>	<EventId>	[<EventName>]	<Session>	{<UpdateGUID>}	<Attempt>	<ResultCode>	<Provider>	<Status>	<Operation>	<Message>	<AgentToken>
 ```
 
-### Sample
+### Sample Lines
 
 ```
-{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}	2026-03-09 14:22:31:234+0500	1	182	101	{00000000-0000-0000-0000-000000000000}	0	0	AutomaticUpdates	Success	Content Install	Installation Successful: Windows successfully installed the following update: Security Update (KB5034441)
+{11111111-1111-1111-1111-111111111111}	2024-01-15 08:00:00.123-0500	1	183	[AGENT_INSTALLING_SUCCEEDED]	101	{22222222-2222-2222-2222-222222222222}	1	0	Windows Update Agent	Success	Content Install	Installation Successful: Windows successfully installed the following update: Security Update (KB5034123)	AAAAAAAAAAAAAAAA.1.0.0.3.0
+{33333333-3333-3333-3333-333333333333}	2024-01-15 08:05:00:456-0500	1	162	[AGENT_DOWNLOAD_FAILED]	101	{44444444-4444-4444-4444-444444444444}	1	80240022	Windows Update Agent	Failure	Content Download	Download failed for KB5034441	BBBBBBBBBBBBBBBB.1.0.0.5.1
 ```
 
 ### Parsing Notes
 
 - **Tab-delimited** (critical — not space-delimited).
-- **Fields**: GUID, Timestamp (with timezone offset), numeric EventID, numeric Category, numeric Level, Update GUID, HRESULT, additional numeric, Agent name, Status, Operation type, Message text.
-- **Timestamp includes timezone offset**: `+HHMM` or `-HHMM`.
-- Quick scan file — fastest way to see WU scan/download/install history with result codes.
+- **Fields**: record GUID, timestamp, format version, numeric event id, bracketed event name, session, update GUID, attempt, result code, provider, status, operation, message, opaque agent token.
+- **The trailing group varies in length.** `Operation`, `Message`, and the agent token are each optional, so a record can end after `Status`, carry only an operation, or carry the full tail. Everything after the status is therefore read from the end: drop a trailing agent token when it matches its shape, then treat the first remaining field as the operation and the rest as the message.
+- **Timestamp carries the writing machine's offset** (`-0500`, `+0530`, or `Z`) and uses `.` or `:` before the millisecond group — both appear inside one file. The offset is recorded on the entry (`timezoneOffset`) and the epoch is computed with it. A record without an offset is a zoneless wall clock and is resolved like CBS/DISM, never promoted to UTC.
+- **Result code is hexadecimal without the `0x` prefix**: `240005` is `0x00240005` (`WU_S_REBOOT_REQUIRED`), `80240022` is `0x80240022` (`WU_E_*`). A code with the HRESULT severity bit set is a failure; `WU_S_*` codes are completed operations, including a restart the operator still owes.
+- **Status is the agent's verdict** (`Success`, `Failure`, `Warning`, `Unknown`) and decides severity ahead of anything the message text suggests.
+- `[(null)]` / `(null)` mean the field is absent, not a literal name.
 - Parse by splitting on `\t`.
 
 ---

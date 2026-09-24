@@ -481,7 +481,7 @@ mod tests {
             None,
         );
         let lines = [
-            "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123\t1\tSoftware Update\t3\t{22222222-2222-2222-2222-222222222222}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034123",
+            "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00:123-0500\t1\t183\t[AGENT_INSTALLING_SUCCEEDED]\t101\t{22222222-2222-2222-2222-222222222222}\t1\t80240022\tWindows Update Agent\tFailure\tContent Install\tInstallation failed for KB5034123\tAAAAAAAAAAAAAAAA.1.0.0.3.0",
         ];
 
         let (entries, parse_errors) =
