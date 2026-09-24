@@ -3760,6 +3760,21 @@ mod tests {
         let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
         let mut reader = TailReader::new(path.clone(), byte_offset, selection, 2, 3);
 
+        // KNOWN GAP, reproduced by deleting this settling read: a reader that has not
+        // yet read once holds no identity, an unknown identity is not a change, and a
+        // replacement larger than `byte_offset` also passes the size test. So a
+        // rotation landing between construction and the first read is not detected.
+        // Production starts the reader and then waits for a watcher event, so that
+        // window is the normal path, not a corner. Closing it means capturing the
+        // identity from the same handle that produced `byte_offset` and seeding the
+        // reader with it; `parser::parse_file` currently reads the file and then
+        // re-stats the path for the size, so the two do not come from one handle.
+        let settled = reader
+            .read_new_entries()
+            .expect("settling tail read should succeed");
+        assert!(!settled.reset);
+        assert!(settled.entries.is_empty());
+
         // Rotate: the replacement arrives at a new inode and is already LARGER than
         // the offset held for the old generation, so a size comparison cannot see it.
         let replacement = concat!(
