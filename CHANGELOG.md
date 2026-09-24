@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Shareable capture bundles (#628)**: A live `dsregcmd /status` capture is now projected before it is handed over, so the copy carries the tenant id, tenant and on-premises domains, device id, certificate thumbprint, user principal name and user SID removed from every artifact — JSON artifacts as JSON rather than as serialized text, so an escaped value cannot survive the scrub. The projection reads artifacts through no-follow handles and writes exclusively, because the bundle is staged under the OS temp root with its path handed to the workspace, and a symlinked entry accepted by one check and skipped by the other reported success for a copy that did not contain the capture.
+
+
+### Added
+
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed
