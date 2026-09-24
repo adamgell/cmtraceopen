@@ -66,6 +66,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # This job links every test binary twice - `cargo test`, then
+      # `cargo test --no-default-features` - on top of the `src-tauri/target/`
+      # restored by the cache step below. `ld` has died with SIGBUS on it, which
+      # is what a memory-mapped write-back returns when the backing store will
+      # not take it: runner disk exhaustion rather than a compile error (#676).
+      # The failing run never uploaded a log, so the space is recorded before and
+      # after the reclaim rather than inferred later.
+      #
+      # Only toolchains this job does not use are removed. `/opt/hostedtoolcache`
+      # itself stays: rustup installs the toolchain there, and deleting it would
+      # break the build this step exists to protect.
+      - name: Reclaim runner disk
+        run: |
+          df -h / | tail -1
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
