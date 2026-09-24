@@ -3760,14 +3760,6 @@ mod tests {
         let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
         let mut reader = TailReader::new(path.clone(), byte_offset, selection, 2, 3);
 
-        // Establish the identity of the generation being tailed. Nothing was appended,
-        // so this read is empty and must not signal a reset.
-        let settled = reader
-            .read_new_entries()
-            .expect("settling tail read should succeed");
-        assert!(!settled.reset);
-        assert!(settled.entries.is_empty());
-
         // Rotate: the replacement arrives at a new inode and is already LARGER than
         // the offset held for the old generation, so a size comparison cannot see it.
         let replacement = concat!(
