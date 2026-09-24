@@ -1958,13 +1958,22 @@ mod tests {
         std::fs::create_dir_all(opaque.parent().expect("parent")).expect("create registry dir");
         let bytes = [0x00u8, 0x9F, 0x92, 0x01];
         std::fs::write(&opaque, bytes).expect("write opaque artifact");
+        let second = root
+            .join("evidence")
+            .join("registry")
+            .join("device-alpha.bin");
+        std::fs::write(&second, bytes).expect("write a second opaque artifact");
 
         let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
 
         assert_eq!(projection.projected_files, 2, "{projection:?}");
+        // Sorted: the filesystem's own order must not reach the caller.
         assert_eq!(
             projection.unprojected_files,
-            vec!["evidence/registry/device.bin".to_string()],
+            vec![
+                "evidence/registry/device-alpha.bin".to_string(),
+                "evidence/registry/device.bin".to_string()
+            ],
             "{projection:?}"
         );
 
