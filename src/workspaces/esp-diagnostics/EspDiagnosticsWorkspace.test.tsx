@@ -564,6 +564,72 @@ describe("ESP diagnostic cockpit frame", () => {
   });
 });
 
+describe("live acquisition capability", () => {
+  function mockCapability(capability: unknown) {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === "get_esp_elevation_state") {
+        return {
+          isElevated: true,
+          restartSupported: true,
+          restrictedSources: [],
+        };
+      }
+      if (command === "get_esp_diagnostics_capability") {
+        if (capability instanceof Error) throw capability;
+        return capability;
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+  }
+
+  it("takes the answer from the backend capability even when the platform disagrees", async () => {
+    useUiStore.setState({ currentPlatform: "macos" });
+    mockCapability({
+      offlineAnalysisSupported: true,
+      liveAcquisitionSupported: true,
+      liveAcquisitionDetail: null,
+    });
+
+    render(<EspDiagnosticsWorkspace />);
+
+    // The platform says no and the build says yes: the layer that probes owns it.
+    expect(
+      await screen.findByText(/Windows live acquisition is read-only/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Live acquisition requires Windows/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the backend's own reason when live acquisition is unavailable", async () => {
+    mockCapability({
+      offlineAnalysisSupported: true,
+      liveAcquisitionSupported: false,
+      liveAcquisitionDetail:
+        "Live ESP evidence acquisition is only supported on Windows",
+    });
+
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(
+      await screen.findByText(
+        /Live ESP evidence acquisition is only supported on Windows/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to local wording only when the probe does not answer", async () => {
+    useUiStore.setState({ currentPlatform: "macos" });
+    mockCapability(new Error("probe unavailable"));
+
+    render(<EspDiagnosticsWorkspace />);
+
+    expect(
+      await screen.findByText(/Live acquisition requires Windows/),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("optional Graph enrichment presentation", () => {
   function renderGraphPanel(
     snapshot: EspDiagnosticsSnapshot,
