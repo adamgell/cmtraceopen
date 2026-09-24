@@ -75,6 +75,16 @@ describe("parsePayloadData brace scanning", () => {
     expect(parsed.some((k) => k.includes("second"))).toBe(true);
   });
 
+  it("parses a single-line array value that is the last line of the payload", () => {
+    // The top-level path trims the outer braces, so this array's line is the
+    // last one and its block closes without a trailing newline. A reader that
+    // counts lines by the newline after the close consumed nothing and read the
+    // same line again.
+    const parsed = parsePayloadData('{ "Rules" = (1); }').entries;
+
+    expect(parsed.map((e) => e.key)).toEqual(["Rules"]);
+  });
+
   // Balanced braces inside a value were already harmless - the depth returns to
   // where it started - so this is the control that has to keep passing.
   it("reads a balanced brace placeholder as part of the value", () => {

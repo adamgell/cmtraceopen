@@ -267,16 +267,47 @@ export interface ParsedPayload {
 }
 
 /**
- * The index of the delimiter that closes the block opened at `openIndex`,
- * ignoring delimiters that sit inside a quoted value.
+ * A delimiter scanner that knows when it is inside a quoted value.
  *
- * A payload value can hold a brace: a template URL (`https://x/{0}/r`), a
- * regex, a filter expression. Counting one as structure ends the block early,
- * and every setting after it is dropped without a word — worse in a viewer than
- * a parse error, because the profile still looks complete.
- *
- * A backslash escape inside a quoted value (`\"`) is a character rather than
+ * A payload value can hold a brace or a paren: a template URL
+ * (`https://x/{0}/r`), a regex, a filter expression. Counting one as structure
+ * ends a block early and every setting after it is dropped without a word —
+ * worse in a viewer than a parse error, because the profile still looks
+ * complete. A backslash escape inside a value (`\"`) is a character rather than
  * the end of the value, so it cannot close the region either.
+ *
+ * One rule, used by both callers: one walks a whole string, the other walks the
+ * payload line by line.
+ */
+function delimiterScanner(open: string, close: string) {
+  let inQuote = false;
+  let escaped = false;
+  return (ch: string): "open" | "close" | null => {
+    if (escaped) {
+      escaped = false;
+      return null;
+    }
+    if (inQuote) {
+      if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inQuote = false;
+      }
+      return null;
+    }
+    if (ch === '"') {
+      inQuote = true;
+      return null;
+    }
+    if (ch === open) return "open";
+    if (ch === close) return "close";
+    return null;
+  };
+}
+
+/**
+ * The index of the delimiter that closes the block opened at `openIndex`, or
+ * null when the block never closes.
  */
 function findClosingDelimiter(
   text: string,
@@ -284,27 +315,13 @@ function findClosingDelimiter(
   open: string,
   close: string,
 ): number | null {
+  const scan = delimiterScanner(open, close);
   let depth = 0;
-  let inQuote = false;
   for (let i = openIndex; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuote) {
-      if (ch === "\\") {
-        i++;
-        continue;
-      }
-      if (ch === '"') {
-        inQuote = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inQuote = true;
-      continue;
-    }
-    if (ch === open) {
+    const kind = scan(text[i]);
+    if (kind === "open") {
       depth++;
-    } else if (ch === close) {
+    } else if (kind === "close") {
       depth--;
       if (depth === 0) {
         return i;
@@ -337,19 +354,28 @@ function collectBalancedBlock(
   open: string,
   close: string,
 ): { block: string; nextIdx: number } {
-  const text = lines.slice(startIdx).join("\n");
-  const openAt = text.indexOf(open);
-  const closeAt =
-    openAt === -1 ? null : findClosingDelimiter(text, openAt, open, close);
-  if (closeAt === null) {
-    // Unmatched, as before: the rest of the payload is the block.
-    return { block: text + "\n", nextIdx: lines.length };
+  const scan = delimiterScanner(open, close);
+  let depth = 0;
+  let block = "";
+  for (let j = startIdx; j < lines.length; j++) {
+    const line = lines[j];
+    for (let k = 0; k < line.length; k++) {
+      const kind = scan(line[k]);
+      if (kind === "open") {
+        depth++;
+      } else if (kind === "close") {
+        depth--;
+      }
+    }
+    block += line + "\n";
+    if (depth === 0) {
+      // Whole lines, always, so the caller never re-reads the line it just
+      // consumed - a block that closes on the last line has no trailing
+      // newline to count.
+      return { block, nextIdx: j + 1 };
+    }
   }
-
-  // Include the whole line the block closes on, and continue after it.
-  const lineEnd = text.indexOf("\n", closeAt);
-  const block = lineEnd === -1 ? text : text.slice(0, lineEnd + 1);
-  return { block, nextIdx: startIdx + block.split("\n").length - 1 };
+  return { block, nextIdx: lines.length };
 }
 
 /**
