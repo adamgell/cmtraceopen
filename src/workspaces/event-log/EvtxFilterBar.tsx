@@ -28,6 +28,7 @@ import { getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import {
   availableColumns,
+  discoverInsertionStrings,
   discoverMappedProperties,
   type EvtxColumnId,
 } from "./evtx-columns";
@@ -142,7 +143,11 @@ export function EvtxFilterBar({ nowEpoch }: EvtxFilterBarProps) {
   // Map columns are offered only when a loaded map actually produced them, so the chooser does not
   // fill with columns that are empty for the log in front of the operator.
   const choosableColumns = useMemo(
-    () => availableColumns(discoverMappedProperties(records)),
+    () =>
+      availableColumns(
+        discoverMappedProperties(records),
+        discoverInsertionStrings(records)
+      ),
     [records]
   );
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);

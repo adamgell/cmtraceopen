@@ -35,9 +35,40 @@ export type EvtxFixedColumnId =
  */
 export type EvtxMappedColumnId = `mapped:${string}`;
 
-export type EvtxColumnId = EvtxFixedColumnId | EvtxMappedColumnId;
+/**
+ * A column carrying one of the event's insertion strings, by position.
+ *
+ * FullEventLogView exposes these as `String 1..N`: the values an event carried, whatever the
+ * provider named them, so a record set with no map can still be read as a table. Positional rather
+ * than named on purpose -- a named column needs a map, and the events a map does not cover are
+ * exactly the ones an operator needs to see the values for.
+ */
+export type EvtxStringColumnId = `string:${number}`;
+
+export type EvtxColumnId =
+  | EvtxFixedColumnId
+  | EvtxMappedColumnId
+  | EvtxStringColumnId;
 
 const MAPPED_PREFIX = "mapped:";
+const STRING_PREFIX = "string:";
+
+/** How many insertion-string columns are ever offered. */
+export const MAX_INSERTION_STRING_COLUMNS = 10;
+
+/** The column id carrying the event's `position`th insertion string, counting from one. */
+export function stringColumnId(position: number): EvtxStringColumnId {
+  return `${STRING_PREFIX}${position}`;
+}
+
+/** The position behind a column id, or null when the column is not an insertion string. */
+export function stringColumnPosition(id: string): number | null {
+  if (!id.startsWith(STRING_PREFIX)) return null;
+  const position = Number(id.slice(STRING_PREFIX.length));
+  if (!Number.isInteger(position)) return null;
+  if (position < 1 || position > MAX_INSERTION_STRING_COLUMNS) return null;
+  return position;
+}
 
 /** The column id carrying an event map's `property`. */
 export function mappedColumnId(property: string): EvtxMappedColumnId {
@@ -79,14 +110,47 @@ function mappedColumnSpec(id: EvtxMappedColumnId): EvtxColumnSpec {
 }
 
 /**
- * Every column offerable for the loaded records: the fixed ones, then whatever the maps produced.
+ * How many insertion strings the loaded records have values for, capped.
+ *
+ * A record set where one event carries twelve values and the rest carry two would otherwise offer
+ * ten columns that are empty for almost every row.
+ */
+export function discoverInsertionStrings(records: readonly EvtxRecord[]): number {
+  let widest = 0;
+  for (const record of records) {
+    if (record.eventData.length > widest) widest = record.eventData.length;
+  }
+  return Math.min(widest, MAX_INSERTION_STRING_COLUMNS);
+}
+
+/** A renderable spec for an insertion-string column, derived from its id alone. */
+function stringColumnSpec(id: EvtxStringColumnId): EvtxColumnSpec {
+  return {
+    id,
+    label: `String ${stringColumnPosition(id) ?? 1}`,
+    defaultWidth: 140,
+    defaultVisible: false,
+  };
+}
+
+/**
+ * Every column offerable for the loaded records: the fixed ones, then whatever the maps produced,
+ * then the insertion strings the records turned out to carry.
  */
 export function availableColumns(
-  mappedProperties: readonly string[]
+  mappedProperties: readonly string[],
+  insertionStrings = 0
 ): EvtxColumnSpec[] {
+  const count = Math.max(
+    0,
+    Math.min(Math.trunc(insertionStrings), MAX_INSERTION_STRING_COLUMNS)
+  );
   return [
     ...EVTX_COLUMNS,
     ...mappedProperties.map((property) => mappedColumnSpec(mappedColumnId(property))),
+    ...Array.from({ length: Number.isFinite(count) ? count : 0 }, (_, index) =>
+      stringColumnSpec(stringColumnId(index + 1))
+    ),
   ];
 }
 
@@ -139,6 +203,7 @@ const FIXED_COLUMNS_BY_ID = new Map<string, EvtxColumnSpec>(
  */
 function isKnownColumnId(candidate: string): boolean {
   if (COLUMN_IDS.has(candidate)) return true;
+  if (stringColumnPosition(candidate) !== null) return true;
   const property = mappedColumnProperty(candidate);
   return property !== null && property.length > 0;
 }
@@ -204,8 +269,12 @@ export function visibleColumns(config: EvtxColumnConfig): EvtxColumnSpec[] {
     .map((id) => {
       const fixed = FIXED_COLUMNS_BY_ID.get(id);
       if (fixed) return fixed;
-      // Synthesized from the id, so rendering a map column needs no knowledge of which maps are
-      // loaded. That keeps the row renderer independent of load order.
+      // Synthesized from the id, so rendering a map or insertion-string column needs no knowledge
+      // of which maps are loaded or how wide the records were. That keeps the row renderer
+      // independent of load order.
+      if (stringColumnPosition(id) !== null) {
+        return stringColumnSpec(id as EvtxStringColumnId);
+      }
       return mappedColumnProperty(id) ? mappedColumnSpec(id as EvtxMappedColumnId) : undefined;
     })
     .filter((column): column is EvtxColumnSpec => column !== undefined);
@@ -254,6 +323,13 @@ export function columnValue(
   id: EvtxColumnId,
   timeZone: EvtxTimeZoneMode = "local"
 ): string {
+  const stringPosition = stringColumnPosition(id);
+  if (stringPosition !== null) {
+    // Positional: the value the event carried at that place, whatever the provider named it. A
+    // record with fewer values renders empty rather than shifting later ones up, so column N means
+    // the same thing on every row.
+    return record.eventData[stringPosition - 1]?.value ?? "";
+  }
   const mappedProperty = mappedColumnProperty(id);
   if (mappedProperty !== null) {
     const column = record.mapped?.find((entry) => entry.property === mappedProperty);
