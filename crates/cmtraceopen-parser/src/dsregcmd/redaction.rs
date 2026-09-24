@@ -372,19 +372,6 @@ pub fn redacted_status_text(input: &str) -> String {
     .text(input)
 }
 
-/// Project one artifact of a capture bundle for sharing.
-///
-/// A bundle keeps its artifacts as captured -- the analyzer reads them back, and
-/// masking where they are stored changes what its rules conclude -- so the
-/// projection belongs at the hand-off, on the way out. This is that projection.
-/// The capture classifies the identities, and the artifact loses what the shared
-/// grammar recognizes by shape and then the literals the same capture named, in
-/// that order, so a tenant domain is not scrubbed out of a principal name before
-/// the mail-address rule has seen it.
-pub fn redacted_capture_artifact(capture: &str, artifact: &str) -> String {
-    CaptureLiterals::from_capture(capture).scrub(artifact)
-}
-
 /// The kind of identity a literal is, which decides the token it reaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityKind {
@@ -1151,7 +1138,7 @@ mod tests {
         let capture = " DomainName : contoso.example\n";
         let artifact = r#"{"tenantDomain":"tenant.example.invalid","deviceId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#;
 
-        let alone = super::redacted_capture_artifact(capture, artifact);
+        let alone = super::CaptureLiterals::from_capture(capture).scrub(artifact);
 
         let mut literals = super::CaptureLiterals::from_capture(capture);
         literals.add("tenant.example.invalid", super::IdentityKind::Tenant);
@@ -1189,7 +1176,7 @@ mod tests {
         let capture = " TenantName : Contoso Ltd\n DomainName : contoso.example\n TenantId : 11111111-2222-3333-4444-555555555555\n DeviceId : aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n";
         let artifact = r#"{"domain":"contoso.example","deviceId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","tenant":"11111111-2222-3333-4444-555555555555"}"#;
 
-        let projected = super::redacted_capture_artifact(capture, artifact);
+        let projected = super::CaptureLiterals::from_capture(capture).scrub(artifact);
 
         assert!(!projected.contains("contoso.example"), "{projected}");
         assert!(
