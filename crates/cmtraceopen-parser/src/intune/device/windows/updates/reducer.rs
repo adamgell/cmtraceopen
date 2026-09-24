@@ -583,8 +583,16 @@ fn device_level_signals(unkeyed: &[UpdateObservation]) -> DeviceSignals {
         signals.client_evidence_present = true;
         let reference = observation.context.evidence_ref.clone();
         match (observation.phase, observation.outcome) {
+            // Last rather than worst, the rule the transaction design already
+            // uses: event 25 is unkeyed and often transient, and a later
+            // successful scan is the device's scan health, so it clears an
+            // earlier failure instead of leaving the chain at `ScanFailed`
+            // beside a finding that cites a successful install.
             (UpdatePhase::Scan, UpdateOutcome::Failed) => {
-                signals.scan_failed.get_or_insert(reference);
+                signals.scan_failed = Some(reference);
+            }
+            (UpdatePhase::Scan, UpdateOutcome::Succeeded) => {
+                signals.scan_failed = None;
             }
             (UpdatePhase::Applicability, UpdateOutcome::NotApplicable)
             | (UpdatePhase::Scan, UpdateOutcome::NotApplicable) => {
@@ -964,5 +972,76 @@ mod sources_agree_tests {
             &UpdateSource::MicrosoftStore
         ));
         assert!(sources_agree(&UpdateSource::Wsus, &UpdateSource::Wsus));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One unkeyed device reading, built from the context a fixture carries.
+    ///
+    /// The shape is copied from the corpus rather than invented, so a change to
+    /// the observation context shows up here as a deserialization failure.
+    const CONTEXT: &str = r#"{"evidenceRef":{"evidenceId":"{evidence_id}","sourceArtifactId":"wu-client-events"},"provenance":{"sourceKind":"eventLog","sourceArtifactId":"wu-client-events","filePath":null,"lineNumber":null,"recordNumber":201,"registry":null,"event":{"channel":"Microsoft-Windows-WindowsUpdateClient/Operational","provider":"Microsoft-Windows-WindowsUpdateClient","eventId":25,"recordId":201}},"sourceTimestamp":{"rawText":"2026-07-31T01:00:00Z","originalOffset":null,"normalizedUtc":"2026-07-31T01:00:00Z","kind":"utc"},"observedAtUtc":"2026-07-31T03:00:00Z","sensitivity":"public","parseState":"parsed","accessState":"available"}"#;
+
+    fn reading(phase: &str, outcome: &str, evidence_id: &str) -> UpdateObservation {
+        let context: IntuneObservationContext =
+            serde_json::from_str(&CONTEXT.replace("{evidence_id}", evidence_id))
+                .expect("the corpus context deserializes");
+        UpdateObservation {
+            context,
+            phase: match phase {
+                "scan" => UpdatePhase::Scan,
+                other => panic!("unknown phase {other}"),
+            },
+            outcome: match outcome {
+                "failed" => UpdateOutcome::Failed,
+                "succeeded" => UpdateOutcome::Succeeded,
+                other => panic!("unknown outcome {other}"),
+            },
+            key: UpdateKey::default(),
+            error: None,
+            activity_id: None,
+            event_id: None,
+            source: None,
+            title: None,
+            supplemental: None,
+            named_data: Vec::new(),
+        }
+    }
+
+    /// A later successful scan clears an earlier failure.
+    ///
+    /// Event 25 is unkeyed and often transient, and the transaction design reads
+    /// last rather than worst, so a device-level reading has to do the same: the
+    /// readings are already in canonical time order. Keeping the first failure
+    /// left the chain at `ScanFailed` beside a finding that cited a successful
+    /// install.
+    #[test]
+    fn a_later_successful_scan_clears_an_earlier_failure() {
+        let signals = device_level_signals(&[
+            reading("scan", "failed", "wu-25"),
+            reading("scan", "succeeded", "wu-26"),
+        ]);
+
+        assert_eq!(
+            signals.scan_failed, None,
+            "the later success is the device's scan health"
+        );
+    }
+
+    /// A failure after a success is still a failure.
+    #[test]
+    fn a_failure_after_a_success_is_still_a_failure() {
+        let signals = device_level_signals(&[
+            reading("scan", "succeeded", "wu-26"),
+            reading("scan", "failed", "wu-25"),
+        ]);
+
+        assert!(
+            signals.scan_failed.is_some(),
+            "the last reading is the device's scan health"
+        );
     }
 }
