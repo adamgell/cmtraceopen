@@ -1254,9 +1254,12 @@ mod tests {
 
         let scrubbed = literals.scrub("seen at [host:DEADBEEFDEADBEEF] here");
 
+        // A case-sensitive `contains("dead")` passed on "DEADBEEF" without the
+        // span ever being scrubbed: the assertion has to look for what would
+        // survive, in the spelling it would survive in.
         assert!(
-            !scrubbed.contains("dead"),
-            "capitalised hex is not the grammar's spelling: {scrubbed}"
+            !scrubbed.to_ascii_lowercase().contains("deadbeefdeadbeef"),
+            "a span the grammar would not mint must not shield its contents: {scrubbed}"
         );
     }
 
