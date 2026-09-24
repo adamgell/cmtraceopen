@@ -21,7 +21,7 @@ Durable facts about `adamgell/cmtraceopen`. These are loaded into every turn whe
 - **Editions:** Full (all features) and Lite (log viewer only)
 - **License:** MIT (PR #384 merged at `a686daef` with provenance visible, CodeRabbit clean)
 - **Distribution:** MSIs/NSIS (Windows), DMG (macOS arm64), .deb/.AppImage (Linux) + Homebrew cask + Scoop bucket
-- **Main HEAD:** `a9a67422` as of 2026-08-03
+- **Main HEAD:** `1967a0a1` as of 2026-09-24
 
 ## Architecture Overview
 
@@ -52,16 +52,23 @@ npx tsc --noEmit                # TypeScript check
 
 CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tauri build on macOS-arm64, Windows-x64, Linux-x64.
 
-## Verified Checkpoints
+## Checkpoints — closed as implementation history
 
 All SHAs are from Adam's PM charter (`~/.hermes/cmtrace-pm-charter.md`). Reverify with `git ls-remote` before acting.
 
-| Issue | Branch SHA | State | Blockers |
+These four checkpoints were **closed in August 2026** as records of implemented work. The blockers
+listed against them at the time were not resolved; they were scoped out of the checkpoints. Do not
+treat a row here as a live lane awaiting an unblock.
+
+| Issue | Reviewed head | Closed | What closure means |
 |---|---|---|---|
-| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | 6/6 focused pass | coverage_complete ignores incomplete-fragment gaps; workflow field uses broad SccmClientWorkflow — NOT merge-ready |
-| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | P1 open | Semantic admission accepts 5.00.TEST.0002 but profile must be exactly 5.00.TEST.0001 — needs red regression, hold PR until clean |
-| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | TDD red 6/2 → green 8/0 | Full gate pending: intake, SUP fixture, spine, full parser, Clippy, wasm32, TS, fmt, diff + CodeRabbit + independent review |
-| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | Store 39/39, hook 7/7, tail 29/29 | Findings: observedThroughLine must dominate entry+amendment ranges; amendment start/span bounds; runtime validation for optional LogEntry fields |
+| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | 2026-08-05 | Published as a projection over synthetic manifests. The closing note says "intentionally not merge-ready" and claims no native Windows acceptance. |
+| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | 2026-08-05 | Closed with a draft PR blocked on SUP #473, which was never restacked. |
+| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | 2026-08-05 | Closed with a draft integration PR against the SCCM integration branch. |
+| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | 2026-08-08 | Closed as implementation history. The closeout note states that closure is not final epic acceptance evidence. |
+
+**The standing gap is native Windows acceptance**, which none of these claims. Every green gate in this
+repository is a Linux/macOS or synthetic-manifest result until someone runs the build on the Setup-CM lab.
 
 ## Recovery Branches (Evidence Only)
 
