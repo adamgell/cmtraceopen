@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **Linux Rust CI job**: `Check & Test (Rust)` failed while linking, with `ld` terminated by signal 7 (SIGBUS), on three runs in one day — two merges to `main` and a pull request — killing a different test binary each time and never reaching the parser-crate or audit steps. SIGBUS from `ld` is a memory-mapped write failing on a full backing store, and the job links several large test binaries after a cold build. The job now reclaims the runner's preinstalled SDKs and toolchains first, none of which it uses, and prints `df -h /` so a recurrence carries the disk state.
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 
