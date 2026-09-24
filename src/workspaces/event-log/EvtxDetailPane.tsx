@@ -76,29 +76,37 @@ function DetectedErrorCodes({
   labelFontSize: number;
   monoFontSize: number;
 }) {
-  const [codes, setCodes] = useState<DetectedErrorCode[]>([]);
+  // The result is stored with the text it was computed from. A record change
+  // re-renders this component with the new text before the effect runs, so
+  // rendering bare `codes` would show the previous record's codes for a frame --
+  // and keep showing them if the new lookup never resolves.
+  const [result, setResult] = useState<{ text: string; codes: DetectedErrorCode[] }>({
+    text: "",
+    codes: [],
+  });
 
   useEffect(() => {
     if (!text.trim()) {
-      setCodes([]);
+      setResult({ text, codes: [] });
       return;
     }
     let cancelled = false;
     invoke<DetectedErrorCode[]>("detect_error_codes", { text })
       .then((found) => {
-        if (!cancelled) setCodes(detectedCodes(found));
+        if (!cancelled) setResult({ text, codes: detectedCodes(found) });
       })
       .catch(() => {
         // A failed lookup is not evidence that the record carried no code, so
         // the pane stays silent rather than claiming there was none.
-        if (!cancelled) setCodes([]);
+        if (!cancelled) setResult({ text, codes: [] });
       });
     return () => {
       cancelled = true;
     };
   }, [text]);
 
-  if (codes.length === 0) {
+  // Only the result belonging to the text on screen is rendered.
+  if (result.text !== text || result.codes.length === 0) {
     return null;
   }
 
@@ -123,7 +131,7 @@ function DetectedErrorCodes({
           fontFamily: LOG_MONOSPACE_FONT_FAMILY,
         }}
       >
-        {codes.map((code) => (
+        {result.codes.map((code) => (
           <li key={`${code.start}-${code.codeHex}`}>
             <strong>{code.codeHex}</strong> — {code.description}
             {code.category ? ` (${code.category})` : ""}

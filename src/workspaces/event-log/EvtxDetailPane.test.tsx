@@ -122,6 +122,41 @@ describe("EvtxDetailPane error code enrichment", () => {
     expect(screen.queryByText(/Error Codes/i)).toBeNull();
   });
 
+  it("does not show the previous record's codes after the selection changes", async () => {
+    const code = {
+      start: 0,
+      end: 10,
+      codeHex: "0x80070005",
+      codeDecimal: "2147942405",
+      description: "Access is denied",
+      category: "System",
+    };
+    invoke.mockImplementation((command: string, args?: { text?: string }) => {
+      if (command !== "detect_error_codes") {
+        return Promise.resolve(null);
+      }
+      // The first record resolves with a code; the second never does, which is
+      // the case that used to keep the previous record's codes on screen.
+      return args?.text?.includes("first") ? Promise.resolve([code]) : new Promise(() => {});
+    });
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message: "first record 0x80070005" }],
+      selectedRecordId: 1,
+    });
+
+    render(<EvtxDetailPane />);
+    await screen.findByText(/Error Codes/i);
+
+    useEvtxStore.setState({
+      records: [
+        { ...RECORD, id: 2, message: "second record" },
+      ],
+      selectedRecordId: 2,
+    });
+
+    await waitFor(() => expect(screen.queryByText(/Error Codes/i)).toBeNull());
+  });
+
   it("ignores entries that do not carry what the pane renders", async () => {
     // An IPC payload is untrusted: a null entry would be read as `entry.start`
     // during render and throw, so entries missing the fields are discarded.
