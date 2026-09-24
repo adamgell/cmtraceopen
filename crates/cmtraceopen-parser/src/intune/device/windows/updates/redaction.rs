@@ -160,15 +160,25 @@ fn mask_unknown_service_state(state: &mut Option<ServiceReportedState>) {
     }
 }
 
-/// Mask an error token that did not read as a code.
+/// Mask an error token that is not the code's own rendering.
 ///
-/// A code keeps its place and its value: `0x80240017` is diagnostic grammar. A
-/// token the reader could not parse as a code is text from the capture, and it
-/// is masked rather than published on the strength of sitting in an `error`
-/// field.
+/// A readable code keeps its place and its value: `0x80240017` is diagnostic
+/// grammar. The `raw` field is kept only when it *is* that code's rendering in
+/// one of the forms this build produces. Anything else in it -- including a
+/// string sitting next to a perfectly readable decimal -- is text from the
+/// capture, and it is masked rather than published on the strength of the field
+/// it occupies.
 fn mask_unreadable_error(error: &mut Option<IntuneErrorCode>) {
     if let Some(code) = error {
-        if code.decimal.is_none() && code.hex.is_none() {
+        let raw = code.raw.trim();
+        let renders_this_code = code
+            .hex
+            .as_deref()
+            .is_some_and(|hex| raw.eq_ignore_ascii_case(hex))
+            || code
+                .decimal
+                .is_some_and(|decimal| raw == decimal.to_string());
+        if !renders_this_code {
             code.raw = REDACTED.to_owned();
         }
     }

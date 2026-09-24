@@ -28,10 +28,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::updates::{
-    analyze_update_bundle, redacted_export_projection, PolicyChainState, SupplementalLogKind,
-    UpdateChainState, UpdateEvidenceBundle, UpdateSnapshot, UpdateSource, UpdateSupplementalLog,
-    UpdateWorkloadOwner, EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED,
-    UPDATE_FINDING_PREFIX,
+    analyze_update_bundle, derive_findings, redacted_export_projection, PolicyChainState,
+    PolicySignal, SupplementalLogKind, UpdateChainState, UpdateEvidenceBundle, UpdateSnapshot,
+    UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner, EVIDENCE_FINDING_PREFIX,
+    POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
@@ -1075,6 +1075,13 @@ fn identity_in_caller_supplied_text_does_not_survive_the_export() {
         decimal: None,
         hex: None,
     });
+    // An identity can also ride along a perfectly readable code: the raw text is
+    // kept only when it is that code's own rendering.
+    snapshot.update_chain.transactions[0].error = Some(IntuneErrorCode {
+        raw: upn.to_owned(),
+        decimal: Some(0),
+        hex: Some("0x00000000".to_owned()),
+    });
 
     let raw = serde_json::to_string(&snapshot).expect("snapshot serializes");
     assert!(
@@ -1092,6 +1099,45 @@ fn identity_in_caller_supplied_text_does_not_survive_the_export() {
     assert!(
         !exported.contains(tenant),
         "a value this leaf did not recognize as a vocabulary term survived the export"
+    );
+}
+
+/// Prose is scrubbed, not masked, so a finding must not republish a value the
+/// export masks in its field: an unreadable token is named as unreadable.
+#[test]
+fn a_finding_summary_never_echoes_an_unreadable_token() {
+    let scenario = "csp-policy-delivery-failure";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));
+
+    let planted = "identity-string.example.invalid";
+    let observation = snapshot
+        .policy_chain
+        .observations
+        .iter_mut()
+        .find(|observation| observation.signal == PolicySignal::DeliveryFailed)
+        .expect("this scenario reports a policy delivery failure");
+    observation.error = Some(IntuneErrorCode {
+        raw: planted.to_owned(),
+        decimal: None,
+        hex: None,
+    });
+
+    snapshot.findings = derive_findings(&snapshot);
+    let prose = snapshot
+        .findings
+        .iter()
+        .map(|finding| finding.summary.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        prose.contains("could not read"),
+        "the finding still names the failure: {prose}"
+    );
+    assert!(
+        !prose.contains(planted),
+        "a summary echoed a token the export masks: {prose}"
     );
 }
 

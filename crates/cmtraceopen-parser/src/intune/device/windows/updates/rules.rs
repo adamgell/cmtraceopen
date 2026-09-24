@@ -162,18 +162,37 @@ fn policy_coverage_gap_ids(snapshot: &UpdateSnapshot) -> Vec<String> {
 }
 
 /// Render an error code for a summary, preferring the hex form an administrator
-/// will recognize.
+/// recognizes.
+///
+/// A token this build could not read as a code is *named as unreadable*, never
+/// echoed. The text in that field is unvalidated capture content, and the export
+/// can only scrub prose rather than mask it, so echoing it would republish
+/// exactly what masking the field removes.
 fn error_text(error: Option<&crate::intune::evidence::IntuneErrorCode>) -> String {
     match error {
-        Some(code) => format!(
-            " ({})",
-            code.hex.clone().unwrap_or_else(|| code.raw.clone())
-        ),
+        Some(code) => {
+            let canonical = code
+                .hex
+                .clone()
+                .or_else(|| code.decimal.map(|value| value.to_string()));
+            match canonical {
+                Some(value) => format!(" ({value})"),
+                None => " (an error code this analysis could not read)".to_owned(),
+            }
+        }
         None => String::new(),
     }
 }
 
+/// Render an update source for a summary.
+///
+/// An unrecognized vocabulary value is reported as unrecognized: it is capture
+/// text sitting in a field that expects one of a known few, and prose is only
+/// scrubbed, not masked.
 fn source_text(source: &UpdateSource) -> String {
+    if matches!(source, UpdateSource::Unknown(_)) {
+        return "an unrecognized update source".to_owned();
+    }
     serde_json::to_value(source)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -705,7 +724,14 @@ fn push_reporting_mismatch(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneF
     }
 }
 
+/// Render a service-reported state for a summary.
+///
+/// Same rule as [`source_text`]: an unrecognized vocabulary value is reported as
+/// unrecognized rather than echoed into prose.
 fn source_text_for_service(state: &ServiceReportedState) -> String {
+    if matches!(state, ServiceReportedState::Unknown(_)) {
+        return "an unrecognized service state".to_owned();
+    }
     serde_json::to_value(state)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
