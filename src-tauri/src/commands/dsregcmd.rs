@@ -148,7 +148,7 @@ pub fn redact_dsregcmd_status_text(input: String) -> String {
 /// A count is what makes a responsiveness assertion about *the moment*: a task
 /// created during one stage has to complete before the next begins, which a thread
 /// asleep inside a stage cannot allow.
-#[cfg(debug_assertions)]
+#[cfg(test)]
 static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -157,25 +157,24 @@ static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
 /// A sleep models slow storage but not *observable* slow storage: a test inside the
 /// same runtime cannot ask anything while the thread is asleep in it. A gate lets the
 /// assertion happen while the stage is still running.
-#[cfg(debug_assertions)]
+#[cfg(test)]
 static SIMULATED_BUNDLE_IO_GATE: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>> =
     std::sync::Mutex::new(None);
 
 /// Read by the responsiveness test, so they exist for tests only.
-#[cfg(all(debug_assertions, test))]
+#[cfg(test)]
 fn simulated_bundle_io_stages_entered() -> usize {
     SIMULATED_BUNDLE_IO_STAGES.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Hold the next simulated stage until the returned sender fires.
-#[cfg(all(debug_assertions, test))]
+#[cfg(test)]
 fn hold_next_simulated_bundle_io_stage() -> std::sync::mpsc::Sender<()> {
     let (release, hold) = std::sync::mpsc::channel();
     *SIMULATED_BUNDLE_IO_GATE.lock().expect("lock the gate") = Some(hold);
     release
 }
 
-#[cfg(debug_assertions)]
 fn simulate_bundle_io_delay(stage: &str) {
     let delay_ms = std::env::var("CMTRACE_SIMULATE_BUNDLE_IO_MS")
         .ok()
@@ -189,15 +188,20 @@ fn simulate_bundle_io_delay(stage: &str) {
     // A test synchronization point: a stage being *in progress* is the moment the
     // assertion about responsiveness is about, and a counter is the smallest way to
     // observe it from outside.
-    SIMULATED_BUNDLE_IO_STAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(test)]
+    {
+        SIMULATED_BUNDLE_IO_STAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-    // A held stage waits for the test rather than for the clock.
-    let held = SIMULATED_BUNDLE_IO_GATE
-        .lock()
-        .ok()
-        .and_then(|mut gate| gate.take());
-    if let Some(hold) = held {
-        let _ = hold.recv();
+        // A held stage waits for the test rather than for the clock. Taken under the
+        // env guard, which every bundle analysis in this module holds, so the stage a
+        // test gates is the stage its own analysis entered.
+        let held = SIMULATED_BUNDLE_IO_GATE
+            .lock()
+            .ok()
+            .and_then(|mut gate| gate.take());
+        if let Some(hold) = held {
+            let _ = hold.recv();
+        }
     }
 
     log::debug!(
@@ -207,10 +211,6 @@ fn simulate_bundle_io_delay(stage: &str) {
     );
     std::thread::sleep(Duration::from_millis(delay_ms));
 }
-
-#[cfg(not(debug_assertions))]
-#[inline(always)]
-fn simulate_bundle_io_delay(_stage: &str) {}
 
 fn load_active_evidence_from_bundle(
     bundle_path: &Path,
@@ -1574,6 +1574,9 @@ mod tests {
     }
     #[test]
     fn network_issue_and_endpoint_unreachable_both_fire() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
         use super::analyze_dsregcmd;
 
         let temp_dir = tempfile::tempdir().expect("create temp dir");
