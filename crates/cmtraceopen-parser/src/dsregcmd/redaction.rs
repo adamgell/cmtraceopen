@@ -191,7 +191,7 @@ fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
                     colon = Some(index + 1 + offset);
                     break;
                 }
-                byte if byte.is_ascii_lowercase() || byte == b'_' => {}
+                byte if byte.is_ascii_lowercase() => {}
                 _ => break,
             }
         }
@@ -201,7 +201,11 @@ fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
         };
         let body_start = colon + 1;
         let body_end = body_start + TOKEN_BODY_BYTES;
-        let is_token = body_end < bytes.len()
+        // The shared grammar mints a nonempty lowercase-letter kind, and this
+        // scanner has to agree exactly: a wider spelling let `[_:deadbeef…]`
+        // shield a classified identifier from the scrub.
+        let is_token = colon > index + 1
+            && body_end < bytes.len()
             && bytes[body_end] == b']'
             && bytes[body_start..body_end]
                 .iter()
@@ -1238,6 +1242,25 @@ mod tests {
 
     /// A classified value that is also a token's kind word cannot edit a token.
     ///
+    /// A bracketed span the shared grammar would not mint is not a token.
+    ///
+    /// The grammar mints `[kind:hex]` with a nonempty lowercase-letter kind, and
+    /// this scanner has to agree exactly: accepting a wider spelling let text
+    /// such as `[_:deadbeefdeadbeef]` shield a classified identifier from the
+    /// scrub, which is a leak rather than a formatting question.
+    #[test]
+    fn a_span_the_grammar_would_not_mint_is_scrubbed() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("dead", KIND_HOST);
+
+        let scrubbed = literals.scrub("seen at [_:deadbeefdeadbeef] here");
+
+        assert!(
+            !scrubbed.contains("dead"),
+            "a spelling the grammar would not mint is not a token: {scrubbed}"
+        );
+    }
+
     /// Many `[` characters with no colon are walked once, not rescanned.
     ///
     /// The scan is bounded and only moves forward, so a field of brackets costs a
