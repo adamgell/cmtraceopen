@@ -224,7 +224,7 @@ fn redact_named(values: &[IntuneNamedValue]) -> Vec<IntuneNamedValue> {
         .iter()
         .map(|entry| IntuneNamedValue {
             name: entry.name.clone(),
-            value: if is_public_named_value(&entry.name) {
+            value: if is_public_named_value(&entry.name, &entry.value) {
                 entry.value.clone()
             } else {
                 REDACTED.to_owned()
@@ -235,17 +235,55 @@ fn redact_named(values: &[IntuneNamedValue]) -> Vec<IntuneNamedValue> {
 
 /// Named values whose content is a Microsoft-defined identifier rather than
 /// tenant data, and which are therefore safe to export verbatim.
-fn is_public_named_value(name: &str) -> bool {
-    const PUBLIC: [&str; 5] = [
-        super::sources::NAMED_UPDATE_GUID,
-        super::sources::NAMED_UPDATE_REVISION,
-        super::sources::NAMED_ERROR_CODE,
-        super::sources::NAMED_SERVICE_GUID,
-        super::sources::NAMED_UPDATE_COUNT,
-    ];
-    PUBLIC
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+/// Whether a named value may be exported verbatim.
+///
+/// The name alone cannot decide it. These values come from the capture, so a
+/// record may carry `errorCode = "jdoe@contoso.com"` under a public name, and
+/// copying that because of the name publishes an identity the field was never
+/// meant to hold. Each public name states a shape, and a value without it is
+/// masked exactly like [`mask_unreadable_error`] masks an unreadable code.
+fn is_public_named_value(name: &str, value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        // Nothing to publish is nothing to leak.
+        return true;
+    }
+    if name.eq_ignore_ascii_case(super::sources::NAMED_UPDATE_GUID)
+        || name.eq_ignore_ascii_case(super::sources::NAMED_SERVICE_GUID)
+    {
+        return reads_as_guid(value);
+    }
+    if name.eq_ignore_ascii_case(super::sources::NAMED_UPDATE_REVISION)
+        || name.eq_ignore_ascii_case(super::sources::NAMED_UPDATE_COUNT)
+    {
+        return value.parse::<u32>().is_ok();
+    }
+    if name.eq_ignore_ascii_case(super::sources::NAMED_ERROR_CODE) {
+        return reads_as_error_code(value);
+    }
+    false
+}
+
+/// Whether a value reads as a GUID, in either of the spellings Windows uses.
+fn reads_as_guid(value: &str) -> bool {
+    let trimmed = value.trim_matches(|character| character == '{' || character == '}');
+    let groups: Vec<&str> = trimmed.split('-').collect();
+    let widths = [8, 4, 4, 4, 12];
+    groups.len() == widths.len()
+        && groups.iter().zip(widths).all(|(group, width)| {
+            group.len() == width && group.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
+/// Whether a value reads as an error code: a hex literal or a decimal number.
+fn reads_as_error_code(value: &str) -> bool {
+    match value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        Some(hex) => !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        None => value.bytes().all(|byte| byte.is_ascii_digit()),
+    }
 }
 
 /// Whether a context is classified as safe to export without redaction.
@@ -283,6 +321,34 @@ mod tests {
             parse_state: IntuneParseState::Parsed,
             access_state: IntuneAccessState::Available,
         }
+    }
+
+    /// The reviewer's trigger: a public name is not a promise about the value.
+    #[test]
+    fn a_public_name_holding_a_non_conforming_value_is_masked() {
+        assert!(!is_public_named_value("errorCode", "jdoe@contoso.com"));
+        assert!(!is_public_named_value(
+            "updateGuid",
+            r"C:\Users\jdoe\AppData"
+        ));
+        assert!(!is_public_named_value("updateRevisionNumber", "alpha"));
+    }
+
+    /// Values that do have the shape their name states are kept.
+    #[test]
+    fn a_public_name_holding_a_conforming_value_is_kept() {
+        assert!(is_public_named_value(
+            "updateGuid",
+            "aaaaaaaa-0000-0000-0000-000000000001"
+        ));
+        assert!(is_public_named_value(
+            "updateGuid",
+            "{AAAAAAAA-0000-0000-0000-000000000001}"
+        ));
+        assert!(is_public_named_value("errorCode", "0x80070005"));
+        assert!(is_public_named_value("errorCode", "2147942405"));
+        assert!(is_public_named_value("updateRevisionNumber", "1"));
+        assert!(is_public_named_value("serviceGuid", ""));
     }
 
     #[test]
