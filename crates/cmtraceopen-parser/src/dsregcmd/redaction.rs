@@ -209,7 +209,7 @@ fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
             && bytes[body_end] == b']'
             && bytes[body_start..body_end]
                 .iter()
-                .all(|byte| byte.is_ascii_hexdigit());
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
         if is_token {
             spans.push((index, body_end + 1));
             index = body_end + 1;
@@ -1242,6 +1242,24 @@ mod tests {
 
     /// A classified value that is also a token's kind word cannot edit a token.
     ///
+    /// A span whose body is not the hex the grammar writes is not a token.
+    ///
+    /// The grammar mints lowercase hex, so a span spelled with capitals can never
+    /// be one of its tokens -- treating it as a token is the same hole as
+    /// accepting a wider kind, one field to the right.
+    #[test]
+    fn a_span_with_uppercase_hex_is_not_a_token() {
+        let mut literals = IdentityLiterals::default();
+        literals.push_identifier("dead", KIND_HOST);
+
+        let scrubbed = literals.scrub("seen at [host:DEADBEEFDEADBEEF] here");
+
+        assert!(
+            !scrubbed.contains("dead"),
+            "capitalised hex is not the grammar's spelling: {scrubbed}"
+        );
+    }
+
     /// A bracketed span the shared grammar would not mint is not a token.
     ///
     /// The grammar mints `[kind:hex]` with a nonempty lowercase-letter kind, and
