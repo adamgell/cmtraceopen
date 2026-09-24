@@ -28,14 +28,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::intune::device::windows::updates::{
-    analyze_update_bundle, redacted_export_projection, SupplementalLogKind, UpdateChainState,
-    UpdateEvidenceBundle, UpdateSnapshot, UpdateSupplementalLog, EVIDENCE_FINDING_PREFIX,
-    POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
+    analyze_update_bundle, redacted_export_projection, PolicyChainState, SupplementalLogKind,
+    UpdateChainState, UpdateEvidenceBundle, UpdateSnapshot, UpdateSource, UpdateSupplementalLog,
+    EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneEvidenceRef,
-    IntuneObservationContext, IntuneParseState, IntuneProvenance, IntuneSensitivity,
-    IntuneSourceKind,
+    IntuneFindingConfidence, IntuneObservationContext, IntuneParseState, IntuneProvenance,
+    IntuneSensitivity, IntuneSourceKind,
 };
 use serde_json::Value;
 use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
@@ -886,6 +886,214 @@ fn has_policy_not_observed(snapshot: &UpdateSnapshot) -> bool {
         .findings
         .iter()
         .any(|finding| finding.finding_id == "intune/windows/updates/policy/not-observed")
+}
+
+/// "No restart is pending" is withheld when the capture never described the
+/// client channel at all, not only when it described it as truncated.
+#[test]
+fn an_undescribed_client_capture_cannot_claim_no_restart_is_pending() {
+    let scenario = "policy-applied-update-installed-reboot-complete";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut undescribed = build_bundle(scenario, &manifest);
+    undescribed
+        .coverage
+        .retain(|entry| entry.family != "windowsUpdateClient");
+
+    assert_eq!(
+        analyze_update_bundle(&undescribed)
+            .update_chain
+            .reboot_pending,
+        None,
+        "{scenario}: an undescribed client channel is not an empty one"
+    );
+}
+
+/// A claim that turns on recency is only as good as the readings that make it.
+///
+/// Deleting the timestamps is the counterexample: with the placeability question
+/// asked only of device-level readings, the pending reading has joined a
+/// transaction and the question goes unanswered.
+#[test]
+fn a_pending_restart_no_one_can_place_in_time_is_not_high_confidence() {
+    let scenario = "reboot-pending";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let bundle = build_bundle(scenario, &manifest);
+    assert_eq!(
+        reboot_confidence(&analyze_update_bundle(&bundle)),
+        Some(IntuneFindingConfidence::High),
+        "{scenario}: a placed capture supports the High-confidence claim"
+    );
+
+    let mut unplaced = bundle.clone();
+    for event in &mut unplaced.events {
+        event.context.source_timestamp = None;
+    }
+    assert_eq!(
+        reboot_confidence(&analyze_update_bundle(&unplaced)),
+        Some(IntuneFindingConfidence::Medium),
+        "{scenario}: a pending reading nobody can place cannot be High confidence"
+    );
+}
+
+/// A record nobody could read is not evidence of the workload owner.
+#[test]
+fn an_unreadable_device_record_is_not_evidence_of_the_workload_owner() {
+    let scenario = "co-management-workload-not-owned-by-intune";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut bundle = build_bundle(scenario, &manifest);
+    let context = bundle
+        .device
+        .context
+        .as_mut()
+        .expect("this scenario supplies device facts with a context");
+    context.parse_state = IntuneParseState::Malformed;
+    context.access_state = IntuneAccessState::PermissionDenied;
+
+    let snapshot = analyze_update_bundle(&bundle);
+    assert_ne!(
+        snapshot.policy_chain.state,
+        PolicyChainState::NotOwnedByIntune,
+        "{scenario}: ownership cannot be concluded from a record nobody could read"
+    );
+    assert_eq!(
+        snapshot.input_coverage.unusable_records, 1,
+        "{scenario}: the excluded device record stays visible"
+    );
+}
+
+/// The two evidence findings cite their own records: one is about records that
+/// were read and did not map, the other about records that could not be read.
+#[test]
+fn unreadable_records_and_unmapped_records_are_not_pooled() {
+    let scenario = "scan-failure";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut bundle = build_bundle(scenario, &manifest);
+    assert!(
+        !bundle.events.is_empty(),
+        "{scenario}: needs a template event"
+    );
+
+    let mut unreadable = bundle.events[0].clone();
+    unreadable.context.evidence_ref = evidence_ref("denied-1", "denied-artifact");
+    unreadable.context.parse_state = IntuneParseState::Malformed;
+    unreadable.context.access_state = IntuneAccessState::PermissionDenied;
+
+    let mut unmapped = bundle.events[0].clone();
+    unmapped.event_id = 9999;
+    unmapped.context.evidence_ref = evidence_ref("unmapped-1", "unmapped-artifact");
+    unmapped.context.parse_state = IntuneParseState::Parsed;
+    unmapped.context.access_state = IntuneAccessState::Available;
+
+    bundle.events = vec![unreadable, unmapped];
+    bundle.setting_reports.clear();
+    bundle.registry_facts.clear();
+    bundle.supplemental_logs.clear();
+    bundle.service_reports.clear();
+
+    let snapshot = analyze_update_bundle(&bundle);
+    assert_eq!(
+        cited_evidence(&snapshot, "intune/windows/updates/evidence/unknown-schema"),
+        vec!["unmapped-1".to_owned()],
+        "{scenario}: the unmapped finding cites the record that was read"
+    );
+    assert_eq!(
+        cited_evidence(
+            &snapshot,
+            "intune/windows/updates/evidence/unusable-records"
+        ),
+        vec!["denied-1".to_owned()],
+        "{scenario}: the unusable finding cites the record that was not"
+    );
+}
+
+/// No collection times are compared, so the mismatch must not say which reading
+/// is current. This is the guard against the sentence that used to claim the
+/// local record was the more recent of the two.
+#[test]
+fn the_reporting_mismatch_does_not_claim_which_reading_is_current() {
+    let (snapshot, _, _) = analyze("local-success-stale-service-report");
+    let mismatch = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id.contains("reporting-mismatch"))
+        .expect("this scenario has a device/service disagreement");
+    assert!(
+        !mismatch.summary.contains("more recent"),
+        "the mismatch summary claims recency without comparing timestamps: {}",
+        mismatch.summary
+    );
+}
+
+/// Identity planted in the fields the export keeps for diagnosis is scrubbed
+/// there too, not only in the fields this leaf classifies as sensitive.
+#[test]
+fn identity_in_caller_supplied_text_does_not_survive_the_export() {
+    let scenario = "policy-applied-update-installed-reboot-complete";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));
+    assert!(
+        !snapshot.policy_chain.observations.is_empty()
+            && !snapshot.update_chain.transactions.is_empty(),
+        "{scenario}: this test needs observations and a transaction"
+    );
+
+    let upn = "adam.admin@contoso.example.com";
+    let profile = r"C:\Users\adam.admin\AppData\Local\Temp";
+    snapshot.policy_chain.observations[0].policy_id = Some(upn.to_owned());
+    snapshot.policy_chain.observations[0].source = Some(UpdateSource::Unknown(profile.to_owned()));
+    snapshot.update_chain.transactions[0].title = Some(format!("Cumulative update for {upn}"));
+    snapshot.findings[0].summary = format!("Reported by {upn} from {profile}");
+    snapshot.input_coverage.unknown_providers = vec![format!("Provider mentioning {upn}")];
+    snapshot.input_coverage.extraction_profile = Some(format!("profile-for-{upn}"));
+
+    let raw = serde_json::to_string(&snapshot).expect("snapshot serializes");
+    assert!(
+        raw.contains(upn),
+        "the planted identity has to be present before the export can be judged"
+    );
+
+    let exported =
+        serde_json::to_string(&redacted_export_projection(&snapshot)).expect("export serializes");
+    assert!(!exported.contains(upn), "a UPN survived the export");
+    assert!(
+        !exported.contains("adam.admin"),
+        "a user profile name survived the export"
+    );
+}
+
+fn evidence_ref(evidence_id: &str, artifact_id: &str) -> IntuneEvidenceRef {
+    IntuneEvidenceRef {
+        evidence_id: evidence_id.to_owned(),
+        source_artifact_id: artifact_id.to_owned(),
+    }
+}
+
+fn cited_evidence(snapshot: &UpdateSnapshot, finding_id: &str) -> Vec<String> {
+    snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == finding_id)
+        .map(|finding| {
+            finding
+                .evidence
+                .iter()
+                .map(|evidence| evidence.evidence_id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn reboot_confidence(snapshot: &UpdateSnapshot) -> Option<IntuneFindingConfidence> {
+    snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id.ends_with("/update/reboot-pending"))
+        .map(|finding| finding.confidence.clone())
 }
 
 /// The snapshot is a function of the readings, not of the order the caller

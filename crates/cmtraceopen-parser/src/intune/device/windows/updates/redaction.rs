@@ -4,12 +4,37 @@
 //! material. What survives is the diagnostic skeleton: which record, from which
 //! provider, at which phase, with which outcome and error code.
 //!
+//! That promise is enforced field by field, and by two different means:
+//!
+//! * **Values this leaf classifies** are masked wholesale -- policy values,
+//!   named-value content outside the Microsoft-defined identifiers, the policy
+//!   id, and artifact `detail` free text.
+//! * **Text a capture supplied** that the export keeps for diagnosis -- update
+//!   titles, finding text, unknown vocabulary values, unreadable error tokens,
+//!   unknown provider names -- is scrubbed through the shared Intune text
+//!   grammar ([`redact_text`]) rather than trusted because of the field it sits
+//!   in. A title is a product string in practice, but "in practice" is not an
+//!   enforcement, and the same field can carry a UPN, a path, or a secret.
+//!
+//! What deliberately survives, because a finding cannot be traced without it:
+//! artifact and evidence identifiers, record and line numbers, channel and
+//! provider identity, policy node URIs and setting ids (policy *locations*, the
+//! same reason the registry provenance survives), activity ids, Windows build
+//! and edition, and error codes that read as codes.
+//!
+//! [`redacted_export_projection`] is the export entry point. `UpdateSnapshot`
+//! itself serializes as it stands, for debugging and for the crate's own tests;
+//! serializing it directly is not an export.
+//!
 //! The projection is a pure function of the snapshot, so the same snapshot
 //! always exports the same bytes. It reuses [`UpdateSnapshot`] rather than
 //! introducing an export-only type, which keeps one shape to golden-test and
 //! makes "what did redaction change?" a field-by-field diff.
 
-use crate::intune::evidence::{IntuneNamedValue, IntuneObservationContext, IntuneSensitivity};
+use crate::intune::apps::windows::common::redact_text;
+use crate::intune::evidence::{
+    IntuneErrorCode, IntuneNamedValue, IntuneObservationContext, IntuneSensitivity,
+};
 
 use super::models::*;
 
@@ -33,16 +58,40 @@ pub fn redacted_export_projection(snapshot: &UpdateSnapshot) -> UpdateSnapshot {
         if observation.value.is_some() {
             observation.value = Some(REDACTED.to_owned());
         }
+        // The policy id is the enrollment's own identifier, which is exactly the
+        // kind of tenant-bearing value this projection promises not to carry.
+        mask_present(&mut observation.policy_id);
+        mask_unknown_source(&mut observation.source);
         observation.named_data = redact_named(&observation.named_data);
     }
+
+    for conflict in &mut projected.policy_chain.conflicts {
+        mask_all(&mut conflict.policy_ids);
+    }
+    mask_unknown_owner(&mut projected.policy_chain.workload_owner);
+    mask_unknown_source(&mut projected.policy_chain.effective_source.configured);
+    mask_unknown_source(&mut projected.policy_chain.effective_source.scanned);
 
     for observation in &mut projected.update_chain.unkeyed_observations {
         redact_context(&mut observation.context);
+        mask_unknown_source(&mut observation.source);
+        scrub_text_option(&mut observation.title);
         observation.named_data = redact_named(&observation.named_data);
     }
 
-    // Update titles are Microsoft product strings and carry no identity, so they
-    // survive; they are the most useful thing in the export.
+    for transaction in &mut projected.update_chain.transactions {
+        scrub_text_option(&mut transaction.title);
+        mask_unreadable_error(&mut transaction.error);
+        mask_unknown_service_state(&mut transaction.service_state);
+    }
+
+    // Findings are prose this crate wrote, but some of it interpolates the
+    // capture: an error token, a policy node, a provider name, an artifact id.
+    for finding in &mut projected.findings {
+        finding.title = redact_text(&finding.title);
+        finding.summary = redact_text(&finding.summary);
+    }
+
     for coverage in &mut projected.coverage {
         // `detail` is adapter free text and can name a path or an account.
         if coverage.detail.is_some() {
@@ -50,7 +99,69 @@ pub fn redacted_export_projection(snapshot: &UpdateSnapshot) -> UpdateSnapshot {
         }
     }
 
+    for provider in &mut projected.input_coverage.unknown_providers {
+        *provider = redact_text(provider);
+    }
+    scrub_text_option(&mut projected.input_coverage.extraction_profile);
+
     projected
+}
+
+/// Mask one value outright, leaving the field present.
+fn mask_present(value: &mut Option<String>) {
+    if value.is_some() {
+        *value = Some(REDACTED.to_owned());
+    }
+}
+
+/// Mask every entry of a list of identifiers.
+fn mask_all(values: &mut [String]) {
+    for value in values {
+        *value = REDACTED.to_owned();
+    }
+}
+
+/// Scrub text a capture supplied instead of trusting the field it arrived in.
+fn scrub_text_option(value: &mut Option<String>) {
+    if let Some(text) = value {
+        *text = redact_text(text);
+    }
+}
+
+/// Scrub a vocabulary value this build did not recognize.
+///
+/// "Unrecognized" is a statement about this build's vocabulary, not about the
+/// value: whatever the capture wrote there is still text from the capture.
+fn mask_unknown_source(source: &mut Option<UpdateSource>) {
+    if let Some(UpdateSource::Unknown(raw)) = source {
+        *raw = redact_text(raw);
+    }
+}
+
+fn mask_unknown_owner(owner: &mut UpdateWorkloadOwner) {
+    if let UpdateWorkloadOwner::Unknown(raw) = owner {
+        *raw = redact_text(raw);
+    }
+}
+
+fn mask_unknown_service_state(state: &mut Option<ServiceReportedState>) {
+    if let Some(ServiceReportedState::Unknown(raw)) = state {
+        *raw = redact_text(raw);
+    }
+}
+
+/// Mask an error token that did not read as a code.
+///
+/// A code keeps its place and its value: `0x80240017` is diagnostic grammar. A
+/// token the reader could not parse as a code is text from the capture, and it
+/// is masked rather than published on the strength of sitting in an `error`
+/// field.
+fn mask_unreadable_error(error: &mut Option<IntuneErrorCode>) {
+    if let Some(code) = error {
+        if code.decimal.is_none() && code.hex.is_none() {
+            code.raw = REDACTED.to_owned();
+        }
+    }
 }
 
 fn redact_device(device: &UpdateDeviceFacts) -> UpdateDeviceFacts {

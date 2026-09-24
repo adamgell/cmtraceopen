@@ -97,6 +97,17 @@ pub fn reduce_bundle(bundle: &UpdateEvidenceBundle) -> UpdateSnapshot {
         }
     }
 
+    // Device facts arrive in one record. If that record could not be read, the
+    // facts it carries are not evidence -- including the workload owner, which
+    // decides whether an Intune update ring is in force at all.
+    let device = match bundle.device.context.as_ref() {
+        Some(context) if !record_can_be_read(context) => {
+            exclude_unreadable(&mut input_coverage, context);
+            UpdateDeviceFacts::default()
+        }
+        _ => bundle.device.clone(),
+    };
+
     input_coverage.unmapped_event_id_list = unmapped_ids.into_iter().collect();
     input_coverage.unknown_providers = unknown_providers.into_iter().collect();
     input_coverage.extraction_profile = bundle.extraction_profile.clone();
@@ -121,14 +132,14 @@ pub fn reduce_bundle(bundle: &UpdateEvidenceBundle) -> UpdateSnapshot {
         .cloned()
         .collect();
 
-    let policy_chain = build_policy_chain(bundle, &policy_observations, &client_observations);
+    let policy_chain = build_policy_chain(&device, &policy_observations, &client_observations);
     let update_chain = build_update_chain(bundle, update_observations);
     let linkage = link_chains(&policy_chain);
 
     let mut snapshot = UpdateSnapshot {
         schema_version: INTUNE_WINDOWS_UPDATES_SCHEMA_VERSION,
         generated_at_utc: bundle.generated_at_utc.clone(),
-        device: bundle.device.clone(),
+        device,
         policy_chain,
         update_chain,
         linkage,
@@ -168,7 +179,9 @@ fn record_can_be_read(context: &IntuneObservationContext) -> bool {
 /// in the snapshot rather than looking like evidence that was never captured.
 fn exclude_unreadable(coverage: &mut UpdateInputCoverage, context: &IntuneObservationContext) {
     coverage.unusable_records += 1;
-    coverage.evidence.push(context.evidence_ref.clone());
+    coverage
+        .unusable_evidence
+        .push(context.evidence_ref.clone());
 }
 
 /// Sort and deduplicate evidence so a snapshot never depends on input order.
@@ -255,19 +268,18 @@ pub(super) fn context_instant(context: &IntuneObservationContext) -> Option<Date
 // ── Policy chain ────────────────────────────────────────────────────────────
 
 fn build_policy_chain(
-    bundle: &UpdateEvidenceBundle,
+    device: &UpdateDeviceFacts,
     observations: &[PolicyObservation],
     client_observations: &[UpdateObservation],
 ) -> PolicyChain {
-    let workload_owner = bundle
-        .device
+    let workload_owner = device
         .update_workload_owner
         .clone()
-        .or_else(|| workload_owner_from(&bundle.device.named_data))
+        .or_else(|| workload_owner_from(&device.named_data))
         .unwrap_or_default();
 
     let conflicts = collect_conflicts(observations);
-    let effective_source = assess_effective_source(bundle, observations, client_observations);
+    let effective_source = assess_effective_source(device, observations, client_observations);
 
     let mut evidence: Vec<IntuneEvidenceRef> = observations
         .iter()
@@ -281,7 +293,7 @@ fn build_policy_chain(
             IntuneFindingConfidence::Low
         }
         PolicyChainState::NotOwnedByIntune => {
-            if bundle.device.update_workload_owner.is_some() {
+            if device.update_workload_owner.is_some() {
                 IntuneFindingConfidence::High
             } else {
                 IntuneFindingConfidence::Medium
@@ -405,7 +417,7 @@ fn collect_conflicts(observations: &[PolicyObservation]) -> Vec<PolicyConflict> 
 /// inert. Collapsing that to "WSUS is configured" would send an administrator
 /// after a redirection that is not happening.
 fn assess_effective_source(
-    bundle: &UpdateEvidenceBundle,
+    device: &UpdateDeviceFacts,
     policy_observations: &[PolicyObservation],
     update_observations: &[UpdateObservation],
 ) -> EffectiveSourceAssessment {
@@ -455,7 +467,7 @@ fn assess_effective_source(
     }
     sort_evidence(&mut scanned_evidence);
 
-    let expected = bundle.device.expected_update_source.clone();
+    let expected = device.expected_update_source.clone();
     // The scanned source is what the device really used, so it wins over the
     // configured one when the two are both known and disagree.
     let effective = scanned.clone().or_else(|| configured.clone());
@@ -616,6 +628,10 @@ fn build_transaction(
 
     let state = transaction_state(observations);
     let error = terminal_error(observations, state);
+    let readings_are_placed = observations
+        .iter()
+        .filter(|observation| observation.is_update_client_evidence())
+        .all(|observation| context_instant(&observation.context).is_some());
     let title = observations
         .iter()
         .find_map(|observation| observation.title.clone());
@@ -650,6 +666,7 @@ fn build_transaction(
         phases,
         error,
         title,
+        readings_are_placed,
         evidence,
         corroborating_evidence: corroborating,
         service_state,
@@ -840,17 +857,23 @@ fn chain_state(transactions: &[UpdateTransaction], signals: &DeviceSignals) -> U
 /// invalidate a claim the client channel itself supports.
 const CLIENT_FAMILY: &str = "windowsUpdateClient";
 
-/// Whether the capture lost or truncated an artifact that carries the client's
-/// own readings.
+/// Whether the capture described the client channel well enough to trust what is
+/// missing from it.
 ///
-/// `rebootPending: false` is a claim that no restart is pending. A capture that
-/// could not read, or truncated, the client's own records cannot support that
-/// claim: the absence of a pending record there is not evidence of completion.
+/// Two ways to lose that trust: an entry that reports the client artifact as
+/// something other than available, and no entry at all. A bundle that never
+/// describes the channel cannot support "no restart is pending" any more than one
+/// that describes it as truncated -- "not captured cleanly" and "not described"
+/// both leave the absence unexplained.
 fn client_capture_is_incomplete(coverage: &[IntuneArtifactCoverage]) -> bool {
-    coverage.iter().any(|entry| {
-        entry.status != IntuneArtifactStatus::Available
-            && entry.family.eq_ignore_ascii_case(CLIENT_FAMILY)
-    })
+    let client_entries: Vec<&IntuneArtifactCoverage> = coverage
+        .iter()
+        .filter(|entry| entry.family.eq_ignore_ascii_case(CLIENT_FAMILY))
+        .collect();
+    client_entries.is_empty()
+        || client_entries
+            .iter()
+            .any(|entry| entry.status != IntuneArtifactStatus::Available)
 }
 
 fn reboot_pending_flag(

@@ -146,17 +146,7 @@ fn client_evidence(
 /// read as the reason no policy record was seen.
 const POLICY_FAMILIES: [&str; 3] = ["mdmDiagnostics", "registry", "suppliedFact"];
 
-/// Artifact ids that were not usable, used as coverage-gap citations.
-fn coverage_gap_ids(snapshot: &UpdateSnapshot) -> Vec<String> {
-    snapshot
-        .coverage
-        .iter()
-        .filter(|entry| entry.status != IntuneArtifactStatus::Available)
-        .map(|entry| entry.artifact_id.clone())
-        .collect()
-}
-
-/// The same list, restricted to the artifacts that could have carried policy.
+/// The unusable artifacts that could have carried policy, as coverage-gap ids.
 fn policy_coverage_gap_ids(snapshot: &UpdateSnapshot) -> Vec<String> {
     snapshot
         .coverage
@@ -215,7 +205,9 @@ fn push_workload_not_owned_by_intune(snapshot: &UpdateSnapshot, findings: &mut V
         .map(|context| vec![context.evidence_ref.clone()])
         .unwrap_or_default();
     let gaps = if evidence.is_empty() {
-        coverage_gap_ids(snapshot)
+        // The same scoping as the policy-not-observed rule: an unusable artifact
+        // that could never have carried policy is not why ownership is unknown.
+        policy_coverage_gap_ids(snapshot)
     } else {
         Vec::new()
     };
@@ -583,11 +575,14 @@ fn push_reboot_pending(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFindi
         return;
     }
 
-    // The claim is only as good as the reading that makes it. A pending reading
+    // The claim is only as good as the readings that make it. A pending reading
     // nobody can place in time, or one sitting in a transaction whose ordering is
     // contradictory, reports a restart without saying when -- which is a
-    // Medium-confidence statement, not a High one.
-    let readings_are_placeable = snapshot
+    // Medium-confidence statement, not a High one. The question is asked of every
+    // contributing reading, keyed or not: asking it only of the device-level
+    // readings left the common case -- a pending reading that joined a
+    // transaction -- unanswered.
+    let unkeyed_are_placed = snapshot
         .update_chain
         .unkeyed_observations
         .iter()
@@ -597,10 +592,13 @@ fn push_reboot_pending(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFindi
                 && observation.outcome == UpdateOutcome::Pending
         })
         .all(|observation| super::reducer::context_instant(&observation.context).is_some());
+    let transactions_are_placed = pending
+        .iter()
+        .all(|transaction| transaction.readings_are_placed);
     let contradicted = pending
         .iter()
         .any(|transaction| transaction.order_contradiction);
-    let confidence = if readings_are_placeable && !contradicted {
+    let confidence = if unkeyed_are_placed && transactions_are_placed && !contradicted {
         IntuneFindingConfidence::High
     } else {
         IntuneFindingConfidence::Medium
@@ -807,7 +805,7 @@ fn push_unusable_records(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFin
             "Re-collect the named evidence with the permissions the source requires",
             "Confirm the capture completed before the device stopped reporting",
         ],
-        coverage.evidence.clone(),
+        coverage.unusable_evidence.clone(),
         Vec::new(),
     ));
 }

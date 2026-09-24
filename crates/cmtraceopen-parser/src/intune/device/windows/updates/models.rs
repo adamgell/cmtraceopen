@@ -218,6 +218,21 @@ pub struct UpdateKey {
     pub revision: Option<String>,
 }
 
+/// Whether two update ids name the same update.
+///
+/// The braces and the case are punctuation, not identity: sources write an id
+/// both ways, and a caller can supply a key directly rather than through
+/// [`crate::intune::device::windows::updates::update_key_from`], so the
+/// comparison canonicalises instead of trusting that every producer did. Without
+/// this, `{a-…}` and `a-…` were two different updates and a service report
+/// joined to neither.
+fn same_update_id(left: &str, right: &str) -> bool {
+    fn canonical(value: &str) -> &str {
+        value.trim().trim_start_matches('{').trim_end_matches('}')
+    }
+    canonical(left).eq_ignore_ascii_case(canonical(right))
+}
+
 impl UpdateKey {
     /// Whether this key identifies anything at all.
     pub fn is_identified(&self) -> bool {
@@ -238,9 +253,7 @@ impl UpdateKey {
         }
         match (&self.update_id, &other.update_id) {
             (Some(left), Some(right)) => {
-                left.eq_ignore_ascii_case(right)
-                    && self.revision_agrees(other)
-                    && self.kb_agrees(other)
+                same_update_id(left, right) && self.revision_agrees(other) && self.kb_agrees(other)
             }
             _ => match (&self.kb_article, &other.kb_article) {
                 // A KB match alone is not enough: a different revision of the
@@ -577,6 +590,16 @@ pub struct UpdateTransaction {
     pub error: Option<IntuneErrorCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Whether every update-client reading in this transaction can be placed in
+    /// time.
+    ///
+    /// A reading with no usable timestamp is still evidence of what happened; it
+    /// cannot say *when*. A conclusion that turns on recency -- "the client's last
+    /// statement was an install" -- cannot be High confidence while one of its
+    /// readings is unplaceable, so the reducer answers that question here rather
+    /// than leaving each rule to guess it from the outside.
+    #[serde(default)]
+    pub readings_are_placed: bool,
     /// Evidence produced by the update client itself.
     pub evidence: Vec<IntuneEvidenceRef>,
     /// Evidence produced by supplemental formats, kept apart so a reader can see
@@ -707,6 +730,14 @@ pub struct UpdateInputCoverage {
     pub extraction_profile_unsupported: bool,
     /// Evidence refs for the unclassified records, so a finding can cite them.
     pub evidence: Vec<IntuneEvidenceRef>,
+    /// Evidence refs for the records excluded as unreadable.
+    ///
+    /// Kept apart from [`Self::evidence`] because the two answer different
+    /// questions: `evidence` is "this record was read and did not map", this is
+    /// "this record could not be read at all". One shared vector made each
+    /// finding cite the other's records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unusable_evidence: Vec<IntuneEvidenceRef>,
 }
 
 impl UpdateInputCoverage {
@@ -764,6 +795,25 @@ mod tests {
             revision: Some("2".to_owned()),
         };
         assert!(!left.joins(&right));
+    }
+
+    #[test]
+    fn keys_join_across_brace_punctuation_in_a_supplied_id() {
+        // A caller can hand over a key directly rather than through
+        // `update_key_from`, so punctuation is normalised where it is compared,
+        // not only where it is built. Otherwise the same service report silently
+        // joined nothing.
+        let braced = UpdateKey {
+            update_id: Some("{aaaaaaaa-0000-0000-0000-000000000001}".to_owned()),
+            kb_article: None,
+            revision: None,
+        };
+        let bare = UpdateKey {
+            update_id: Some("aaaaaaaa-0000-0000-0000-000000000001".to_owned()),
+            kb_article: None,
+            revision: None,
+        };
+        assert!(braced.joins(&bare));
     }
 
     #[test]
