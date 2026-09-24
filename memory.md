@@ -83,6 +83,8 @@ Never batch-merge these. Extract reviewed issue-scoped slices into fresh worktre
 | `codex/recovery-intune-ios-diagnostics-20260803` | `4cf3ad15f1bc4f97d21f3046bd4abc8989c18aa4` | iOS diagnostics |
 | `codex/recovery-intune-ios-console-round2-20260803` | `952b48f442f761380ec8a650d6feba1b5cebe7cd` | iOS console round 2 |
 
+**Checked 2026-09-24:** all six branches are still present on `origin`, so the refs are preserved as promised — this table is accurate about what it holds. What has changed is the *second* instruction: the targets have since landed. `#365` and `#360` are done, the macOS and iOS parser families exist on `main` (`intune/apps/macos`, `intune/portal/{macos,ios_ipados}`), and the epic tracker marks the corresponding rows complete. So these branches are now history rather than pending recovery, and "check merged equivalents" is answered rather than open — worth keeping only as evidence, which is what the heading already says.
+
 ## Execution Order (From PM Charter)
 
 1. SUP correction → DP exact-profile → Client health → Intune CP corrections → Recovery WUfB remediator → Downstream SCCM families
