@@ -545,7 +545,7 @@ fn project_capture_bundle_impl(
     // The capture is decoded from bytes rather than read as UTF-8: a bundle
     // this build did not write may hold a UTF-16 capture, and the artifacts
     // beside it already take that path.
-    let capture_bytes = std::fs::read(&capture_path).map_err(|error| {
+    let capture_bytes = read_bundle_file(&capture_path).map_err(|error| {
         crate::error::AppError::Internal(format!(
             "Failed to read the capture '{}': {error}",
             capture_path.display()
@@ -672,7 +672,7 @@ fn project_bundle_dir(
             continue;
         }
 
-        let bytes = std::fs::read(&path).map_err(|error| {
+        let bytes = read_bundle_file(&path).map_err(|error| {
             crate::error::AppError::Internal(format!(
                 "Failed to read '{}': {error}",
                 path.display()
@@ -687,7 +687,7 @@ fn project_bundle_dir(
         };
         match projected {
             Some(bytes) => {
-                std::fs::write(&target, bytes).map_err(|error| {
+                write_projected_file(&target, &bytes).map_err(|error| {
                     crate::error::AppError::Internal(format!(
                         "Failed to write '{}': {error}",
                         target.display()
@@ -696,7 +696,7 @@ fn project_bundle_dir(
                 *projected_files += 1;
             }
             None => {
-                std::fs::write(&target, &bytes).map_err(|error| {
+                write_projected_file(&target, &bytes).map_err(|error| {
                     crate::error::AppError::Internal(format!(
                         "Failed to write '{}': {error}",
                         target.display()
@@ -840,7 +840,7 @@ fn collect_artifact_identities(
             // Decoded, not read as UTF-8: the walk itself decodes and writes this
             // same file, so skipping a UTF-16 one here left identities in the copy
             // that the projection had the means to remove.
-            let Ok(bytes) = std::fs::read(&path) else {
+            let Ok(bytes) = read_bundle_file(&path) else {
                 continue;
             };
             let Some(text) = decode_artifact_text(&bytes) else {
@@ -854,7 +854,7 @@ fn collect_artifact_identities(
         }
         // Everything else is text this walk can read: registry dumps and command
         // output name the same identities in a labelled form.
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = read_bundle_file(&path) else {
             continue;
         };
         if let Some(text) = decode_artifact_text(&bytes) {
@@ -940,12 +940,121 @@ fn collect_identities_in(
 }
 
 /// The capture a bundle's identities are read from.
+#[cfg(all(test, unix))]
+#[test]
+fn a_link_is_not_read_through() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let target = temp.path().join("outside.txt");
+    std::fs::write(&target, b"bytes from outside the bundle").expect("write target");
+    let link = temp.path().join("entry.txt");
+    std::os::unix::fs::symlink(&target, &link).expect("create the symlink");
+
+    let error = read_bundle_file(&link).expect_err("a link is not read through");
+
+    assert_eq!(
+        error.raw_os_error(),
+        Some(libc::ELOOP),
+        "the open refuses the link itself rather than opening its target"
+    );
+    assert_eq!(
+        std::fs::read(&link).expect("a following read still works"),
+        b"bytes from outside the bundle".to_vec(),
+        "this is the read the no-follow handle replaces"
+    );
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn a_symlinked_capture_is_rejected_rather_than_read() {
+    // The walk skips a symlink, so accepting one here means the command reports
+    // success for a projection whose capture is not in it. The two halves have to
+    // agree about what the capture is.
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path();
+    let record = root.join("elsewhere.txt");
+    std::fs::write(&record, b"the capture, somewhere else").expect("write the target");
+    let staged = root
+        .join("evidence")
+        .join("command-output")
+        .join("dsregcmd-status.txt");
+    std::fs::create_dir_all(staged.parent().expect("parent")).expect("create dirs");
+    std::os::unix::fs::symlink(&record, &staged).expect("create the symlink");
+
+    let error = find_bundle_capture(root).expect_err("a symlinked capture is not a capture");
+
+    assert!(
+        format!("{error}").contains("dsregcmd-status.txt"),
+        "the error names the path it refused: {error}"
+    );
+}
+
+/// Open a bundle file without following a link.
+///
+/// The projector checks `entry.file_type()` and then reads by path, and those are
+/// two different lookups: the bundle is staged under the temporary directory with
+/// its path exposed to the frontend, so another process with write access can
+/// replace an entry in between and the read would follow the replacement. Opening
+/// with no-follow and reading through that handle removes the second lookup.
+#[cfg(unix)]
+fn open_bundle_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn open_bundle_file(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: open the link itself, never its target.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+/// Read a bundle file through a no-follow handle.
+fn read_bundle_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut file = open_bundle_file(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Write a projected file without writing through a link that appeared at the
+/// destination.
+///
+/// `std::fs::write` follows one, which would put projected bytes wherever the
+/// link points. Removing first and then creating exclusively means an entry that
+/// reappears is an error rather than a write.
+fn write_projected_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)
+}
+
 fn find_bundle_capture(root: &Path) -> Result<std::path::PathBuf, crate::error::AppError> {
     let staged = root
         .join("evidence")
         .join("command-output")
         .join("dsregcmd-status.txt");
-    if staged.is_file() {
+    // `is_file()` follows a link, and the walk below does not: accepting one here
+    // would report success for a projection whose capture is missing.
+    let is_plain_file = std::fs::symlink_metadata(&staged)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false);
+    if is_plain_file {
         return Ok(staged);
     }
     Err(crate::error::AppError::InvalidInput(format!(
