@@ -219,31 +219,58 @@ fn redact_context(context: &mut IntuneObservationContext) {
 ///
 /// The names are what make an export diagnosable ("this record carried a
 /// serviceGuid"); the values are what can leak.
-/// Whether a name reads as a field label, and is therefore safe to export.
+/// Whether a name is one this build reads, or one the capture itself uses for an
+/// unnamed field.
 ///
-/// The name slot holds field names in a capture, so the export keeps a name that
-/// looks like one. It is not a whitelist of this build's constants: the corpus
-/// carries names we do not define (`Message5` and `HexInt1`, both positional forms
-/// the event payload uses, and vendor fields such as `updatelist`), and masking
-/// those would cost legibility for nothing.
-///
-/// What the rule excludes is the identity shapes — a UPN (`@`), a domain-qualified
-/// account (`\`), a URI or path (`/`, `:`), a dotted display name (`.`). A name in
-/// one of those shapes is a *value* someone filed in the name slot, and the value
-/// check next door cannot see it because it only ever inspects the value.
-fn reads_as_field_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+/// A list rather than a shape test, because no shape separates a field name from a
+/// value: `ABC123XYZ` is as alphanumeric as `updateGuid`, and a serial is exactly
+/// the kind of tenant data this projection promises not to carry. The cost is that
+/// a field this build does not know is masked, which is the safe direction — and
+/// it is why the corpus names below are short and spelled out as they appear,
+/// rather than patterned.
+fn is_known_named_value_name(name: &str) -> bool {
+    use super::sources as names;
+
+    // Field names the capture carries and this build does not define: two vendor
+    // fields from the corpus, and the positional forms Windows uses for `<Data>`
+    // elements that arrive without a `Name`.
+    if ["updatelist", "tenantDisplayName"]
+        .iter()
+        .any(|known| name.eq_ignore_ascii_case(known))
+    {
+        return true;
+    }
+    if ["Message", "HexInt"].iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+    }) {
+        return true;
+    }
+
+    [
+        names::NAMED_UPDATE_GUID,
+        names::NAMED_UPDATE_REVISION,
+        names::NAMED_UPDATE_TITLE,
+        names::NAMED_ERROR_CODE,
+        names::NAMED_SERVICE_GUID,
+        names::NAMED_UPDATE_COUNT,
+        names::NAMED_KB_ARTICLE_IDS,
+        names::NAMED_ADAPTER_PHASE,
+        names::NAMED_ADAPTER_OUTCOME,
+        names::NAMED_DEFERRAL_REASON,
+        names::NAMED_UNSUPPORTED_VALUE,
+        names::NAMED_WINNING_POLICY_ID,
+        names::NAMED_NODE_URI,
+    ]
+    .iter()
+    .any(|known| name.eq_ignore_ascii_case(known))
 }
 
 fn redact_named(values: &[IntuneNamedValue]) -> Vec<IntuneNamedValue> {
     values
         .iter()
         .map(|entry| IntuneNamedValue {
-            name: if reads_as_field_name(&entry.name) {
+            name: if is_known_named_value_name(&entry.name) {
                 entry.name.clone()
             } else {
                 REDACTED.to_owned()
@@ -323,15 +350,19 @@ mod tests {
 
     #[test]
     fn a_name_that_is_not_a_field_name_is_masked() {
-        // The value check cannot see these: the identity is in the name slot.
+        // The value check cannot see any of these: the identity is in the name slot.
         let masked = [
             "adam.admin@contoso.example.com",
-            r"contoso\adam.admin",
+            r"contosodam.admin",
             "adam.admin",
             "./Device/Vendor/MSFT/Policy/Config/Update/UpdateServiceUrl",
+            // A serial is alphanumeric, so a shape test cannot see it, and the
+            // charter names serials as tenant data an export must not carry.
+            "ABC123XYZ",
+            "SERIAL0123456789",
         ];
-        // Names the corpus actually carries, which must survive or the export
-        // stops describing the capture.
+        // Names the corpus carries, which must survive or the export stops
+        // describing the capture.
         let kept = [
             "updateGuid",
             "Message5",
@@ -348,7 +379,7 @@ mod tests {
             assert_eq!(
                 redact_named(&values)[0].name,
                 REDACTED,
-                "{name} is an identity shape, not a field name"
+                "{name} is not a field name"
             );
         }
         for name in kept {
