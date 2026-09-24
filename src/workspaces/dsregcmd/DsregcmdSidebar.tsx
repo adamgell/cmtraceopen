@@ -34,6 +34,29 @@ interface CaptureBundleProjection {
  * the projection cannot read as text is copied unchanged and named, so whoever
  * hands it over knows what was not projected rather than assuming.
  */
+/**
+ * The projection in an IPC payload, or nothing when it is not one.
+ *
+ * `invoke<T>` types the call at compile time only, so the payload is checked
+ * before it reaches the render pass: a missing `projectedFiles` would otherwise
+ * surface as `undefined` in the message the engineer reads.
+ */
+function readProjection(payload: unknown): CaptureBundleProjection | null {
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+  const candidate = payload as Partial<CaptureBundleProjection>;
+  if (
+    typeof candidate.destination !== "string" ||
+    typeof candidate.projectedFiles !== "number" ||
+    !Array.isArray(candidate.unprojectedFiles) ||
+    !candidate.unprojectedFiles.every((file) => typeof file === "string")
+  ) {
+    return null;
+  }
+  return candidate as CaptureBundleProjection;
+}
+
 function ExportBundleButton({ bundleRoot }: { bundleRoot: string }) {
   const [state, setState] = useState<
     | { kind: "idle" }
@@ -45,10 +68,16 @@ function ExportBundleButton({ bundleRoot }: { bundleRoot: string }) {
   const run = async () => {
     setState({ kind: "busy" });
     try {
-      const projection = await invoke<CaptureBundleProjection>(
-        "project_dsregcmd_capture_bundle",
-        { bundleRoot },
+      const projection = readProjection(
+        await invoke<unknown>("project_dsregcmd_capture_bundle", { bundleRoot }),
       );
+      if (!projection) {
+        setState({
+          kind: "failed",
+          message: "The export returned a result this build cannot read.",
+        });
+        return;
+      }
       setState({ kind: "done", projection });
     } catch (error) {
       setState({
@@ -162,7 +191,10 @@ export function DsregcmdSidebar() {
               {sourceContext.bundlePath && (
                 <>
                 <div style={{ marginTop: "6px", wordBreak: "break-word" }}><strong>Bundle root:</strong> {sourceContext.bundlePath}</div>
-                <ExportBundleButton bundleRoot={sourceContext.bundlePath} />
+                <ExportBundleButton
+                  key={sourceContext.bundlePath}
+                  bundleRoot={sourceContext.bundlePath}
+                />
               </>
               )}
             </div>

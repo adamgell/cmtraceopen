@@ -399,6 +399,7 @@ pub fn run() {
             commands::dsregcmd::load_dsregcmd_source,
             #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::redact_dsregcmd_status_text,
+            #[cfg(feature = "dsregcmd")]
             commands::dsregcmd::project_dsregcmd_capture_bundle,
             #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_scan_environment,

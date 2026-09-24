@@ -1090,9 +1090,6 @@ mod tests {
         );
     }
 
-    /// One text reaches one token even when two fields classify it under two
-    /// kinds.
-    ///
     /// An artifact handed over from a bundle loses what its capture named.
     ///
     /// The capture is the classifier: the bundle's other files carry the same
@@ -1116,6 +1113,9 @@ mod tests {
         );
     }
 
+    /// One text reaches one token even when two fields classify it under two
+    /// kinds.
+    ///
     /// The kind is a property of the *field*; the token is a property of the
     /// *value*, and a narrative mention carries no field at all. Keying the table
     /// by kind would leave a mention of `contoso.example` in prose choosing

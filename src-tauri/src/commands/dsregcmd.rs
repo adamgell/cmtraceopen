@@ -504,6 +504,7 @@ const ARTIFACT_SCHEDULED_TASKS: &str = "evidence/scheduled-tasks/enterprise-mgmt
 /// `redacted_status_text`. The folder is not private, though: its path is handed
 /// One projected copy of a capture bundle.
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptureBundleProjection {
     /// The folder the shareable copy was written to.
     pub destination: String,
@@ -558,7 +559,7 @@ fn project_capture_bundle_impl(
 
     let mut projected_files = 0;
     let mut unprojected_files = Vec::new();
-    project_bundle_dir(
+    if let Err(error) = project_bundle_dir(
         root,
         root,
         &destination,
@@ -566,7 +567,12 @@ fn project_capture_bundle_impl(
         &capture_path,
         &mut projected_files,
         &mut unprojected_files,
-    )?;
+    ) {
+        // A copy that stops halfway is worse than none: the caller would have to
+        // tell a partial projection from a complete one by reading it.
+        let _ = std::fs::remove_dir_all(&destination);
+        return Err(error);
+    }
 
     Ok(CaptureBundleProjection {
         destination: destination.display().to_string(),
@@ -608,7 +614,7 @@ fn project_bundle_dir(
         if file_type.is_symlink() {
             // Following it could project a file outside the bundle, and copying
             // it would hand over something this walk never inspected.
-            unprojected_files.push(relative.display().to_string());
+            unprojected_files.push(projection_relative_path(&relative));
             continue;
         }
         if file_type.is_dir() {
@@ -662,11 +668,24 @@ fn project_bundle_dir(
                         target.display()
                     ))
                 })?;
-                unprojected_files.push(relative.display().to_string());
+                unprojected_files.push(projection_relative_path(&relative));
             }
         }
     }
     Ok(())
+}
+
+/// A bundle-relative path as the projection reports it, always with `/`.
+///
+/// `Path::display` uses the platform separator, so a Windows run reported
+/// `evidence\\registry\\device.bin` and the test asserting the POSIX spelling
+/// failed only on Windows.
+fn projection_relative_path(relative: &Path) -> String {
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<String>>()
+        .join("/")
 }
 
 /// The projected form of one artifact's bytes, or `None` when they are not text.
@@ -693,7 +712,7 @@ fn decode_utf16(bytes: &[u8]) -> Option<(String, bool)> {
         [0xFE, 0xFF, rest @ ..] => (false, rest),
         _ => return None,
     };
-    if body.len() % 2 != 0 {
+    if !body.len().is_multiple_of(2) {
         return None;
     }
     let units: Vec<u16> = (0..body.len() / 2)
@@ -758,10 +777,19 @@ fn shareable_sibling(root: &Path) -> std::path::PathBuf {
 /// of that boundary: the copy this writes has the capture's identities scrubbed
 /// out of every artifact, and the folder it was read from is untouched.
 #[tauri::command]
-pub fn project_dsregcmd_capture_bundle(
+pub async fn project_dsregcmd_capture_bundle(
     bundle_root: String,
 ) -> Result<CaptureBundleProjection, crate::error::AppError> {
-    project_capture_bundle_impl(Path::new(&bundle_root))
+    // Reads and rewrites every file in the bundle and runs the redaction grammar
+    // over event-log JSON: the same class of work `analyze_dsregcmd` moves off
+    // the main thread, and a synchronous command body would freeze the window.
+    tauri::async_runtime::spawn_blocking(move || {
+        project_capture_bundle_impl(Path::new(&bundle_root))
+    })
+    .await
+    .map_err(|error| {
+        crate::error::AppError::Internal(format!("The bundle projection task failed: {error}"))
+    })?
 }
 
 /// to the frontend, the sidebar renders it, and a support engineer can open or
