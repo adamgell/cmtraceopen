@@ -34,6 +34,7 @@ function file(overrides: Partial<DeploymentLogFile> = {}): DeploymentLogFile {
 
 function readyResult(): DeploymentAnalysisResult {
   return {
+    limitations: [],
     folderPath: "C:\\Windows\\Logs\\Software",
     files: [
       file({
@@ -88,6 +89,15 @@ function seedReady() {
   });
 }
 
+function seedReadyWith(overrides: Partial<DeploymentAnalysisResult>) {
+  useDeploymentStore.setState({
+    phase: "ready",
+    result: { ...readyResult(), ...overrides },
+    errorMessage: null,
+    expandedErrorIndex: null,
+  });
+}
+
 afterEach(() => {
   cleanup();
   useDeploymentStore.getState().reset();
@@ -102,6 +112,28 @@ beforeEach(() => {
 });
 
 describe("DeploymentWorkspace fixtures", () => {
+  it("DEP-004 states the scan was bounded when the backend reports a limit", () => {
+    seedReadyWith({
+      limitations: ["Directory depth budget of 32 was exhausted."],
+    });
+    render(<DeploymentWorkspace />);
+
+    // The counts are the logs that were read, not the folder's contents, and the
+    // workspace has to say so.
+    expect(screen.getByText("Scan incomplete")).toBeInTheDocument();
+    expect(
+      screen.getByText("Directory depth budget of 32 was exhausted."),
+    ).toBeInTheDocument();
+  });
+
+  it("DEP-005 does not claim a gap when the scan covered the folder", () => {
+    seedReady();
+    render(<DeploymentWorkspace />);
+
+    // A banner that always shows would stop meaning anything.
+    expect(screen.queryByText("Scan incomplete")).toBeNull();
+  });
+
   it("DEP-001 shows folder analysis inventory and outcome counts", () => {
     seedReady();
     render(<DeploymentWorkspace />);

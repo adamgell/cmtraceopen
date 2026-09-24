@@ -458,7 +458,11 @@ export function StatusBar() {
       deploymentPhase === "analyzing"
         ? "Analyzing"
         : deploymentPhase === "ready" && deploymentResult
-          ? `${deploymentResult.totalFiles} files`
+          ? `${deploymentResult.totalFiles} files${
+              deploymentResult.limitations.length > 0
+                ? " (scan incomplete)"
+                : ""
+            }`
           : deploymentPhase === "error"
             ? "Analysis failed"
             : deploymentPhase === "empty"

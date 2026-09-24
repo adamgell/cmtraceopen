@@ -269,6 +269,49 @@ export function DeploymentWorkspace() {
         unknown={result.unknown}
       />
 
+      {result.limitations.length > 0 && (
+        <div
+          style={{
+            padding: "8px 10px",
+            borderRadius: "4px",
+            backgroundColor: tokens.colorNeutralBackground3,
+            borderLeft: `3px solid ${tokens.colorPaletteDarkOrangeForeground1}`,
+          }}
+        >
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              marginBottom: "4px",
+              color: tokens.colorPaletteDarkOrangeForeground1,
+            }}
+          >
+            Scan incomplete
+          </div>
+          <div
+            style={{
+              fontSize: "12px",
+              color: tokens.colorNeutralForeground2,
+            }}
+          >
+            These counts cover the logs that were read, not every log in the
+            folder.
+          </div>
+          <ul
+            style={{
+              margin: "4px 0 0",
+              paddingLeft: "18px",
+              fontSize: "12px",
+              color: tokens.colorNeutralForeground2,
+            }}
+          >
+            {result.limitations.map((limitation) => (
+              <li key={limitation}>{limitation}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {failedFiles.length > 0 && (
         <div>
           <div
