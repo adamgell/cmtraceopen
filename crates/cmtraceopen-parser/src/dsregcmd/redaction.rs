@@ -120,6 +120,14 @@ const KIND_HOST: &str = "host";
 /// covered.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
+/// Shortest identity a caller may add to a hand-off table.
+///
+/// Lower than the display-name floor because the shape is known: a field stating
+/// a domain, an Entra id or a computer name holds an identity, so a short value is
+/// a short identity rather than a word that might be prose. Held above two bytes so
+/// a degenerate value cannot rewrite every occurrence of those characters.
+const MIN_IDENTIFIER_BYTES: usize = 4;
+
 /// Every identity value this lane classified, paired with the token that
 /// replaces it.
 ///
@@ -150,6 +158,18 @@ impl IdentityLiterals {
     fn push(&mut self, value: &str, kind: &str) {
         let literal = value.trim();
         if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+            return;
+        }
+        self.insert(literal, kind);
+    }
+
+    /// Record one classified value, unless the table already represents it.
+    ///
+    /// No floor here: the callers hold their values to the floor their kind
+    /// deserves -- display names to [`MIN_SCRUBBED_LITERAL_BYTES`], identifiers to
+    /// [`MIN_IDENTIFIER_BYTES`].
+    fn insert(&mut self, literal: &str, kind: &str) {
+        if literal.is_empty() {
             return;
         }
 
@@ -417,8 +437,16 @@ impl CaptureLiterals {
     }
 
     /// Add one identity the capture does not name, from the evidence beside it.
+    ///
+    /// Identifiers are held to [`MIN_IDENTIFIER_BYTES`] rather than the display
+    /// name floor: an on-premises domain can be four bytes, and the path for names
+    /// would drop it from the table this exists to build.
     pub fn add(&mut self, value: &str, kind: IdentityKind) {
-        self.literals.push(value, kind.name());
+        let literal = value.trim();
+        if literal.len() < MIN_IDENTIFIER_BYTES {
+            return;
+        }
+        self.literals.insert(literal, kind.name());
     }
 
     /// Project one artifact with every literal this hand-off carries.
@@ -1127,6 +1155,25 @@ mod tests {
             "the export claims a tenant identity the capture never held: {}",
             json(&published)
         );
+    }
+
+    /// A short identifier added by the caller is scrubbed, not skipped.
+    ///
+    /// `add` went through the path that holds *display names* to a six-byte floor,
+    /// so an on-premises tenant domain of four bytes was dropped from the table and
+    /// left in the copy the table exists to clean. An identifier is short because
+    /// the identity is short, which is why it has its own floor.
+    #[test]
+    fn a_short_identifier_added_by_the_caller_is_scrubbed() {
+        let capture = " DomainName : contoso.example\n";
+        let artifact = "the device joined corp yesterday";
+
+        let mut literals = super::CaptureLiterals::from_capture(capture);
+        literals.add("corp", super::IdentityKind::Tenant);
+
+        let projected = literals.scrub(artifact);
+
+        assert!(!projected.contains("corp"), "{projected}");
     }
 
     /// An identity the capture never names is scrubbed when the caller adds it.
