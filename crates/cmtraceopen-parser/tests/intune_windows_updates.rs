@@ -49,16 +49,16 @@ const CORPUS: &str = "device/windows/updates";
 const SCENARIOS: [&str; 19] = [
     "co-management-workload-not-owned-by-intune",
     "conflicting-policy-sources",
+    "contradictory-order-with-unreadable-artifact",
     "csp-policy-delivery-failure",
     "download-failure",
     "effective-wsus-source-when-wufb-expected",
     "event-only-partial-bundle",
     "install-failure-with-servicing-corroboration",
-    "invalid-offset-contradictory-order",
     "local-success-stale-service-report",
     "maintenance-deadline-deferral",
     "policy-applied-no-applicable-update",
-    "policy-applied-update-installed-reboot-complete",
+    "policy-applied-update-installed-no-observed-restart",
     "privacy-safe-deterministic-export",
     "reboot-pending",
     "report-only-partial-bundle",
@@ -636,7 +636,7 @@ fn the_serialized_snapshot_keeps_its_documented_camel_case_shape() {
     // Pins the wire contract without a whole-document golden that would churn on
     // every fixture edit. New fields must be additive, so this asserts the
     // documented keys are present, not that no others are.
-    let (snapshot, _, _) = analyze("policy-applied-update-installed-reboot-complete");
+    let (snapshot, _, _) = analyze("policy-applied-update-installed-no-observed-restart");
     let value = serde_json::to_value(&snapshot).expect("snapshot serializes");
 
     for key in [
@@ -770,7 +770,7 @@ fn re_reducing_the_same_bundle_produces_the_same_snapshot() {
 /// the snapshot counts them under its input coverage.
 #[test]
 fn a_record_that_could_not_be_read_never_establishes_a_state() {
-    let scenario = "policy-applied-update-installed-reboot-complete";
+    let scenario = "policy-applied-update-installed-no-observed-restart";
     let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let mut bundle = build_bundle(scenario, &manifest);
@@ -807,7 +807,7 @@ fn a_record_that_could_not_be_read_never_establishes_a_state() {
 /// pending record there is not evidence that the restart completed.
 #[test]
 fn a_truncated_client_capture_cannot_claim_no_restart_is_pending() {
-    let scenario = "policy-applied-update-installed-reboot-complete";
+    let scenario = "policy-applied-update-installed-no-observed-restart";
     let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let bundle = build_bundle(scenario, &manifest);
@@ -893,7 +893,7 @@ fn has_policy_not_observed(snapshot: &UpdateSnapshot) -> bool {
 /// client channel at all, not only when it described it as truncated.
 #[test]
 fn an_undescribed_client_capture_cannot_claim_no_restart_is_pending() {
-    let scenario = "policy-applied-update-installed-reboot-complete";
+    let scenario = "policy-applied-update-installed-no-observed-restart";
     let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let mut undescribed = build_bundle(scenario, &manifest);
@@ -1033,7 +1033,7 @@ fn the_reporting_mismatch_does_not_claim_which_reading_is_current() {
 /// there too, not only in the fields this leaf classifies as sensitive.
 #[test]
 fn identity_in_caller_supplied_text_does_not_survive_the_export() {
-    let scenario = "policy-applied-update-installed-reboot-complete";
+    let scenario = "policy-applied-update-installed-no-observed-restart";
     let root = scenario_root(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let mut snapshot = analyze_update_bundle(&build_bundle(scenario, &manifest));

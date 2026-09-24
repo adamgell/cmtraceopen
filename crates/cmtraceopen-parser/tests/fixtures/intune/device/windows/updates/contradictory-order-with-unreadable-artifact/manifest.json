@@ -1,9 +1,9 @@
 {
   "intuneManifestVersion": 1,
   "syntheticFixture": true,
-  "scenario": "invalid-offset-contradictory-order",
+  "scenario": "contradictory-order-with-unreadable-artifact",
   "workload": "device/windows/updates",
-  "description": "One record carries an unusable timestamp and the install is stamped before its own download. The state is still read, but at low confidence.",
+  "description": "The install is stamped before its own download, so the ordering is contradictory and the state is read at low confidence. The second client artifact is unreadable, so its records never reach the analyzer: this scenario pins contradictory ordering and an unreadable artifact, not offset handling.",
   "generatedAtUtc": "2026-07-31T03:00:00Z",
   "artifacts": [
     {

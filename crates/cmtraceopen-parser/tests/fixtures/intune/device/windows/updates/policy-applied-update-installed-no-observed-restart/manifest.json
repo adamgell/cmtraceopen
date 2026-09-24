@@ -1,9 +1,9 @@
 {
   "intuneManifestVersion": 1,
   "syntheticFixture": true,
-  "scenario": "policy-applied-update-installed-reboot-complete",
+  "scenario": "policy-applied-update-installed-no-observed-restart",
   "workload": "device/windows/updates",
-  "description": "Update policy is delivered and applied, the update client scans, downloads, installs, and no restart is outstanding. The two chains reach their terminal states independently.",
+  "description": "A policy was applied and the update installed. The corpus holds no record of a completed restart, so this scenario pins the installation and the absence of a pending-restart record -- not a restart.",
   "generatedAtUtc": "2026-07-31T03:00:00Z",
   "artifacts": [
     {

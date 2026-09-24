@@ -1,5 +1,5 @@
 {
-  "scenario": "policy-applied-update-installed-reboot-complete",
+  "scenario": "policy-applied-update-installed-no-observed-restart",
   "workload": "device/windows/updates",
   "coverage": [
     {

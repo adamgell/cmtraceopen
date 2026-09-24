@@ -1,5 +1,5 @@
 {
-  "scenario": "invalid-offset-contradictory-order",
+  "scenario": "contradictory-order-with-unreadable-artifact",
   "workload": "device/windows/updates",
   "coverage": [
     {
