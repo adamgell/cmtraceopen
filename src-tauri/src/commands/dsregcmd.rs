@@ -815,19 +815,66 @@ fn collect_artifact_identities(
             collect_artifact_identities(&path, literals);
             continue;
         }
-        if !path
+        let is_json = path
             .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-        {
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        if is_json {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            collect_identities_in(&value, literals);
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        // Everything else is text this walk can read: registry dumps and command
+        // output name the same identities in a labelled form.
+        let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
+        let decoded = match std::str::from_utf8(&bytes) {
+            Ok(text) => Some(text.to_owned()),
+            Err(_) => decode_utf16(&bytes).map(|(text, _)| text),
         };
-        collect_identities_in(&value, literals);
+        if let Some(text) = decoded {
+            collect_labelled_identities(&text, literals);
+        }
+    }
+}
+
+/// The identities a labelled line of text states.
+///
+/// Registry dumps and command output are text, not JSON, and they name the same
+/// identities in a labelled form. The label is the anchor that makes this safe: a
+/// value with no label beside it has nothing to key on and is left to the shared
+/// grammar.
+fn collect_labelled_identities(
+    text: &str,
+    literals: &mut cmtraceopen_parser::dsregcmd::redaction::CaptureLiterals,
+) {
+    // One folded copy, so the search costs no allocation per key; the fold keeps
+    // byte offsets aligned.
+    let lowered = text.to_ascii_lowercase();
+    for (key, kind) in BUNDLE_IDENTITY_KEYS {
+        let needle = key.to_ascii_lowercase();
+        for (at, _) in lowered.match_indices(&needle) {
+            let after = text[at + key.len()..].trim_start();
+            let after = after
+                .strip_prefix([':', '='])
+                .map(str::trim_start)
+                .unwrap_or(after);
+            let after = after.strip_prefix('"').unwrap_or(after);
+            let value: String = after
+                .chars()
+                .take_while(|character| {
+                    !character.is_whitespace() && !matches!(character, '"' | ',' | '}' | ';')
+                })
+                .collect();
+            if !value.is_empty() {
+                literals.add(&value, kind);
+            }
+        }
     }
 }
 
@@ -1794,6 +1841,41 @@ mod tests {
         let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
 
         assert!(projection.projected_files >= 1, "{projection:?}");
+    }
+
+    /// A labelled identity in a non-JSON artifact is added to the table too.
+    ///
+    /// Registry dumps and command output are text, and they name the same
+    /// identities in a labelled form. The label is the anchor: an unlabelled value
+    /// has none, which is the boundary the review drew.
+    #[test]
+    fn projecting_a_bundle_scrubs_a_labelled_identity_in_text_evidence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        std::fs::write(
+            command_output.join("scp-query.txt"),
+            "tenantDomain = tenant.example.invalid\r\nazureAdId: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\r\n",
+        )
+        .expect("write scp evidence");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let scp = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("command-output")
+                .join("scp-query.txt"),
+        )
+        .expect("read projected scp evidence");
+        assert!(!scp.contains("tenant.example.invalid"), "{scp}");
     }
 
     fn write_projection_bundle(root: &std::path::Path) {
