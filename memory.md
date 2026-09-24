@@ -56,6 +56,8 @@ CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tau
 
 All SHAs are from Adam's PM charter (`~/.hermes/cmtrace-pm-charter.md`). Reverify with `git ls-remote` before acting.
 
+**That source is not readable on this workstation** — the path does not exist here, checked 2026-09-24 — and the CEO charter treats an unreadable contract as a fail-closed condition. So the citation above cannot be followed, and the table has to stand on its own: the SHAs are quoted in full precisely so a reader does not need the charter to verify them. If the file lives on the operator's machine only, this line should say so rather than pointing at a path a session cannot open.
+
 **Every row below was stale when rechecked on 2026-09-24**: the four issues had all merged
 weeks earlier while the table still said NOT merge-ready, hold the PR, gate pending, findings
 outstanding. The SHAs are preserved on origin branches, so the rows were never wrong about the
