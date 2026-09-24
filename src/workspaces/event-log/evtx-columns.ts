@@ -67,6 +67,11 @@ export function stringColumnPosition(id: string): number | null {
   const position = Number(id.slice(STRING_PREFIX.length));
   if (!Number.isInteger(position)) return null;
   if (position < 1 || position > MAX_INSERTION_STRING_COLUMNS) return null;
+  // Only the spelling this module writes names a column. `Number()` is happy with
+  // `1.5`, `1e0` and `" 2"`, and a persisted configuration carrying one of those
+  // would reach the renderer as a fractional position or inflate the count of
+  // columns a stored layout retains.
+  if (stringColumnId(position) !== id) return null;
   return position;
 }
 

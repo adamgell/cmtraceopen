@@ -1,24 +1,6 @@
 import { eventDateKey, formatEventTime } from "./evtx-time";
 import { describe, expect, it } from "vitest";
-import {
-  availableColumns,
-  discoverInsertionStrings,
-  discoverMappedProperties,
-  mappedColumnId,
-  columnValue,
-  columnWidth,
-  defaultColumnConfig,
-  EVTX_COLUMNS,
-  MAX_INSERTION_STRING_COLUMNS,
-  moveColumn,
-  retainedInsertionStrings,
-  sanitizeColumnConfig,
-  type EvtxColumnId,
-  type EvtxColumnSpec,
-  toggleColumn,
-  visibleColumns,
-  type EvtxColumnConfig,
-} from "./evtx-columns";
+import { EVTX_COLUMNS, MAX_INSERTION_STRING_COLUMNS, availableColumns, columnValue, columnWidth, defaultColumnConfig, discoverInsertionStrings, discoverMappedProperties, mappedColumnId, moveColumn, retainedInsertionStrings, sanitizeColumnConfig, stringColumnPosition, toggleColumn, type EvtxColumnConfig, type EvtxColumnId, type EvtxColumnSpec, visibleColumns } from "./evtx-columns";
 import type { EvtxRecord } from "./types";
 
 /**
@@ -256,6 +238,18 @@ describe("map columns", () => {
     const visible = visibleColumns(config);
     expect(visible.map((c) => c.id)).toEqual(["level", mappedColumnId("RemoteHost")]);
     expect(columnWidth(config, visible[1])).toBe(200);
+  });
+
+  it("rejects an insertion-string id that is not the canonical spelling", () => {
+    // Only what `stringColumnId` writes is a column: a persisted configuration
+    // carrying `string:1.5`, `string:1e0` or `string:01` names nothing, and
+    // accepting it lets a stray id inflate the discovered count or reach the
+    // renderer as a fractional position.
+    for (const id of ["string:1.5", "string:1e0", "string:01", "string: 2", "string:0", "string:11"]) {
+      expect(stringColumnPosition(id)).toBeNull();
+    }
+    expect(stringColumnPosition("string:1")).toBe(1);
+    expect(stringColumnPosition("string:10")).toBe(10);
   });
 
   it("still rejects an id that is neither fixed nor a map column", () => {
