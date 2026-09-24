@@ -1,6 +1,11 @@
 # ADR-005: Who owns a very large explicit event load
 
-- **Status:** Proposed — recorded as the resolution of issue #635. Confirm at merge.
+- **Status:** Accepted — recorded as the resolution of issue #635, and confirmed once the
+  changes it required were in `main`: `evtx_cancel_channel_query` sets the per-request flag
+  (`src-tauri/src/event_log/commands.rs`), the channel read loop stops between batches and
+  returns the partial scan, a stopped scan surfaces as `EvtxCoverageGapKind::Cancelled`
+  saying the channel may hold more, and the picker offers Stop in place of Load while a
+  load is in flight. The backend-owned path stays deferred with the criteria below.
 - **Context:** The Event Viewer workspace bounds the automatic load at
   `AUTO_LOAD_MAX_EVENTS` (2,000 events per channel) and says so on screen when a
   channel comes back at the bound. That bound is deliberately not applied to the
