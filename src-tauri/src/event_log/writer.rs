@@ -230,20 +230,14 @@ fn invalid_raw_xml(message: impl Into<String>) -> io::Error {
 }
 
 fn invalid_comment(comment: quick_xml::events::BytesText<'_>) -> bool {
-    let bytes = comment.into_inner();
-    bytes.windows(2).any(|pair| pair == b"--")
-        || bytes.last() == Some(&b'-')
-        || has_invalid_xml_code_point(&bytes)
+    let text = comment.into_inner();
+    text.contains("--") || text.ends_with('-') || has_invalid_xml_code_point(&text)
 }
 
-fn has_invalid_xml_code_point(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes)
-        .map(|value| {
-            value
-                .chars()
-                .any(|character| !valid_xml_code_point(character as u32))
-        })
-        .unwrap_or(true)
+fn has_invalid_xml_code_point(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| !valid_xml_code_point(character as u32))
 }
 
 fn valid_xml_code_point(value: u32) -> bool {
@@ -253,10 +247,7 @@ fn valid_xml_code_point(value: u32) -> bool {
         && !matches!(value, 0x00..=0x08 | 0x0B..=0x0C | 0x0E..=0x1F)
 }
 
-fn valid_xml_name(name: &[u8]) -> bool {
-    let Ok(name) = std::str::from_utf8(name) else {
-        return false;
-    };
+fn valid_xml_name(name: &str) -> bool {
     let mut characters = name.chars();
     let Some(first) = characters.next() else {
         return false;
@@ -298,10 +289,7 @@ fn trim_xml_whitespace(value: &str) -> &str {
     value.trim_matches(|character| matches!(character, ' ' | '\t' | '\r' | '\n'))
 }
 
-fn validate_element(
-    element: &quick_xml::events::BytesStart<'_>,
-    decoder: quick_xml::Decoder,
-) -> io::Result<()> {
+fn validate_element(element: &quick_xml::events::BytesStart<'_>) -> io::Result<()> {
     if !valid_xml_name(element.name().as_ref()) {
         return Err(invalid_raw_xml(
             "raw XML has an invalid element or attribute name",
@@ -316,9 +304,9 @@ fn validate_element(
             ));
         }
         let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|error| invalid_raw_xml(format!("raw XML attribute is malformed: {error}")))?;
-        if has_invalid_xml_code_point(value.as_bytes()) {
+        if has_invalid_xml_code_point(&value) {
             return Err(invalid_raw_xml("raw XML has an invalid Unicode code point"));
         }
     }
@@ -326,14 +314,12 @@ fn validate_element(
 }
 
 fn validate_xml_declaration(declaration: &quick_xml::events::BytesDecl<'_>) -> io::Result<()> {
-    let bytes: &[u8] = declaration;
-    if has_invalid_xml_code_point(bytes) {
+    let content: &str = declaration;
+    if has_invalid_xml_code_point(content) {
         return Err(invalid_raw_xml(
             "raw XML declaration has an invalid Unicode code point",
         ));
     }
-    let content = std::str::from_utf8(bytes)
-        .map_err(|_| invalid_raw_xml("raw XML declaration is not valid UTF-8"))?;
     if !content.starts_with("xml") || content.len() < 3 {
         return Err(invalid_raw_xml("raw XML declaration is malformed"));
     }
@@ -353,34 +339,34 @@ fn validate_xml_declaration(declaration: &quick_xml::events::BytesDecl<'_>) -> i
         }
         let value = attribute.value.as_ref();
         match name {
-            b"version" => {
+            "version" => {
                 if version_seen || encoding_seen || standalone_seen {
                     return Err(invalid_raw_xml(
                         "raw XML declaration attributes are out of order or duplicated",
                     ));
                 }
-                if !matches!(value, b"1.0" | b"1.1") {
+                if !matches!(value, "1.0" | "1.1") {
                     return Err(invalid_raw_xml(
                         "raw XML declaration has an invalid version",
                     ));
                 }
                 version_seen = true;
             }
-            b"encoding" => {
+            "encoding" => {
                 if !version_seen || encoding_seen || standalone_seen {
                     return Err(invalid_raw_xml(
                         "raw XML declaration attributes are out of order or duplicated",
                     ));
                 }
-                if !value.eq_ignore_ascii_case(b"UTF-8") {
+                if !value.eq_ignore_ascii_case("UTF-8") {
                     return Err(invalid_raw_xml(
                         "raw XML encoding must agree with UTF-8 output",
                     ));
                 }
                 encoding_seen = true;
             }
-            b"standalone" => {
-                if !version_seen || standalone_seen || !matches!(value, b"yes" | b"no") {
+            "standalone" => {
+                if !version_seen || standalone_seen || !matches!(value, "yes" | "no") {
                     return Err(invalid_raw_xml(
                         "raw XML declaration has an invalid standalone attribute",
                     ));
@@ -402,16 +388,18 @@ fn validate_xml_declaration(declaration: &quick_xml::events::BytesDecl<'_>) -> i
     Ok(())
 }
 
-fn valid_general_ref(name: &[u8]) -> bool {
-    let valid_named = matches!(name, b"amp" | b"lt" | b"gt" | b"apos" | b"quot");
+fn valid_general_ref(name: &str) -> bool {
+    let valid_named = matches!(name, "amp" | "lt" | "gt" | "apos" | "quot");
     let valid_numeric = name
-        .strip_prefix(b"#x")
-        .filter(|value| !value.is_empty() && value.iter().all(u8::is_ascii_hexdigit))
-        .and_then(|value| u32::from_str_radix(std::str::from_utf8(value).ok()?, 16).ok())
+        .strip_prefix("#x")
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .and_then(|value| u32::from_str_radix(value, 16).ok())
         .or_else(|| {
-            name.strip_prefix(b"#")
-                .filter(|value| !value.is_empty() && value.iter().all(u8::is_ascii_digit))
-                .and_then(|value| std::str::from_utf8(value).ok()?.parse::<u32>().ok())
+            name.strip_prefix('#')
+                .filter(|value| {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .and_then(|value| value.parse::<u32>().ok())
         })
         .is_some_and(valid_xml_code_point);
     valid_named || valid_numeric
@@ -454,7 +442,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 if depth == 0 && root_seen {
                     return Err(invalid_raw_xml("raw XML has multiple roots"));
                 }
-                validate_element(&element, reader.decoder())?;
+                validate_element(&element)?;
                 if depth == 0 {
                     root_seen = true;
                 }
@@ -464,7 +452,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 if depth == 0 && root_seen {
                     return Err(invalid_raw_xml("raw XML has multiple roots"));
                 }
-                validate_element(&element, reader.decoder())?;
+                validate_element(&element)?;
                 if depth == 0 {
                     root_seen = true;
                 }
@@ -481,10 +469,10 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 depth -= 1;
             }
             quick_xml::events::Event::Text(text) => {
-                let bytes = text.into_inner();
+                let text = text.into_inner();
                 let top_level = depth == 0;
-                if has_invalid_xml_code_point(&bytes)
-                    || (top_level && !bytes.iter().all(u8::is_ascii_whitespace))
+                if has_invalid_xml_code_point(&text)
+                    || (top_level && !text.bytes().all(|byte| byte.is_ascii_whitespace()))
                 {
                     return Err(invalid_raw_xml("raw XML has invalid text"));
                 }
@@ -493,8 +481,8 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 if depth == 0 {
                     return Err(invalid_raw_xml("raw XML has top-level CDATA"));
                 }
-                let bytes = data.into_inner();
-                if has_invalid_xml_code_point(&bytes) {
+                let text = data.into_inner();
+                if has_invalid_xml_code_point(&text) {
                     return Err(invalid_raw_xml("raw XML has an invalid Unicode code point"));
                 }
             }
@@ -502,7 +490,7 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
                 if depth == 0 {
                     return Err(invalid_raw_xml("raw XML has a top-level entity reference"));
                 }
-                if !valid_general_ref(reference.into_inner().as_ref()) {
+                if !valid_general_ref(&reference.into_inner()) {
                     return Err(invalid_raw_xml(
                         "raw XML contains an unknown or invalid entity reference",
                     ));
@@ -513,12 +501,12 @@ fn required_raw_xml(record: &EvtxRecord) -> io::Result<&str> {
             }
             quick_xml::events::Event::PI(instruction) => {
                 let target = instruction.target();
-                if !valid_xml_name(target) || target.eq_ignore_ascii_case(b"xml") {
+                if !valid_xml_name(target) || target.eq_ignore_ascii_case("xml") {
                     return Err(invalid_raw_xml(
                         "raw XML processing instruction has an invalid target",
                     ));
                 }
-                if has_invalid_xml_code_point(instruction.into_inner().as_ref()) {
+                if has_invalid_xml_code_point(&instruction.into_inner()) {
                     return Err(invalid_raw_xml(
                         "raw XML processing instruction has an invalid Unicode code point",
                     ));

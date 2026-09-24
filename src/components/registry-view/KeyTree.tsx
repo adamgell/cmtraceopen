@@ -36,14 +36,25 @@ export function KeyTree() {
       disclosurePointerRef.current = false;
     };
 
+    // Unfocusing the document root fires `blur` at the window with the element
+    // taking focus as `relatedTarget`; that is an ordinary focus transition, not
+    // the window going away, and the intent it would discard is still the one the
+    // focus event currently in flight belongs to.
+    const clearDisclosurePointerOnWindowBlur = (event: Event) => {
+      if ((event as FocusEvent).relatedTarget !== null) {
+        return;
+      }
+      disclosurePointerRef.current = false;
+    };
+
     document.addEventListener("pointerup", clearDisclosurePointer, true);
     document.addEventListener("pointercancel", clearDisclosurePointer, true);
-    window.addEventListener("blur", clearDisclosurePointer);
+    window.addEventListener("blur", clearDisclosurePointerOnWindowBlur);
 
     return () => {
       document.removeEventListener("pointerup", clearDisclosurePointer, true);
       document.removeEventListener("pointercancel", clearDisclosurePointer, true);
-      window.removeEventListener("blur", clearDisclosurePointer);
+      window.removeEventListener("blur", clearDisclosurePointerOnWindowBlur);
     };
   }, []);
 
