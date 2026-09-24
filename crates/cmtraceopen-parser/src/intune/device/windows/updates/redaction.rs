@@ -240,9 +240,14 @@ fn is_known_named_value_name(name: &str) -> bool {
     {
         return true;
     }
+    // Bounded, because an unbounded suffix is a hole in the allowlist: Windows
+    // numbers these positionally and a real event carries a handful of `<Data>`
+    // elements, so three digits is generous — while `Message12345678901234567890`
+    // is a name slot carrying a serial-shaped identifier past the check that masks
+    // values.
     if ["Message", "HexInt"].iter().any(|prefix| {
         name.strip_prefix(prefix)
-            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
+            .is_some_and(|rest| rest.len() <= 3 && rest.bytes().all(|byte| byte.is_ascii_digit()))
     }) {
         return true;
     }
@@ -360,12 +365,18 @@ mod tests {
             // charter names serials as tenant data an export must not carry.
             "ABC123XYZ",
             "SERIAL0123456789",
+            // The same trick through the positional allowlist: a bounded prefix
+            // with an unbounded numeric tail.
+            "Message12345678901234567890",
+            "HexInt9999999",
         ];
         // Names the corpus carries, which must survive or the export stops
         // describing the capture.
         let kept = [
             "updateGuid",
             "Message5",
+            "Message10",
+            "Message999",
             "HexInt1",
             "updatelist",
             "tenantDisplayName",
