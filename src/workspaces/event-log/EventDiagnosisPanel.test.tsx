@@ -176,9 +176,14 @@ describe("EventDiagnosisPanel", () => {
 
   // Previously parameterised over both outcomes and asserting they shared the
   // text "No issues detected" - which is the conflation this test now prevents.
-  it.each(["noFindings", "insufficientEvidence"] as const)(
+  // The wording is spelled out here rather than read from the map, so that
+  // re-collapsing the two labels fails this test and not only the map invariant.
+  it.each([
+    ["noFindings", "No issues found"],
+    ["insufficientEvidence", "Insufficient evidence"],
+  ] as const)(
     "labels the %s outcome with its own wording",
-    (outcome) => {
+    (outcome, label) => {
       render(
         <EventDiagnosisPanel
           summary={{
@@ -186,15 +191,20 @@ describe("EventDiagnosisPanel", () => {
             overview: {
               ...summary.overview,
               outcome,
-              headline: "No issues detected.",
+              // Neutral headline: the assertion below is about the badge the
+              // panel derives from the outcome, not about text echoed back.
+              headline: "Diagnosis summary.",
             },
           }}
         />,
       );
 
-      expect(screen.getByText(OUTCOME_LABELS[outcome])).toBeTruthy();
+      expect(screen.getByText(label)).toBeTruthy();
       // The raw enum name is still not shown to a reader.
       expect(screen.queryByText(outcome)).toBeNull();
+      // The defect: a coverage gap rendered as the clean result's wording. A
+      // panel that cannot conclude must not read as a panel that concluded.
+      expect(screen.queryByText("No issues detected")).toBeNull();
     },
   );
 
