@@ -33,6 +33,7 @@ use cmtraceopen_parser::intune::device::windows::updates::{
     UpdatePhase, UpdateSnapshot, UpdateSource, UpdateSupplementalLog, UpdateWorkloadOwner,
     EVIDENCE_FINDING_PREFIX, POLICY_FINDING_PREFIX, REDACTED, UPDATE_FINDING_PREFIX,
 };
+use cmtraceopen_parser::intune::evidence::IntuneTimestampKind;
 use cmtraceopen_parser::intune::evidence::{
     IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
     IntuneEvidenceRef, IntuneFindingConfidence, IntuneObservationContext, IntuneParseState,
@@ -1026,6 +1027,73 @@ fn the_reporting_mismatch_does_not_claim_which_reading_is_current() {
         !mismatch.summary.contains("more recent"),
         "the mismatch summary claims recency without comparing timestamps: {}",
         mismatch.summary
+    );
+}
+
+/// An unplaceable reading is never the one the verdict rests on.
+///
+/// Two cases, and the difference between them is the rule: an unreadable time on
+/// a record that is not the terminal one leaves the corpus's verdict standing, and
+/// an unreadable time on the terminal record must not carry that record's outcome
+/// into the state. The corpus supplies the first expectation; the second is the
+/// protection `sort_readings` exists for.
+#[test]
+fn an_unplaceable_reading_never_states_the_verdict() {
+    let scenario = "install-failure-with-servicing-corroboration";
+    let root = scenario_root(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+
+    let unplaceable = |bundle: &mut UpdateEvidenceBundle, index: usize| {
+        let event = bundle
+            .events
+            .iter_mut()
+            .filter(|event| event.context.evidence_ref.source_artifact_id == "wu-client-events")
+            .nth(index)
+            .expect("the scenario carries this client event");
+        let timestamp = event
+            .context
+            .source_timestamp
+            .as_mut()
+            .expect("the client event carries a timestamp");
+        timestamp.kind = IntuneTimestampKind::Invalid;
+        timestamp.normalized_utc = None;
+    };
+
+    // An earlier client record loses its time: the terminal record still states
+    // the outcome, so the corpus's verdict has to hold.
+    let mut earliest = build_bundle(scenario, &manifest);
+    unplaceable(&mut earliest, 0);
+    let snapshot = analyze_update_bundle(&earliest);
+    assert!(
+        snapshot
+            .update_chain
+            .transactions
+            .iter()
+            .any(|transaction| !transaction.readings_are_placed),
+        "the unplaceable record is reported as unplaced"
+    );
+    assert_eq!(
+        serde_json::to_value(snapshot.update_chain.state).expect("the state serializes"),
+        expected["updateChain"]["state"],
+        "the terminal reading is still placed, so the verdict stands"
+    );
+
+    // The terminal record loses its time: the state must not keep its outcome,
+    // because a reading that cannot be placed cannot be the one the verdict rests
+    // on.
+    let mut latest = build_bundle(scenario, &manifest);
+    let client_events = latest
+        .events
+        .iter()
+        .filter(|event| event.context.evidence_ref.source_artifact_id == "wu-client-events")
+        .count();
+    unplaceable(&mut latest, client_events - 1);
+    let snapshot = analyze_update_bundle(&latest);
+    let state = serde_json::to_value(snapshot.update_chain.state).expect("the state serializes");
+    assert_ne!(
+        state, "installFailed",
+        "the unplaceable record's outcome is not the verdict"
     );
 }
 
