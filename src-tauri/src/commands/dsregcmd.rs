@@ -865,10 +865,13 @@ fn collect_labelled_identities(
         let needle = key.to_ascii_lowercase();
         for (at, _) in lowered.match_indices(&needle) {
             let after = text[at + key.len()..].trim_start();
-            let after = after
-                .strip_prefix([':', '='])
-                .map(str::trim_start)
-                .unwrap_or(after);
+            // A label with no delimiter states nothing: treating the word that
+            // merely follows the key as its value added `Contoso` to the table for
+            // `tenantDomainContoso` and scrubbed it out of the whole bundle.
+            let Some(after) = after.strip_prefix([':', '=']) else {
+                continue;
+            };
+            let after = after.trim_start();
             let after = after.strip_prefix('"').unwrap_or(after);
             let value: String = after
                 .chars()
@@ -1881,6 +1884,44 @@ mod tests {
         )
         .expect("read projected scp evidence");
         assert!(!scp.contains("tenant.example.invalid"), "{scp}");
+    }
+
+    /// Only a *labelled* value is read, not any word the key happens to prefix.
+    ///
+    /// The reader is anchored on the label, so a key without a following `:` or `=`
+    /// states nothing: treating `tenantDomainContoso` as a label would add
+    /// `Contoso` to the table and scrub an ordinary word out of the whole bundle.
+    #[test]
+    fn a_key_without_a_delimiter_states_no_identity() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let command_output = root.join("evidence").join("command-output");
+        std::fs::create_dir_all(&command_output).expect("create bundle dirs");
+        std::fs::write(
+            command_output.join("dsregcmd-status.txt"),
+            " DomainName : contoso.example\n",
+        )
+        .expect("write capture");
+        std::fs::write(
+            command_output.join("notes.txt"),
+            "tenantDomainContoso mentioned in passing\n",
+        )
+        .expect("write notes");
+
+        let projection = super::project_capture_bundle_impl(&root).expect("project the bundle");
+
+        let destination = std::path::PathBuf::from(&projection.destination);
+        let notes = std::fs::read_to_string(
+            destination
+                .join("evidence")
+                .join("command-output")
+                .join("notes.txt"),
+        )
+        .expect("read projected notes");
+        assert!(
+            notes.contains("Contoso"),
+            "a key with no delimiter states no identity: {notes}"
+        );
     }
 
     fn write_projection_bundle(root: &std::path::Path) {
