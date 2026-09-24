@@ -69,3 +69,78 @@ describe("EvtxDetailPane correlation identity", () => {
     expect(screen.getByText("S-1-5-21-1000")).toBeInTheDocument();
   });
 });
+
+describe("EvtxDetailPane error codes", () => {
+  const mention = (overrides: Record<string, unknown>) => ({
+    start: 0,
+    end: 10,
+    codeHex: "0x80070005",
+    codeDecimal: "-2147024891",
+    description: "",
+    category: "",
+    outcome: null,
+    known: false,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.getState().reset();
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message: "Update failed with 0x80070005" }],
+      selectedRecordId: RECORD.id,
+    });
+    useMarkerStore.setState({
+      markersByFile: new Map(),
+      loadingFiles: new Set(["event-log:Application.evtx"]),
+    });
+  });
+
+  it("shows a code the database knows with its meaning", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "resolve_error_codes_in_text"
+        ? Promise.resolve([
+            mention({
+              known: true,
+              description: "Access is denied.",
+              category: "Win32",
+              outcome: "Failure",
+            }),
+          ])
+        : Promise.resolve(null),
+    );
+
+    render(<EvtxDetailPane />);
+
+    expect(
+      await screen.findByText("Error codes in this event"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Access is denied\./)).toBeInTheDocument();
+    expect(screen.getByText(/Win32/)).toBeInTheDocument();
+  });
+
+  it("labels a code the database cannot explain instead of staying silent", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "resolve_error_codes_in_text"
+        ? Promise.resolve([mention({ codeHex: "0xDEADBEEF", known: false })])
+        : Promise.resolve(null),
+    );
+
+    render(<EvtxDetailPane />);
+
+    expect(
+      await screen.findByText("Error codes in this event"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("0xDEADBEEF")).toBeInTheDocument();
+    expect(screen.getByText("Not in the error database")).toBeInTheDocument();
+  });
+
+  it("shows nothing extra when the command reports no codes", async () => {
+    invoke.mockResolvedValue([]);
+
+    render(<EvtxDetailPane />);
+
+    expect(screen.getByText("Update failed with 0x80070005")).toBeInTheDocument();
+    expect(screen.queryByText("Error codes in this event")).not.toBeInTheDocument();
+  });
+});

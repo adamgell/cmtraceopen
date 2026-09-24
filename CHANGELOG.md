@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Event detail resolves the error codes in an event's text (#665)**: A grid full of `0x8007…` and HRESULTs from MDM, AppX, Windows Update or ConfigMgr events was readable only by opening the Error Lookup dialog and retyping the code. The detail pane now lists the codes it finds in the message and event data with their name and category, and marks a code the database cannot explain as not in the database rather than staying silent. Detection stays in the parser crate, so the frontend never grows a second idea of what a code looks like ([#665](https://github.com/adamgell/cmtraceopen/issues/665)).
+
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, tokens } from "@fluentui/react-components";
+import { invoke } from "@tauri-apps/api/core";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -19,11 +20,26 @@ import {
 import { useEvtxStore } from "./evtx-store";
 import { EvtxMarkerControls } from "./EvtxTimelineRow";
 
+/** One error code found in an event's text, as the parser crate reports it. */
+interface ErrorCodeMention {
+  start: number;
+  end: number;
+  codeHex: string;
+  codeDecimal: string;
+  /** Empty when `known` is false. */
+  description: string;
+  /** Empty when `known` is false. */
+  category: string;
+  outcome: "Failure" | "Success" | "SuccessRequiresAction" | null;
+  known: boolean;
+}
+
 export function EvtxDetailPane() {
   const markersByFile = useMarkerStore((s) => s.markersByFile);
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const [showRawXml, setShowRawXml] = useState(false);
+  const [errorCodes, setErrorCodes] = useState<ErrorCodeMention[]>([]);
 
   const logDetailsFontSize = useUiStore((s) => s.logDetailsFontSize);
   const fontSize = clampLogDetailsFontSize(logDetailsFontSize);
@@ -35,6 +51,50 @@ export function EvtxDetailPane() {
     if (selectedRecordId == null) return null;
     return records.find((r) => r.id === selectedRecordId) ?? null;
   }, [records, selectedRecordId]);
+  /**
+   * The text an operator is reading here: the message and the event data, which
+   * is where MDM, AppX and Windows Update codes tend to sit. `rawXml` repeats
+   * both, so it is left out rather than scanned twice.
+   */
+  const codeSourceText = useMemo(() => {
+    if (!record) return "";
+    return [record.message, ...record.eventData.map((field) => field.value)]
+      .filter((value) => value.length > 0)
+      .join("\n");
+  }, [record]);
+
+  // Detection lives in the parser crate, so this asks rather than decides what a
+  // code looks like. A code the database does not hold comes back marked unknown.
+  useEffect(() => {
+    if (codeSourceText.length === 0) {
+      setErrorCodes([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<ErrorCodeMention[]>("resolve_error_codes_in_text", {
+      text: codeSourceText,
+    })
+      .then((mentions) => {
+        if (cancelled) return;
+        // One line per distinct code: an event that repeats a code in its event
+        // data should not repeat it in the list.
+        const seen = new Set<string>();
+        setErrorCodes(
+          (Array.isArray(mentions) ? mentions : []).filter((mention) => {
+            if (seen.has(mention.codeHex)) return false;
+            seen.add(mention.codeHex);
+            return true;
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setErrorCodes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codeSourceText]);
+
   const marker = useMemo(
     () => (record ? getEvtxMarker(record, markersByFile) : null),
     [record, markersByFile]
@@ -146,6 +206,56 @@ export function EvtxDetailPane() {
           }}
         >
           {record.message}
+        </div>
+      )}
+
+      {errorCodes.length > 0 && (
+        <div
+          style={{
+            border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: "4px",
+            padding: "8px",
+            flexShrink: 0,
+          }}
+        >
+          <div
+            style={{
+              fontSize: `${labelFontSize}px`,
+              color: tokens.colorNeutralForeground3,
+              marginBottom: "4px",
+            }}
+          >
+            Error codes in this event
+          </div>
+          <ul
+            style={{
+              margin: 0,
+              paddingLeft: "18px",
+              fontSize: `${monoFontSize}px`,
+              lineHeight: detailLineHeight,
+            }}
+          >
+            {errorCodes.map((mention) => (
+              <li key={mention.codeHex}>
+                <span style={{ fontFamily: LOG_MONOSPACE_FONT_FAMILY }}>
+                  {mention.codeHex}
+                </span>
+                {": "}
+                {mention.known ? (
+                  <span>
+                    {mention.description}
+                    {mention.category ? ` (${mention.category})` : ""}
+                  </span>
+                ) : (
+                  // Not silence: the code is real, the database just cannot
+                  // explain it, and the operator needs to see that difference.
+                  <span style={{ color: tokens.colorNeutralForeground3 }}>
+                    Not in the error database
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
