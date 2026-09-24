@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type {
-  AggregateParsedFileResult,
+  AggregateSourceFile,
   EvidenceBundleMetadata,
   FolderEntry,
   KnownSourceMetadata,
@@ -446,7 +446,55 @@ export function getParserSelectionDisplay(
   };
 }
 
-function buildAggregateFileOrder(files: AggregateParsedFileResult[]): Record<string, number> {
+export interface AggregateParserDisplay {
+  /** How many distinct parsers read the files in the merged stream. */
+  parserCount: number;
+  /** The single parser's label, or null when the stream mixes parsers. */
+  parserLabel: string | null;
+  /** The format every file shares, or "Mixed" when they differ. */
+  formatLabel: string;
+  provenanceLabel: string;
+  qualityLabel: string;
+}
+
+/**
+ * Summarize the parsers behind an aggregate folder stream.
+ *
+ * Every file in the merged stream was read by whichever parser matched it, so
+ * the stream has no single parser selection of its own. Reporting "Unknown
+ * format" for a folder whose files were all read by their dedicated parser hid
+ * the provenance the analyst needs, and adopting one file's selection would
+ * claim a format the other files do not have (#657). Values every file shares
+ * are reported as they are; a mix says so.
+ */
+export function getAggregateParserDisplay(
+  files: AggregateSourceFile[]
+): AggregateParserDisplay | null {
+  if (files.length === 0) {
+    return null;
+  }
+
+  const formats = new Set(files.map((file) => file.formatDetected));
+  const parsers = new Set(files.map((file) => file.parserSelection.parser));
+  const provenances = new Set(
+    files.map((file) => getProvenanceLabel(file.parserSelection.provenance))
+  );
+  const qualities = new Set(
+    files.map((file) => getQualityLabel(file.parserSelection.parseQuality))
+  );
+  const soleParser = parsers.size === 1 ? [...parsers][0] : null;
+
+  return {
+    parserCount: parsers.size,
+    parserLabel: soleParser === null ? null : getParserLabel(soleParser),
+    formatLabel: formats.size === 1 ? [...formats][0] : "Mixed",
+    provenanceLabel:
+      provenances.size === 1 ? [...provenances][0] : "Mixed provenance",
+    qualityLabel: qualities.size === 1 ? [...qualities][0] : "Mixed quality",
+  };
+}
+
+function buildAggregateFileOrder(files: AggregateSourceFile[]): Record<string, number> {
   return Object.fromEntries(files.map((file, index) => [file.filePath, index]));
 }
 
@@ -577,7 +625,7 @@ interface LogState {
   /** Selected file inside the active source container. */
   selectedSourceFilePath: string | null;
   /** Included files when the active source is loaded as an aggregate folder stream. */
-  aggregateFiles: AggregateParsedFileResult[];
+  aggregateFiles: AggregateSourceFile[];
   /** Changes only when an aggregate source is explicitly loaded or replaced. */
   aggregateTailGeneration: number;
   /** User-visible source loading/selection state. */
@@ -640,7 +688,7 @@ interface LogState {
   setByteOffset: (offset: number) => void;
   setActiveColumns: (columns: ColumnId[]) => void;
   setSourceOpenMode: (mode: SourceOpenMode) => void;
-  setAggregateFiles: (files: AggregateParsedFileResult[]) => void;
+  setAggregateFiles: (files: AggregateSourceFile[]) => void;
   setHighlightText: (text: string) => void;
   setHighlightCaseSensitive: (sensitive: boolean) => void;
   setFindQuery: (text: string) => void;
