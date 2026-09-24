@@ -19,6 +19,7 @@ import {
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import type {
+  AggregateSourceFile,
   FolderEntry,
   KnownSourceMetadata,
   LogEntry,
@@ -361,7 +362,7 @@ async function loadFolderProgressive(
 
   // Build aggregate view — use Array.concat or indexed copy instead of
   // push(...spread) to avoid blowing the JS call stack on large entry arrays.
-  const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
+  const aggregateFiles: AggregateSourceFile[] = [];
   let totalLines = 0;
   let totalEntryCount = 0;
 
@@ -374,6 +375,8 @@ async function loadFolderProgressive(
       parseErrors: result.parseErrors,
       fileSize: result.fileSize,
       byteOffset: result.byteOffset,
+      formatDetected: result.formatDetected,
+      parserSelection: result.parserSelection,
     });
   }
 
@@ -732,19 +735,8 @@ export async function switchToTab(
       logState.setSourceOpenMode("single-file");
 
       // Restore sidebar context
-      if (sourceContext && sourceContext.sourceKind !== "file") {
-        if (
-          !(await restoreFolderContext(
-            sourceContext,
-            generation,
-          ))
-        ) {
-          return;
-        }
-      } else if (sourceContext?.sourceKind === "file") {
-        logState.setActiveSource(sourceContext.source);
-        logState.setSourceEntries([]);
-        logState.setBundleMetadata(null);
+      if (sourceContext) {
+        if (!(await restoreSourceContext(sourceContext, generation))) return;
       }
 
       // Restore registry data from cache (or reload)
@@ -768,14 +760,9 @@ export async function switchToTab(
   if (cached) {
     console.info("[log-source] tab switch from cache (instant)", { filePath });
 
-    const standaloneSource =
-      sourceContext?.sourceKind === "file"
-        ? sourceContext.source
-        : sourceContext === null
-          ? { kind: "file" as const, path: filePath }
-          : null;
-    if (standaloneSource) {
-      logState.setActiveSource(standaloneSource);
+    if (!sourceContext) {
+      // Migrated tabs retain a file path but no source context.
+      logState.setActiveSource({ kind: "file", path: filePath });
       logState.setSourceEntries([]);
       logState.setBundleMetadata(null);
     }
@@ -797,18 +784,16 @@ export async function switchToTab(
       message: `Loaded ${getBaseName(filePath)}.`,
     });
 
-    if (sourceContext && sourceContext.sourceKind !== "file") {
+    if (sourceContext) {
       try {
-        const restored = await restoreFolderContext(
-          sourceContext,
-          generation,
-        );
-        if (!restored) return;
+        if (!(await restoreSourceContext(sourceContext, generation))) return;
       } catch (error) {
-        console.warn("[log-source] folder context restore failed after tab switch", {
-          filePath,
-          error,
-        });
+        // The cached entries are still usable, so a source that can no longer
+        // be listed must not turn the tab switch into a failure.
+        console.warn(
+          "[log-source] source context restore failed after tab switch",
+          { filePath, error }
+        );
       }
     }
     return;
@@ -838,7 +823,7 @@ export async function switchToTab(
 
   // Folder or known-source tab — restore sidebar then load the file
   if (
-    !(await restoreFolderContext(
+    !(await restoreSourceContext(
       sourceContext,
       generation,
     ))
@@ -848,8 +833,8 @@ export async function switchToTab(
   await loadSelectedLogFile(filePath, source, generation);
 }
 
-/** Restore the sidebar folder listing if the active source changed. */
-async function restoreFolderContext(
+/** Restore the sidebar source context for the tab being switched to. */
+async function restoreSourceContext(
   sourceContext: TabSourceContext,
   restoreGeneration: number,
 ): Promise<boolean> {
@@ -857,6 +842,21 @@ async function restoreFolderContext(
   const logState = useLogStore.getState();
 
   const { source } = sourceContext;
+
+  // A file-shaped source has no listing to restore, and `listLogSourceFolder`
+  // refuses one outright. Routing it through the folder lane threw, the caller
+  // swallowed the failure, and the sidebar kept the previous source's header
+  // while the main view showed the newly loaded file (#657).
+  if (
+    source.kind === "file" ||
+    (source.kind === "known" && source.pathKind === "file")
+  ) {
+    logState.setActiveSource(source);
+    logState.setSourceEntries([]);
+    logState.setBundleMetadata(null);
+    return true;
+  }
+
   const currentSource = logState.activeSource;
   const sourceChanged =
     !currentSource ||
@@ -937,7 +937,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     }
 
     // Build aggregate view — avoid push(...spread) to prevent call stack overflow
-    const aggregateFiles: import("../types/log").AggregateParsedFileResult[] = [];
+    const aggregateFiles: AggregateSourceFile[] = [];
     let totalLines = 0;
     let totalEntryCount = 0;
 
@@ -950,6 +950,8 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
         parseErrors: result.parseErrors,
         fileSize: result.fileSize,
         byteOffset: result.byteOffset,
+        formatDetected: result.formatDetected,
+        parserSelection: result.parserSelection,
       });
     }
 
