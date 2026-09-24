@@ -33,6 +33,7 @@ const DEFAULT_RESPONSES: Record<string, unknown> = {
     entries: [],
     parse_quality: "Unstructured",
     parser_kind: "PlainText",
+    modifiedUnixMs: null,
   },
   get_recent_files: [],
   get_file_info: null,
