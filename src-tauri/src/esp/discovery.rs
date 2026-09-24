@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use cmtraceopen_parser::collector::env_expand::expand_env_vars;
+use crate::collector::env_expand::expand_env_vars;
 use cmtraceopen_parser::collector::types::CollectionProfile;
 use glob::{MatchOptions, Pattern};
 

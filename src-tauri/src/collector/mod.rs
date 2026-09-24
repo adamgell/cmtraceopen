@@ -8,7 +8,9 @@
 // filesystem or the Tauri runtime — concerns that don't belong in the
 // wasm-compatible parser crate.
 
-pub use cmtraceopen_parser::collector::{env_expand, profile, types};
+pub mod env_expand;
+
+pub use cmtraceopen_parser::collector::{profile, types};
 
 pub mod artifacts;
 pub mod engine;
