@@ -597,6 +597,12 @@ fn device_level_signals(unkeyed: &[UpdateObservation]) -> DeviceSignals {
             }
             (UpdatePhase::Scan, UpdateOutcome::Succeeded) => {
                 signals.scan_failed = None;
+                // A scan that found updates answers the earlier one, the rule the
+                // failure above already states: an event 26 reporting
+                // `updateCount=0` followed by one that found updates left the
+                // device reading as `NoApplicableUpdate`, beside a finding that
+                // cited the earlier scan.
+                signals.no_applicable_update = None;
             }
             (UpdatePhase::Applicability, UpdateOutcome::NotApplicable)
             | (UpdatePhase::Scan, UpdateOutcome::NotApplicable) => {
@@ -1105,6 +1111,26 @@ mod tests {
             supplemental: None,
             named_data: Vec::new(),
         }
+    }
+
+    /// A later successful scan also clears an earlier "nothing applies" verdict.
+    ///
+    /// The same rule as the failure below, which this branch applied to
+    /// `scan_failed` only: an event 26 reporting `updateCount=0` left the device
+    /// reading as `NoApplicableUpdate` after a later scan found updates, beside a
+    /// finding that cited the earlier scan.
+    #[test]
+    fn a_later_successful_scan_clears_an_earlier_no_applicable_verdict() {
+        let mut empty = reading_at("scan", "succeeded", "wu-40", "2026-01-01T01:00:00Z");
+        empty.outcome = UpdateOutcome::NotApplicable;
+        let later = reading_at("scan", "succeeded", "wu-41", "2026-01-01T02:00:00Z");
+
+        let signals = device_level_signals(&[empty, later]);
+
+        assert!(
+            signals.no_applicable_update.is_none(),
+            "the later scan reported updates, so the earlier verdict does not stand"
+        );
     }
 
     /// A later successful scan clears an earlier failure.
