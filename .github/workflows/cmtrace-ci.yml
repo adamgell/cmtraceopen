@@ -7,6 +7,11 @@ on:
     # Long-lived integration branches must be listed explicitly: a PR whose base
     # is absent here runs no jobs at all, silently, and still reports mergeable.
     branches: [main, codex/parser-family-skeleton]
+  # The merge queue tests a temporary merge commit and reports the same required
+  # checks that gate `main`. Without this trigger a queued pull request waits for
+  # checks that never start, so the queue stalls rather than merging.
+  merge_group:
+
   # A pull request opened by a workflow with GITHUB_TOKEN does not trigger
   # workflows, so the release publishers that open one kick the checks against
   # their branch explicitly. This is the documented event that still creates a
@@ -46,7 +51,7 @@ jobs:
       - name: Changed-range whitespace
         env:
           BEFORE_SHA: ${{ github.event.before }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           # The base-selection rule lives in .github/scripts/changed-range.sh so it
           # can be executed by a test rather than only read here. A root commit is

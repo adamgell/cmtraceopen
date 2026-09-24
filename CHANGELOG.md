@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **The CI workflow declares a `merge_group` trigger (#756)**: A merge queue tests a temporary merge commit and reports the same required checks that gate `main`. Without this trigger a queued pull request waits for checks that never start, so the queue stalls instead of merging - and the failure looks like a hung queue rather than a missing line, which is why a test now asserts the trigger is present. The changed-range whitespace check also selects its base from `merge_group.base_sha` and takes the merge-base range there, instead of falling back to the empty tree and re-checking the whole repository.
+
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 

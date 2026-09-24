@@ -161,6 +161,21 @@ test("a pull request uses the merge-base range for both ordinary and root bases"
   );
 });
 
+test("a merge group uses the merge-base range, because it carries a base too", () => {
+  const { dir, root, head } = makeRepo();
+
+  assert.equal(
+    selectedRange(dir, "merge_group", "", head),
+    `${head}...HEAD`,
+    "a merge group uses the three-dot range",
+  );
+  assert.equal(
+    selectedRange(dir, "merge_group", "", root),
+    `${root}...HEAD`,
+    "a root-commit base is still valid for a merge group",
+  );
+});
+
 test("an all-zero base falls back to the empty tree", () => {
   const { dir } = makeRepo();
   const zero = "0".repeat(40);

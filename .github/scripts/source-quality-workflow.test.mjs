@@ -39,7 +39,7 @@ const expectedSourceQualityJob = `  source-quality:
       - name: Changed-range whitespace
         env:
           BEFORE_SHA: \${{ github.event.before }}
-          PR_BASE_SHA: \${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: \${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           # The base-selection rule lives in .github/scripts/changed-range.sh so it
           # can be executed by a test rather than only read here. A root commit is
@@ -117,6 +117,18 @@ function assertRequiredTriggers(workflow) {
   }
 }
 
+// The merge queue reports the same required checks that gate `main`. A pull
+// request queued without this trigger waits for checks that never start, and the
+// failure looks like a hung queue rather than a missing line, so it is asserted
+// rather than left to review. It carries no branch filter, which is why the
+// branch loop above does not cover it.
+function assertMergeGroupTrigger(workflow) {
+  assert.ok(
+    /^ {2}merge_group:\s*$/m.test(workflow),
+    "the workflow must declare a merge_group trigger for the merge queue",
+  );
+}
+
 function sourceQualityJob(workflow) {
   const sourceQuality = workflow.match(/^  source-quality:\n/m);
   assert.ok(sourceQuality, "source-quality job missing");
@@ -155,6 +167,7 @@ test("source-quality gates formatting, wasm portability, and the changed range",
   const workflow = await readFile(workflowUrl, "utf8");
 
   assertRequiredTriggers(workflow);
+  assertMergeGroupTrigger(workflow);
   assertSourceQualityRequirements(workflow);
 });
 

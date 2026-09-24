@@ -19,8 +19,14 @@
 #   event          base              range
 #   pull_request   ordinary commit   base...HEAD
 #   pull_request   root commit       base...HEAD
+#   merge_group    ordinary commit   base...HEAD
+#   merge_group    root commit       base...HEAD
 #   push           ordinary commit   base..HEAD
 #   push           root commit       base..HEAD
+#
+# A merge group is the merge queue's temporary merge commit: it carries a base
+# the same way a pull request does, and reporting the same range keeps the
+# whitespace check meaningful there rather than widening it to the whole tree.
 #   either         all-zero base     empty tree -> HEAD
 #   either         missing base      empty tree -> HEAD
 #
@@ -32,7 +38,7 @@ event="${1:-}"
 before="${2:-}"
 pr_base="${3:-}"
 
-if [[ "$event" == "pull_request" ]]; then
+if [[ "$event" == "pull_request" || "$event" == "merge_group" ]]; then
   base="$pr_base"
   separator="..."
 else
