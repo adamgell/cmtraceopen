@@ -56,12 +56,19 @@ CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tau
 
 All SHAs are from Adam's PM charter (`~/.hermes/cmtrace-pm-charter.md`). Reverify with `git ls-remote` before acting.
 
+**Every row below was stale when rechecked on 2026-09-24**: the four issues had all merged
+weeks earlier while the table still said NOT merge-ready, hold the PR, gate pending, findings
+outstanding. The SHAs are preserved on origin branches, so the rows were never wrong about the
+*commits* — only about whether the work had landed. That is the failure mode this table is
+supposed to prevent, and it read as current for seven weeks. Treat a row here as a pointer to
+verify, never as state.
+
 | Issue | Branch SHA | State | Blockers |
 |---|---|---|---|
-| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | 6/6 focused pass | coverage_complete ignores incomplete-fragment gaps; workflow field uses broad SccmClientWorkflow — NOT merge-ready |
-| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | P1 open | Semantic admission accepts 5.00.TEST.0002 but profile must be exactly 5.00.TEST.0001 — needs red regression, hold PR until clean |
-| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | TDD red 6/2 → green 8/0 | Full gate pending: intake, SUP fixture, spine, full parser, Clippy, wasm32, TS, fmt, diff + CodeRabbit + independent review |
-| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | Store 39/39, hook 7/7, tail 29/29 | Findings: observedThroughLine must dominate entry+amendment ranges; amendment start/span bounds; runtime validation for optional LogEntry fields |
+| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | **MERGED** via #340; issue closed 2026-08-05 | none — the blockers below were resolved before merge |
+| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | **MERGED** via #385 | none |
+| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | **MERGED** via #377 | none |
+| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | **MERGED** via #460 | none |
 
 ## Recovery Branches (Evidence Only)
 
