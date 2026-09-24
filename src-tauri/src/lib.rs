@@ -11,6 +11,8 @@ pub use cmtraceopen_parser::error_db;
 pub mod esp;
 #[cfg(feature = "event-log")]
 pub mod event_log;
+pub mod fs_identity;
+
 pub mod graph_api;
 pub mod intune;
 #[cfg(debug_assertions)]
