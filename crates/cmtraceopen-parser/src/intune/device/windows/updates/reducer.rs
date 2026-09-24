@@ -460,9 +460,13 @@ fn assess_effective_source(
         let Some(source) = &observation.source else {
             continue;
         };
-        if scanned.is_none() {
-            scanned = Some(source.clone());
-        }
+        // Readings arrive in canonical order with unplaceable ones first, so the
+        // last assignment is the latest *placed* reading. Taking the first made
+        // an untimestamped reading win every time, and made an older source win
+        // when all of them were placed -- a device that moved from WSUS to WUfB
+        // stayed assessed as WSUS, which drives `matches_expectation`, the linked
+        // chains and the effective-source-mismatch finding.
+        scanned = Some(source.clone());
         scanned_evidence.push(observation.context.evidence_ref.clone());
     }
     sort_evidence(&mut scanned_evidence);
@@ -1010,6 +1014,30 @@ mod tests {
         );
     }
 
+    /// The scanned source is the latest reading, not the first.
+    ///
+    /// A device that moved from WSUS to WUfB kept being assessed as WSUS while
+    /// the first reading won, and that value drives `matches_expectation`, the
+    /// linked chains and the effective-source-mismatch finding.
+    #[test]
+    fn the_scanned_source_is_the_latest_reading() {
+        let mut older = reading_at("applicability", "succeeded", "wu-1", "2026-01-01T01:00:00Z");
+        older.source = Some(UpdateSource::Wsus);
+        let mut newer = reading_at("applicability", "succeeded", "wu-2", "2026-01-01T02:00:00Z");
+        newer.source = Some(UpdateSource::WindowsUpdateForBusiness);
+
+        // Readings reach this function in canonical order, which is the contract
+        // its own comment states.
+        let assessment =
+            assess_effective_source(&UpdateDeviceFacts::default(), &[], &[older, newer]);
+
+        assert_eq!(
+            assessment.scanned,
+            Some(UpdateSource::WindowsUpdateForBusiness),
+            "the latest placed reading is the scanned source"
+        );
+    }
+
     /// One unkeyed device reading, built from the context a fixture carries.
     ///
     /// The shape is copied from the corpus rather than invented, so a change to
@@ -1032,6 +1060,7 @@ mod tests {
             context,
             phase: match phase {
                 "scan" => UpdatePhase::Scan,
+                "applicability" => UpdatePhase::Applicability,
                 "download" => UpdatePhase::Download,
                 "install" => UpdatePhase::Install,
                 other => panic!("unknown phase {other}"),
