@@ -571,21 +571,45 @@ fn push_deferral(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFinding>) {
 }
 
 fn push_reboot_pending(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneFinding>) {
-    let mut evidence: Vec<IntuneEvidenceRef> =
-        transactions_in_state(snapshot, UpdateTransactionState::RebootPending)
-            .into_iter()
-            .flat_map(|transaction| transaction.evidence.iter().cloned())
-            .collect();
+    let pending = transactions_in_state(snapshot, UpdateTransactionState::RebootPending);
+    let mut evidence: Vec<IntuneEvidenceRef> = pending
+        .iter()
+        .flat_map(|transaction| transaction.evidence.iter().cloned())
+        .collect();
     if evidence.is_empty() {
         evidence = client_evidence(snapshot, UpdatePhase::Reboot, UpdateOutcome::Pending);
     }
     if evidence.is_empty() || snapshot.update_chain.reboot_pending != Some(true) {
         return;
     }
+
+    // The claim is only as good as the reading that makes it. A pending reading
+    // nobody can place in time, or one sitting in a transaction whose ordering is
+    // contradictory, reports a restart without saying when -- which is a
+    // Medium-confidence statement, not a High one.
+    let readings_are_placeable = snapshot
+        .update_chain
+        .unkeyed_observations
+        .iter()
+        .filter(|observation| {
+            observation.is_update_client_evidence()
+                && observation.phase == UpdatePhase::Reboot
+                && observation.outcome == UpdateOutcome::Pending
+        })
+        .all(|observation| super::reducer::context_instant(&observation.context).is_some());
+    let contradicted = pending
+        .iter()
+        .any(|transaction| transaction.order_contradiction);
+    let confidence = if readings_are_placeable && !contradicted {
+        IntuneFindingConfidence::High
+    } else {
+        IntuneFindingConfidence::Medium
+    };
+
     findings.push(finding(
         format!("{UPDATE_FINDING_PREFIX}/reboot-pending"),
         IntuneFindingSeverity::Warning,
-        IntuneFindingConfidence::High,
+        confidence,
         "A restart is required to finish installing an update",
         "The update client reported that a restart is required. The update is staged but not complete, so a service-side report of 'installed' would be premature."
             .to_owned(),
@@ -665,7 +689,7 @@ fn push_reporting_mismatch(snapshot: &UpdateSnapshot, findings: &mut Vec<IntuneF
             IntuneFindingConfidence::Medium,
             "The service report disagrees with the device's own update record",
             format!(
-                "Local Windows Update client evidence for {} reads '{}', while the Intune update report reads '{}'. The local record is the more recent of the two.",
+                "Local Windows Update client evidence for {} reads '{}', while the Intune update report reads '{}'. Which one is current is not decided here: that needs the two readings' collection times compared, and this analysis does not compare them.",
                 transaction.key.label(),
                 serde_json::to_value(transaction.state)
                     .ok()

@@ -239,7 +239,10 @@ fn compare_contexts(left: &IntuneObservationContext, right: &IntuneObservationCo
 ///
 /// A timestamp the adapter marked invalid counts as unplaceable, which is the
 /// same reading `has_order_contradiction` takes of it.
-fn context_instant(context: &IntuneObservationContext) -> Option<DateTime<Utc>> {
+///
+/// `pub(super)` so the findings pass can ask the same question about a reading
+/// rather than inventing a second answer to it.
+pub(super) fn context_instant(context: &IntuneObservationContext) -> Option<DateTime<Utc>> {
     let timestamp = context.source_timestamp.as_ref()?;
     if timestamp.kind == IntuneTimestampKind::Invalid {
         return None;
