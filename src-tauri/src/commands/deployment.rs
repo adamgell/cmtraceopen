@@ -618,8 +618,10 @@ fn analyze_single_file(file_path: &str) -> DeploymentLogFile {
 
 /// Deepest directory nesting the scan will descend.
 ///
-/// Also terminates a Windows junction loop, which `file_type().is_symlink()`
-/// does not report, so this and the symlink check cover each other.
+/// This is the guard that terminates a Windows junction loop: a junction is
+/// reported as a directory and `file_type().is_symlink()` does not flag it, so
+/// only the depth bound stops it. Do not remove this in favour of the symlink
+/// check below.
 const MAX_DEPLOYMENT_SCAN_DEPTH: usize = 32;
 
 /// Upper bound on collected paths, so a wide tree cannot accumulate without limit.
@@ -641,6 +643,11 @@ fn collect_log_files(dir: &Path, out: &mut Vec<String>, depth: usize) {
         // `symlink_metadata` reports the link itself rather than following it, so
         // a link pointing at an ancestor cannot be entered as a cycle. `is_dir()`
         // would follow it, which is how the recursion previously had no floor.
+        //
+        // On Unix this is the whole of the symlink handling: a link's file type is
+        // neither directory nor file, so it falls through the chain below. The
+        // explicit refusal is kept for platforms that report a directory symlink as
+        // a directory.
         let Ok(metadata) = std::fs::symlink_metadata(&path) else {
             continue;
         };
@@ -1077,6 +1084,10 @@ mod collect_log_files_tests {
         assert_eq!(found.len(), 2, "expected both .log files, got {found:?}");
     }
 
+    // Proves the walk terminates rather than recursing: with the pre-fix code this
+    // dies on stack exhaustion. It does not isolate the explicit symlink refusal,
+    // which is inert on Unix because `symlink_metadata` already reports a link as
+    // neither directory nor file - removing that refusal leaves this test passing.
     #[cfg(unix)]
     #[test]
     fn a_symlink_cycle_terminates_instead_of_recursing() {
