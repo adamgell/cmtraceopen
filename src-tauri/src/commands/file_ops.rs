@@ -838,6 +838,48 @@ pub struct FileHashResult {
     pub size_bytes: u64,
 }
 
+/// The extension the session save dialog writes (`session-save.ts`).
+const SESSION_EXTENSION: &str = "cmtrace";
+
+/// A session holds tab metadata and filter state, not log content, so this is
+/// generous rather than tight. It exists so a mistaken or hostile path cannot
+/// pull an arbitrary large file into the frontend in one call.
+const MAX_SESSION_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a saved session file.
+///
+/// Restoring a session is the one flow whose path the user does not choose at
+/// the moment they use it - it comes from the recent-sessions list - so the fs
+/// plugin's dialog-driven scope cannot cover it. This command is what replaces
+/// that, and it accepts only the extension the app's own save dialog writes:
+/// a narrower authority than `fs:read-all`, rather than the same authority
+/// wearing a command name. The frontend still validates the parsed shape.
+#[tauri::command]
+pub fn read_session_file(path: String) -> Result<String, crate::error::AppError> {
+    let requested = Path::new(&path);
+
+    let is_session_extension = requested
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(SESSION_EXTENSION));
+    if !is_session_extension {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "not a session file: {}",
+            requested.display()
+        )));
+    }
+
+    let metadata = std::fs::metadata(requested).map_err(crate::error::AppError::Io)?;
+    if metadata.len() > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file is {} bytes, over the {MAX_SESSION_BYTES} byte limit: {}",
+            metadata.len(),
+            requested.display()
+        )));
+    }
+
+    std::fs::read_to_string(requested).map_err(crate::error::AppError::Io)
+}
+
 #[tauri::command]
 pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
     use sha2::{Digest, Sha256};
@@ -915,12 +957,48 @@ fn index_aggregate_entries(
 mod tests {
     use super::{
         index_aggregate_entries, list_log_folder, merge_folder_diagnostics,
-        open_log_folder_aggregate_impl, PathDiagnostic, MAX_FOLDER_LISTING_ERRORS,
+        open_log_folder_aggregate_impl, read_session_file, PathDiagnostic,
+        MAX_FOLDER_LISTING_ERRORS,
     };
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// The refusal is the behaviour worth pinning: this command exists to be a
+    /// narrower authority than `fs:read-all`, so a path outside the extension
+    /// the app's own save dialog writes has to come back as an error rather
+    /// than as file content.
+    #[test]
+    fn read_session_file_accepts_only_the_session_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "cmtrace-session-read-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let session = dir.join("saved.cmtrace");
+        fs::write(&session, "{\"tabs\":[]}").expect("write session");
+        let other = dir.join("id_rsa");
+        fs::write(&other, "private key material").expect("write other file");
+        // Created deliberately: without it this would pass for the wrong reason
+        // (a missing path rather than a directory), and the comment would be a
+        // claim the test does not make.
+        let directory = dir.join("folder.cmtrace");
+        fs::create_dir_all(&directory).expect("create directory named like a session");
+
+        assert_eq!(
+            read_session_file(session.to_string_lossy().to_string()).expect("session reads"),
+            "{\"tabs\":[]}"
+        );
+        assert!(read_session_file(other.to_string_lossy().to_string()).is_err());
+        assert!(read_session_file(dir.join("absent").to_string_lossy().to_string()).is_err());
+        assert!(read_session_file(directory.to_string_lossy().to_string()).is_err());
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
 
     /// Proves the wiring, not just the classifier: an unreadable folder must
     /// reach the frontend as `AccessDenied` rather than as "folder does not

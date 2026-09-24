@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { readTextFile } from "@tauri-apps/plugin-fs";
 import { loadFilesAsLogSource, loadPathAsLogSource } from "./log-source";
 import { restoreSession } from "./session-restore";
 import { useFilterStore } from "../stores/filter-store";
@@ -50,6 +49,19 @@ function sessionJson(clauses: unknown[], tabCount = 1): string {
   });
 }
 
+/**
+ * Restore reads through Rust (`read_session_file`) rather than the fs plugin, so
+ * the mock has to be per-command: `compute_file_hash` goes through the same
+ * `invoke` and must keep returning a matching hash.
+ */
+function mockRestoreContent(content: string): void {
+  vi.mocked(invoke).mockImplementation((command) =>
+    command === "read_session_file"
+      ? Promise.resolve(content)
+      : Promise.resolve({ hash: "abc", sizeBytes: 100 }),
+  );
+}
+
 describe("restoreSession filter restore (issue #193)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,12 +70,12 @@ describe("restoreSession filter restore (issue #193)", () => {
       .mockResolvedValue(restoredLoadResult);
     vi.mocked(loadFilesAsLogSource).mockReset().mockResolvedValue(true);
     // compute_file_hash returns a matching hash so the tab is considered valid.
-    vi.mocked(invoke).mockResolvedValue({ hash: "abc", sizeBytes: 100 });
+    mockRestoreContent(sessionJson([]));
     useFilterStore.getState().clearFilter();
   });
 
   it("writes the saved filter clauses back into the filter store", async () => {
-    vi.mocked(readTextFile).mockResolvedValue(
+    mockRestoreContent(
       sessionJson([{ field: "Message", op: "Contains", value: "error" }])
     );
 
@@ -76,7 +88,7 @@ describe("restoreSession filter restore (issue #193)", () => {
   });
 
   it("does not aggregate after an individual restore is superseded", async () => {
-    vi.mocked(readTextFile).mockResolvedValue(sessionJson([], 2));
+    mockRestoreContent(sessionJson([], 2));
     vi.mocked(loadPathAsLogSource).mockResolvedValueOnce(null);
 
     await expect(restoreSession("/tmp/session.cmtrace")).resolves.toBeNull();
@@ -84,7 +96,7 @@ describe("restoreSession filter restore (issue #193)", () => {
     expect(loadFilesAsLogSource).not.toHaveBeenCalled();
   });
   it("aborts when aggregate restore is superseded", async () => {
-    vi.mocked(readTextFile).mockResolvedValue(sessionJson([], 2));
+    mockRestoreContent(sessionJson([], 2));
     vi.mocked(loadPathAsLogSource).mockRejectedValue(new Error("load failed"));
     vi.mocked(loadFilesAsLogSource).mockResolvedValue(false);
 
@@ -97,7 +109,7 @@ describe("restoreSession filter restore (issue #193)", () => {
 
 
   it("leaves the filter cleared when the session had no clauses", async () => {
-    vi.mocked(readTextFile).mockResolvedValue(sessionJson([]));
+    mockRestoreContent(sessionJson([]));
 
     await restoreSession("/tmp/session.cmtrace");
 
