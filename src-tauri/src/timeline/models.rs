@@ -159,11 +159,6 @@ pub enum TimelineError {
     TooLarge { estimated: u64, limit: u64 },
     #[error("no sources")]
     NoSources,
-    /// Reserved for a future phase that surfaces per-source read errors as
-    /// distinct variants rather than embedding them in `errors` on the bundle.
-    #[allow(dead_code)]
-    #[error("source read error: {path}: {message}")]
-    SourceRead { path: String, message: String },
     #[error("internal: {message}")]
     Internal { message: String },
 }
