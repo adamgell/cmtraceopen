@@ -67,7 +67,8 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
     let content = read_file_content(path)?;
     let metadata = std::fs::metadata(path).ok();
     let file_size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-    let (mut result, selection) = cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    let (mut result, selection) =
+        cmtraceopen_parser::parser::parse_content(&content, path, file_size);
     // The modified time is the adapter's to supply: the pure parser has no file
     // to read. Without it a multi-file open shows "Modified time unavailable"
     // for every file, while the same files listed from their folder show real
