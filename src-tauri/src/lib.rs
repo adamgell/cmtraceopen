@@ -382,6 +382,7 @@ pub fn run() {
             commands::filter::apply_filter,
             commands::error_lookup::lookup_error_code,
             commands::error_lookup::search_error_codes,
+            commands::error_lookup::detect_error_codes,
             #[cfg(feature = "intune-diagnostics")]
             commands::intune::analyze_intune_logs,
             #[cfg(feature = "deployment")]

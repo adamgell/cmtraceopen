@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Button, tokens } from "@fluentui/react-components";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -18,6 +19,98 @@ import {
 } from "./evtx-marker-adapter";
 import { useEvtxStore } from "./evtx-store";
 import { EvtxMarkerControls } from "./EvtxTimelineRow";
+
+/**
+ * A response from the parser crate's error-code detection.
+ *
+ * Declared here rather than in a shared file, matching how the error-lookup
+ * dialog declares the shape of the command it calls.
+ */
+interface DetectedErrorCode {
+  start: number;
+  end: number;
+  codeHex: string;
+  codeDecimal: string;
+  description: string;
+  category: string;
+}
+
+/**
+ * The error codes a record's own text carries, with what the database knows.
+ *
+ * Detection happens in the parser crate, so the pane never guesses at a code
+ * shape and no second pattern exists to drift from it. Only codes the database
+ * can describe are listed: detection does not invent an entry for a code it
+ * cannot read, so the pane never shows a code with no meaning beside it.
+ */
+function DetectedErrorCodes({
+  text,
+  labelFontSize,
+  monoFontSize,
+}: {
+  text: string;
+  labelFontSize: number;
+  monoFontSize: number;
+}) {
+  const [codes, setCodes] = useState<DetectedErrorCode[]>([]);
+
+  useEffect(() => {
+    if (!text.trim()) {
+      setCodes([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<DetectedErrorCode[]>("detect_error_codes", { text })
+      .then((found) => {
+        // The command is the only thing that knows a code's shape, so a payload
+        // that is not a list of them is treated as no answer at all.
+        if (!cancelled) setCodes(Array.isArray(found) ? found : []);
+      })
+      .catch(() => {
+        // A failed lookup is not evidence that the record carried no code, so
+        // the pane stays silent rather than claiming there was none.
+        if (!cancelled) setCodes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [text]);
+
+  if (codes.length === 0) {
+    return null;
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: `${labelFontSize}px`,
+          fontWeight: 600,
+          color: tokens.colorNeutralForeground3,
+          textTransform: "uppercase",
+          marginBottom: "4px",
+        }}
+      >
+        Error Codes
+      </div>
+      <ul
+        style={{
+          margin: 0,
+          paddingLeft: "18px",
+          fontSize: `${monoFontSize}px`,
+          fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+        }}
+      >
+        {codes.map((code) => (
+          <li key={`${code.start}-${code.codeHex}`}>
+            <strong>{code.codeHex}</strong> — {code.description}
+            {code.category ? ` (${code.category})` : ""}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function EvtxDetailPane() {
   const markersByFile = useMarkerStore((s) => s.markersByFile);
@@ -371,6 +464,14 @@ export function EvtxDetailPane() {
           ))}
         </div>
       )}
+
+      <DetectedErrorCodes
+        text={[record.message, ...record.eventData.map((field) => field.value)].join(
+          "\n"
+        )}
+        labelFontSize={labelFontSize}
+        monoFontSize={monoFontSize}
+      />
 
       {/* Raw XML */}
       <div>

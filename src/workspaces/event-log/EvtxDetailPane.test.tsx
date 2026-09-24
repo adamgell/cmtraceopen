@@ -69,3 +69,48 @@ describe("EvtxDetailPane correlation identity", () => {
     expect(screen.getByText("S-1-5-21-1000")).toBeInTheDocument();
   });
 });
+
+describe("EvtxDetailPane error code enrichment", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    useEvtxStore.getState().reset();
+  });
+
+  it("shows what the database knows about a code the record carries", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "detect_error_codes"
+        ? Promise.resolve([
+            {
+              start: 18,
+              end: 28,
+              codeHex: "0x80070005",
+              codeDecimal: "-2147024891",
+              description: "Access is denied",
+              category: "Win32",
+            },
+          ])
+        : Promise.resolve(null)
+    );
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message: "Install failed 0x80070005" }],
+      selectedRecordId: 1,
+    });
+
+    render(<EvtxDetailPane />);
+
+    expect(await screen.findByText("0x80070005")).toBeTruthy();
+    expect(screen.getByText(/Access is denied/)).toBeTruthy();
+  });
+
+  it("stays silent when no code is detected", async () => {
+    invoke.mockImplementation(() => Promise.resolve([]));
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message: "Nothing numeric here" }],
+      selectedRecordId: 1,
+    });
+
+    render(<EvtxDetailPane />);
+
+    expect(screen.queryByText(/Error Codes/i)).toBeNull();
+  });
+});
