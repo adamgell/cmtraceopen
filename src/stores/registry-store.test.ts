@@ -43,4 +43,29 @@ describe("registry store case-insensitive subtrees", () => {
 
     expect(useRegistryStore.getState().selectedKeyPath).toBe(parent.fullPath);
   });
+
+  it("reveals a search match whose key arrived in another casing", () => {
+    useRegistryStore
+      .getState()
+      .setRegistryData(data(["HKLM\\Software\\A", "hklm\\software\\B"]));
+
+    const parent = useRegistryStore.getState().tree[0].children[0];
+    const child = parent.children.find((node) => node.name === "B")!;
+
+    // Loading expands every branch, so collapse first: the reveal has to do
+    // the work for the assertion to mean anything.
+    useRegistryStore.getState().toggleExpanded(parent.fullPath);
+    expect(useRegistryStore.getState().expandedPaths.has(parent.fullPath)).toBe(
+      false,
+    );
+
+    useRegistryStore.getState().setSearchQuery("B");
+    useRegistryStore.getState().searchNext();
+
+    // The file says hklm, the tree says HKLM: the match must still be shown.
+    expect(useRegistryStore.getState().selectedKeyPath).toBe(child.fullPath);
+    expect(useRegistryStore.getState().expandedPaths.has(parent.fullPath)).toBe(
+      true,
+    );
+  });
 });
