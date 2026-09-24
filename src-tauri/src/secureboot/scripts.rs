@@ -86,6 +86,10 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     // Launch the wrapper elevated via Start-Process -Verb RunAs.
     // This triggers the UAC prompt. The outer (non-elevated) PowerShell
     // blocks on -Wait until the elevated process exits.
+    //
+    // Deliberately unbounded: the wait is the user deciding whether to grant
+    // elevation, so a deadline here would terminate the prompt the flow is
+    // waiting for.
     let _output = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",

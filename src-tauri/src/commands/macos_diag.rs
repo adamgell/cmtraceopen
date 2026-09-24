@@ -55,6 +55,10 @@ pub fn macos_query_unified_log(
 pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "macos")]
     {
+        // Deliberately unbounded: a System Settings deep link is an interactive
+        // launch. It hands off to the shell and outlives this call, so there is
+        // nothing to wait for and a deadline would close the pane the user asked
+        // for.
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()
