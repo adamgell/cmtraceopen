@@ -3,8 +3,8 @@
   "evidence": "Firewall warning for the notification TCP port and the state message it raises. Server health signal, not a client notification failure.",
   "files": [
     {
-      "name": "BgbServer.log",
-      "rotation": "current",
+      "name": "BgbServer.lo_",
+      "rotation": "lo_",
       "lines": 7,
       "framedRecords": 7,
       "unframedLines": []
