@@ -3093,6 +3093,7 @@ const COMMAND_DECODERS = {
     decodeRecordResponse<SccmEnvironmentDiscovery>(value, commandName, {
       supported: (field) => typeof field === "boolean",
       configmgrVersion: isNullableCommandString,
+      siteVersion: isNullableCommandString,
       roles: isCommandRecordArray,
       sources: isCommandRecordArray,
       issues: isCommandRecordArray,

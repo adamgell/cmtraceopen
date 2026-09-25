@@ -94,6 +94,7 @@ const COVERAGE_ROWS: SccmSourceStatus[] = [
 const DISCOVERY: SccmEnvironmentDiscovery = {
   supported: true,
   configmgrVersion: "5.00.9128.1000",
+  siteVersion: null,
   roles: [
     { role: "client", basis: "service" },
     { role: "managementPoint", basis: "cim" },
@@ -106,9 +107,20 @@ const DISCOVERY: SccmEnvironmentDiscovery = {
 const ROLELESS_DISCOVERY: SccmEnvironmentDiscovery = {
   supported: true,
   configmgrVersion: null,
+  siteVersion: null,
   roles: [],
   sources: [],
   issues: [],
+  advancedSources: [],
+};
+
+const SITE_SERVER_DISCOVERY: SccmEnvironmentDiscovery = {
+  supported: true,
+  configmgrVersion: null,
+  siteVersion: "5.00.9141.1000",
+  roles: [{ role: "siteServer", basis: "registry" }],
+  sources: [],
+  issues: [{ code: "versionUnavailable", role: "client" }],
   advancedSources: [],
 };
 
@@ -166,6 +178,21 @@ describe("SccmWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "Capture diagnostic bundle" }),
     ).toBeEnabled();
+  });
+
+  it("shows the site server version separately from the client version", async () => {
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(SITE_SERVER_DISCOVERY);
+    render(<SccmWorkspace />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discover SCCM environment" }),
+    );
+
+    const siteFact = (await screen.findByText("Site server version")).parentElement;
+    expect(siteFact).toHaveTextContent("5.00.9141.1000");
+    const clientFact = screen.getByText("Client version").parentElement;
+    expect(clientFact).toHaveTextContent("Not reported");
+    expect(screen.getByText("Version not reported")).toBeInTheDocument();
   });
 
   it("keeps capture unavailable when discovery finds no SCCM roles", async () => {

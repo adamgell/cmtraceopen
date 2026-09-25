@@ -569,6 +569,7 @@ describe("SCCM product-path IPC boundary", () => {
     const discovery = {
       supported: true,
       configmgrVersion: null,
+      siteVersion: "5.00.9141.1000",
       roles: [],
       sources: [],
       issues: [],

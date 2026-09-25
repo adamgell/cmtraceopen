@@ -94,6 +94,7 @@ const DETAIL_LABELS: Record<SccmSourceDetailCode, string> = {
 const ISSUE_LABELS: Record<SccmDiscoveryIssueCode, string> = {
   unsupportedPlatform: "Unsupported platform",
   registryAccessDenied: "Registry access denied",
+  versionUnavailable: "Version not reported",
   cimAccessDenied: "CIM access denied",
   discoveryFailed: "Discovery failed",
 };
@@ -434,8 +435,12 @@ export function SccmWorkspace() {
               <strong>{discovery.supported ? "Supported" : "Unavailable"}</strong>
             </div>
             <div className="sccm-environment-fact">
-              <span className="sccm-fact-label">ConfigMgr</span>
+              <span className="sccm-fact-label">Client version</span>
               <strong>{discovery.configmgrVersion ?? "Not reported"}</strong>
+            </div>
+            <div className="sccm-environment-fact">
+              <span className="sccm-fact-label">Site server version</span>
+              <strong>{discovery.siteVersion ?? "Not reported"}</strong>
             </div>
             <div className="sccm-environment-fact sccm-role-fact">
               <span className="sccm-fact-label">Observed roles</span>
