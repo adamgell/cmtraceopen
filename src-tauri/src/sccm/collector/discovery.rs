@@ -151,15 +151,16 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
     use winreg::RegKey;
 
     const CLIENT_SETUP_KEY: &str = r"SOFTWARE\Microsoft\CCM\Setup";
-    const CLIENT_VERSION_VALUE: &str = "ProductVersion";
+    // `ProductVersion` in this key is the base MSI version; `SmsClientVersion`
+    // is the installed client build that the console reports.
+    const CLIENT_VERSION_KEY: &str = r"SOFTWARE\Microsoft\SMS\Mobile Client";
+    const CLIENT_VERSION_VALUE: &str = "SmsClientVersion";
     const SITE_SERVER_KEY: &str = r"SOFTWARE\Microsoft\SMS\Setup";
     const SITE_SERVER_VERSION_VALUE: &str = "Full Version";
 
-    fn setup_key_fact(key: &std::io::Result<RegKey>, version_value: &str) -> SetupKeyFact {
+    fn setup_key_fact(key: &std::io::Result<RegKey>) -> SetupKeyFact {
         match key {
-            Ok(key) => SetupKeyFact::Present {
-                version: key.get_value::<String, _>(version_value).ok(),
-            },
+            Ok(_) => SetupKeyFact::Present,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 SetupKeyFact::AccessDenied
             }
@@ -178,9 +179,17 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
     let site_server_key = hklm.open_subkey(SITE_SERVER_KEY);
     apply_setup_key_facts(
         &mut environment,
-        setup_key_fact(&client_key, CLIENT_VERSION_VALUE),
-        setup_key_fact(&site_server_key, SITE_SERVER_VERSION_VALUE),
+        setup_key_fact(&client_key),
+        setup_key_fact(&site_server_key),
     );
+    let client_version = hklm
+        .open_subkey(CLIENT_VERSION_KEY)
+        .and_then(|key| key.get_value::<String, _>(CLIENT_VERSION_VALUE))
+        .ok();
+    let site_version = site_server_key
+        .as_ref()
+        .ok()
+        .and_then(|key| key.get_value::<String, _>(SITE_SERVER_VERSION_VALUE).ok());
 
     let mut server_install_root = None;
     if let Ok(key) = &site_server_key {
@@ -263,22 +272,22 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
         _ => {}
     }
 
+    apply_version_facts(&mut environment, client_version, site_version);
     report_missing_versions(&mut environment);
     Ok(environment)
 }
 
-/// What discovery observed for one ConfigMgr setup registry key.
+/// Whether a ConfigMgr setup registry key exists. Presence establishes a role;
+/// it says nothing about the version, which is read separately.
 #[cfg(any(test, target_os = "windows"))]
 #[derive(Debug)]
 enum SetupKeyFact {
     Absent,
     AccessDenied,
-    Present { version: Option<String> },
+    Present,
 }
 
-/// Records the client (`CCM\Setup`) and site server (`SMS\Setup`) facts.
-/// The two versions are kept in separate fields; a blank version is treated
-/// as unread and never inferred.
+/// Records the client (`CCM\Setup`) and site server (`SMS\Setup`) role facts.
 #[cfg(any(test, target_os = "windows"))]
 fn apply_setup_key_facts(
     environment: &mut PrivateSccmEnvironment,
@@ -295,21 +304,37 @@ fn apply_setup_key_facts(
                 code: SccmDiscoveryIssueCode::RegistryAccessDenied,
                 role: Some(role),
             }),
-            SetupKeyFact::Present { version } => {
-                environment.roles.push(SccmDetectedRole {
-                    role: role.clone(),
-                    basis: SccmDiscoveryBasis::Registry,
-                });
-                let version = version
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty());
-                match role {
-                    SccmRole::Client => environment.configmgr_version = version,
-                    _ => environment.site_version = version,
-                }
-            }
+            SetupKeyFact::Present => environment.roles.push(SccmDetectedRole {
+                role,
+                basis: SccmDiscoveryBasis::Registry,
+            }),
         }
     }
+}
+
+/// Attaches the client version (`SMS\Mobile Client` `SmsClientVersion`) and the
+/// site version (`SMS\Setup` `Full Version`) to their roles, whatever basis
+/// observed the role. The two stay in separate fields; a version for an
+/// unobserved role is dropped, and a blank version is treated as unread.
+#[cfg(any(test, target_os = "windows"))]
+fn apply_version_facts(
+    environment: &mut PrivateSccmEnvironment,
+    client_version: Option<String>,
+    site_version: Option<String>,
+) {
+    let usable = |version: Option<String>, role: SccmRole| {
+        environment
+            .roles
+            .iter()
+            .any(|fact| fact.role == role)
+            .then(|| version.map(|value| value.trim().to_owned()))
+            .flatten()
+            .filter(|value| !value.is_empty())
+    };
+    let client_version = usable(client_version, SccmRole::Client);
+    let site_version = usable(site_version, SccmRole::SiteServer);
+    environment.configmgr_version = client_version;
+    environment.site_version = site_version;
 }
 
 /// Reports a coverage gap for every observed client or site server role
@@ -1034,14 +1059,40 @@ mod tests {
         apply_setup_key_facts(
             &mut environment,
             SetupKeyFact::Absent,
-            SetupKeyFact::Present {
-                version: Some("5.00.9141.1000".to_owned()),
-            },
+            SetupKeyFact::Present,
         );
+        apply_version_facts(&mut environment, None, Some("5.00.9141.1000".to_owned()));
+        report_missing_versions(&mut environment);
 
         assert_eq!(environment.site_version.as_deref(), Some("5.00.9141.1000"));
         assert_eq!(environment.configmgr_version, None);
         assert_eq!(environment.roles, vec![observed_role(SccmRole::SiteServer)]);
+        assert!(environment.issues.is_empty());
+    }
+
+    #[test]
+    fn client_version_comes_from_mobile_client_when_client_is_only_observed_by_service() {
+        // Lab site server: a real, assigned client with no CCM\Setup key.
+        let mut environment = PrivateSccmEnvironment::default();
+        apply_setup_key_facts(
+            &mut environment,
+            SetupKeyFact::Absent,
+            SetupKeyFact::Present,
+        );
+        apply_cim_service_facts(&mut environment, br#"{"Name":"CcmExec"}"#, None);
+        apply_version_facts(
+            &mut environment,
+            Some("5.00.9141.1011".to_owned()),
+            Some("5.00.9141.1000".to_owned()),
+        );
+
+        report_missing_versions(&mut environment);
+
+        assert_eq!(
+            environment.configmgr_version.as_deref(),
+            Some("5.00.9141.1011")
+        );
+        assert_eq!(environment.site_version.as_deref(), Some("5.00.9141.1000"));
         assert!(environment.issues.is_empty());
     }
 
@@ -1051,12 +1102,13 @@ mod tests {
 
         apply_setup_key_facts(
             &mut environment,
-            SetupKeyFact::Present {
-                version: Some("5.00.9128.1000".to_owned()),
-            },
-            SetupKeyFact::Present {
-                version: Some("5.00.9141.1000".to_owned()),
-            },
+            SetupKeyFact::Present,
+            SetupKeyFact::Present,
+        );
+        apply_version_facts(
+            &mut environment,
+            Some("5.00.9128.1000".to_owned()),
+            Some("5.00.9141.1000".to_owned()),
         );
 
         assert_eq!(
@@ -1067,16 +1119,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_setup_version_is_a_coverage_gap_not_a_guess() {
+    fn missing_or_blank_version_is_a_coverage_gap_not_a_guess() {
         let mut environment = PrivateSccmEnvironment::default();
 
         apply_setup_key_facts(
             &mut environment,
-            SetupKeyFact::Present {
-                version: Some("   ".to_owned()),
-            },
-            SetupKeyFact::Present { version: None },
+            SetupKeyFact::Present,
+            SetupKeyFact::Present,
         );
+        apply_version_facts(&mut environment, Some("   ".to_owned()), None);
         report_missing_versions(&mut environment);
 
         assert_eq!(environment.configmgr_version, None);
@@ -1097,16 +1148,15 @@ mod tests {
     }
 
     #[test]
-    fn service_observed_role_without_setup_key_reports_version_gap() {
+    fn service_observed_client_without_any_version_reports_a_gap() {
         let mut environment = PrivateSccmEnvironment::default();
         apply_setup_key_facts(
             &mut environment,
             SetupKeyFact::Absent,
-            SetupKeyFact::Present {
-                version: Some("5.00.9141.1000".to_owned()),
-            },
+            SetupKeyFact::Present,
         );
         apply_cim_service_facts(&mut environment, br#"{"Name":"CcmExec"}"#, None);
+        apply_version_facts(&mut environment, None, Some("5.00.9141.1000".to_owned()));
 
         report_missing_versions(&mut environment);
 
@@ -1121,11 +1171,18 @@ mod tests {
     }
 
     #[test]
-    fn unobserved_roles_do_not_report_version_gaps() {
+    fn versions_of_unobserved_roles_are_not_reported() {
         let mut environment = PrivateSccmEnvironment::default();
 
+        apply_version_facts(
+            &mut environment,
+            Some("5.00.9141.1011".to_owned()),
+            Some("5.00.9141.1000".to_owned()),
+        );
         report_missing_versions(&mut environment);
 
+        assert_eq!(environment.configmgr_version, None);
+        assert_eq!(environment.site_version, None);
         assert!(environment.issues.is_empty());
     }
 
