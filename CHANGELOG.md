@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **CHANGELOG.md merges by union**: Every pull request adds an entry under `## [Unreleased]`, so two branches adding one each conflict on adjacent lines - all seven conflicting pull requests in the queue conflict on this file and nothing else. `.gitattributes` now declares `CHANGELOG.md merge=union`, so both sides' entries survive the merge and the file keeps its single unreleased section.
+- **CHANGELOG.md merges by union for local merges**: Every pull request adds an entry under `## [Unreleased]`, so two branches adding one each conflict on adjacent lines. `.gitattributes` now declares `CHANGELOG.md merge=union`, which concatenates both sides so the file keeps its single unreleased section. **This applies to local git merges only**: pull-request merges run on GitHub's own merge implementation, which does not honour repository merge attributes, so a branch that already conflicts on this file keeps conflicting in the web UI and `merge=union` will not clear it - those still need a local merge or rebase with the result pushed.
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed

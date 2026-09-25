@@ -14,7 +14,11 @@ crates/cmtraceopen-parser/tests/fixtures/** -text -whitespace
 src-tauri/tests/corpus/company_portal/** -text -whitespace
 
 # Entries accumulate in ## [Unreleased], so two branches adding one each conflict on
-# adjacent lines. The union driver concatenates both sides instead. Verified by merging
-# two open pull requests here: no conflict, one ## [Unreleased], both entries kept. It
-# applies from the merging side, so this has to land before the branches it helps.
+# adjacent lines. The union driver concatenates both sides instead, which removes that
+# conflict for a LOCAL git merge.
+#
+# It does not reach GitHub. Pull-request merges run on GitHub's own merge implementation,
+# which does not honour repository merge attributes, so a branch that already conflicts on
+# this file keeps conflicting in the web UI and `merge=union` will not clear it. Resolving
+# those still means merging or rebasing locally and pushing the result.
 CHANGELOG.md merge=union
