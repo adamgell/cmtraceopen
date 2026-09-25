@@ -555,7 +555,10 @@ def clean_coderabbit_review(
             "unresolved_coderabbit_thread_count": 0,
             "latest_coderabbit_review": latest_review,
             "latest_coderabbit_review_state": "APPROVED",
+            "latest_coderabbit_review_at_head": True,
+            "reviews_are_advisory": False,
             "approved_at_head": True,
+            "review_cleared": True,
         },
         "unresolved_threads": [],
         "reviews": [latest_review],
@@ -4246,7 +4249,7 @@ class BaseEvidenceTests(unittest.TestCase):
 
     def test_coderabbit_pass_requires_clean_stable_raw_verdict(self) -> None:
         variants = (
-            "unapproved",
+            "not-cleared",
             "actionable-thread",
             "wrong-base",
             "stale-head",
@@ -4267,8 +4270,9 @@ class BaseEvidenceTests(unittest.TestCase):
                         unquote(urlparse(artifact["rawEvidenceUri"]).path)
                     )
                     raw = json.loads(raw_path.read_text(encoding="utf-8"))
-                    if variant == "unapproved":
+                    if variant == "not-cleared":
                         raw["summary"]["approved_at_head"] = False
+                        raw["summary"]["review_cleared"] = False
                     elif variant == "actionable-thread":
                         raw["summary"][
                             "unresolved_coderabbit_thread_count"
@@ -4294,6 +4298,94 @@ class BaseEvidenceTests(unittest.TestCase):
                         raw["pull_request"]["base_sha"] = SHA_C
                     else:
                         raw["pull_request"]["head_sha"] = SHA_C
+                    rewrite_review_raw(observation, raw)
+
+                    with self.assertRaises(ValueError):
+                        lane_state.validate_base_evidence(
+                            manifest,
+                            "317",
+                            "coderabbit",
+                            observation,
+                        )
+
+    def test_coderabbit_advisory_review_at_head_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = lane_state.empty_manifest()
+            allocate_issue(manifest, root, 317)
+            lane_state.record_pr(manifest, "317", 42, PR_URL)
+            observation = base_observation(root, "coderabbit")
+            evidence_path = artifact_path(observation["artifact"])
+            artifact = json.loads(evidence_path.read_text(encoding="utf-8"))
+            raw_path = Path(unquote(urlparse(artifact["rawEvidenceUri"]).path))
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+            raw["summary"]["reviews_are_advisory"] = True
+            raw["summary"]["approved_at_head"] = False
+            raw["summary"]["review_cleared"] = True
+            raw["summary"]["latest_coderabbit_review_state"] = "COMMENTED"
+            raw["summary"]["latest_coderabbit_review"]["state"] = "COMMENTED"
+            raw["reviews"][0]["state"] = "COMMENTED"
+            rewrite_review_raw(observation, raw)
+
+            lane_state.validate_base_evidence(
+                manifest,
+                "317",
+                "coderabbit",
+                observation,
+            )
+
+    def test_coderabbit_advisory_review_must_still_clear_head(self) -> None:
+        variants = (
+            "not-cleared",
+            "actionable-thread",
+        )
+        for variant in variants:
+            with self.subTest(variant=variant):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    manifest = lane_state.empty_manifest()
+                    allocate_issue(manifest, root, 317)
+                    lane_state.record_pr(manifest, "317", 42, PR_URL)
+                    observation = base_observation(root, "coderabbit")
+                    evidence_path = artifact_path(observation["artifact"])
+                    artifact = json.loads(
+                        evidence_path.read_text(encoding="utf-8")
+                    )
+                    raw_path = Path(
+                        unquote(urlparse(artifact["rawEvidenceUri"]).path)
+                    )
+                    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+                    raw["summary"]["reviews_are_advisory"] = True
+                    raw["summary"]["approved_at_head"] = False
+                    raw["summary"]["review_cleared"] = True
+                    raw["summary"]["latest_coderabbit_review_state"] = "COMMENTED"
+                    raw["summary"]["latest_coderabbit_review"]["state"] = (
+                        "COMMENTED"
+                    )
+                    raw["reviews"][0]["state"] = "COMMENTED"
+                    if variant == "not-cleared":
+                        raw["summary"]["review_cleared"] = False
+                    else:
+                        raw["summary"][
+                            "unresolved_coderabbit_thread_count"
+                        ] = 1
+                        raw["summary"]["unresolved_thread_count"] = 1
+                        raw["unresolved_threads"] = [
+                            {
+                                "id": "thread-1",
+                                "isResolved": False,
+                                "isOutdated": False,
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "author": {
+                                                "login": "coderabbitai[bot]"
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
                     rewrite_review_raw(observation, raw)
 
                     with self.assertRaises(ValueError):

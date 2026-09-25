@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -382,10 +383,21 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
         if not thread["isOutdated"] and thread_has_coderabbit(thread)
     ]
     latest = coderabbit_reviews[-1] if coderabbit_reviews else None
-    approved_at_head = bool(
+    latest_at_head = bool(
         latest
-        and latest.get("state") == "APPROVED"
         and (latest.get("commit") or {}).get("oid") == metadata["head_sha"]
+    )
+    approved_at_head = bool(latest_at_head and latest.get("state") == "APPROVED")
+    advisory = reviews_are_advisory()
+    # Under the request-changes workflow a cycle ends APPROVED. In advisory mode
+    # CodeRabbit only ever comments, so the equivalent evidence is a review
+    # anchored to this head with no CodeRabbit thread left open.
+    review_cleared = bool(
+        latest_at_head
+        and (
+            latest.get("state") == "APPROVED"
+            or (advisory and not unresolved_coderabbit)
+        )
     )
 
     return {
@@ -397,11 +409,37 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
             "unresolved_coderabbit_thread_count": len(unresolved_coderabbit),
             "latest_coderabbit_review": latest,
             "latest_coderabbit_review_state": latest.get("state") if latest else None,
+            "latest_coderabbit_review_at_head": latest_at_head,
+            "reviews_are_advisory": advisory,
             "approved_at_head": approved_at_head,
+            "review_cleared": review_cleared,
         },
         "unresolved_threads": unresolved,
         "reviews": reviews,
     }
+
+
+def reviews_are_advisory() -> bool:
+    """Whether .coderabbit.yaml asks CodeRabbit to comment rather than block.
+
+    `request_changes_workflow: false` makes every review arrive as COMMENTED,
+    which never becomes APPROVED, so a gate that waits for approval can never be
+    satisfied. Read from the repository root, the directory the skill promises to
+    run in. An unreadable file or key yields False, the stricter reading.
+    """
+    try:
+        text = Path(".coderabbit.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        if key.strip() != "request_changes_workflow":
+            continue
+        return value.split("#", 1)[0].strip().casefold() in {"false", "no", "off"}
+    return False
 
 
 def is_coderabbit(author: dict[str, Any] | None) -> bool:

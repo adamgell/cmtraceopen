@@ -18,7 +18,7 @@ charters (`reducer-contract`, `reducer-adversary`, `reducer-integration`), and t
 specialist context (repo-root `soul.md`, `memory.md`).
 
 The deliverable is the charter's gate-state report: findings ranked most-severe
-first, named gate states (CI, CodeRabbit `approved_at_head` via the
+first, named gate states (CI, CodeRabbit `review_cleared` via the
 `coderabbit-review-loop` skill's state script, contract conformance), and rejected
 feedback with reasoning. Merging is the repository owner's action; the review ends
 at the report.

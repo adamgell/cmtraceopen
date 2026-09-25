@@ -13,7 +13,11 @@ tone_instructions: >-
 reviews:
   profile: assertive
   # Keep reviews advisory: CI gates (cargo clippy, cargo test, tsc) decide mergeability.
-  request_changes_workflow: true
+  # `true` submits every review as CHANGES_REQUESTED, which GitHub treats as a block. With
+  # `main` unprotected that state is the only thing holding a PR whose checks all pass, and
+  # CodeRabbit does not re-review an already-reviewed commit, so a PR whose findings were
+  # addressed cannot clear it on its own. Reviews still comment, and CI still gates.
+  request_changes_workflow: false
   high_level_summary: true
   changed_files_summary: true
   sequence_diagrams: true
