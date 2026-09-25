@@ -290,13 +290,22 @@ impl UpdateKey {
     }
 
     /// Stable, human-readable label used in finding ids.
+    ///
+    /// The update id is part of it whenever one is known: `joins()` keeps two keys
+    /// apart by that id even when they share a KB, so a label without it can name
+    /// two different transactions — and `rules.rs` then emits two findings with the
+    /// same `finding_id`.
     pub fn label(&self) -> String {
-        match (&self.kb_article, &self.update_id, &self.revision) {
+        let base = match (&self.kb_article, &self.update_id, &self.revision) {
             (Some(kb), _, Some(revision)) => format!("{kb}.{revision}"),
             (Some(kb), _, None) => kb.clone(),
             (None, Some(id), Some(revision)) => format!("{id}.{revision}"),
             (None, Some(id), None) => id.clone(),
             (None, None, _) => "unidentified".to_owned(),
+        };
+        match &self.update_id {
+            Some(id) => format!("{base}.{id}"),
+            None => base,
         }
     }
 
@@ -938,6 +947,60 @@ mod tests {
             revision: None,
         };
         assert!(left.joins(&unspecified));
+    }
+
+    #[test]
+    fn labels_stay_distinct_across_keys_that_do_not_join() {
+        // rules.rs builds finding ids from the label, so two keys that do not
+        // join must not produce the same one: a consumer keying on finding_id
+        // would merge or drop one of them.
+        let per_architecture = UpdateKey {
+            update_id: Some("{aaaaaaaa-0000-0000-0000-000000000001}".to_owned()),
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        let other_architecture = UpdateKey {
+            update_id: Some("{bbbbbbbb-0000-0000-0000-000000000002}".to_owned()),
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        assert!(!per_architecture.joins(&other_architecture));
+        assert_ne!(
+            per_architecture.label(),
+            other_architecture.label(),
+            "one KB across two GUIDs is two transactions and needs two labels"
+        );
+
+        // The same revision number under two ids is the same shape.
+        let first = UpdateKey {
+            update_id: Some("{a}".to_owned()),
+            kb_article: None,
+            revision: Some("1".to_owned()),
+        };
+        let second = UpdateKey {
+            update_id: Some("{b}".to_owned()),
+            kb_article: None,
+            revision: Some("1".to_owned()),
+        };
+        assert_ne!(first.label(), second.label());
+    }
+
+    #[test]
+    fn labels_collapse_only_for_keys_that_join() {
+        // The one pair allowed to share a label is the pair joins() already folds
+        // into a single transaction, so no finding is lost by the collapse.
+        let left = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: None,
+        };
+        let right = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: None,
+        };
+        assert!(left.joins(&right));
+        assert_eq!(left.label(), right.label());
     }
 
     #[test]
