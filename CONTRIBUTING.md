@@ -155,6 +155,5 @@ cd src-tauri && cargo bench
 ## Project Links
 
 - [Changelog](CHANGELOG.md)
-- [Feature Roadmap](FEATURE_IMPROVEMENTS.md)
-- [DSRegCmd Troubleshooting Guide](DSREGCMD_TROUBLESHOOTING.md)
+- [Field Guide](https://cmtraceopen.com/field-guide/)
 - [Disclaimer](DISCLAIMER.md)
