@@ -63,6 +63,7 @@ import type {
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
 import type {
+  EspAcquisitionCapability,
   EspAppFlipBackup,
   EspAppFlipResult,
   EspDiagnosticsSnapshot,
@@ -2486,6 +2487,10 @@ export async function getEspElevationState(): Promise<EspElevationState> {
   return invokeCommand("get_esp_elevation_state");
 }
 
+export async function getEspDiagnosticsCapability(): Promise<EspAcquisitionCapability> {
+  return invokeCommand("get_esp_diagnostics_capability");
+}
+
 export async function analyzeEspEvidence(
   path: string,
   requestId: string,
@@ -3155,6 +3160,13 @@ const COMMAND_DECODERS = {
       artifactCounts: isCommandRecord,
       durationMs: isFiniteCommandNumber,
       gaps: isCommandRecordArray,
+    }),
+  get_esp_diagnostics_capability: (value, commandName) =>
+    decodeRecordResponse<EspAcquisitionCapability>(value, commandName, {
+      offlineAnalysisSupported: (field) => typeof field === "boolean",
+      liveAcquisitionSupported: (field) => typeof field === "boolean",
+      liveAcquisitionDetail: (field) =>
+        field === null || typeof field === "string",
     }),
   get_esp_elevation_state: (value, commandName) =>
     decodeRecordResponse<EspElevationState>(value, commandName, {
