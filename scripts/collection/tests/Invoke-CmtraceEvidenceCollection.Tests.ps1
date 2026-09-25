@@ -1,7 +1,10 @@
 BeforeAll {
-    $collectorPath = Join-Path $PSScriptRoot '..' 'Invoke-CmtraceEvidenceCollection.ps1'
-    $stagedProfilePath = Join-Path $PSScriptRoot '..' 'intune-evidence-profile.json'
-    $referenceProfilePath = Join-Path $PSScriptRoot '..' '..' '..' 'references' 'collection' 'intune-evidence-profile.json'
+    # Join-Path takes a single child path in Windows PowerShell 5.1, which is the shell the ESP
+    # job runs this file under. Passing several positional segments works in pwsh 7 and throws
+    # there, so every call below joins exactly once.
+    $collectorPath = Join-Path $PSScriptRoot '../Invoke-CmtraceEvidenceCollection.ps1'
+    $stagedProfilePath = Join-Path $PSScriptRoot '../intune-evidence-profile.json'
+    $referenceProfilePath = Join-Path $PSScriptRoot '../../../references/collection/intune-evidence-profile.json'
     $stagedProfileText = Get-Content -LiteralPath $stagedProfilePath -Raw
     $referenceProfileText = Get-Content -LiteralPath $referenceProfilePath -Raw
     $stagedProfile = $stagedProfileText | ConvertFrom-Json
