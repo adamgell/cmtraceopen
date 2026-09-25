@@ -71,6 +71,8 @@ struct SourceCard {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RawParserFamily {
     Ccm,
+    /// Legacy SMS trace framing (`message$$<component><time><thread>`), `ParserKind::Simple`.
+    Simple,
     Unsupported,
     Unknown(String),
 }
@@ -83,6 +85,7 @@ impl<'de> Deserialize<'de> for RawParserFamily {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
             "ccm" => Self::Ccm,
+            "simple" => Self::Simple,
             "unsupported" => Self::Unsupported,
             _ => Self::Unknown(value),
         })
@@ -513,7 +516,10 @@ fn validate_card(card: &SourceCard) -> Validation {
                     .as_deref()
                     .is_none_or(str::is_empty)
                 || card.promotion.deferred_reason.is_some()
-                || card.raw_parser_family != RawParserFamily::Ccm
+                || !matches!(
+                    card.raw_parser_family,
+                    RawParserFamily::Ccm | RawParserFamily::Simple
+                )
                 || card.source_version_scope.state != SourceVersionState::Scoped
             {
                 issues.push("ruleValidatedMetadataInvalid".to_owned());
@@ -739,10 +745,11 @@ fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
         );
         assert!(
             matches!(
-                card.promotion.state,
-                PromotionState::Candidate | PromotionState::Deferred
+                (card.card_id.as_str(), &card.promotion.state),
+                (_, PromotionState::Candidate | PromotionState::Deferred)
+                    | ("client-notification-bgb", PromotionState::Observed)
             ),
-            "{filename}: no lab-observed or rule-validated evidence exists"
+            "{filename}: only client-notification-bgb has lab-observed evidence (#479), and no card is rule-validated"
         );
         assert!(card.semantic_policy.capture_guidance_only);
         assert!(!card.semantic_policy.can_create_transactions);
