@@ -50,18 +50,27 @@ cargo bench                     # Criterion benchmarks (intune_pipeline)
 npx tsc --noEmit                # TypeScript check
 ```
 
-CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tauri build on macOS-arm64, Windows-x64, Linux-x64.
+CI gates: seven jobs — Source Quality (fmt, changed-range whitespace, wasm32 portability), Check & Test (Rust, both feature sets, the parser crate's tests and clippy, `cargo deny`, `cargo audit`), Rust MSRV 1.88 (Ubuntu and Windows), TypeScript Check, E2E (Playwright), ESP Diagnostics (Windows), Build (macos-arm64, Windows-x64, Linux-x64). The three-item shorthand that used to sit here came from `CLAUDE.md` and was understated in both places.
 
 ## Verified Checkpoints
 
 All SHAs are from Adam's PM charter (`~/.hermes/cmtrace-pm-charter.md`). Reverify with `git ls-remote` before acting.
 
+**That source is not readable on this workstation** — the path does not exist here, checked 2026-09-24 — and the CEO charter treats an unreadable contract as a fail-closed condition. So the citation above cannot be followed, and the table has to stand on its own: the SHAs are quoted in full precisely so a reader does not need the charter to verify them. If the file lives on the operator's machine only, this line should say so rather than pointing at a path a session cannot open.
+
+**Every row below was stale when rechecked on 2026-09-24**: the four issues had all merged
+weeks earlier while the table still said NOT merge-ready, hold the PR, gate pending, findings
+outstanding. The SHAs are preserved on origin branches, so the rows were never wrong about the
+*commits* — only about whether the work had landed. That is the failure mode this table is
+supposed to prevent, and it read as current for seven weeks. Treat a row here as a pointer to
+verify, never as state.
+
 | Issue | Branch SHA | State | Blockers |
 |---|---|---|---|
-| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | 6/6 focused pass | coverage_complete ignores incomplete-fragment gaps; workflow field uses broad SccmClientWorkflow — NOT merge-ready |
-| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | P1 open | Semantic admission accepts 5.00.TEST.0002 but profile must be exactly 5.00.TEST.0001 — needs red regression, hold PR until clean |
-| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | TDD red 6/2 → green 8/0 | Full gate pending: intake, SUP fixture, spine, full parser, Clippy, wasm32, TS, fmt, diff + CodeRabbit + independent review |
-| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | Store 39/39, hook 7/7, tail 29/29 | Findings: observedThroughLine must dominate entry+amendment ranges; amendment start/span bounds; runtime validation for optional LogEntry fields |
+| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | **MERGED into `main` via #490** 2026-08-05; #340 was preparation into `codex/parser-family-skeleton` | none |
+| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | **MERGED into `main` via #490** 2026-08-05; #385 was preparation into `codex/parser-family-skeleton` | none |
+| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | **MERGED into `main` via #490** 2026-08-05; #377 was preparation into `codex/parser-family-skeleton` | none |
+| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | **MERGED** via #460 | none |
 
 ## Recovery Branches (Evidence Only)
 
@@ -75,6 +84,8 @@ Never batch-merge these. Extract reviewed issue-scoped slices into fresh worktre
 | `codex/recovery-intune-macos-unified-log-20260803` | `27d58a2aeee535346f8e32fa5305f0bea95b39f8` | macOS unified log |
 | `codex/recovery-intune-ios-diagnostics-20260803` | `4cf3ad15f1bc4f97d21f3046bd4abc8989c18aa4` | iOS diagnostics |
 | `codex/recovery-intune-ios-console-round2-20260803` | `952b48f442f761380ec8a650d6feba1b5cebe7cd` | iOS console round 2 |
+
+**Checked 2026-09-24:** all six branches are still present on `origin`, so the refs are preserved as promised — this table is accurate about what it holds. What has changed is the *second* instruction: the targets have since landed. `#365` and `#360` are done, the macOS and iOS parser families exist on `main` (`intune/apps/macos`, `intune/portal/{macos,ios_ipados}`), and the epic tracker marks the corresponding rows complete. So these branches are now history rather than pending recovery, and "check merged equivalents" is answered rather than open — worth keeping only as evidence, which is what the heading already says.
 
 ## Execution Order (From PM Charter)
 
@@ -102,7 +113,10 @@ Staff notes live in each member's subdirectory:
 
 `cmtraceopen` has an extraordinary development footprint across multiple git worktree directories. This is not just "developed in Claude/Codex" — it IS a parallel development ecosystem.
 
-- **450+ git worktrees** total across `.worktrees/`, `/private/tmp/cmtraceopen-*`, `~/.codex/worktrees/`, and the root repo's own `.claude/worktrees/`
+- **87 git worktrees** registered, measured 2026-09-24 — counted rather than described, because the
+  previous figure here read "450+": 86 in `.worktrees/`, 31 in `~/.codex/worktrees/`, and none in
+  `/private/tmp/cmtraceopen-*`. The forest is real; it is a fifth of the size the layout block below
+  used to claim, which is what cleaning up merged lanes does to a count nobody retakes.
 - **246 SCCM branches** for issues #318 through #482 (diagnostic program: client health, intake, policy, DP, SUP, hierarchy, cross-side correlation)
 - **~40 Intune branches** covering IME corrections, Company Portal multi-platform (Windows/macOS/iOS/Android), WUfB recovery, device inventory
 - Many worktrees have **1,000+ commits** from main — deep parallel feature development with real code changes and merge activity
@@ -110,9 +124,9 @@ Staff notes live in each member's subdirectory:
 ### Worktree Directory Layout
 ```
 Users/Adam.Gell/repo/cmtraceopen/
-  .worktrees/             # Main repo's git worktree index — 450 branches
-  /private/tmp/cmtraceopen-*  # Temporary worktrees from active agent sessions (~115)
-  ~/.codex/worktrees/     # Codex-specific worktrees (~7)
+  .worktrees/                 # 86 worktrees, all registered with `git worktree list`
+  ~/.codex/worktrees/         # 31 Codex-specific worktrees
+  /private/tmp/cmtraceopen-*  # none present as of 2026-09-24
 ```
 
 These directories track the full state of every Claude/Codex agent session as parallel working copies.
