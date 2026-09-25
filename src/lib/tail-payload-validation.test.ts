@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { LogEntry, TailEntryAmendment, TailPayload } from "../types/log";
+import type {
+  ErrorCodeOutcome,
+  LogEntry,
+  TailEntryAmendment,
+  TailPayload,
+} from "../types/log";
 import { parseTailPayload } from "./tail-payload-validation";
 
 function entry(overrides: Partial<LogEntry> = {}): LogEntry {
@@ -99,6 +104,7 @@ describe("parseTailPayload", () => {
             codeDecimal: "0",
             description: "success",
             category: "Win32",
+            outcome: "failure",
           },
         ],
       }),
@@ -114,6 +120,7 @@ describe("parseTailPayload", () => {
             codeDecimal: "0",
             description: "success",
             category: "Win32",
+            outcome: "failure",
           },
         ],
       }),
@@ -138,6 +145,7 @@ describe("parseTailPayload", () => {
         codeDecimal: "0",
         description: "success",
         category: "Win32",
+        outcome: "failure",
       },
     ],
     ipAddress: "192.0.2.1",
@@ -210,6 +218,37 @@ describe("parseTailPayload", () => {
     expect(parseTailPayload(value)).toEqual(value);
   });
 
+  it("rejects a span whose outcome is missing or unknown", () => {
+    // The outcome decides whether a span is counted as a finding, so a payload
+    // that omits it or invents a value must not be accepted as a span.
+    const span = {
+      start: 0,
+      end: 7,
+      codeHex: "0x80070005",
+      codeDecimal: "2147942405",
+      description: "Access is denied",
+      category: "Win32",
+    };
+    const withOutcome = (outcome: ErrorCodeOutcome) =>
+      payload({
+        entries: [entry({ errorCodeSpans: [{ ...span, outcome }] })],
+        observedThroughLine: 1,
+      });
+
+    // Deliberately invalid values, cast only to reach the validator.
+    for (const outcome of [
+      undefined,
+      null,
+      "Success",
+      "failure ",
+      1,
+    ] as unknown as ErrorCodeOutcome[]) {
+      expect(parseTailPayload(withOutcome(outcome))).toBeNull();
+    }
+
+    expect(parseTailPayload(withOutcome("failure"))).not.toBeNull();
+  });
+
   it("validates message spans in JavaScript UTF-16 offsets", () => {
     const value = payload({
       entries: [
@@ -223,6 +262,7 @@ describe("parseTailPayload", () => {
               codeDecimal: "0",
               description: "success",
               category: "Win32",
+              outcome: "failure",
             },
           ],
         }),
@@ -287,6 +327,7 @@ describe("parseTailPayload", () => {
             codeDecimal: "0",
             description: "success",
             category: "Win32",
+            outcome: "failure",
           },
         ],
       }),
