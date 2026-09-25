@@ -4,7 +4,7 @@ description: Propose documentation of merged CMTrace Open behavior from source, 
 model: "@scaffold"
 tools: [read, grep, glob]
 spawns: []
-autoloadSkills: [cmtraceopen, mdbook-docs]
+autoloadSkills: [cmtraceopen]
 advisor: true
 output:
   type: object

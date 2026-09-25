@@ -206,7 +206,7 @@ jobs:
         run: npm run test
 
       - name: CI bundle output contract tests
-        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs
+        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs
 
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
