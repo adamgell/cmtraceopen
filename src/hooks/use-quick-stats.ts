@@ -88,9 +88,15 @@ export function useQuickStats(): QuickStats {
         }
       }
 
-      // Collect all error code spans (not just from Error severity)
+      // Collect error code spans from every severity — a line logged at Info
+      // can still carry the failure an analyst is chasing — but not the codes
+      // that report a completed operation. CBS.log writes
+      // `[HRESULT = 0x00000000]` on successful steps, so counting S_OK made a
+      // healthy log look like it failed (#657). Codes that completed and still
+      // require action (a pending reboot) stay.
       if (entry.errorCodeSpans && entry.errorCodeSpans.length > 0) {
         for (const span of entry.errorCodeSpans) {
+          if (span.outcome === "success") continue;
           const hex = span.codeHex.startsWith("0x")
             ? "0x" + span.codeHex.slice(2).toUpperCase()
             : span.codeHex.toUpperCase();
