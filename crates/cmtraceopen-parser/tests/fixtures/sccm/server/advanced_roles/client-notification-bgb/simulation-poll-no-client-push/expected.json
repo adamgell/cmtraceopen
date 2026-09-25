@@ -1,0 +1,13 @@
+{
+  "fixtureId": "simulation-poll-no-client-push",
+  "evidence": "Push-task poll whose only retrieved message is the server simulation self-check. It is not a client push request and has no terminal outcome.",
+  "files": [
+    {
+      "name": "BgbServer.log",
+      "rotation": "current",
+      "lines": 27,
+      "framedRecords": 27,
+      "unframedLines": []
+    }
+  ]
+}

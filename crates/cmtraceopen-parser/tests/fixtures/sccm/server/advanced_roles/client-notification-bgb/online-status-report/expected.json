@@ -1,0 +1,13 @@
+{
+  "fixtureId": "online-status-report",
+  "evidence": "Periodic online-status accounting ending in a generated BGB online status report. Aggregate counts only, no per-client notification.",
+  "files": [
+    {
+      "name": "BgbServer.log",
+      "rotation": "current",
+      "lines": 10,
+      "framedRecords": 10,
+      "unframedLines": []
+    }
+  ]
+}

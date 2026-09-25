@@ -14,10 +14,12 @@
     "configuredRoleLogRoot",
     "siteServerLogs"
   ],
-  "rawParserFamily": "ccm",
+  "rawParserFamily": "simple",
   "sourceVersionScope": {
-    "state": "unknown",
-    "allowedPrefixes": []
+    "state": "scoped",
+    "allowedPrefixes": [
+      "5.00.9141"
+    ]
   },
   "capture": {
     "classification": "optional",
@@ -34,6 +36,8 @@
   "privacy": {
     "sensitivity": "high",
     "classes": [
+      "certificateIdentity",
+      "databaseIdentity",
       "deviceIdentity",
       "notificationPayload",
       "userIdentity"
@@ -55,11 +59,21 @@
     "timeOnlyEligible": false,
     "topologyRequired": true
   },
-  "fixtureIds": [],
+  "fixtureIds": [
+    "component-start",
+    "firewall-warning-state-message",
+    "mp-settings-certificates",
+    "online-status-report",
+    "rotation-boundary",
+    "simulation-poll-no-client-push"
+  ],
   "ownerIssue": "#334",
   "promotion": {
-    "state": "candidate",
-    "observedEvidenceIds": [],
+    "state": "observed",
+    "observedEvidenceIds": [
+      "lab-2026-09-25-bgbserver-framing-rotation",
+      "lab-2026-09-25-bgbserver-role-path-version"
+    ],
     "implementationIssue": null,
     "productionReducer": null,
     "deferredReason": null
@@ -70,8 +84,8 @@
     "canCreateFailureFindings": false
   },
   "nextEvidence": [
-    "Record sanitized server-role, configured-path, and source-version provenance without assuming the candidate basename exists.",
-    "Validate server versus client notification keys using independent synthetic fixtures before defining any correlation."
+    "Capture BgbServer.log across an operator-initiated client notification action, with the matching client CcmNotificationAgent.log, so request and terminal outcome are observed rather than inferred.",
+    "Validate server versus client notification keys using independent sanitized fixtures before defining any correlation."
   ],
   "supersession": {
     "state": "active",

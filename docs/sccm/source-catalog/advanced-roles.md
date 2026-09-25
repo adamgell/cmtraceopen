@@ -4,7 +4,7 @@ Issue: #480
 
 Card schema: `1.0.0`
 
-Evidence status: synthetic contract only
+Evidence status: synthetic contract only, except `client-notification-bgb`, which has a sanitized lab observation (#479)
 
 This catalog is a gate for future source discovery. It does not add a parser, reducer, transaction, finding, native collector, or live Windows acceptance claim. The candidate basenames are capture-discovery hints, not assertions that a role is configured or that a file exists. Missing, denied, capped, skipped, unsupported, malformed, and partial sources remain coverage states.
 
@@ -28,12 +28,12 @@ Public projection is restricted to nonsensitive card, role, capture, and coverag
 
 ## Initial cards
 
-No initial card has sanitized lab-observed provenance, so none has a follow-up implementation issue or semantic admission.
+Only `client-notification-bgb` has sanitized lab-observed provenance; its contract is [client-notification-bgb.md](client-notification-bgb.md). No card has a follow-up implementation issue or semantic admission.
 
 | Card ID | Candidate scope | Raw grammar | State | Privacy | Exact next promotion evidence |
 | --- | --- | --- | --- | --- | --- |
 | `certificate-enrollment-pki` | Certificate registration point; candidate `crp.log` | CCM | `candidate` | High: certificate, device, and subject identity | Authorized role/path/version observation; success, terminal, privacy, incomplete, and rotation fixtures |
-| `client-notification-bgb` | Server-side notification and management-point context; candidate `BgbServer.log` | CCM | `candidate` | High: device, user, and notification payload | Sanitized server-role observation and independently validated server-versus-client notification keys |
+| `client-notification-bgb` | Server-side notification and management-point context; `BgbServer.log` observed in site server logs | Simple (SMS trace) | `observed` | High: certificate, database, device, user, and notification payload | An observed client notification request with its terminal outcome, and independently validated server-versus-client notification keys |
 | `cloud-service-connection` | Service connection point and CMG connection point; candidates `CloudMgr.log`, `SMS_Cloud_ProxyConnector.log` | CCM | `candidate` | High: tenant, endpoint, certificate, and token-like data | Authorized configured-role observation followed by privacy review and bounded scenario fixtures |
 | `osd-pxe` | PXE-enabled distribution point and site server; candidate `smspxe.log` | CCM | `candidate` | High: device, MAC, network, and resource identity | Sanitized configured-role observation plus topology, privacy, rejection, rotation, malformed, and incomplete fixtures |
 | `reporting` | Reporting services point; candidate `srsrp.log` | CCM | `candidate` | High: report, query, account, and data-source identity | Sanitized configured-role observation and bounded redaction fixtures |
@@ -60,4 +60,4 @@ Dedicated admission tests prove:
 
 ## Native validation boundary
 
-The development SCCM Server may later provide sanitized observed provenance, but it is not a blocker for this contract and has not been exercised by this slice. Any future promotion must update the individual card with evidence IDs and fixtures, open a dedicated implementation issue, obtain review, and rerun the parser, wasm32, strict Clippy, formatting, and manifest checks before semantic admission.
+The lab SCCM site server provided sanitized observed provenance for `client-notification-bgb` (#479). No other card has been exercised on it. Any future promotion must update the individual card with evidence IDs and fixtures, open a dedicated implementation issue, obtain review, and rerun the parser, wasm32, strict Clippy, formatting, and manifest checks before semantic admission.

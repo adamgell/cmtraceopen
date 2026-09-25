@@ -1,0 +1,13 @@
+{
+  "fixtureId": "firewall-warning-state-message",
+  "evidence": "Firewall warning for the notification TCP port and the state message it raises. Server health signal, not a client notification failure.",
+  "files": [
+    {
+      "name": "BgbServer.log",
+      "rotation": "current",
+      "lines": 7,
+      "framedRecords": 7,
+      "unframedLines": []
+    }
+  ]
+}
