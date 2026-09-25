@@ -70,7 +70,7 @@ export interface SccmDiscoveryIssue {
 
 export interface SccmEnvironmentDiscovery {
   supported: boolean;
-  /** Client version from CCM\Setup. */
+  /** Client version from SMS\Mobile Client (SmsClientVersion). */
   configmgrVersion: string | null;
   /** Site server version from SMS\Setup. */
   siteVersion: string | null;

@@ -96,7 +96,7 @@ pub struct SccmDiscoveryIssue {
 #[serde(rename_all = "camelCase")]
 pub struct SccmEnvironmentDiscovery {
     pub supported: bool,
-    /// Client version read from `CCM\Setup`.
+    /// Client version read from `SMS\Mobile Client` `SmsClientVersion`.
     pub configmgr_version: Option<String>,
     /// Site server version read from `SMS\Setup`.
     pub site_version: Option<String>,
