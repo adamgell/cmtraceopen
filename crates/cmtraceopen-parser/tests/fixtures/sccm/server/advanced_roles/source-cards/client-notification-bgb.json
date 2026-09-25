@@ -64,6 +64,7 @@
     "firewall-warning-state-message",
     "mp-settings-certificates",
     "online-status-report",
+    "push-task-delivered",
     "rotation-boundary",
     "simulation-poll-no-client-push"
   ],
@@ -71,6 +72,7 @@
   "promotion": {
     "state": "observed",
     "observedEvidenceIds": [
+      "lab-2026-09-25-bgb-push-task-delivered",
       "lab-2026-09-25-bgbserver-framing-rotation",
       "lab-2026-09-25-bgbserver-role-path-version"
     ],
@@ -84,8 +86,8 @@
     "canCreateFailureFindings": false
   },
   "nextEvidence": [
-    "Capture BgbServer.log across an operator-initiated client notification action, with the matching client CcmNotificationAgent.log, so request and terminal outcome are observed rather than inferred.",
-    "Validate server versus client notification keys using independent sanitized fixtures before defining any correlation."
+    "Capture a push task whose status report shows FailedClients greater than zero (for example, a notification to an offline client) so a failure outcome is observed rather than inferred.",
+    "Capture a second push to a different client so PushID, TaskID and TaskGUID can be shown collision-safe before the key state is validated."
   ],
   "supersession": {
     "state": "active",

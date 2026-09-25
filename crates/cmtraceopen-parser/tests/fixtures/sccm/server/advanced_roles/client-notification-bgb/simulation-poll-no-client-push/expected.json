@@ -4,6 +4,7 @@
   "files": [
     {
       "name": "BgbServer.log",
+      "side": "server",
       "rotation": "current",
       "lines": 27,
       "framedRecords": 27,
