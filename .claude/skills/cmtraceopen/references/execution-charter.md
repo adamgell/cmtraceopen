@@ -23,6 +23,33 @@ tracking, and safe integration. Reverify all remote state before acting on it.
   explicit approval.
 - Adam alone merges.
 
+## Autonomy and hard stops
+
+An approved issue lane runs to an open pull request with green gates without asking
+Adam for direction. Take direction from these sources, in order:
+
+1. The issue: its scope and acceptance criteria.
+2. Its epic or milestone and the issues linked from it.
+3. This charter: hard rules, architecture rules, and per-slice gates.
+4. The ADRs in `docs/architecture/decisions/` and the charters in `.Clairvoyance/staff/`.
+
+When these sources answer a question, decide, record the decision and its source on
+the issue, and keep going. Opening a pull request is a checkpoint to report, not a
+place to wait. When a lane's pull request is open and green, start the next approved
+lane.
+
+Stop and ask Adam only for these:
+
+- Merging, force-pushing, or deleting branches or artifacts.
+- Any write to a lab host's registry, site server, or configuration. Read-only
+  queries are allowed.
+- Work outside the issue's scope, or a role or feature the issue does not name.
+- A conflict between the issue and this charter or an ADR.
+- A blocker that survives two different approaches. Record both attempts on the
+  issue before asking.
+- Anything that would put lab hostnames, tenant domains, or raw captures into the
+  repository or a pull request.
+
 ## Architecture (non-negotiable)
 
 - `cmtraceopen-parser` is pure Rust and compiles for `wasm32-unknown-unknown`. No OS

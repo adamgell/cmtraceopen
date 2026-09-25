@@ -125,7 +125,7 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ### Pre-Work
 
 1. **Step 0 Rule**: Before ANY structural refactor on a file >300 LOC, first remove all dead props, unused exports, unused imports, and debug logs. Commit this cleanup separately before starting the real work.
-2. **Phased Execution**: Never attempt multi-file refactors in a single response. Break work into explicit phases. Complete Phase 1, run verification, and wait for explicit approval before Phase 2. Each phase must touch no more than 5 files.
+2. **Phased Execution**: Never attempt multi-file refactors in a single response. Break work into explicit phases. Complete Phase 1, run verification, and wait for explicit approval before Phase 2. Each phase must touch no more than 5 files. Exception: in an issue lane Adam has approved, the per-slice gates in `.claude/skills/cmtraceopen/references/execution-charter.md` are the phases. Verify each one and continue without waiting; stop only for that charter's hard stops.
 
 ### Code Quality
 
