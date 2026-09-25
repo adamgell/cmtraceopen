@@ -46,7 +46,7 @@ failure scenario.
 
 The deliverable is a report containing: findings ranked most-severe first; the named
 gates and their observed states from artifacts Main supplies: CI checks, CodeRabbit
-review state (`approved_at_head`), a posted Hermes charter review with no open blocking
+review state (`review_cleared`), a posted Hermes charter review with no open blocking
 findings, and contract-layer conformance; explicitly rejected review feedback with
 reasoning; and a closing line that states what the review covered and what it did not.
 Missing, stale, or mismatched evidence is a blocker. Merge readiness is reported to Adam
