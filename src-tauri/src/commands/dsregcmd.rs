@@ -554,7 +554,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     // Phase 3: Active diagnostics (connectivity + SCP)
     let evidence_connectivity = bundle_path.join("evidence").join("connectivity");
     fs::create_dir_all(&evidence_connectivity).map_err(|error| {
-        AppError::Internal(format!(
+        crate::error::AppError::Internal(format!(
             "Failed to create the live capture's connectivity evidence directory '{}': {}",
             evidence_connectivity.display(),
             error
@@ -576,7 +576,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     if let Some(ref analysis) = event_log_analysis {
         let evidence_event_logs = bundle_path.join("evidence").join("event-logs");
         fs::create_dir_all(&evidence_event_logs).map_err(|error| {
-            AppError::Internal(format!(
+            crate::error::AppError::Internal(format!(
                 "Failed to create the live capture's event-log evidence directory '{}': {}",
                 evidence_event_logs.display(),
                 error
@@ -590,7 +590,7 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     let scheduled_task_evidence = collect_enterprise_mgmt_task_guids();
     let evidence_scheduled_tasks = bundle_path.join("evidence").join("scheduled-tasks");
     fs::create_dir_all(&evidence_scheduled_tasks).map_err(|error| {
-        AppError::Internal(format!(
+        crate::error::AppError::Internal(format!(
             "Failed to create the live capture's scheduled-task evidence directory '{}': {}",
             evidence_scheduled_tasks.display(),
             error
