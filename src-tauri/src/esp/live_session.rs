@@ -1007,11 +1007,7 @@ fn active_profile_directories(observed_at_utc: &str) -> ActiveProfileDirectories
         .take(MAX_ACTIVE_PROFILE_DIRECTORIES)
         .filter_map(|sid| profile_list.open_subkey_with_flags(sid, KEY_READ).ok())
         .filter_map(|key| key.get_value::<String, _>("ProfileImagePath").ok())
-        .map(|path| {
-            PathBuf::from(crate::collector::env_expand::expand_env_vars(
-                &path,
-            ))
-        })
+        .map(|path| PathBuf::from(crate::collector::env_expand::expand_env_vars(&path)))
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
