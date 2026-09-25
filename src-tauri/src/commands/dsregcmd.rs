@@ -840,7 +840,12 @@ fn collect_artifact_identities(
             // Decoded, not read as UTF-8: the walk itself decodes and writes this
             // same file, so skipping a UTF-16 one here left identities in the copy
             // that the projection had the means to remove.
-            let Ok(bytes) = std::fs::read(&path) else {
+            //
+            // Read through the walk's own reader, which refuses anything that is
+            // not a regular file: this pass runs before the walk, so a FIFO in the
+            // bundle would otherwise block here, on a following open with nothing
+            // to time it out.
+            let Ok(bytes) = read_bundle_file(&path) else {
                 continue;
             };
             let Some(text) = decode_artifact_text(&bytes) else {
@@ -854,7 +859,7 @@ fn collect_artifact_identities(
         }
         // Everything else is text this walk can read: registry dumps and command
         // output name the same identities in a labelled form.
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = read_bundle_file(&path) else {
             continue;
         };
         if let Some(text) = decode_artifact_text(&bytes) {
@@ -988,19 +993,25 @@ fn a_symlinked_capture_is_rejected_rather_than_read() {
     );
 }
 
-/// Open a bundle file without following a link.
+/// Open a bundle file without following a link, or waiting for one.
 ///
 /// The projector checks `entry.file_type()` and then reads by path, and those are
 /// two different lookups: the bundle is staged under the temporary directory with
 /// its path exposed to the frontend, so another process with write access can
 /// replace an entry in between and the read would follow the replacement. Opening
 /// with no-follow and reading through that handle removes the second lookup.
+///
+/// `O_NONBLOCK` is what keeps that open from waiting: a FIFO is neither a
+/// directory nor a link, so the walk sends it here, and a read-only open of one
+/// blocks until a writer appears. It does not affect a regular file's reads and
+/// does not affect `O_NOFOLLOW`, so the handle still comes back no-follow — it
+/// comes back for `read_bundle_file` to refuse instead of blocking the caller.
 #[cfg(unix)]
 fn open_bundle_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
 }
 
@@ -1015,10 +1026,29 @@ fn open_bundle_file(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// Read a bundle file through a no-follow handle.
+/// Read a bundle file through a no-follow handle, and only a regular file.
+///
+/// Every read of a bundle file on the projection path goes through it — the
+/// identity pass before the walk, and the walk itself — so an entry that is not a
+/// regular file is refused wherever it is met.
+///
+/// The handle, not the path, says what was opened: the walk decides from
+/// `entry.file_type()` and then reads by path, and those two lookups can
+/// disagree. Every entry that is neither a directory nor a link reaches this
+/// open, and on Unix a read-only open of a FIFO waits for a writer — the
+/// projection would block there, before a byte is read, with nothing to time it
+/// out. A handle whose type is not a regular file is refused before the read, on
+/// both platforms: on Windows `is_file()` is false for a link, so a reparse point
+/// the walk did not see is refused as the link it is rather than read.
 fn read_bundle_file(path: &Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut file = open_bundle_file(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("'{}' is not a regular file", path.display()),
+        ));
+    }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
@@ -1045,10 +1075,30 @@ fn write_projected_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn find_bundle_capture(root: &Path) -> Result<std::path::PathBuf, crate::error::AppError> {
-    let staged = root
-        .join("evidence")
+    let relative = Path::new("evidence")
         .join("command-output")
         .join("dsregcmd-status.txt");
+    let staged = root.join(&relative);
+
+    // A link at any component of the capture path is refused, not only at the last
+    // one. `symlink_metadata` refuses the link at the final component but still
+    // resolves every component before it, so an `evidence` or an
+    // `evidence/command-output` that is itself a symlink was accepted here while
+    // `project_bundle_dir` skips that same entry as a link: the projection then
+    // reported success having copied no capture at all. Walking the path one
+    // component at a time means no link is followed to reach the file, so both
+    // halves agree about what the capture is.
+    let mut walked = root.to_path_buf();
+    for component in relative.components() {
+        walked.push(component);
+        let is_symlink = std::fs::symlink_metadata(&walked)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink {
+            return Err(no_capture_to_project(&staged));
+        }
+    }
+
     // `is_file()` follows a link, and the walk below does not: accepting one here
     // would report success for a projection whose capture is missing.
     let is_plain_file = std::fs::symlink_metadata(&staged)
@@ -1057,10 +1107,15 @@ fn find_bundle_capture(root: &Path) -> Result<std::path::PathBuf, crate::error::
     if is_plain_file {
         return Ok(staged);
     }
-    Err(crate::error::AppError::InvalidInput(format!(
+    Err(no_capture_to_project(&staged))
+}
+
+/// The error a bundle with no capture to project returns.
+fn no_capture_to_project(staged: &Path) -> crate::error::AppError {
+    crate::error::AppError::InvalidInput(format!(
         "no capture to project: '{}' does not exist",
         staged.display()
-    )))
+    ))
 }
 
 /// Where the shareable copy is written: beside the bundle it came from.
@@ -2172,6 +2227,81 @@ mod tests {
         assert!(
             projection.unprojected_files.is_empty(),
             "nothing was copied, so nothing is reported as copied: {projection:?}"
+        );
+    }
+
+    /// A FIFO in the bundle is refused, not opened.
+    ///
+    /// Every entry that is neither a directory nor a link reaches the reader, and
+    /// on Unix a read-only open of a FIFO waits for a writer: without a type check
+    /// on the opened handle this projection waits there forever. The bounded wait
+    /// is what tells "refused" apart from "still waiting".
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_the_bundle_is_refused_rather_than_opened() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        write_projection_bundle(&root);
+        let registry = root.join("evidence").join("registry");
+        std::fs::create_dir_all(&registry).expect("create registry dir");
+        let fifo = registry.join("device.pipe");
+        let fifo_path =
+            std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path has no nul");
+        // SAFETY: `mkfifo` creates a FIFO at a path this test owns and does not
+        // otherwise touch; the path outlives the call.
+        let created = unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) };
+        assert_eq!(
+            created,
+            0,
+            "create the fifo: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let projection_root = root.clone();
+        std::thread::spawn(move || {
+            let outcome = super::project_capture_bundle_impl(&projection_root)
+                .map(|projection| projection.projected_files)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(outcome);
+        });
+
+        let outcome = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the projection refuses the fifo instead of waiting on its open");
+        let error = outcome.expect_err("a fifo is not a bundle artifact to read");
+
+        assert!(
+            error.contains("device.pipe"),
+            "the error names the entry it refused: {error}"
+        );
+    }
+
+    /// A capture behind a symlinked folder is refused, not projected into nothing.
+    ///
+    /// The link is at `evidence/command-output` rather than at the file, which only
+    /// the final component's no-follow check never saw: the capture was accepted,
+    /// the walk then skipped the linked folder, and the command reported a
+    /// successful projection that copied no capture at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_capture_folder_is_rejected_rather_than_projected() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("capture");
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir_all(root.join("evidence")).expect("create evidence dir");
+        std::fs::create_dir_all(&elsewhere).expect("create the folder the link points at");
+        std::fs::write(elsewhere.join("dsregcmd-status.txt"), PROJECTION_CAPTURE)
+            .expect("write the capture outside the bundle");
+        std::os::unix::fs::symlink(&elsewhere, root.join("evidence").join("command-output"))
+            .expect("link the capture folder");
+
+        let error = super::project_capture_bundle_impl(&root)
+            .expect_err("a capture behind a link is not a capture to project");
+
+        assert!(
+            format!("{error}").contains("dsregcmd-status.txt"),
+            "the error names the path it refused: {error}"
         );
     }
 
