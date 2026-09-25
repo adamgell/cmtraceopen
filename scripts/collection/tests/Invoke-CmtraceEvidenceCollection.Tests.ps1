@@ -99,7 +99,7 @@ Describe 'New-CollectorBundleId' {
     It 'uses the invariant Gregorian calendar under a non-Gregorian culture' {
         $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
         $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
-        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56)
+        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56, [DateTimeKind]::Utc)
         Mock Get-Date {
             param([string]$Format)
             if ([string]::IsNullOrEmpty($Format)) {
@@ -121,11 +121,13 @@ Describe 'New-CollectorBundleId' {
             [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
         }
 
-        # The id embeds the current UTC time, so the assertion pins the shape rather
-        # than a literal clock value. What the culture switch must not change is that
-        # the digits are invariant ASCII: fa-IR would otherwise render Persian digits.
+        # The clock is mocked above, so the Gregorian instant is known and can be asserted
+        # literally. Pinning only the shape would pass under fa-IR even if the calendar
+        # changed: a Hijri date formats as 14050231-123456, which is still eight ASCII
+        # digits and still matches the pattern below.
         $bundleId | Should -Match '^CMTRACE-[0-9]{8}-[0-9]{6}-DEVICE-01-[0-9a-f]{32}$'
         $timestamp = ($bundleId -split '-')[1..2] -join '-'
+        $timestamp | Should -BeExactly '20260521-123456'
         foreach ($ch in $timestamp.ToCharArray()) {
             if ($ch -ne '-') {
                 [int]$ch | Should -BeLessThan 128 -Because "'$ch' must be an ASCII digit under any culture"
