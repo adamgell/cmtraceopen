@@ -1323,6 +1323,11 @@ mod tests {
     use super::analyze_dsregcmd;
     #[cfg(not(target_os = "windows"))]
     use super::capture_dsregcmd;
+    // The Windows-only test below drives this helper directly rather than
+    // through a capture, which is the point of it: the write has to fail
+    // without a live dsregcmd run to set one up.
+    #[cfg(target_os = "windows")]
+    use super::write_evidence_json;
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
