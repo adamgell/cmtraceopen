@@ -33,6 +33,12 @@ const TENANT_DOMAIN: &str = "contoso.onmicrosoft.com";
 const TENANT_ID: &str = "8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90";
 const SERIAL: &str = "5CD9SYNTH01";
 const ENTDM_ID: &str = "ENTDM-SYNTH-0001";
+/// A tenant domain whose shape is short because the tenant's is.
+///
+/// Four bytes, which is the case a live capture published: an on-premises
+/// NetBIOS domain that short was masked in its typed field and left verbatim
+/// in the narrative naming the same value.
+const SHORT_TENANT_DOMAIN: &str = "corp";
 const USER_SID: &str = "S-1-5-21-1111111111-2222222222-3333333333-1001";
 const INSTALL_SECRET: &str = "Sup3rSyntheticSecret";
 const BEARER_TOKEN: &str = "eyJzeW50aGV0aWMtdG9rZW4";
@@ -205,6 +211,33 @@ fn a_bare_serial_or_tenant_domain_in_narrative_text_is_scrubbed() {
     assert!(
         !exported.contains(TENANT_DOMAIN),
         "the exported session leaks a bare tenant domain in narrative text"
+    );
+}
+
+#[test]
+fn a_short_tenant_domain_in_narrative_text_is_scrubbed() {
+    // The same argument as the bare-domain case above, held to a lower floor.
+    // A tenant domain has no distinctive shape, so it is removed because the
+    // projection already knows it as a typed field it is about to mask. A short
+    // one is short because the tenant's domain is short, not because it might
+    // be prose - so the display-name floor, which exists to keep junk firmware
+    // serials from mangling narrative, must not decide this one.
+    let mut snapshot = snapshot_with_planted_identifiers();
+    snapshot.identity.tenant_domain = Some(sensitive(SHORT_TENANT_DOMAIN));
+    snapshot.activity[0].detail = Some(format!("joined {SHORT_TENANT_DOMAIN}"));
+
+    let raw = serde_json::to_string(&snapshot).expect("snapshot serializes");
+    let exported = exported_session_json(&snapshot);
+
+    // Canary: the value is reachable from the snapshot, so the assertion below
+    // proves redaction removed it rather than the fixture never carrying it.
+    assert!(
+        raw.contains(SHORT_TENANT_DOMAIN),
+        "test fixture no longer plants the short tenant domain"
+    );
+    assert!(
+        !exported.contains(SHORT_TENANT_DOMAIN),
+        "the exported session leaks a short tenant domain in narrative text"
     );
 }
 
