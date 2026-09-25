@@ -4,7 +4,8 @@
 > pull requests named here are closed or merged — #317, #490, #500, #512, #409, #441, #410,
 > #414, #506, #507, #326, #321, #333 — and the plan files they point at still exist, so
 > nothing here is broken. What is missing is anything current: `docs/superpowers/plans/` holds
-> 40 files, several of them months newer (through 2026-08-30), and none of them appear here.
+> 40 files; the newest is dated 2026-08-30, about four weeks past the 2026-08-04 and 2026-08-05
+> plans the rules below name, and none of them appear here.
 >
 > A session following this index is routed only into the past. Regenerating it from the plans
 > directory — one `IF <subject> → read <plan>` per file, with the date in the rule — is

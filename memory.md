@@ -67,9 +67,9 @@ verify, never as state.
 
 | Issue | Branch SHA | State | Blockers |
 |---|---|---|---|
-| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | **MERGED** via #340; issue closed 2026-08-05 | none — the blockers below were resolved before merge |
-| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | **MERGED** via #385 | none |
-| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | **MERGED** via #377 | none |
+| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | **MERGED into `main` via #490** 2026-08-05; #340 was preparation into `codex/parser-family-skeleton` | none |
+| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | **MERGED into `main` via #490** 2026-08-05; #385 was preparation into `codex/parser-family-skeleton` | none |
+| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | **MERGED into `main` via #490** 2026-08-05; #377 was preparation into `codex/parser-family-skeleton` | none |
 | #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | **MERGED** via #460 | none |
 
 ## Recovery Branches (Evidence Only)
@@ -113,10 +113,9 @@ Staff notes live in each member's subdirectory:
 
 `cmtraceopen` has an extraordinary development footprint across multiple git worktree directories. This is not just "developed in Claude/Codex" — it IS a parallel development ecosystem.
 
-- **~65 git worktrees** total, measured 2026-09-24 — counted rather than described, because the
-  previous figure here read "450+": 34 in `.worktrees/` (35 registered with `git worktree list`),
-  28 in `~/.codex/worktrees/`, one in `/private/tmp/cmtraceopen-*`, and one each in the repo's own
-  and `~/.claude/` worktree directories. The forest is real; it is a seventh of the size this line
+- **87 git worktrees** registered, measured 2026-09-24 — counted rather than described, because the
+  previous figure here read "450+": 86 in `.worktrees/`, 31 in `~/.codex/worktrees/`, and none in
+  `/private/tmp/cmtraceopen-*`. The forest is real; it is a fifth of the size the layout block below
   used to claim, which is what cleaning up merged lanes does to a count nobody retakes.
 - **246 SCCM branches** for issues #318 through #482 (diagnostic program: client health, intake, policy, DP, SUP, hierarchy, cross-side correlation)
 - **~40 Intune branches** covering IME corrections, Company Portal multi-platform (Windows/macOS/iOS/Android), WUfB recovery, device inventory
@@ -125,9 +124,9 @@ Staff notes live in each member's subdirectory:
 ### Worktree Directory Layout
 ```
 Users/Adam.Gell/repo/cmtraceopen/
-  .worktrees/             # Main repo's git worktree index — 450 branches
-  /private/tmp/cmtraceopen-*  # Temporary worktrees from active agent sessions (~115)
-  ~/.codex/worktrees/     # Codex-specific worktrees (~7)
+  .worktrees/                 # 86 worktrees, all registered with `git worktree list`
+  ~/.codex/worktrees/         # 31 Codex-specific worktrees
+  /private/tmp/cmtraceopen-*  # none present as of 2026-09-24
 ```
 
 These directories track the full state of every Claude/Codex agent session as parallel working copies.
