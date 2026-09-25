@@ -23,9 +23,13 @@ first, named gate states (CI, CodeRabbit `approved_at_head` via the
 feedback with reasoning. Merging is the repository owner's action; the review ends
 at the report.
 
-## Running it in Claude Code
+## Dispatching the review (Main only)
 
-Dispatch the `cmtrace-code-review` subagent with the target head, the base, and the
+This section is for the session that requests the review. If you are the
+`code-review` staff role or the `cmtrace-code-review` subagent, skip it: you
+return the report, and Main validates and posts it.
+
+In Claude Code, Main dispatches the `cmtrace-code-review` subagent with the target head, the base, and the
 gate artifacts (CI result, the `coderabbit-review-loop` state snapshot, contract
 conformance evidence). Write its final JSON to a temporary file and run
 `python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role code-review --input <file>`;
