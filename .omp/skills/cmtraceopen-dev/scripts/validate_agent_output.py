@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Callable, NoReturn, Sequence
@@ -49,6 +50,11 @@ _validate_check_command: Callable[[Sequence[object]], tuple[str, ...]] = getattr
     _COMMAND_POLICY, "validate_check_command"
 )
 
+AGENTS_DIR = Path(__file__).resolve().parents[3] / "agents"
+_TOP_LEVEL_REQUIRED = re.compile(r"^  required: \[([^\]]*)\]$")
+_TOP_LEVEL_PROPERTY = re.compile(r"^    ([A-Za-z_][A-Za-z0-9_]*):")
+
+
 ROLES = {
     "code-review",
     "coder",
@@ -81,6 +87,80 @@ TEXT_LIST_KEYS = {
 
 def _fail(message: str) -> NoReturn:
     raise ValueError(message)
+
+
+def _output_contract_block(role: str) -> tuple[frozenset[str], frozenset[str]]:
+    """The role's `required` and top-level `properties` key sets.
+
+    OMP enforces this schema at the provider; Claude subagents have no provider
+    schema, so the broker enforces the closed top-level key set itself.
+    `required` names the keys every payload must carry; `properties` names
+    every key a payload may carry (required plus optional). `required` must
+    be a subset of `properties`, or the contract itself is malformed, and
+    that malformed state fails loudly here rather than silently rejecting
+    every payload for the role.
+    """
+    path = AGENTS_DIR / f"{role}.md"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        _fail(f"no output contract for role {role}: {path}")
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        _fail(f"output contract has no frontmatter: {path}")
+    frontmatter = lines[1 : lines.index("---", 1)]
+    if "output:" not in frontmatter:
+        _fail(f"output contract has no output schema: {path}")
+    block = []
+    for line in frontmatter[frontmatter.index("output:") + 1 :]:
+        if not line.startswith(" "):
+            break
+        block.append(line)
+    if "  additionalProperties: false" not in block:
+        _fail(f"output contract must close its top-level keys: {path}")
+    required_matches = [
+        match for match in map(_TOP_LEVEL_REQUIRED.match, block) if match
+    ]
+    if len(required_matches) != 1:
+        _fail(f"output contract needs exactly one top-level required list: {path}")
+    required = frozenset(
+        name.strip() for name in required_matches[0].group(1).split(",")
+    )
+    if "" in required:
+        _fail(f"output contract has an empty required key: {path}")
+    if "  properties:" not in block:
+        _fail(f"output contract has no top-level properties block: {path}")
+    properties_start = block.index("  properties:") + 1
+    property_names = []
+    for line in block[properties_start:]:
+        if line and not line.startswith("    "):
+            break
+        match = _TOP_LEVEL_PROPERTY.match(line)
+        if match:
+            property_names.append(match.group(1))
+    properties = frozenset(property_names)
+    if not required <= properties:
+        _fail(
+            "output contract required keys are not a subset of properties: "
+            f"{path}"
+        )
+    return required, properties
+
+
+def output_contract_keys(role: str) -> frozenset[str]:
+    """The role's allowed top-level output keys (its `properties` block)."""
+    _required, properties = _output_contract_block(role)
+    return properties
+
+
+def _validate_contract_keys(role: str, payload: dict[str, object]) -> None:
+    required, properties = _output_contract_block(role)
+    missing = sorted(required - payload.keys())
+    unexpected = sorted(payload.keys() - properties)
+    if missing or unexpected:
+        _fail(
+            f"{role} output keys must match its contract "
+            f"(missing: {missing}, unexpected: {unexpected})"
+        )
 
 
 def _list(payload: dict[str, object], key: str) -> list[object]:
@@ -411,6 +491,7 @@ def validate_output(role: str, payload: object) -> None:
         _fail("agent output must be an object")
     if payload.get("role") != role:
         _fail(f"role discriminator must equal {role}")
+    _validate_contract_keys(role, payload)
     for key in TEXT_LIST_KEYS[role]:
         _validate_text_list(payload, key)
     phase = payload.get("phase")

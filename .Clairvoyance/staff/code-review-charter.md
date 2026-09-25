@@ -46,18 +46,16 @@ failure scenario.
 
 The deliverable is a report containing: findings ranked most-severe first; the named
 gates and their observed states from artifacts Main supplies: CI checks, CodeRabbit
-review state (`approved_at_head`), a posted Hermes charter review with no open blocking
-findings, and contract-layer conformance; explicitly rejected review feedback with
-reasoning; and a closing line that states what the review covered and what it did not.
+review state (`approved_at_head`), and contract-layer conformance; explicitly rejected
+review feedback with reasoning; and a closing line that states what the review covered
+and what it did not.
 Missing, stale, or mismatched evidence is a blocker. Merge readiness is reported to Adam
 as gate states; merging is Adam's action and is not part of any review.
 
-Hermes and CodeRabbit are both merge gates for ALL fixes (Adam, 2026-08-08): no
-fix PR of any size is merge-ready until CodeRabbit is APPROVED at head AND a
-Hermes charter review has been posted with its blocking findings resolved. Charter
-reviews run as Hermes sessions by default (see the operator skill's delegation
-runbook); the operator's own layer agents are the fallback when Hermes is
-unavailable, and a fallback review must say so in its report.
+A clean report from this charter's reviewer (the `code-review` staff agent in OMP,
+`cmtrace-code-review` in Claude Code) is the charter review; Main posts it on the
+pull request. No fix PR of any size is merge-ready until CodeRabbit is APPROVED at
+head and that clean charter review has been posted.
 
 ## You do not
 

@@ -311,9 +311,7 @@ skills:
   enableClaudeUser: false
   enableClaudeProject: true
   enableAgentsUser: false
-  enableAgentsProject: true
-  customDirectories:
-    - ~/.omp/agent/skillsets/cmtraceopen
+  enableAgentsProject: false
 
 task:
   batch: true

@@ -1,13 +1,10 @@
 ---
 name: cmtraceopen-memory
-description: Durable facts about adamgell/cmtraceopen — architecture, checkpoints, workflow rules, and ecosystem state. Loaded every turn for this project.
+description: Durable facts about adamgell/cmtraceopen, covering architecture, gates, workflow rules, and where knowledge lives. Loaded every turn for this project.
 version: 1.0.0
-author: Adam Gell / Hermes Agent
+author: Adam Gell
 license: MIT
 platforms: [linux, macos, windows]
-metadata:
-  hermes:
-    tags: [cmtraceopen, memory, durable-facts, architecture, checkpoints, workflow]
 ---
 
 # CMTrace Open — Memory
@@ -21,14 +18,13 @@ Durable facts about `adamgell/cmtraceopen`. These are loaded into every turn whe
 - **Editions:** Full (all features) and Lite (log viewer only)
 - **License:** MIT (PR #384 merged at `a686daef` with provenance visible, CodeRabbit clean)
 - **Distribution:** MSIs/NSIS (Windows), DMG (macOS arm64), .deb/.AppImage (Linux) + Homebrew cask + Scoop bucket
-- **Main HEAD:** `a9a67422` as of 2026-08-03
 
 ## Architecture Overview
 
 Three structural layers:
 
 1. **Frontend** (`src/`) — React 19, TypeScript, Fluent UI, Zustand stores (log-store, filter-store, ui-store, marker-store). Workspaces: intune, esp-diagnostics, dsregcmd, sysmon, secureboot, event-log, macos-diag, jamf, timeline, deployment, dns-dhcp
-2. **Backend IPC** (`src-tauri/src/`) — Tauri v2 Rust. IPC commands in `commands/`. Platform modules: intune, dsregcmd, esp, collector, state, watcher
+2. **Backend IPC** (`src-tauri/src/`) — Tauri v2 Rust. IPC commands in `src-tauri/src/commands/`. Platform modules: intune, dsregcmd, esp, collector, state, watcher
 3. **Parser Crate** (`crates/cmtraceopen-parser/`) — Pure Rust, wasm32-compatible. No OS I/O. Contains parser/, intune/, esp/, dsregcmd/, error_db/
 
 Hard boundary: cmtraceopen-parser is pure Rust only. No OS I/O, registry, WMI, Tauri, network, DB, or live collection in the parser crate.
@@ -50,38 +46,14 @@ cargo bench                     # Criterion benchmarks (intune_pipeline)
 npx tsc --noEmit                # TypeScript check
 ```
 
-CI gates: `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tauri build on macOS-arm64, Windows-x64, Linux-x64.
+CI gates: `cargo fmt --all -- --check`, parser wasm32 check, `cargo check + cargo test + clippy` (Ubuntu), `npx tsc` (Node 20), Tauri build on macOS-arm64, Windows-x64, Linux-x64. `.github/workflows/cmtrace-ci.yml` is authoritative.
 
-## Verified Checkpoints
+## Live State and History
 
-All SHAs are from Adam's PM charter (`~/.hermes/cmtrace-pm-charter.md`). Reverify with `git ls-remote` before acting.
+This file holds no checkpoint SHAs or issue status. Read live state from GitHub and `git ls-remote` when you act.
 
-| Issue | Branch SHA | State | Blockers |
-|---|---|---|---|
-| #320 client health | `6ccf8dafa791ad7d07d3b7bb450e6fe31e8dfb3c` | 6/6 focused pass | coverage_complete ignores incomplete-fragment gaps; workflow field uses broad SccmClientWorkflow — NOT merge-ready |
-| #329 DP lifecycle | `a03af515fa692948a8fce0435c4ef34128f0bf5e` | P1 open | Semantic admission accepts 5.00.TEST.0002 but profile must be exactly 5.00.TEST.0001 — needs red regression, hold PR until clean |
-| #330 SUP coverage | `76e2b0b910d028cddbb6d9109bf124e95facdcb4` | TDD red 6/2 → green 8/0 | Full gate pending: intake, SUP fixture, spine, full parser, Clippy, wasm32, TS, fmt, diff + CodeRabbit + independent review |
-| #366 Intune CP | `04e1ecba6f2d93977d9c011427a2b7b787214d54` | Store 39/39, hook 7/7, tail 29/29 | Findings: observedThroughLine must dominate entry+amendment ranges; amendment start/span bounds; runtime validation for optional LogEntry fields |
-
-## Recovery Branches (Evidence Only)
-
-Never batch-merge these. Extract reviewed issue-scoped slices into fresh worktrees. Preserve refs. Check merged equivalents for closed macOS/iOS issues before any PR.
-
-| Branch | SHA | Target Issue |
-|---|---|---|
-| `codex/recovery-intune365-overlay-20260803` | `9fb2f9a2d7769449cdb60ab5ab5da63107fd0437` | #365 (WUfB) |
-| `codex/recovery-intune-windows-remediations-20260803` | `2e016ab65289372cec4dc0a0204ad285cee6b8ef` | #360 (remediations) |
-| `codex/recovery-intune-macos-logs-20260803` | `871003949f1d1acbddbecc271497a68d2bf5d335` | macOS logs |
-| `codex/recovery-intune-macos-unified-log-20260803` | `27d58a2aeee535346f8e32fa5305f0bea95b39f8` | macOS unified log |
-| `codex/recovery-intune-ios-diagnostics-20260803` | `4cf3ad15f1bc4f97d21f3046bd4abc8989c18aa4` | iOS diagnostics |
-| `codex/recovery-intune-ios-console-round2-20260803` | `952b48f442f761380ec8a650d6feba1b5cebe7cd` | iOS console round 2 |
-
-## Execution Order (From PM Charter)
-
-1. SUP correction → DP exact-profile → Client health → Intune CP corrections → Recovery WUfB remediator → Downstream SCCM families
-2. Correlation last: starting at policy-to-MP, then content-to-DP
-
-Per-slice gates: Red test recorded → smallest implementation → focused green → aggregate (Rust tests, full parser, wasm32, Clippy, fmt) → CodeRabbit exact diff → independent review → push reviewed commit, verify remote SHA.
+- The SCCM diagnostics epic (#317) is closed. Its program plans remain in `docs/superpowers/plans/2026-07-30-sccm-*.md`.
+- `codex/recovery-*` branches on origin are unreviewed evidence from the 2026-08-03 recovery. The handling rules and the per-slice gates are in `.claude/skills/cmtraceopen/references/execution-charter.md`.
 
 ## Clairvoyance Staff Org
 
@@ -89,47 +61,28 @@ The repo has an internal parallel agent team structure documented under `.Clairv
 
 | Role | Charter File | Model Tier | Notes |
 |---|---|---|---|
-| **CEO** | `staff/ceo-charter.md` | Reasoning (gpt-5.6-sol, claude-opus-4-8) | Runs the org; Adam runs CEO. Owns execution board (#317), quality bar, architecture boundary, budget, truth-telling |
-| **Coder** | `staff/coder-charter.md` | Scaffold/Mid (kimi-k3/k2.7-code/grok-4-20-reasoning) | Implementation pool — one per issue lane. Red-first, anchor-grounded, worktree discipline, full gates |
-| **UI/Design** | `staff/ui-design-charter.md` | Mid (kimi-k3) | Product designer frontend engineer — stable contracts only, coverage states as first-class UI |
-| **Tech Writer** | `staff/tech-writer Charter.md` | Scaffold (kimi-k2.7-code) | Docs from merged code only — no unshipped behavior documented |
+| **CEO** | `.Clairvoyance/staff/ceo-charter.md` | Reasoning (gpt-5.6-sol, claude-opus-4-8) | Runs the org; Adam runs CEO. Owns execution board (#317), quality bar, architecture boundary, budget, truth-telling |
+| **Coder** | `.Clairvoyance/staff/coder-charter.md` | Scaffold/Mid (kimi-k3/k2.7-code/grok-4-20-reasoning) | Implementation pool — one per issue lane. Red-first, anchor-grounded, worktree discipline, full gates |
+| **UI/Design** | `.Clairvoyance/staff/ui-design-charter.md` | Mid (kimi-k3) | Product designer frontend engineer — stable contracts only, coverage states as first-class UI |
+| **Tech Writer** | `.Clairvoyance/staff/tech-writer-charter.md` | Scaffold (kimi-k2.7-code) | Docs from merged code only — no unshipped behavior documented |
+| **Code Reviewer** | `.Clairvoyance/staff/code-review-charter.md` | Reasoning | Contract, adversarial, then mechanical review layers; reports gate states, never merges |
+| **Reducer Contract / Adversary / Integration** | `.Clairvoyance/staff/reducer-*-charter.md` | Reasoning or Mid (per charter) | Reducer semantics, false-story testing, restack and exact-head conformance |
 
-Staff notes live in each member's subdirectory:
-- **Roger:** SCCM Epic #317, issues #318–#335, recovery branches, execution planning
-- **Theo:** Docs-audit phases (phase 2 = `docs/audit-phase2`, phase 3 = `docs/audit-phase3`)
+`.Clairvoyance/staff/roger/index.md` and `.Clairvoyance/staff/theo/index.md` route to personal notes that are not checked in; treat those routes as empty.
 
-## Ecosystem State: The Worktree Forest
+## Lanes and Worktrees
 
-`cmtraceopen` has an extraordinary development footprint across multiple git worktree directories. This is not just "developed in Claude/Codex" — it IS a parallel development ecosystem.
+- Issue lanes are git worktrees under `.worktrees/<lane>` (gitignored), one branch per lane, cut from `origin/main`.
+- `.cargo/config.toml` pins the build output to `src-tauri/target`, so every worktree carries its own multi-GB target directory. Run `cargo clean` in a lane before `git worktree remove`; removing the worktree does not delete its branch.
+- Origin carries many parallel `codex/*` lane branches from agent sessions. A branch existing is not evidence it was reviewed or merged.
 
-- **450+ git worktrees** total across `.worktrees/`, `/private/tmp/cmtraceopen-*`, `~/.codex/worktrees/`, and the root repo's own `.claude/worktrees/`
-- **246 SCCM branches** for issues #318 through #482 (diagnostic program: client health, intake, policy, DP, SUP, hierarchy, cross-side correlation)
-- **~40 Intune branches** covering IME corrections, Company Portal multi-platform (Windows/macOS/iOS/Android), WUfB recovery, device inventory
-- Many worktrees have **1,000+ commits** from main — deep parallel feature development with real code changes and merge activity
+## Model Tiering
 
-### Worktree Directory Layout
-```
-Users/Adam.Gell/repo/cmtraceopen/
-  .worktrees/             # Main repo's git worktree index — 450 branches
-  /private/tmp/cmtraceopen-*  # Temporary worktrees from active agent sessions (~115)
-  ~/.codex/worktrees/     # Codex-specific worktrees (~7)
-```
-
-These directories track the full state of every Claude/Codex agent session as parallel working copies.
-
-## Model Tiering Details
-
-| Tier | Models | Scope | Provider |
-|---|---|---|---|
-| Scaffold | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash`, `gpt-5-luna` | Fixture matrices, test boilerplate, doc skeletons — ALWAYS with real anchors in the brief | `custom:api.llmgateway.io` |
-| Mid | `kimi-k3`, `grok-4-20-reasoning` | Parser logic, reducers, diagnostic rules | Same provider |
-| Reasoning | `gpt-5.6-sol`, `claude-opus-4-8` | Diagnostic contracts, cross-side correlation (#333-class), architecture decisions | Default or gateway |
-
-> **MLX local tier is UNPROVEN** for codegen on CMTrace Open. Must pass pilot-grading gauntlet first. Max-tokens raised from 512 to 4096+ before meaningful tests.
+Tiers and their scopes are defined in `soul.md`. Scaffold-tier delegation and the grading every model must pass are in `.claude/skills/cmtraceopen/references/scaffold-pipeline.md`.
 
 ## Hard Rules Recap (The Core Three)
 
-From Adam's handoff and the Clairvoyance charters — these override everything:
+From the execution charter and the Clairvoyance charters; these override everything:
 
 1. **No backward-compat → Remove obsolete paths, never add fallbacks**
 2. **Simplest implementation wins — no speculative abstractions, no unfinished complexity**  
@@ -141,10 +94,10 @@ From Adam's handoff and the Clairvoyance charters — these override everything:
 |---|---|
 | Agent soul (this file's sibling) | `soul.md` |
 | Agent memory (this) | `memory.md` |
-| PM charter / checkpoints | `~/.hermes/cmtrace-pm-charter.md` |
+| Execution charter and per-slice gates | `.claude/skills/cmtraceopen/references/execution-charter.md` |
 | Dev architecture | `.Clairvoyance/library.md`, `CLAUDE.md` |
 | Staff org charters | `.Clairvoyance/staff/` |
-| Scaffold pipeline skill | `~/.hermes/skills/software-development/cmtrace-scaffold-pipeline/` |
+| Scaffold-tier delegation | `.claude/skills/cmtraceopen/references/scaffold-pipeline.md` |
 | Execution plans | `docs/superpowers/plans/2026-07-30-sccm-*.md` (7 docs) |
-| Specs | `.Clairvoyance/specs/2026-*/` |
-| Collection scripts | `scripts/collection/` + `intune-evidence-profile.json` |
+| Specs | `docs/superpowers/specs/` |
+| Collection scripts | `scripts/collection/`, profile `scripts/collection/intune-evidence-profile.json` |
