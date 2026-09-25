@@ -60,11 +60,44 @@ npx tsc --noEmit
 
 ### CI Checks
 
-Pull requests must pass:
+Six required status checks, on the `Protect` ruleset over `main`:
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
+2. **TypeScript Check** — the `frontend` job, which is more than its name: `npm ci`, `npx tsc --noEmit`, `npm run test` (the vitest suite), the bundle-output and release-script contract tests under `scripts/` via `node --test`, and `npm audit --audit-level=high`.
+3. **E2E (Playwright)** — `npm run test:e2e`.
+4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
+
+Three more jobs run on every PR but are not required to merge:
+
+- **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
+- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+
+The Windows jobs are also the only place `#[cfg(target_os = "windows")]` code is compiled. `cargo check` and `cargo test` on Linux or macOS skip it entirely, tests included, and pass without reading a line of it. A change under that gate is therefore verified by CI alone until the Windows jobs run, and it is worth saying so in the pull request rather than implying local coverage. Two compile errors in one pull request reached CI that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
+
+## Before you push
+
+Every required check has a local equivalent, and running them here is faster than reading about them in CI output:
+
+```bash
+cargo fmt --all -- --check                                  # Source Quality, the formatting half
+cd src-tauri && cargo check && cargo test                   # Check & Test (Rust)
+cd src-tauri && cargo clippy --all-targets -- -D warnings
+cargo test -p cmtraceopen-parser                            # the parser crate's own suite
+npx tsc --noEmit                                            # TypeScript Check
+npm run test                                                # the vitest suite
+```
+
+`cargo fmt --all -- --check` is the one most easily missed. A hand-wrapped expression that compiles and passes every test it touches still fails `Source Quality`, and the fix is a single `cargo fmt --all`.
+
+## Changelog
+
+Every user-visible change gets an entry in `CHANGELOG.md` under `## [Unreleased]`, added in the
+pull request that makes the change. The section documents fixes as well as features, including
+internal ones — the updater-manifest job and the supply-chain bump are both in it — so the test
+is whether a reader of the changelog would otherwise not know it happened.
+
+Keep entries to what changed and why it mattered; the diff is the record of how.
 
 ## MCP Servers (optional)
 
