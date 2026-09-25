@@ -267,32 +267,61 @@ export interface ParsedPayload {
 }
 
 /**
+ * Scan forward from `startIndex`, which sits just after an opening delimiter,
+ * to the index of the delimiter that closes it. Delimiters inside a quoted
+ * string are data rather than structure, so a `}` in a filter expression or a
+ * regex does not end the block, and a backslash escapes the character after
+ * it, which keeps an escaped quote from closing the string. Returns -1 when
+ * the delimiter is never closed.
+ */
+function findClosingDelimiter(
+  data: string,
+  startIndex: number,
+  open: string,
+  close: string,
+): number {
+  let depth = 1;
+  let inString = false;
+  let i = startIndex;
+  while (i < data.length) {
+    const ch = data[i];
+    if (inString) {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+    } else if (ch === '"') {
+      inString = true;
+    } else if (ch === open) {
+      depth++;
+    } else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
  * Given a starting index just after an opening '{', find the matching '}'.
  * Returns the content between the braces (exclusive), or null if unmatched.
  */
 function extractBracedBlock(data: string, startIndex: number): string | null {
-  let depth = 1;
-  let i = startIndex;
-  while (i < data.length && depth > 0) {
-    if (data[i] === "{") {
-      depth++;
-    } else if (data[i] === "}") {
-      depth--;
-    }
-    if (depth > 0) {
-      i++;
-    }
-  }
-  if (depth !== 0) {
-    return null;
-  }
-  return data.slice(startIndex, i);
+  const closeIndex = findClosingDelimiter(data, startIndex, "{", "}");
+  return closeIndex < 0 ? null : data.slice(startIndex, closeIndex);
 }
 
 /**
- * Collect a multi-line balanced block starting from an opening delimiter.
- * Works for both `(...)` and `{...}`. Returns the full collected string
- * including the opening delimiter already in `start`, and advances `i`.
+ * Collect a multi-line balanced block starting from an opening delimiter on
+ * `lines[startIdx]`. Works for both `(...)` and `{...}`, and ignores
+ * delimiters inside quoted strings. Returns the block through the line that
+ * closes it, plus the index of the next unconsumed line.
  */
 function collectBalancedBlock(
   lines: string[],
@@ -300,20 +329,20 @@ function collectBalancedBlock(
   open: string,
   close: string,
 ): { block: string; nextIdx: number } {
-  let depth = 0;
-  let block = "";
-  for (let j = startIdx; j < lines.length; j++) {
-    const l = lines[j];
-    for (const ch of l) {
-      if (ch === open) depth++;
-      if (ch === close) depth--;
-    }
-    block += l + "\n";
-    if (depth === 0) {
-      return { block, nextIdx: j + 1 };
-    }
+  const remainder = lines.slice(startIdx).join("\n");
+  const openIndex = remainder.indexOf(open);
+  const closeIndex =
+    openIndex < 0
+      ? -1
+      : findClosingDelimiter(remainder, openIndex + 1, open, close);
+  if (closeIndex < 0) {
+    return { block: `${remainder}\n`, nextIdx: lines.length };
   }
-  return { block, nextIdx: lines.length };
+  const consumed = remainder.slice(0, closeIndex + 1);
+  return {
+    block: `${consumed}\n`,
+    nextIdx: startIdx + consumed.split("\n").length,
+  };
 }
 
 /**
