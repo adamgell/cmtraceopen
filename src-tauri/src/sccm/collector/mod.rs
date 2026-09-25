@@ -60,6 +60,7 @@ pub enum SccmSourceDetailCode {
 pub enum SccmDiscoveryIssueCode {
     UnsupportedPlatform,
     RegistryAccessDenied,
+    VersionUnavailable,
     CimAccessDenied,
     DiscoveryFailed,
 }
@@ -95,7 +96,10 @@ pub struct SccmDiscoveryIssue {
 #[serde(rename_all = "camelCase")]
 pub struct SccmEnvironmentDiscovery {
     pub supported: bool,
+    /// Client version read from `CCM\Setup`.
     pub configmgr_version: Option<String>,
+    /// Site server version read from `SMS\Setup`.
+    pub site_version: Option<String>,
     pub roles: Vec<SccmDetectedRole>,
     pub sources: Vec<SccmSourceStatus>,
     pub issues: Vec<SccmDiscoveryIssue>,
@@ -119,6 +123,7 @@ pub struct SccmCaptureResult {
 pub struct PrivateSccmEnvironment {
     pub supported: bool,
     pub configmgr_version: Option<String>,
+    pub site_version: Option<String>,
     pub roles: Vec<SccmDetectedRole>,
     pub roots: Vec<SccmCaptureRoot>,
     pub issues: Vec<SccmDiscoveryIssue>,
