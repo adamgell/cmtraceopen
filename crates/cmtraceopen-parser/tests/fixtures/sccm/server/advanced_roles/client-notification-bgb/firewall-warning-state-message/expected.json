@@ -4,6 +4,7 @@
   "files": [
     {
       "name": "BgbServer.lo_",
+      "side": "server",
       "rotation": "lo_",
       "lines": 7,
       "framedRecords": 7,

@@ -6,7 +6,7 @@ Card: `crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/sourc
 
 Promotion state: `observed`
 
-Evidence status: sanitized lab observation of framing, rotation, role, path, and version. No notification request or terminal outcome has been observed.
+Evidence status: sanitized lab observation of framing, rotation, role, path, and version, plus one operator-initiated client notification observed end to end on both sides. No failure outcome has been observed.
 
 This contract describes what server-side `BgbServer.log` evidence looks like and how it may be captured. It adds no parser, reducer, transaction, finding, or correlation. The card stays capture guidance only until a rule-validated promotion with its own implementation issue.
 
@@ -23,7 +23,8 @@ One lab primary site server, observed read-only on 2026-09-25:
 | Component | `SMS_NOTIFICATION_SERVER` | Every framed record |
 | Coverage window | About 7 days: the rotated file from 2026-09-18, the current file to 2026-09-25 | File contents |
 | Online clients | 2 (1 TCP, 1 HTTP) throughout | `Total online clients` records |
-| Client notification pushes | None | No record in either file |
+| Client notification pushes | None in 7 days of passive history; one operator-initiated push (PushID 13) on 2026-09-25, approved by Adam | `BgbServer.log`, and the client's `CcmNotificationAgent.log` |
+| Paired client | The site server's own ConfigMgr client, version `5.00.9141.1011`, logging to `C:Program FilesSMS_CCMLogs` (co-located with the management point) | `SMSMobile Client` `SmsClientVersion`, console |
 
 Current discovery does not read the `NotificationServer` key, so it never reports a `clientNotificationServer` role. It also treats the co-located management point's root as a site-install fallback, so capture offers `BgbServer.log` only as an operator-declared candidate. Neither is changed here.
 
@@ -55,7 +56,9 @@ The minimum bundle is the current `BgbServer.log` plus `BgbServer.lo_`, which ma
 | Class | Meaning | Notification semantics |
 | --- | --- | --- |
 | Component start and listener setup | Executive start, TCP and HTTP listeners accepting connections | None |
-| Push-task poll | `Retrieving push tasks from database...`, `Get one push message from database.` | The only retrieved message was the server's own `Found simulation message` self-check |
+| Push-task poll | `Retrieving push tasks from database...`, `Get one push message from database.` | Without a pending action, the only retrieved message is the server's own `Found simulation message` self-check |
+| Push-task delivery | `Starting to send push task (PushID TaskID TaskGUID TaskType TaskParam) to N clients`, `Finished sending push task (PushID TaskID) to N clients` | The server-side request for one client action |
+| Task status report | `Generated BGB task status report … (PushID ReportedClients FailedClients)` | The server-side terminal outcome for that push |
 | Online-status accounting | Client counts, resync checks, generated BGB online-status reports; live-data reports (`*.BLD`) were also observed but are not in a fixture | Aggregate only |
 | Management point settings refresh | Refresh plus signing and encryption certificate thumbprints | None |
 | Firewall health | `WARNING:` for the notification TCP port, with state message `9802` | Server health, not a client failure |
@@ -63,7 +66,11 @@ The minimum bundle is the current `BgbServer.log` plus `BgbServer.lo_`, which ma
 
 ## Stable keys
 
-No stable non-time notification key exists in the observed evidence. Generated report file names (`*.BLD` observed, `*.BOS` fixtured) and state message files (`*.SMX`, fixtured) are random, and state message GUIDs identify status-system deliveries, not client notifications. The correlation policy stays `unvalidated`, and time-only correlation remains forbidden.
+The observed push carries an exact non-time key on both sides: server `PushID`, `TaskID` and `TaskGUID` in `Starting to send push task`, and client `pushid`, `taskid` and `taskguid` in the `BgbAgent` record `Receive task from server`. In the one observed push all three matched exactly, and the task type matched. The task status report repeats the `PushID`.
+
+These are key **candidates**. One matched pair shows the key exists but not that it is collision-safe (for example, whether `PushID` restarts), so the correlation policy stays `unvalidated`. Time only corroborates the order (the client logged receipt 50 ms after the server started sending) and is never the key.
+
+Generated report file names (`*.BLD` observed; `*.BOS` and `*.BTS` fixtured) and state message files (`*.SMX`, fixtured) are random, and state message GUIDs identify status-system deliveries, not client notifications.
 
 ## Coverage states
 
@@ -74,7 +81,14 @@ No stable non-time notification key exists in the observed evidence. Generated r
 
 ## Terminal semantics
 
-Unobserved. A future rule needs a server-side push request for a named client action, followed by an explicit acknowledgement, rejection, or delivery exhaustion, correlated to the client-side log by a validated key. Until then the card cannot create transactions or failure findings.
+Success is observed; failure is not.
+
+- **Request:** `Starting to send push task … to N clients`, then `Finished sending push task … to N clients`.
+- **Client receipt:** `Receive task from server with pushid=…, taskid=…, taskguid=…` in the client's `CcmNotificationAgent.log` (component `BgbAgent`, CCM framing).
+- **Terminal outcome:** `Generated BGB task status report … (PushID: N ReportedClients: R FailedClients: F)`. The observed push reported `ReportedClients: 1 FailedClients: 0`, about 29 seconds after sending.
+- **Unobserved:** any report with `FailedClients` above zero, and any rejection or delivery-exhaustion record. A failure rule cannot be written from this evidence.
+
+The card stays capture guidance only: no transactions or failure findings until failure evidence and a collision-safe key exist and a rule-validated promotion has its own implementation issue.
 
 ## Privacy boundary
 
@@ -85,7 +99,9 @@ Unobserved. A future rule needs a server-side push request for a named client ac
 | Certificate thumbprints | Management point settings refresh | 40 zeros |
 | State message GUIDs | Queued and delivered state messages | Sequential zero GUIDs |
 | Site install root | Inbox and report paths | `<siteInstallRoot>` |
-| Generated file names | Report and state message files | Sequential placeholders |
+| Generated file names | Report, task status, and state message files | Sequential placeholders |
+| Push task GUID | Server `TaskGUID` and client `taskguid` | The same zero GUID on both sides, so the key match survives sanitization |
+| Client IP address and subnet | Client `BgbAgent` keep-alive records | Not fixtured |
 
 Listener ports (`10123`, `443`), process and thread IDs, and timestamps are kept. They are product defaults or runtime values, not lab identity.
 
@@ -101,13 +117,14 @@ Under `crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/clien
 | `firewall-warning-state-message` | Warning severity, state message delivery, identity redaction |
 | `mp-settings-certificates` | Certificate thumbprint redaction |
 | `online-status-report` | Online-status accounting and report generation |
+| `push-task-delivered` | One push task on the server and its receipt on the client, linked by exact `PushID`, `TaskID` and `TaskGUID`, and closed by the task status report |
 | `rotation-boundary` | `.lo_` rename marker and ordering across rotation |
 | `simulation-poll-no-client-push` | A push-task poll that retrieves only the simulation self-check |
 
-The fixtures are real lab lines with identity replaced; no line was synthesized. Each fixture file is named for the file it came from (`BgbServer.log` or `BgbServer.lo_`), and a test checks that against the observed rename time. The raw logs stay on the lab host. `crates/cmtraceopen-parser/tests/sccm_server_bgb_source_contract.rs` checks detection, framing, rotation order, the card inventory, and the sanitized-identity rules.
+The fixtures are real lab lines with identity replaced; no line was synthesized. Each fixture file is named for the file it came from (`BgbServer.log`, `BgbServer.lo_`, or the client's `CcmNotificationAgent.log`), and a test checks the server files against the observed rename time. The raw logs stay on the lab host. `crates/cmtraceopen-parser/tests/sccm_server_bgb_source_contract.rs` checks detection, framing, rotation order, the card inventory, and the sanitized-identity rules.
 
 ## Next evidence
 
-1. Capture `BgbServer.log` across an operator-initiated client notification action, with the matching client-side `CcmNotificationAgent.log`. This needs a change on the site server and requires Adam's approval.
-2. Validate server-versus-client notification keys with independent sanitized fixtures before defining any correlation.
+1. A push whose status report shows `FailedClients` above zero (for example, a notification to an offline client), so a failure outcome is observed. This is a site server action and needs Adam's approval.
+2. A second push to a different client, so the key can be shown collision-safe before the correlation policy is validated. Also a site server action.
 3. Separately, decide whether discovery should read the `NotificationServer` key and a co-located management point's log root. That belongs to the capture lane (#497), not this contract.

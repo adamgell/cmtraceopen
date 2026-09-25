@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 const COMPONENT: &str = "SMS_NOTIFICATION_SERVER";
+const CLIENT_COMPONENT: &str = "BgbAgent";
 const TIMEZONE_BIAS_MINUTES: i32 = 240;
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +31,8 @@ struct Expected {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExpectedFile {
     name: String,
+    /// `server` for `BgbServer.*`, `client` for the paired client-side log.
+    side: String,
     rotation: String,
     lines: u32,
     framed_records: usize,
@@ -124,20 +127,21 @@ fn bgb_fixture_inventory_matches_the_card() {
 }
 
 #[test]
-fn bgb_fixtures_detect_as_simple_and_frame_every_trailer_line() {
+fn bgb_fixtures_detect_their_framing_and_keep_every_line() {
     for id in fixture_dirs() {
         for file in expected(&id).files {
             let path = fixture_root().join(&id).join(&file.name);
             let content = read_fixture(&path);
             let (result, selection) = parse_content(&content, &file.name, content.len() as u64);
+            // BgbServer.log is SMS trace (Simple); the client notification log is CCM.
+            let (parser, format, component) = match file.side.as_str() {
+                "server" => (ParserKind::Simple, LogFormat::Simple, COMPONENT),
+                "client" => (ParserKind::Ccm, LogFormat::Ccm, CLIENT_COMPONENT),
+                other => panic!("{id}/{}: unknown side {other}", file.name),
+            };
 
-            assert_eq!(selection.parser, ParserKind::Simple, "{id}/{}", file.name);
-            assert_eq!(
-                result.format_detected,
-                LogFormat::Simple,
-                "{id}/{}",
-                file.name
-            );
+            assert_eq!(selection.parser, parser, "{id}/{}", file.name);
+            assert_eq!(result.format_detected, format, "{id}/{}", file.name);
             assert_eq!(
                 content.lines().count() as u32,
                 file.lines,
@@ -168,7 +172,7 @@ fn bgb_fixtures_detect_as_simple_and_frame_every_trailer_line() {
             );
 
             for entry in &framed {
-                assert_eq!(entry.component.as_deref(), Some(COMPONENT));
+                assert_eq!(entry.component.as_deref(), Some(component));
                 assert_eq!(entry.timezone_offset, Some(TIMEZONE_BIAS_MINUTES));
                 assert!(entry.thread.is_some(), "{id}/{}", file.name);
                 assert!(entry.timestamp.is_some(), "{id}/{}", file.name);
@@ -263,12 +267,17 @@ fn every_fixture_file_is_labeled_with_the_rotation_it_came_from() {
     for id in fixture_dirs() {
         for file in expected(&id).files {
             let label = format!("{id}/{}", file.name);
-            let expected_name = match file.rotation.as_str() {
-                "current" => "BgbServer.log",
-                "lo_" => "BgbServer.lo_",
-                other => panic!("{label}: unknown rotation {other}"),
+            let expected_name = match (file.side.as_str(), file.rotation.as_str()) {
+                ("server", "current") => "BgbServer.log",
+                ("server", "lo_") => "BgbServer.lo_",
+                ("client", "current") => "CcmNotificationAgent.log",
+                (side, rotation) => panic!("{label}: unknown {side}/{rotation}"),
             };
             assert_eq!(file.name, expected_name, "{label}");
+            // The observed rename belongs to BgbServer; the client log rotates on its own.
+            if file.side != "server" {
+                continue;
+            }
             let timestamps = record_timestamps(&id, &file);
             if file.rotation == "current" {
                 assert!(
@@ -320,14 +329,16 @@ fn bgb_fixtures_carry_only_sanitized_identity() {
     let thumbprint = Regex::new(r"(?i)\b[0-9a-f]{40}\b").unwrap();
     // Any dotted name of two or more labels that starts with a letter.
     let dotted = Regex::new(r"(?i)\b[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+\b").unwrap();
-    let generated_name = Regex::new(r"^(?:Bgb|msg)[0-9]{5}\.(?:BLD|BOS|SMX)$").unwrap();
-    let generated_file = Regex::new(r"\\([A-Za-z0-9]+\.(?:BLD|BOS|SMX))\b").unwrap();
+    let generated_name = Regex::new(r"^(?:Bgb|msg)[0-9]{5}\.(?:BLD|BOS|BTS|SMX)$").unwrap();
+    let generated_file = Regex::new(r"\\([A-Za-z0-9]+\.(?:BLD|BOS|BTS|SMX))\b").unwrap();
     let drive_path = Regex::new(r"(?i)\b[a-z]:\\").unwrap();
     let host_field = Regex::new(r#"SYS=(\S+)|local on (\S+)"#).unwrap();
     let insertion_string = Regex::new(r#"ISTR[0-9]="([^"]*)""#).unwrap();
     let site_code = Regex::new(r"SITE=(\w+)|P1='(\w+)'|CM_(\w+)").unwrap();
     let allowed_dotted = [
         "SITESERVER.example.invalid",
+        // Product source file named by the CCM `file=` attribute, not identity.
+        "bgbconnector.cpp",
         "dllhost.exe",
         "bgb.box",
         "statesys.box",
@@ -400,4 +411,81 @@ fn bgb_fixtures_carry_only_sanitized_identity() {
         assert!(all_content.contains(placeholder), "missing {placeholder:?}");
     }
     assert!(generated_file.is_match(&all_content));
+}
+
+#[derive(Debug, PartialEq)]
+struct PushKey {
+    push_id: u32,
+    task_id: u32,
+    task_guid: String,
+}
+
+fn parsed_messages(id: &str, name: &str) -> Vec<(String, i64)> {
+    let content = read_fixture(&fixture_root().join(id).join(name));
+    parse_content(&content, name, 0)
+        .0
+        .entries
+        .into_iter()
+        .map(|entry| (entry.message, entry.timestamp.expect("framed record")))
+        .collect()
+}
+
+#[test]
+fn push_task_delivery_links_server_and_client_by_exact_task_key() {
+    let server = parsed_messages("push-task-delivered", "BgbServer.log");
+    let client = parsed_messages("push-task-delivered", "CcmNotificationAgent.log");
+
+    let start = Regex::new(
+        r"^Starting to send push task \(PushID: (\d+) TaskID: (\d+) TaskGUID: ([0-9a-f-]{36}) TaskType: (\d+) TaskParam: \) to (\d+) clients",
+    )
+    .unwrap();
+    let finished =
+        Regex::new(r"^Finished sending push task \(PushID: (\d+) TaskID: (\d+)\) to (\d+) clients")
+            .unwrap();
+    let status = Regex::new(
+        r"^Generated BGB task status report .* \(PushID: (\d+) ReportedClients: (\d+) FailedClients: (\d+)\)",
+    )
+    .unwrap();
+    let receive = Regex::new(
+        r"^Receive task from server with pushid=(\d+), taskid=(\d+), taskguid=([0-9a-f-]{36}), tasktype=(\d+)",
+    )
+    .unwrap();
+
+    fn only<'a>(records: &'a [(String, i64)], pattern: &Regex) -> (regex::Captures<'a>, i64) {
+        let mut matches = records
+            .iter()
+            .filter_map(|(message, time)| pattern.captures(message).map(|caps| (caps, *time)))
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "{pattern}");
+        matches.remove(0)
+    }
+    let (sent, sent_at) = only(&server, &start);
+    let (done, _) = only(&server, &finished);
+    let (report, _) = only(&server, &status);
+    let (received, received_at) = only(&client, &receive);
+
+    let server_key = PushKey {
+        push_id: sent[1].parse().unwrap(),
+        task_id: sent[2].parse().unwrap(),
+        task_guid: sent[3].to_owned(),
+    };
+    let client_key = PushKey {
+        push_id: received[1].parse().unwrap(),
+        task_id: received[2].parse().unwrap(),
+        task_guid: received[3].to_owned(),
+    };
+    // The correlation is the exact key; time only corroborates the order.
+    assert_eq!(client_key, server_key);
+    assert_eq!(&received[4], &sent[4], "task type");
+    assert!(received_at >= sent_at);
+
+    // Server-side request and terminal outcome close the same push.
+    assert_eq!(done[1].parse::<u32>().unwrap(), server_key.push_id);
+    assert_eq!(done[2].parse::<u32>().unwrap(), server_key.task_id);
+    assert_eq!(&done[3], &sent[5], "clients targeted");
+    assert_eq!(report[1].parse::<u32>().unwrap(), server_key.push_id);
+    assert_eq!(
+        (&report[2], &report[3]),
+        (&"1".to_owned()[..], &"0".to_owned()[..])
+    );
 }

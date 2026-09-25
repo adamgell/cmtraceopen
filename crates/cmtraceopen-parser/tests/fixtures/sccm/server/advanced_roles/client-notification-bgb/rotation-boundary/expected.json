@@ -4,6 +4,7 @@
   "files": [
     {
       "name": "BgbServer.lo_",
+      "side": "server",
       "rotation": "lo_",
       "lines": 5,
       "framedRecords": 4,
@@ -13,6 +14,7 @@
     },
     {
       "name": "BgbServer.log",
+      "side": "server",
       "rotation": "current",
       "lines": 4,
       "framedRecords": 4,
