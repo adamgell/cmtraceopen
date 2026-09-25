@@ -73,6 +73,8 @@ Three more jobs run on every PR but are not required to merge:
 - **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
 - **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
 
+The Windows jobs are also the only place `#[cfg(target_os = "windows")]` code is compiled. `cargo check` and `cargo test` on Linux or macOS skip it entirely, tests included, and pass without reading a line of it. A change under that gate is therefore verified by CI alone until the Windows jobs run, and it is worth saying so in the pull request rather than implying local coverage. Two compile errors in one pull request reached CI that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
+
 ## Changelog
 
 Every user-visible change gets an entry in `CHANGELOG.md` under `## [Unreleased]`, added in the
