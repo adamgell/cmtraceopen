@@ -72,6 +72,8 @@ struct SourceCard {
 enum RawParserFamily {
     Ccm,
     /// Legacy SMS trace framing (`message$$<component><time><thread>`), `ParserKind::Simple`.
+    /// Descriptive only: the SCCM evidence spine carries CCM records, so a Simple card
+    /// cannot be rule-validated until a Simple-framed evidence path exists.
     Simple,
     Unsupported,
     Unknown(String),
@@ -516,10 +518,7 @@ fn validate_card(card: &SourceCard) -> Validation {
                     .as_deref()
                     .is_none_or(str::is_empty)
                 || card.promotion.deferred_reason.is_some()
-                || !matches!(
-                    card.raw_parser_family,
-                    RawParserFamily::Ccm | RawParserFamily::Simple
-                )
+                || card.raw_parser_family != RawParserFamily::Ccm
                 || card.source_version_scope.state != SourceVersionState::Scoped
             {
                 issues.push("ruleValidatedMetadataInvalid".to_owned());
@@ -1003,4 +1002,13 @@ fn only_a_fully_linked_rule_validated_card_is_semantically_admitted() {
     let unvalidated_key = validate_card(&card);
     assert_eq!(unvalidated_key.issues, ["ruleValidatedKeyPolicyInvalid"]);
     assert!(!unvalidated_key.admitted_to_semantic_catalog);
+
+    // The SCCM evidence spine carries only CCM logical records (`normalize_ccm_artifact`),
+    // so a Simple-framed source can be described but never semantically admitted.
+    card.correlation_policy.key_state = KeyState::Validated;
+    card.correlation_policy.allowed_key_kinds = vec!["requestId".to_owned()];
+    card.raw_parser_family = RawParserFamily::Simple;
+    let simple_framed = validate_card(&card);
+    assert_eq!(simple_framed.issues, ["ruleValidatedMetadataInvalid"]);
+    assert!(!simple_framed.admitted_to_semantic_catalog);
 }

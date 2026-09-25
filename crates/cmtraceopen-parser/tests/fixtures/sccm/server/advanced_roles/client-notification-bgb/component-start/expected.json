@@ -3,8 +3,8 @@
   "evidence": "SMS_EXECUTIVE starts the notification server component, which opens its TCP and HTTP listeners. Startup framing only; no client notification.",
   "files": [
     {
-      "name": "BgbServer.log",
-      "rotation": "current",
+      "name": "BgbServer.lo_",
+      "rotation": "lo_",
       "lines": 20,
       "framedRecords": 20,
       "unframedLines": []

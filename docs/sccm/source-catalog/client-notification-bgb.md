@@ -36,10 +36,11 @@ Current discovery does not read the `NotificationServer` key, so it never report
 ```
 
 - Auto-detection selects `ParserKind::Simple`. No new parser kind or grammar is needed.
+- The catalog records the family as `simple`, which is descriptive only. The SCCM evidence spine (`normalize_ccm_artifact`) carries CCM logical records, so a `simple` card cannot reach `ruleValidated` until an implementation issue adds a Simple-framed evidence path and its tests.
 - Each physical line is one record. No multi-line records were observed.
 - The trailing `~~` stays in the message text, because the Simple parser trims only whitespace.
 - The timestamp is local time with a signed bias in minutes (`+240` in the lab). The parser applies the bias; timestamps are ordered within each file.
-- Severity comes only from message text, as the Simple parser does for every source. The firewall `WARNING:` record becomes a warning.
+- Severity comes only from message text, as the Simple parser does for every source. In the fixtures the firewall `WARNING:` record is the only warning.
 
 ## Rotation and minimum bundle
 
@@ -55,14 +56,14 @@ The minimum bundle is the current `BgbServer.log` plus `BgbServer.lo_`, which ma
 | --- | --- | --- |
 | Component start and listener setup | Executive start, TCP and HTTP listeners accepting connections | None |
 | Push-task poll | `Retrieving push tasks from database...`, `Get one push message from database.` | The only retrieved message was the server's own `Found simulation message` self-check |
-| Online-status accounting | Client counts, resync checks, generated BGB online-status and live-data reports | Aggregate only |
+| Online-status accounting | Client counts, resync checks, generated BGB online-status reports; live-data reports (`*.BLD`) were also observed but are not in a fixture | Aggregate only |
 | Management point settings refresh | Refresh plus signing and encryption certificate thumbprints | None |
 | Firewall health | `WARNING:` for the notification TCP port, with state message `9802` | Server health, not a client failure |
 | State message delivery | `STATMSG`, queued state message, `Successfully send state change notification` | Status system delivery, not client notification |
 
 ## Stable keys
 
-No stable non-time notification key exists in the observed evidence. Generated report file names (`*.BLD`, `*.BOS`) and state message files (`*.SMX`) are random, and state message GUIDs identify status-system deliveries, not client notifications. The correlation policy stays `unvalidated`, and time-only correlation remains forbidden.
+No stable non-time notification key exists in the observed evidence. Generated report file names (`*.BLD` observed, `*.BOS` fixtured) and state message files (`*.SMX`, fixtured) are random, and state message GUIDs identify status-system deliveries, not client notifications. The correlation policy stays `unvalidated`, and time-only correlation remains forbidden.
 
 ## Coverage states
 
@@ -103,7 +104,7 @@ Under `crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/clien
 | `rotation-boundary` | `.lo_` rename marker and ordering across rotation |
 | `simulation-poll-no-client-push` | A push-task poll that retrieves only the simulation self-check |
 
-The fixtures are real lab lines with identity replaced; no line was synthesized. The raw logs stay on the lab host. `crates/cmtraceopen-parser/tests/sccm_server_bgb_source_contract.rs` checks detection, framing, rotation order, the card inventory, and the sanitized-identity rules.
+The fixtures are real lab lines with identity replaced; no line was synthesized. Each fixture file is named for the file it came from (`BgbServer.log` or `BgbServer.lo_`), and a test checks that against the observed rename time. The raw logs stay on the lab host. `crates/cmtraceopen-parser/tests/sccm_server_bgb_source_contract.rs` checks detection, framing, rotation order, the card inventory, and the sanitized-identity rules.
 
 ## Next evidence
 

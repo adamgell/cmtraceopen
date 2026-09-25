@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind};
+use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind, Severity};
 use cmtraceopen_parser::parser::parse_content;
 use regex::Regex;
 use serde::Deserialize;
@@ -232,14 +232,93 @@ fn rotated_file_ends_with_the_rename_marker_and_precedes_the_current_file() {
     assert!(last_rotated <= first_current);
 }
 
+fn record_timestamps(id: &str, file: &ExpectedFile) -> Vec<i64> {
+    let content = read_fixture(&fixture_root().join(id).join(&file.name));
+    parse_content(&content, &file.name, 0)
+        .0
+        .entries
+        .iter()
+        .filter_map(|entry| entry.timestamp)
+        .collect()
+}
+
+#[test]
+fn every_fixture_file_is_labeled_with_the_rotation_it_came_from() {
+    let boundary = expected("rotation-boundary");
+    let rotated_end = boundary
+        .files
+        .iter()
+        .filter(|file| file.rotation == "lo_")
+        .flat_map(|file| record_timestamps("rotation-boundary", file))
+        .max()
+        .unwrap();
+    let current_start = boundary
+        .files
+        .iter()
+        .filter(|file| file.rotation == "current")
+        .flat_map(|file| record_timestamps("rotation-boundary", file))
+        .min()
+        .unwrap();
+
+    for id in fixture_dirs() {
+        for file in expected(&id).files {
+            let label = format!("{id}/{}", file.name);
+            let expected_name = match file.rotation.as_str() {
+                "current" => "BgbServer.log",
+                "lo_" => "BgbServer.lo_",
+                other => panic!("{label}: unknown rotation {other}"),
+            };
+            assert_eq!(file.name, expected_name, "{label}");
+            let timestamps = record_timestamps(&id, &file);
+            if file.rotation == "current" {
+                assert!(
+                    timestamps.iter().all(|time| *time >= current_start),
+                    "{label}: a current-file record predates the observed rename"
+                );
+            } else {
+                assert!(
+                    timestamps.iter().all(|time| *time <= rotated_end),
+                    "{label}: a rotated-file record follows the observed rename"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn firewall_warning_is_the_only_warning_record() {
+    let expected = expected("firewall-warning-state-message");
+    let file = &expected.files[0];
+    let content = read_fixture(
+        &fixture_root()
+            .join("firewall-warning-state-message")
+            .join(&file.name),
+    );
+    let (result, _) = parse_content(&content, &file.name, 0);
+    let warnings = result
+        .entries
+        .iter()
+        .filter(|entry| entry.severity == Severity::Warning)
+        .map(|entry| entry.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].starts_with("WARNING: Notification Server"));
+}
+
 #[test]
 fn bgb_fixtures_carry_only_sanitized_identity() {
     let guid =
         Regex::new(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
     let placeholder_guid = Regex::new(r"^00000000-0000-0000-0000-[0-9]{12}$").unwrap();
     let thumbprint = Regex::new(r"(?i)\b[0-9a-f]{40}\b").unwrap();
-    let fqdn = Regex::new(r"(?i)\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\.[a-z]{2,}\b").unwrap();
-    let site_code = Regex::new(r#"SITE=(\w+)|P1='(\w+)'|"CM_(\w+)""#).unwrap();
+    // Any dotted name of two or more labels that starts with a letter.
+    let dotted = Regex::new(r"(?i)\b[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+\b").unwrap();
+    let generated_name = Regex::new(r"^(?:Bgb|msg)[0-9]{5}\.(?:BLD|BOS|SMX)$").unwrap();
+    let generated_file = Regex::new(r"\\([A-Za-z0-9]+\.(?:BLD|BOS|SMX))\b").unwrap();
+    let drive_path = Regex::new(r"(?i)\b[a-z]:\\").unwrap();
+    let host_field = Regex::new(r#"SYS=(\S+)|local on (\S+)"#).unwrap();
+    let insertion_string = Regex::new(r#"ISTR[0-9]="([^"]*)""#).unwrap();
+    let site_code = Regex::new(r"SITE=(\w+)|P1='(\w+)'|CM_(\w+)").unwrap();
     let allowed_dotted = [
         "SITESERVER.example.invalid",
         "dllhost.exe",
@@ -247,7 +326,9 @@ fn bgb_fixtures_carry_only_sanitized_identity() {
         "statesys.box",
         "statmgr.box",
     ];
+    let allowed_hosts = ["SITESERVER", "SITESERVER.example.invalid"];
 
+    let mut all_content = String::new();
     for id in fixture_dirs() {
         for file in expected(&id).files {
             let content = read_fixture(&fixture_root().join(&id).join(&file.name));
@@ -261,21 +342,55 @@ fn bgb_fixtures_carry_only_sanitized_identity() {
                     "{label}: thumbprint"
                 );
             }
-            for found in fqdn.find_iter(&content) {
+            for found in dotted.find_iter(&content) {
                 let value = found.as_str();
                 assert!(
                     allowed_dotted
                         .iter()
                         .any(|allowed| allowed.eq_ignore_ascii_case(value))
-                        || value.ends_with(".example.invalid"),
-                    "{label}: unexpected dotted name"
+                        || generated_name.is_match(value),
+                    "{label}: unexpected dotted name {value:?}"
+                );
+            }
+            for captures in generated_file.captures_iter(&content) {
+                assert!(
+                    generated_name.is_match(&captures[1]),
+                    "{label}: generated file name"
+                );
+            }
+            assert!(!drive_path.is_match(&content), "{label}: drive-letter path");
+            for captures in host_field.captures_iter(&content) {
+                let host = captures.iter().skip(1).flatten().next().unwrap().as_str();
+                assert!(allowed_hosts.contains(&host), "{label}: host {host:?}");
+            }
+            for captures in insertion_string.captures_iter(&content) {
+                let value = &captures[1];
+                assert!(
+                    value.is_empty()
+                        || value.bytes().all(|byte| byte.is_ascii_digit())
+                        || allowed_hosts.contains(&value)
+                        || value == "CM_PS1",
+                    "{label}: insertion string {value:?}"
                 );
             }
             for captures in site_code.captures_iter(&content) {
                 let code = captures.iter().skip(1).flatten().next().unwrap().as_str();
                 assert_eq!(code, "PS1", "{label}: site code");
             }
-            assert!(!content.contains("Program Files"), "{label}: install path");
+            all_content.push_str(&content);
         }
     }
+
+    // The placeholders must actually be exercised, so the checks above are not vacuous.
+    for placeholder in [
+        "SYS=SITESERVER.example.invalid",
+        "local on SITESERVER",
+        "SITE=PS1",
+        r"<siteInstallRoot>\inboxes",
+        "hash 0000000000000000000000000000000000000000",
+        "00000000-0000-0000-0000-000000000001",
+    ] {
+        assert!(all_content.contains(placeholder), "missing {placeholder:?}");
+    }
+    assert!(generated_file.is_match(&all_content));
 }
