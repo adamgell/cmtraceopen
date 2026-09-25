@@ -1732,13 +1732,19 @@ mod tests {
 
     #[test]
     fn derives_high_capture_confidence_for_recent_interactive_capture() {
-        let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        // One instant for both the fixture and the evaluation. Reading the clock
+        // twice let a pause of 16 minutes cross the 15-minute High threshold and
+        // fail the assertion; a literal makes the test a function of its input.
+        let evaluated_at = chrono::DateTime::parse_from_rfc3339("2026-03-10T10:30:00.000Z")
+            .expect("valid instant")
+            .with_timezone(&Utc);
+        let now = evaluated_at.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
         let sample = format!(
             "\n AzureAdJoined : YES\n DomainJoined : YES\n AzureAdPrt : YES\n AzureAdPrtUpdateTime : {now}\n Client Time : {now}\n User Context : UN-ELEVATED User\n SessionIsNotRemote : YES\n"
         );
 
         let facts = parse_dsregcmd(&sample).expect("parse high confidence sample");
-        let analysis = analyze_facts(facts, &sample, Utc::now());
+        let analysis = analyze_facts(facts, &sample, evaluated_at);
 
         assert_eq!(
             analysis.derived.capture_confidence,
