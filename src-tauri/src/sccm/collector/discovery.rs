@@ -59,7 +59,7 @@ fn assemble_native_environment(mut environment: PrivateSccmEnvironment) -> Priva
                     role_scope: "managementPoint".to_owned(),
                     path_class: "configuredRoleLogRoot".to_owned(),
                     root: root.path.clone(),
-                    source_version: environment.configmgr_version.clone(),
+                    source_version: environment.site_version.clone(),
                     pxe_enabled: false,
                 });
         }
@@ -566,7 +566,7 @@ mod tests {
         );
         let environment = assemble_native_environment(PrivateSccmEnvironment {
             supported: true,
-            configmgr_version: Some("5.00.9141.1000".to_owned()),
+            site_version: Some("5.00.9141.1000".to_owned()),
             roles: vec![observed_role(SccmRole::ManagementPoint)],
             roots: vec![discovered],
             ..PrivateSccmEnvironment::default()
@@ -611,7 +611,7 @@ mod tests {
             source_id: contract.source_id.to_owned(),
             role_scope: "managementPoint".to_owned(),
             path_class: "configuredRoleLogRoot".to_owned(),
-            expected_source_version: environment.configmgr_version.clone(),
+            expected_source_version: environment.site_version.clone(),
             selected_root: root.path().to_string_lossy().into_owned(),
         };
         let now = Instant::now();
@@ -669,7 +669,7 @@ mod tests {
             source_id: contract.source_id.to_owned(),
             role_scope: "managementPoint".to_owned(),
             path_class: "configuredRoleLogRoot".to_owned(),
-            expected_source_version: environment.configmgr_version.clone(),
+            expected_source_version: environment.site_version.clone(),
             selected_root: root.path().to_string_lossy().into_owned(),
         };
         let now = Instant::now();
@@ -683,6 +683,78 @@ mod tests {
         assert!(manifest.contains("\"roleProvenance\": \"operatorDeclared\""));
         assert!(manifest.contains("\"pathProvenance\": \"operatorDeclared\""));
         assert!(manifest.contains("\"pathClaim\": \"configuredRoleLogRoot\""));
+    }
+
+    #[test]
+    fn server_scoped_advanced_sources_carry_the_site_version_not_the_client_version() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("BgbServer.log"), b"observed-bgb").unwrap();
+        let discovered = resolve_role_root(
+            SccmRole::ManagementPoint,
+            Some(root.path().to_owned()),
+            None,
+            None,
+        )
+        .unwrap();
+        let environment = assemble_native_environment(PrivateSccmEnvironment {
+            supported: true,
+            configmgr_version: Some("5.00.9128.1000".to_owned()),
+            site_version: Some("5.00.9141.1000".to_owned()),
+            roles: vec![observed_role(SccmRole::ManagementPoint)],
+            roots: vec![discovered],
+            ..PrivateSccmEnvironment::default()
+        });
+
+        assert_eq!(
+            environment.advanced_source_facts[0]
+                .source_version
+                .as_deref(),
+            Some("5.00.9141.1000")
+        );
+        for option in advanced_source_options(&environment) {
+            assert_eq!(
+                option.source_version.as_deref(),
+                Some("5.00.9141.1000"),
+                "{}",
+                option.source_id
+            );
+        }
+
+        let contract = advanced_source_contracts()
+            .iter()
+            .find(|contract| contract.source_id == "advanced-client-notification-bgb")
+            .unwrap();
+        let request = |expected: &str| SccmAdvancedCaptureAuthorizationRequest {
+            card_id: contract.card_id.to_owned(),
+            card_version: contract.card_version.to_owned(),
+            source_id: contract.source_id.to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            expected_source_version: Some(expected.to_owned()),
+            selected_root: root.path().to_string_lossy().into_owned(),
+        };
+        let now = Instant::now();
+        let mut store = SccmAdvancedCapabilityStore::default();
+        assert!(store
+            .authorize(&environment, request("5.00.9128.1000"), now)
+            .is_err());
+        assert!(store
+            .authorize(&environment, request("5.00.9141.1000"), now)
+            .is_ok());
+    }
+
+    #[test]
+    fn advanced_sources_never_borrow_the_client_version_when_site_version_is_missing() {
+        let environment = assemble_native_environment(PrivateSccmEnvironment {
+            supported: true,
+            configmgr_version: Some("5.00.9128.1000".to_owned()),
+            roles: vec![observed_role(SccmRole::SiteServer)],
+            ..PrivateSccmEnvironment::default()
+        });
+
+        for option in advanced_source_options(&environment) {
+            assert_eq!(option.source_version, None, "{}", option.source_id);
+        }
     }
 
     #[test]
