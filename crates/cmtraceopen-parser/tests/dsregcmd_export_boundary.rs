@@ -26,6 +26,7 @@
 //! every free-text field too; the fixture plants them in fields *and* in
 //! narrative so guard 1 proves both paths.
 
+use chrono::Utc;
 use cmtraceopen_parser::dsregcmd::{
     analyze_text, analyze_text_with_evidence, redacted_status_text, DsregcmdActiveEvidence,
     DsregcmdBundleEvidence, DsregcmdConnectivityResult, DsregcmdScpQueryResult,
@@ -116,7 +117,7 @@ const SID_CAPTURE: &str = r#"
 
 /// The JSON a caller of the published crate receives.
 fn published_analysis_json(capture: &str) -> String {
-    let analysis = analyze_text(capture).expect("the dsregcmd capture parses");
+    let analysis = analyze_text(capture, Utc::now()).expect("the dsregcmd capture parses");
     serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
 }
 
@@ -311,7 +312,7 @@ fn evidence_attached_from_a_bundle_is_projected_too() {
             event_log_analysis: Some(events),
             ..DsregcmdBundleEvidence::default()
         };
-        let analysis = analyze_text_with_evidence(STATUS_CAPTURE, evidence)
+        let analysis = analyze_text_with_evidence(STATUS_CAPTURE, evidence, Utc::now())
             .expect("the dsregcmd capture analyzes");
         serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
     };
@@ -346,7 +347,7 @@ fn evidence_attached_from_a_bundle_is_projected_too() {
 /// than reaching a second token.
 #[test]
 fn projecting_an_already_projected_analysis_changes_nothing() {
-    let once = analyze_text(STATUS_CAPTURE).expect("capture parses");
+    let once = analyze_text(STATUS_CAPTURE, Utc::now()).expect("capture parses");
     let twice = cmtraceopen_parser::dsregcmd::redacted_analysis(&once);
 
     assert_eq!(

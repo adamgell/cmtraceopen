@@ -1,3 +1,6 @@
+use chrono::DateTime;
+use chrono::Utc;
+
 pub mod derive;
 pub mod extended;
 pub mod models;
@@ -28,8 +31,11 @@ pub use redaction::{redacted_analysis, redacted_status_text};
 ///
 /// Returns `Err(String)` with a human-readable parse failure; callers wrap
 /// into their own error type as needed.
-pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
-    analyze_text_with_evidence(input, DsregcmdBundleEvidence::default())
+pub fn analyze_text(
+    input: &str,
+    evaluated_at: DateTime<Utc>,
+) -> Result<DsregcmdAnalysisResult, String> {
+    analyze_text_with_evidence(input, DsregcmdBundleEvidence::default(), evaluated_at)
 }
 
 /// The analyzer entry point the application uses: parse `dsregcmd /status`
@@ -44,8 +50,9 @@ pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
 pub fn analyze_text_with_evidence(
     input: &str,
     evidence: DsregcmdBundleEvidence,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<DsregcmdAnalysisResult, String> {
-    let mut result = analyze_text_preserving_local_values(input)?;
+    let mut result = analyze_text_preserving_local_values(input, evaluated_at)?;
 
     evidence.apply_to(&mut result);
     rules::apply_enrollment_cross_reference(&mut result);
@@ -69,7 +76,8 @@ pub fn analyze_text_with_evidence(
 /// publishes calls [`analyze_text`] or [`analyze_text_with_evidence`].
 pub(crate) fn analyze_text_preserving_local_values(
     input: &str,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<DsregcmdAnalysisResult, String> {
     let facts = parser::parse_dsregcmd(input)?;
-    Ok(rules::analyze_facts(facts, input))
+    Ok(rules::analyze_facts(facts, input, evaluated_at))
 }
