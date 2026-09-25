@@ -1182,8 +1182,8 @@ fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_files_recursive, describe_parser_selection, inspect_evidence_artifact,
-        inspect_evidence_bundle, EvidenceArtifactIntakeKind,
+        classify_artifact_intake_kind, collect_files_recursive, describe_parser_selection,
+        inspect_evidence_artifact, inspect_evidence_bundle, EvidenceArtifactIntakeKind,
     };
     #[cfg(feature = "collector")]
     use crate::collector::artifacts::{collect_logs, CollectorContext};
@@ -1733,5 +1733,28 @@ mod tests {
         ]
     }
 }"#
+    }
+    #[test]
+    fn artifact_intake_kind_classifies_every_bundle_category_case_insensitively() {
+        for (category, expected) in [
+            ("logs", EvidenceArtifactIntakeKind::Log),
+            ("LOGS", EvidenceArtifactIntakeKind::Log),
+            ("registry", EvidenceArtifactIntakeKind::RegistrySnapshot),
+            ("event-log", EvidenceArtifactIntakeKind::EventLogExport),
+            ("event-logs", EvidenceArtifactIntakeKind::EventLogExport),
+            ("command-output", EvidenceArtifactIntakeKind::CommandOutput),
+            ("screenshots", EvidenceArtifactIntakeKind::Screenshot),
+            ("exports", EvidenceArtifactIntakeKind::Export),
+            // An unrecognized category stays Unknown rather than being guessed
+            // into a preview kind, so the artifact is shown as an opaque entry.
+            ("other", EvidenceArtifactIntakeKind::Unknown),
+            ("", EvidenceArtifactIntakeKind::Unknown),
+        ] {
+            assert_eq!(
+                classify_artifact_intake_kind(category),
+                expected,
+                "category {category:?}"
+            );
+        }
     }
 }

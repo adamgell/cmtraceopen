@@ -99,7 +99,13 @@ Describe 'New-CollectorBundleId' {
     It 'uses the invariant Gregorian calendar under a non-Gregorian culture' {
         $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
         $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
-        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56)
+        # The bundle id stamps UTC, so the mocked clock is explicitly UTC: a local
+        # Kind would shift with the host's offset and make this expectation
+        # environment-dependent.
+        $testDate = [datetime]::SpecifyKind(
+            [datetime]::new(2026, 5, 21, 12, 34, 56),
+            [System.DateTimeKind]::Utc
+        )
         Mock Get-Date {
             param([string]$Format)
             if ([string]::IsNullOrEmpty($Format)) {

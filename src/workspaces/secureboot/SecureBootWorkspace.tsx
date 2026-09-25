@@ -193,7 +193,6 @@ export function SecureBootWorkspace() {
         <StatusBanner
           stage={result.stage}
           onRescan={handleRescan}
-          isScanning={isAnalyzing}
         />
         <StageProgressBar currentStage={result.stage} />
         <FactGroupCards scanState={result.scanState} dataSource={result.dataSource} />

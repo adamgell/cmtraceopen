@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test as base, expect } from "./fixtures";
 import espFixture from "./fixtures/demo/esp-diagnostics.json" with { type: "json" };
 import {
   buildBaseEspSnapshot,
@@ -12,6 +12,28 @@ import type {
   EspGraphRequest,
   EspInstallerCorrelation,
 } from "../src/workspaces/esp-diagnostics/types";
+
+/**
+ * The workspace probes the host's elevation state, whose answer depends on the
+ * machine (and on whether the debug IPC bridge is up: on macOS the real backend
+ * reports `restartSupported: false`, while these tests render the Windows
+ * administrator-coverage surface). Pinning the probe keeps the suite identical
+ * with and without `npm run app:dev` running.
+ */
+const test = base.extend({
+  page: async ({ page }, use) => {
+    await page.addInitScript(() => {
+      const ipc = window.__e2e_ipc_overrides__;
+      if (!ipc) return;
+      ipc["get_esp_elevation_state"] = () => ({
+        isElevated: false,
+        restartSupported: true,
+        restrictedSources: [],
+      });
+    });
+    await use(page);
+  },
+});
 
 const fullGraph = espFixture.graph.full as unknown as EspGraphOverlay;
 const partialGraph = espFixture.graph.partial as unknown as EspGraphOverlay;

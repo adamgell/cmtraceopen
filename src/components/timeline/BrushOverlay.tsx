@@ -6,9 +6,22 @@ interface Props {
   timeRangeMs: [number, number];
   width: number;
   height: number;
+  /**
+   * Reports the pointer while it is over the lanes. The overlay covers the swim
+   * lanes, so this is the only pointer stream a lane readout can observe.
+   */
+  onPointerMove?: (clientX: number, clientY: number) => void;
+  /** Reports that the pointer left the lanes, so a readout can clear. */
+  onPointerLeave?: () => void;
 }
 
-export function BrushOverlay({ timeRangeMs, width, height }: Props) {
+export function BrushOverlay({
+  timeRangeMs,
+  width,
+  height,
+  onPointerMove,
+  onPointerLeave,
+}: Props) {
   const brushRange = useTimelineStore((s) => s.brushRange);
   const setBrushRange = useTimelineStore((s) => s.setBrushRange);
   const clearBrushRange = useTimelineStore((s) => s.clearBrushRange);
@@ -30,6 +43,7 @@ export function BrushOverlay({ timeRangeMs, width, height }: Props) {
     setDragEnd(x);
   };
   const onMouseMove = (e: React.MouseEvent) => {
+    onPointerMove?.(e.clientX, e.clientY);
     if (dragStart == null) return;
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -73,7 +87,10 @@ export function BrushOverlay({ timeRangeMs, width, height }: Props) {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
+      onMouseLeave={() => {
+        onMouseUp();
+        onPointerLeave?.();
+      }}
       style={{
         position: "absolute",
         inset: 0,

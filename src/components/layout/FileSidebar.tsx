@@ -400,7 +400,12 @@ export function LogSidebar() {
                     const filePaths = files
                       .filter((e) => !e.isDir && getCachedTabSnapshot(e.path))
                       .map((e) => e.path);
-                    if (filePaths.length >= 2) createMergedTab(filePaths);
+                    if (filePaths.length >= 2) {
+                      // The merged view replaces the whole source, so a filter
+                      // that belonged to the previous view must not survive it.
+                      clearFilter();
+                      createMergedTab(filePaths);
+                    }
                   }}
                   style={{
                     width: "100%",

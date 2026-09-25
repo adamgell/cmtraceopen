@@ -430,9 +430,11 @@ export function qualifyByCaptureConfidence(
   confidence: DsregcmdAnalysisResult["derived"]["captureConfidence"],
   text: string,
 ): string {
-  return confidence === "high"
-    ? text
-    : `Based on this capture, ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  // The qualifier is a prefix, not a joined clause: lower-casing the detail's
+  // first character mangled product and acronym names ("MDM" -> "mDM",
+  // "PRT present" -> "pRT present", "Primary Refresh Token" ->
+  // "primary Refresh Token").
+  return confidence === "high" ? text : `Based on this capture, ${text}`;
 }
 
 export function getDisplayPhaseAssessment(
@@ -743,6 +745,17 @@ export function getSummaryText(
   ].join("\n");
 }
 
+/**
+ * A timeline row is only useful with a real timestamp: absent values are
+ * omitted by the caller's `.filter((item) => item.value)`, while a value that is
+ * present but not parseable keeps its original text rather than a placeholder.
+ */
+function timelineTimestamp(value: string | null | undefined): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (raw === "") return "";
+  return formatLocalDateTime(raw) ?? raw;
+}
+
 export function buildTimelineItems(
   facts: DsregcmdFacts,
   result: DsregcmdAnalysisResult,
@@ -771,19 +784,19 @@ export function buildTimelineItems(
     {
       id: "previous-prt",
       label: "Previous PRT attempt",
-      value: formatDateTimeValue(facts.diagnostics.previousPrtAttempt),
+      value: timelineTimestamp(facts.diagnostics.previousPrtAttempt),
       tone: "neutral" as const,
     },
     {
       id: "prt-update",
       label: "Azure AD PRT update",
-      value: formatDateTimeValue(facts.ssoState.azureAdPrtUpdateTime),
+      value: timelineTimestamp(facts.ssoState.azureAdPrtUpdateTime),
       tone: result.derived.stalePrt ? ("warn" as const) : ("good" as const),
     },
     {
       id: "client-time",
       label: "Client reference time",
-      value: formatDateTimeValue(facts.diagnostics.clientTime),
+      value: timelineTimestamp(facts.diagnostics.clientTime),
       tone: "neutral" as const,
     },
   ].filter((item) => item.value);

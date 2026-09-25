@@ -822,12 +822,18 @@ export function DsregcmdWorkspace() {
           >
             <FlowBox
               title="Current phase"
-              detail={`${stage.label}. ${stage.summary}`}
+              detail={qualifyByCaptureConfidence(
+                confidence.confidence,
+                `${stage.label}. ${stage.summary}`,
+              )}
               tone={stage.tone}
             />
             <FlowBox
               title="Join posture"
-              detail={`${result.derived.joinTypeLabel}. Azure AD joined: ${formatBool(result.facts.joinState.azureAdJoined)}. Domain joined: ${formatBool(result.facts.joinState.domainJoined)}.`}
+              detail={qualifyByCaptureConfidence(
+                confidence.confidence,
+                `${result.derived.joinTypeLabel}. Azure AD joined: ${formatBool(result.facts.joinState.azureAdJoined)}. Domain joined: ${formatBool(result.facts.joinState.domainJoined)}.`,
+              )}
               tone={toneForJoinType(result.derived.joinType)}
             />
             <FlowBox

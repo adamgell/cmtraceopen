@@ -28,10 +28,6 @@ struct BridgeState {
 
 /// Start the IPC bridge server. Runs forever; spawn with `tokio::spawn`.
 pub async fn start(port: u16) {
-    let state = Arc::new(BridgeState {
-        open_files: Mutex::new(HashMap::new()),
-    });
-
     let listener = match TcpListener::bind(format!("127.0.0.1:{port}")).await {
         Ok(l) => {
             log::info!("ipc_bridge: listening on 127.0.0.1:{port}");
@@ -42,6 +38,16 @@ pub async fn start(port: u16) {
             return;
         }
     };
+
+    serve(listener).await;
+}
+
+/// Accepts and serves connections until the listener fails. Split from `start`
+/// so a test can drive the real handler on an OS-assigned port.
+async fn serve(listener: TcpListener) {
+    let state = Arc::new(BridgeState {
+        open_files: Mutex::new(HashMap::new()),
+    });
 
     loop {
         match listener.accept().await {
@@ -54,26 +60,87 @@ pub async fn start(port: u16) {
     }
 }
 
+/// Largest request the development bridge accepts. The body is a small JSON
+/// envelope, so anything larger is a client bug rather than traffic to buffer.
+const MAX_REQUEST_BYTES: usize = 1 << 20;
+
+/// Reads one request, waiting until the declared `Content-Length` body arrives.
+///
+/// A single `read` is not a request: TCP may deliver the head and the body in
+/// separate segments, and parsing the first segment alone made the bridge answer
+/// `request parse error: EOF while parsing a value` (or reset the connection)
+/// for a perfectly well-formed call.
+async fn read_request(socket: &mut TcpStream) -> Option<String> {
+    let mut raw = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 8192];
+
+    loop {
+        let read = socket.read(&mut chunk).await.ok()?;
+        if read == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..read]);
+        if raw.len() > MAX_REQUEST_BYTES {
+            log::warn!("ipc_bridge: request exceeded {MAX_REQUEST_BYTES} bytes");
+            return None;
+        }
+
+        if let Some(headers_end) = find_headers_end(&raw) {
+            let expected = declared_content_length(&raw[..headers_end]);
+            if raw.len() >= headers_end + 4 + expected {
+                break;
+            }
+        }
+    }
+
+    Some(String::from_utf8_lossy(&raw).into_owned())
+}
+
+/// Byte offset of the header terminator, if the headers have arrived.
+fn find_headers_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+/// `Content-Length` of the request head, or 0 when absent or unparsable.
+fn declared_content_length(head: &[u8]) -> usize {
+    String::from_utf8_lossy(head)
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0)
+}
+
 // ── Connection handler ────────────────────────────────────────────────────────
 
 async fn handle_connection(mut socket: TcpStream, state: Arc<BridgeState>) {
-    let mut buf = vec![0u8; 65536];
-    let n = match socket.read(&mut buf).await {
-        Ok(n) if n > 0 => n,
-        _ => return,
+    let raw = match read_request(&mut socket).await {
+        Some(raw) => raw,
+        None => return,
     };
 
-    let raw = String::from_utf8_lossy(&buf[..n]);
-    let first_line = raw.lines().next().unwrap_or("");
-    let method = first_line.split_whitespace().next().unwrap_or("");
+    let headers_end = raw.find("\r\n\r\n");
+    let head = match headers_end {
+        Some(index) => &raw[..index],
+        None => raw.as_str(),
+    };
+    let method = head
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
 
     let (status_line, body, content_type) = match method {
         "OPTIONS" => ("204 No Content", String::new(), ""),
         "GET" => ("200 OK", r#"{"ok":true}"#.to_string(), "application/json"),
         "POST" => {
-            let body_str = raw
-                .find("\r\n\r\n")
-                .map(|i| raw[i + 4..].trim_end_matches('\0'))
+            let body_str = headers_end
+                .map(|index| raw[index + 4..].trim_end_matches('\0'))
                 .unwrap_or("");
             let result = dispatch(body_str, &state);
             ("200 OK", result, "application/json")
@@ -221,6 +288,30 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&Option::<String>::None)
         }
 
+        // ── Browser-session startup ─────────────────────────────────────────
+        // These answer "nothing is pending", which is what the real backend
+        // answers when no second launch, no elevation restore ticket and no
+        // native menu exist. Leaving them unimplemented made the app log
+        // console errors while booting against the bridge, and the smoke
+        // suite's no-JS-errors assertion failed whenever `npm run app:dev` was
+        // running alongside it.
+        "take_second_launch_paths" => ok_json(&Vec::<String>::new()),
+
+        "get_initial_elevation_restore" => ok_json(&serde_json::Value::Null),
+
+        // A browser session has no native application menu to synchronize.
+        "sync_app_menu_state" => ok_json(&serde_json::Value::Null),
+
+        // The real command reads HKCU on Windows and returns the ISO defaults
+        // elsewhere; the bridge runs on the development host, so it answers
+        // exactly what that command answers here.
+        "get_system_date_time_preferences" => {
+            match crate::commands::system_preferences::get_system_date_time_preferences() {
+                Ok(preferences) => ok_json(&preferences),
+                Err(error) => err_json(&error.to_string()),
+            }
+        }
+
         "get_known_log_sources" => {
             ok_json(&Vec::<String>::new())
         }
@@ -298,14 +389,112 @@ fn err_json(msg: &str) -> String {
 
 #[cfg(all(test, feature = "esp-diagnostics"))]
 mod tests {
-    use super::{dispatch, BridgeState};
+    use super::{dispatch, serve, BridgeState};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
     fn state() -> Arc<BridgeState> {
         Arc::new(BridgeState {
             open_files: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Serves one request through the real handler on an OS-assigned port.
+    fn round_trip(request: &str, split_at: Option<usize>) -> String {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            tokio::spawn(serve(listener));
+
+            let mut socket = TcpStream::connect(addr).await.expect("connect");
+            match split_at {
+                Some(index) => {
+                    // Two writes with a pause: the first read can only see the
+                    // first segment, which is exactly what a real client can do.
+                    socket
+                        .write_all(&request.as_bytes()[..index])
+                        .await
+                        .expect("write head");
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    socket
+                        .write_all(&request.as_bytes()[index..])
+                        .await
+                        .expect("write tail");
+                }
+                None => socket.write_all(request.as_bytes()).await.expect("write"),
+            }
+
+            let mut response = Vec::new();
+            socket.read_to_end(&mut response).await.expect("read");
+            String::from_utf8_lossy(&response).into_owned()
+        })
+    }
+
+    fn post(body: &str) -> String {
+        format!(
+            "POST /invoke HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn request_split_across_writes_is_served_in_full() {
+        let body = serde_json::json!({ "cmd": "get_app_version", "args": {} }).to_string();
+        let request = post(&body);
+        // Split inside the body, past the header terminator.
+        let split = request.len() - body.len() / 2;
+        let response = round_trip(&request, Some(split));
+        assert!(
+            response.contains("\"result\""),
+            "a request split across two writes must still be dispatched: {response}"
+        );
+    }
+
+    #[test]
+    fn whole_request_in_one_write_is_served() {
+        let body = serde_json::json!({ "cmd": "get_app_version", "args": {} }).to_string();
+        let response = round_trip(&post(&body), None);
+        assert!(response.contains("\"result\""), "response was {response}");
+    }
+
+    #[test]
+    fn bodyless_get_is_served() {
+        let response = round_trip("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", None);
+        assert!(
+            response.contains(r#"{"ok":true}"#),
+            "response was {response}"
+        );
+    }
+
+    #[test]
+    fn debug_bridge_answers_browser_session_startup_commands() {
+        // Without these the app logs console errors while booting against the
+        // bridge (no second launch, no restore ticket, no native menu), which
+        // failed the smoke suite's no-JS-errors assertion whenever the app ran.
+        for command in [
+            "take_second_launch_paths",
+            "get_initial_elevation_restore",
+            "sync_app_menu_state",
+            "get_system_date_time_preferences",
+        ] {
+            let response = dispatch(
+                &serde_json::json!({ "cmd": command, "args": {} }).to_string(),
+                &state(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert!(
+                value.get("error").is_none(),
+                "{command} must answer without an error: {response}"
+            );
+            assert!(value.get("result").is_some(), "{command}: {response}");
+        }
     }
 
     #[test]

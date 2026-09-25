@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { selectTopFindings, toneForPrtState } from "./dsregcmd-formatters";
+import {
+  qualifyByCaptureConfidence,
+  selectTopFindings,
+  toneForPrtState,
+} from "./dsregcmd-formatters";
 import type { DsregcmdSeverity } from "./types";
 
 /// The Top Findings list claims "Highest-priority diagnostics first". The
@@ -95,5 +99,25 @@ describe("toneForPrtState", () => {
   it("is neutral when freshness is unknown instead of claiming health", () => {
     expect(toneForPrtState(true, null)).toBe("neutral");
     expect(toneForPrtState(true, undefined)).toBe("neutral");
+  });
+});
+
+/// The qualifier prefixes a conclusion drawn from a low-confidence capture. It
+/// used to lower-case the detail's first character, which mangled product and
+/// acronym names ("MDM" -> "mDM", "PRT present" -> "pRT present").
+describe("qualifyByCaptureConfidence", () => {
+  it("leaves high-confidence copy untouched", () => {
+    expect(qualifyByCaptureConfidence("high", "PRT present is Yes.")).toBe(
+      "PRT present is Yes.",
+    );
+  });
+
+  it("prefixes a caveat without re-casing the detail", () => {
+    expect(qualifyByCaptureConfidence("low", "MDM visibility is Unknown.")).toBe(
+      "Based on this capture, MDM visibility is Unknown.",
+    );
+    expect(qualifyByCaptureConfidence("medium", "NGC is Yes.")).toBe(
+      "Based on this capture, NGC is Yes.",
+    );
   });
 });

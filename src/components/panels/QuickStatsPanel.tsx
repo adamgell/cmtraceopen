@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Text, tokens } from "@fluentui/react-components";
 import {
   ArrowSortDownRegular,
@@ -42,18 +42,25 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
   // kept separate from the clause-based filter system to avoid the heavy IPC path).
   const [activeSeverity, setActiveSeverity] = useState<string | null>(null);
 
-  // Clear local severity state when an external action clears all filters
-  const hasActiveFilter = useFilterStore((s) => s.hasActiveFilter);
+  // The ids a card applied, so an external filter change can reset the card.
+  // Clause count is not enough: a card sets `filteredIds` directly, which
+  // `hasActiveFilter()` does not count, so the card's own click used to read as
+  // "no filter" and cleared its active state immediately.
+  const appliedCardIds = useRef<Set<number> | null>(null);
+  const filteredIds = useFilterStore((s) => s.filteredIds);
   useEffect(() => {
-    if (!hasActiveFilter() && activeSeverity !== null) {
+    if (activeSeverity === null) return;
+    if (filteredIds === null || filteredIds !== appliedCardIds.current) {
+      appliedCardIds.current = null;
       setActiveSeverity(null);
     }
-  }, [hasActiveFilter, activeSeverity]);
+  }, [filteredIds, activeSeverity]);
 
   const handleSeverityClick = useCallback(
     (severity: string) => {
       if (activeSeverity === severity) {
         // Toggle off
+        appliedCardIds.current = null;
         setActiveSeverity(null);
         clearFilter();
       } else {
@@ -64,6 +71,7 @@ export const QuickStatsPanel = memo(function QuickStatsPanel({
             ids.add(entry.id);
           }
         }
+        appliedCardIds.current = ids;
         setActiveSeverity(severity);
         setFilteredIds(ids);
       }

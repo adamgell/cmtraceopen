@@ -56,16 +56,12 @@ function stageColors(tier: StageTier) {
 
 export interface StatusBannerProps {
   stage: SecureBootStage;
-  scanTimestamp?: string;
   onRescan?: () => void;
-  isScanning?: boolean;
 }
 
 export function StatusBanner({
   stage,
-  scanTimestamp,
   onRescan,
-  isScanning = false,
 }: StatusBannerProps) {
   const tier = stageTier(stage);
   const colors = stageColors(tier);
@@ -126,29 +122,12 @@ export function StatusBanner({
           >
             {STAGE_DESCRIPTIONS[stage]}
           </div>
-          {scanTimestamp && (
-            <div
-              style={{
-                marginTop: "6px",
-                fontSize: "11px",
-                color: colors.text,
-                opacity: 0.65,
-              }}
-            >
-              Scanned: {scanTimestamp}
-            </div>
-          )}
         </div>
       </div>
 
       {onRescan && (
-        <Button
-          appearance="secondary"
-          disabled={isScanning}
-          onClick={onRescan}
-          style={{ flexShrink: 0 }}
-        >
-          {isScanning ? "Scanning…" : "Rescan"}
+        <Button appearance="secondary" onClick={onRescan} style={{ flexShrink: 0 }}>
+          Rescan
         </Button>
       )}
     </div>

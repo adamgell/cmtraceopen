@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useTimelineStore } from "../../stores/timeline-store";
 import { useLaneBuckets } from "./hooks/useLaneBuckets";
-import { SwimLaneCanvas } from "./SwimLaneCanvas";
+import { SwimLaneCanvas, type SwimLaneCanvasHandle } from "./SwimLaneCanvas";
 import { LaneLegend } from "./LaneLegend";
 import { IncidentChipBar } from "./IncidentChipBar";
 import { IncidentDetailPanel } from "./IncidentDetailPanel";
@@ -19,6 +19,14 @@ export function TimelineWorkspace() {
   const laneVisibility = useTimelineStore((s) => s.laneVisibility);
   const soloSourceIdx = useTimelineStore((s) => s.soloSourceIdx);
   const [hover, setHover] = useState<string | null>(null);
+
+  // The brush overlay covers the lanes and owns the pointer, so lane hover is
+  // resolved through the canvas hit test rather than a canvas mousemove.
+  const laneCanvasRef = useRef<SwimLaneCanvasHandle>(null);
+  const handleLanePointerMove = (clientX: number, clientY: number) => {
+    const bucket = laneCanvasRef.current?.bucketAtPoint(clientX, clientY) ?? null;
+    setHover(bucket ? `${bucket.totalCount} rows · ${bucket.errorCount} errors` : null);
+  };
 
   // Resize-observer for lane width so the canvas/ruler/brush all match.
   const laneBoxRef = useRef<HTMLDivElement>(null);
@@ -169,6 +177,7 @@ export function TimelineWorkspace() {
       >
         <TimelineRuler timeRangeMs={bundle.timeRangeMs} width={laneWidth} />
         <SwimLaneCanvas
+          ref={laneCanvasRef}
           sources={bundle.sources}
           buckets={buckets}
           timeRangeMs={bundle.timeRangeMs}
@@ -176,16 +185,13 @@ export function TimelineWorkspace() {
           laneHeight={LANE_HEIGHT}
           laneVisibility={laneVisibility}
           soloSourceIdx={soloSourceIdx}
-          onBucketHover={(b) =>
-            setHover(
-              b ? `${b.totalCount} rows · ${b.errorCount} errors` : null,
-            )
-          }
         />
         <BrushOverlay
           timeRangeMs={bundle.timeRangeMs}
           width={laneWidth}
           height={20 + laneAreaHeight}
+          onPointerMove={handleLanePointerMove}
+          onPointerLeave={() => setHover(null)}
         />
         {hover && (
           <div
