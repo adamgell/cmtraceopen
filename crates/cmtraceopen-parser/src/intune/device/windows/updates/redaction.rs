@@ -246,8 +246,14 @@ fn is_known_named_value_name(name: &str) -> bool {
     // is a name slot carrying a serial-shaped identifier past the check that masks
     // values.
     if ["Message", "HexInt"].iter().any(|prefix| {
-        name.strip_prefix(prefix)
-            .is_some_and(|rest| rest.len() <= 3 && rest.bytes().all(|byte| byte.is_ascii_digit()))
+        name.strip_prefix(prefix).is_some_and(|rest| {
+            // The suffix is the positional number, so it has to be there: the
+            // bare prefix is not a form Windows emits, and `all()` over an empty
+            // rest would accept it.
+            !rest.is_empty()
+                && rest.len() <= 3
+                && rest.bytes().all(|byte| byte.is_ascii_digit())
+        })
     }) {
         return true;
     }
@@ -369,6 +375,9 @@ mod tests {
             // with an unbounded numeric tail.
             "Message12345678901234567890",
             "HexInt9999999",
+            // The bare prefixes are not positional forms and carry no number.
+            "Message",
+            "HexInt",
         ];
         // Names the corpus carries, which must survive or the export stops
         // describing the capture.
