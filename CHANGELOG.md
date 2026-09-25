@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Error codes in event data resolve against the embedded table (#665)**: A code detected in a record's message or named data is matched against the 792-entry table and shown with its description, category and severity, along with the spans that identified it. The lookup happens where the code is, instead of by pasting hex into a dialog.
+- **Error codes in event data resolve against the embedded table (#665)**: A code detected in a record's message or named data is matched against the 792-entry table and shown with its code, description and category. The lookup happens where the code is, instead of by pasting hex into a dialog.
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed
