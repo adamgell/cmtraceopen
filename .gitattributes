@@ -12,3 +12,9 @@ src-tauri/tests/fixtures/** -text
 # Covers Company Portal, SCCM, and other pure-parser evidence corpora.
 crates/cmtraceopen-parser/tests/fixtures/** -text -whitespace
 src-tauri/tests/corpus/company_portal/** -text -whitespace
+
+# Entries accumulate in ## [Unreleased], so two branches adding one each conflict on
+# adjacent lines. The union driver concatenates both sides instead. Verified by merging
+# two open pull requests here: no conflict, one ## [Unreleased], both entries kept. It
+# applies from the merging side, so this has to land before the branches it helps.
+CHANGELOG.md merge=union
