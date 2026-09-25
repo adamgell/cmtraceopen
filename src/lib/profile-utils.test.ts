@@ -46,6 +46,25 @@ describe("parsePayloadData with braces inside quoted values", () => {
     expect(entries[2].value).toBe("w");
   });
 
+  it("keeps an array of dicts whose value holds a quoted brace", () => {
+    const payload = `"mcx_preference_settings" = {
+  "Rules" = (
+    { "Comment" = "A"; "RuleType" = "x}y"; },
+    { "Comment" = "B"; "RuleType" = 2; }
+  );
+  "Tail" = "t";
+};`;
+
+    const { entries } = parsePayloadData(payload);
+
+    expect(entries.map((e) => e.key)).toEqual(["Rules", "Tail"]);
+    expect(entries[0].type).toBe("array");
+    // The array rendered as its own items rather than as the raw block text.
+    expect(entries[0].value).not.toContain(`"Rules" = (`);
+    expect(entries[0].value).toContain("x}y");
+    expect(entries[1].value).toBe("t");
+  });
+
   it("treats an escaped quote as part of the string rather than its end", () => {
     const payload = `"mcx_preference_settings" = {
   "Pattern" = "a\\"}b";
