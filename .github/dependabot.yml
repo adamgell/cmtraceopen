@@ -20,6 +20,17 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # windows-future has no 0.4–0.99 line. 0.3.2 is the last release built on
+      # the windows-core family `windows` is pinned to in src-tauri/Cargo.toml;
+      # 0.100.0 moves to the windows-core 0.100 family, which requires rustc
+      # 1.95 (the floor declared here is 1.88) and a matching migration of every
+      # `windows` call site, including the WAM token acquisition in graph_api.rs.
+      # That is a deliberate family-wide migration, not a bump. Lift this entry
+      # when the whole family moves together.
+      # https://github.com/adamgell/cmtraceopen/pull/655
+      - dependency-name: "windows-future"
+        versions: [">= 0.100.0"]
 
   # GitHub Actions — proposes SHA pin updates when new versions release
   - package-ecosystem: "github-actions"
@@ -28,3 +39,15 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    ignore:
+      # This repository pins dtolnay/rust-toolchain twice on purpose and
+      # Dependabot tracks a single version per action name. Every step without a
+      # `toolchain:` input uses the `<version>` ref whose action.yml bakes in the
+      # channel rust-toolchain.toml pins, so CI cannot float; the MSRV job uses
+      # the input-accepting `stable` ref so it can ask for 1.88. Pointing either
+      # step at the other's SHA installs the wrong channel — a `<version>` ref
+      # ignores the `toolchain:` input entirely — and
+      # scripts/ci-toolchain.test.mjs rejects the result. The pin is raised
+      # deliberately, together with rust-toolchain.toml.
+      # https://github.com/adamgell/cmtraceopen/pull/649
+      - dependency-name: "dtolnay/rust-toolchain"
