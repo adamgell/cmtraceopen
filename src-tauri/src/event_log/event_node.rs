@@ -45,20 +45,14 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
                 close(&mut stack, &mut root, node)?;
             }
             Ok(XmlEvent::Text(text)) => {
-                let value = text
-                    .xml10_content()
-                    .map_err(|error| format!("undecodable text: {error}"))?
-                    .into_owned();
+                let value = text.xml10_content().into_owned();
                 push_text(&mut stack, &value)?;
             }
             Ok(XmlEvent::GeneralRef(reference)) => {
-                // Entity references are their own event in quick-xml 0.41. Ignoring them would
+                // Entity references are their own event in quick-xml 0.42. Ignoring them would
                 // silently drop every '&', '<' and '>' from event data, which is common in command
                 // lines and file paths.
-                let name = reference
-                    .decode()
-                    .map_err(|error| format!("undecodable entity reference: {error}"))?
-                    .into_owned();
+                let name = reference.into_inner();
                 let raw = format!("&{name};");
                 let resolved = quick_xml::escape::unescape(&raw)
                     .map(|value| value.into_owned())
@@ -66,7 +60,7 @@ pub fn parse_event_xml(xml: &str) -> Result<EventNode, String> {
                 push_text(&mut stack, &resolved)?;
             }
             Ok(XmlEvent::CData(data)) => {
-                let value = String::from_utf8_lossy(&data).into_owned();
+                let value = data.into_inner();
                 push_text(&mut stack, &value)?;
             }
             Ok(XmlEvent::End(end)) => {
@@ -154,11 +148,10 @@ fn element_from(start: &quick_xml::events::BytesStart<'_>) -> Result<EventNode, 
     Ok(node)
 }
 
-fn local_name(raw: &[u8]) -> String {
-    let text = String::from_utf8_lossy(raw);
-    match text.rsplit_once(':') {
+fn local_name(raw: &str) -> String {
+    match raw.rsplit_once(':') {
         Some((_, local)) => local.to_string(),
-        None => text.into_owned(),
+        None => raw.to_string(),
     }
 }
 

@@ -1,4 +1,5 @@
 import type {
+  ErrorCodeOutcome,
   ErrorCodeSpan,
   LogEntry,
   LogFormat,
@@ -80,6 +81,11 @@ const PARSER_SPECIALIZATIONS = new Set([
   "intuneDeviceInventoryRotationFailure",
 ]);
 const ENTRY_KINDS = new Set(["Log", "Section", "Iteration", "Header"]);
+const ERROR_CODE_OUTCOMES = new Set<ErrorCodeOutcome>([
+  "failure",
+  "success",
+  "successRequiresAction",
+]);
 const OPTIONAL_NULLABLE_STRING_FIELDS = [
   "ipAddress",
   "hostName",
@@ -154,7 +160,10 @@ function isErrorCodeSpan(
     typeof value.codeHex === "string" &&
     typeof value.codeDecimal === "string" &&
     typeof value.description === "string" &&
-    typeof value.category === "string"
+    typeof value.category === "string" &&
+    // The outcome decides whether a span is counted as a finding, so a payload
+    // that omits it or invents a value must not reach the table as a success.
+    ERROR_CODE_OUTCOMES.has(value.outcome as ErrorCodeOutcome)
   );
 }
 

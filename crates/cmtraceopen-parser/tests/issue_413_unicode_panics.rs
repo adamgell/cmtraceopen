@@ -110,7 +110,7 @@ fn cmtlog_parser_preserves_invalid_digits_and_valid_unicode_payload() {
 
 fn reporting_events_line(timestamp: &str, detail: &str) -> String {
     format!(
-        "{{11111111-1111-1111-1111-111111111111}}\t{timestamp}\t1\tSoftware Update\t1\t{{22222222-2222-2222-2222-222222222222}}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\t{detail}"
+        "{{11111111-1111-1111-1111-111111111111}}\t{timestamp}\t1\t183\t[AGENT_INSTALLING_SUCCEEDED]\t101\t{{22222222-2222-2222-2222-222222222222}}\t1\t0\tWindows Update Agent\tSuccess\tContent Install\t{detail}\tAAAAAAAAAAAAAAAA.1.0.0.3.0"
     )
 }
 
