@@ -2,6 +2,7 @@ use crate::dsregcmd::models::{
     DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdFacts, DsregcmdJoinType,
 };
 use crate::intune::models::IntuneDiagnosticSeverity;
+use chrono::{DateTime, Utc};
 
 use super::derive::{
     aggregated_error_text, contains_aadsts_code, contains_text, contains_win32_code, derive_facts,
@@ -23,8 +24,12 @@ pub use super::extended::{
 /// ([`analyze_text`](super::analyze_text) and
 /// [`analyze_text_with_evidence`](super::analyze_text_with_evidence)) call it and
 /// then project (ADR-004 revision 1, Ruling 1).
-pub(crate) fn analyze_facts(facts: DsregcmdFacts, raw_input: &str) -> DsregcmdAnalysisResult {
-    let derived = derive_facts(&facts, raw_input);
+pub(crate) fn analyze_facts(
+    facts: DsregcmdFacts,
+    raw_input: &str,
+    evaluated_at: DateTime<Utc>,
+) -> DsregcmdAnalysisResult {
+    let derived = derive_facts(&facts, raw_input, evaluated_at);
     let diagnostics = build_diagnostics(&facts, &derived);
 
     DsregcmdAnalysisResult {
@@ -1511,7 +1516,7 @@ mod tests {
     #[test]
     fn derives_join_type_and_high_value_flags() {
         let facts = parse_dsregcmd(HYBRID_SAMPLE).expect("parse hybrid sample");
-        let analysis = analyze_facts(facts, HYBRID_SAMPLE);
+        let analysis = analyze_facts(facts, HYBRID_SAMPLE, Utc::now());
 
         assert_eq!(
             analysis.derived.join_type,
@@ -1539,7 +1544,7 @@ mod tests {
     #[test]
     fn emits_expected_error_warning_and_info_rules() {
         let facts = parse_dsregcmd(HYBRID_SAMPLE).expect("parse hybrid sample");
-        let analysis = analyze_facts(facts, HYBRID_SAMPLE);
+        let analysis = analyze_facts(facts, HYBRID_SAMPLE, Utc::now());
         let ids: Vec<&str> = analysis
             .diagnostics
             .iter()
@@ -1576,7 +1581,7 @@ mod tests {
     #[test]
     fn emits_core_not_joined_rules() {
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse not joined sample");
-        let analysis = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let analysis = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
         let ids: Vec<&str> = analysis
             .diagnostics
             .iter()
@@ -1597,7 +1602,7 @@ mod tests {
     #[test]
     fn missing_mdm_urls_do_not_create_warnings_by_default() {
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse not joined sample");
-        let analysis = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let analysis = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
 
         assert_eq!(analysis.derived.mdm_enrolled, None);
         assert_eq!(analysis.derived.missing_mdm, None);
@@ -1633,7 +1638,7 @@ mod tests {
 "#;
 
         let facts = parse_dsregcmd(sample).expect("parse ngc sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
 
         assert!(analysis
             .diagnostics
@@ -1660,7 +1665,7 @@ mod tests {
 "#;
 
         let facts = parse_dsregcmd(sample).expect("parse ngc post join sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis
             .diagnostics
             .iter()
@@ -1674,7 +1679,7 @@ mod tests {
     #[test]
     fn emits_phase_aware_discovery_and_prt_code_diagnostics() {
         let facts = parse_dsregcmd(PHASE_AWARE_SAMPLE).expect("parse phase aware sample");
-        let analysis = analyze_facts(facts, PHASE_AWARE_SAMPLE);
+        let analysis = analyze_facts(facts, PHASE_AWARE_SAMPLE, Utc::now());
         let ids: Vec<&str> = analysis
             .diagnostics
             .iter()
@@ -1700,7 +1705,7 @@ mod tests {
     #[test]
     fn emits_remaining_adal_and_tpm_mappings() {
         let facts = parse_dsregcmd(ADAL_AND_TPM_SAMPLE).expect("parse adal and tpm sample");
-        let analysis = analyze_facts(facts, ADAL_AND_TPM_SAMPLE);
+        let analysis = analyze_facts(facts, ADAL_AND_TPM_SAMPLE, Utc::now());
         let ids: Vec<&str> = analysis
             .diagnostics
             .iter()
@@ -1727,13 +1732,19 @@ mod tests {
 
     #[test]
     fn derives_high_capture_confidence_for_recent_interactive_capture() {
-        let now = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        // One instant for both the fixture and the evaluation. Reading the clock
+        // twice let a pause of 16 minutes cross the 15-minute High threshold and
+        // fail the assertion; a literal makes the test a function of its input.
+        let evaluated_at = chrono::DateTime::parse_from_rfc3339("2026-03-10T10:30:00.000Z")
+            .expect("valid instant")
+            .with_timezone(&Utc);
+        let now = evaluated_at.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
         let sample = format!(
             "\n AzureAdJoined : YES\n DomainJoined : YES\n AzureAdPrt : YES\n AzureAdPrtUpdateTime : {now}\n Client Time : {now}\n User Context : UN-ELEVATED User\n SessionIsNotRemote : YES\n"
         );
 
         let facts = parse_dsregcmd(&sample).expect("parse high confidence sample");
-        let analysis = analyze_facts(facts, &sample);
+        let analysis = analyze_facts(facts, &sample, evaluated_at);
 
         assert_eq!(
             analysis.derived.capture_confidence,
@@ -1754,7 +1765,7 @@ mod tests {
 "#;
 
         let facts = parse_dsregcmd(sample).expect("parse low confidence sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
 
         assert_eq!(
             analysis.derived.capture_confidence,
@@ -1772,7 +1783,7 @@ mod tests {
  User Identity : Administrator
 "#;
         let facts = parse_dsregcmd(sample).expect("parse admin sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1797,7 +1808,7 @@ mod tests {
  User Identity : S-1-5-21-3623811015-3361044348-30300820-500
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sid admin sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1816,7 +1827,7 @@ mod tests {
  User Identity : Administrator
 "#;
         let facts = parse_dsregcmd(sample).expect("parse joined admin sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1836,7 +1847,7 @@ mod tests {
  AD Configuration Test : PASSED
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sync pending sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1862,7 +1873,7 @@ mod tests {
  AD Configuration Test : PASSED
 "#;
         let facts = parse_dsregcmd(sample).expect("parse ad fail sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1881,7 +1892,7 @@ mod tests {
  Fallback to Sync-Join : ENABLED
 "#;
         let facts = parse_dsregcmd(sample).expect("parse fallback sync sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1906,7 +1917,7 @@ mod tests {
  DRS Discovery Test : FAIL [0x801c0021]
 "#;
         let facts = parse_dsregcmd(sample).expect("parse scp verify sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1931,7 +1942,7 @@ mod tests {
  DRS Discovery Test : FAIL [0x801c0021]
 "#;
         let facts = parse_dsregcmd(sample).expect("parse scp non-domain sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let ids: Vec<&str> = analysis.diagnostics.iter().map(|i| i.id.as_str()).collect();
 
         assert!(
@@ -1948,7 +1959,7 @@ mod tests {
         };
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
 
         result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
             enrollment_count: 1,
@@ -1984,7 +1995,7 @@ mod tests {
         };
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
 
         // Enrollment state=1 but GUID doesn't match any scheduled task
         result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
@@ -2028,7 +2039,7 @@ mod tests {
         };
 
         let facts = parse_dsregcmd(JOINED_NO_MDM_URLS_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, JOINED_NO_MDM_URLS_SAMPLE);
+        let mut result = analyze_facts(facts, JOINED_NO_MDM_URLS_SAMPLE, Utc::now());
 
         // enrollment_count is 0 in registry evidence, but scheduled tasks have matching GUIDs
         result.enrollment_evidence = Some(DsregcmdEnrollmentEvidence {
@@ -2071,7 +2082,7 @@ mod tests {
         use crate::dsregcmd::models::{DsregcmdActiveEvidence, DsregcmdScpQueryResult};
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
         result.facts.join_state.domain_joined = Some(true);
         result.active_evidence = Some(DsregcmdActiveEvidence {
             connectivity_tests: Vec::new(),
@@ -2097,7 +2108,7 @@ mod tests {
         use crate::dsregcmd::models::{DsregcmdActiveEvidence, DsregcmdScpQueryResult};
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
         result.facts.join_state.domain_joined = Some(true);
         result.active_evidence = Some(DsregcmdActiveEvidence {
             connectivity_tests: Vec::new(),
@@ -2127,7 +2138,7 @@ mod tests {
  AzureAdPrtUpdateTime : 2025-03-10 05:00:00.000 UTC
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
 
         assert_eq!(analysis.derived.prt_age_hours, None);
         assert_eq!(analysis.derived.stale_prt, None);
@@ -2143,7 +2154,7 @@ mod tests {
  Server ErrorCode : 0x80071312
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             !analysis
                 .diagnostics
@@ -2162,7 +2173,7 @@ mod tests {
  Server ErrorCode : 1312
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2186,7 +2197,7 @@ mod tests {
  Server ErrorCode : 1317
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         let issue = analysis
             .diagnostics
             .iter()
@@ -2215,7 +2226,7 @@ mod tests {
  Server ErrorCode : 1355
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2234,7 +2245,7 @@ mod tests {
  Server ErrorCode : [1312]
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2252,7 +2263,7 @@ mod tests {
  Server ErrorCode : 0x00000520
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2270,7 +2281,7 @@ mod tests {
  Server ErrorCode : 0x801c0021/1312
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2289,7 +2300,7 @@ mod tests {
  Server Message : ERROR_1312 occurred
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             !analysis
                 .diagnostics
@@ -2308,7 +2319,7 @@ mod tests {
  AD Connectivity Test : FAIL [0xcaa90017]
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2327,7 +2338,7 @@ mod tests {
  DeviceCertificateValidity : [ 2025-03-01 00:00:00.000 UTC -- ]
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert_eq!(analysis.derived.certificate_valid_from, None);
         assert_eq!(analysis.derived.certificate_valid_to, None);
     }
@@ -2341,7 +2352,7 @@ mod tests {
  Server Message : AADSTS50126 Invalid username or password
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert!(
             analysis
                 .diagnostics
@@ -2365,7 +2376,7 @@ mod tests {
  Server Error Description : AADSTS501260
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
 
         assert!(
             !analysis
@@ -2392,7 +2403,7 @@ mod tests {
  Server Error Description : Error(AADSTS50126): invalid username or password.
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
 
         assert!(
             analysis
@@ -2417,7 +2428,7 @@ mod tests {
         };
 
         let facts = parse_dsregcmd(NOT_JOINED_SAMPLE).expect("parse sample");
-        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE);
+        let mut result = analyze_facts(facts, NOT_JOINED_SAMPLE, Utc::now());
         result.event_log_analysis = Some(EventLogAnalysis {
             source_kind: EventLogAnalysisSource::Bundle,
             entries: vec![EventLogEntry {
@@ -2460,7 +2471,7 @@ mod tests {
  Attempt Status : 0xc000006d
 "#;
         let facts = parse_dsregcmd(sample).expect("parse sample");
-        let analysis = analyze_facts(facts, sample);
+        let analysis = analyze_facts(facts, sample, Utc::now());
         assert_eq!(
             analysis.derived.dominant_phase,
             DsregcmdDiagnosticPhase::Discover

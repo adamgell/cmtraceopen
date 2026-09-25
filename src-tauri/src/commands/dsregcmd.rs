@@ -84,7 +84,7 @@ fn analyze_dsregcmd_blocking(
     // (issue #627).
     let evidence = bundle_path.map(load_bundle_evidence).unwrap_or_default();
 
-    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence)?;
+    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence, chrono::Utc::now())?;
 
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
