@@ -19,18 +19,18 @@ CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all
 
 | You need… | Look here (codebase) | Mirrored in this DS |
 |---|---|---|
-| Theme objects, brand ramps | `src/lib/themes/*` | `02-color-themes.html`, `tokens.css` |
-| Semantic color tokens | `src/lib/themes/*-theme.ts` | `03-color-tokens.html`, `tokens.css` |
-| Type ramp & families | `src/lib/themes/typography.ts` | `04-typography.html` |
-| Log row metrics | `src/lib/log-accessibility.ts` (`getLogListMetrics()`) | `04-typography.html`, `09-components-log-grid.html` |
-| Spacing / radius / shadow | `src/lib/themes/tokens.css` | `05-spacing-radius-shadow.html` |
-| Motion durations & curves | *(no such file found on 2026-09-24 — this row needs re-pointing)* | `06-motion.html` |
-| Icons | `@fluentui/react-icons` | `07-iconography.html` |
-| Buttons, inputs, badges | `src/components/ui/*` | `08-components-buttons-inputs.html` |
-| Log row, gutter, markers | `src/components/log-view/LogRow.tsx` (the gutter is a slot in the row, not a separate component) | `09-components-log-grid.html` |
-| Toolbar, tabs, status bar | `src/components/chrome/*` | `10-components-chrome.html` |
-| Dialogs, settings, find | `src/components/dialogs/*` | `11-components-dialogs.html` |
-| Full app reference | `src/App.tsx` | `ui-kit.html` |
+| Theme objects, brand ramps | `src/lib/themes/*` | `tokens.css` |
+| Semantic color tokens | `src/lib/themes/*-theme.ts` | `tokens.css` |
+| Type ramp & families | `src/lib/themes/typography.ts` | `tokens.css` |
+| Log row metrics | `src/lib/log-accessibility.ts` (`getLogListMetrics()`) | — |
+| Spacing / radius / shadow | `src/lib/themes/tokens.css` | `tokens.css` |
+| Motion durations & curves | `src/lib/themes/shared-overrides.ts` (the complete set; `tokens.css` carries only a partial motion mirror) | `tokens.css` (partial) |
+| Icons | `@fluentui/react-icons` | — |
+| Buttons, inputs, badges | `src/components/ui/*` | — |
+| Log row, gutter, markers | `src/components/log-view/LogRow.tsx` (the gutter is a slot in the row, not a separate component) | — |
+| Toolbar, tabs, status bar | `src/components/chrome/*` | — |
+| Dialogs, settings, find | `src/components/dialogs/*` | — |
+| Full app reference | `src/App.tsx` | — |
 
 ---
 
