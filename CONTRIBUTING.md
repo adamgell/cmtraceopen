@@ -75,6 +75,21 @@ Three more jobs run on every PR but are not required to merge:
 
 The Windows jobs are also the only place `#[cfg(target_os = "windows")]` code is compiled. `cargo check` and `cargo test` on Linux or macOS skip it entirely, tests included, and pass without reading a line of it. A change under that gate is therefore verified by CI alone until the Windows jobs run, and it is worth saying so in the pull request rather than implying local coverage. Two compile errors in one pull request reached CI that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
 
+## Before you push
+
+Every required check has a local equivalent, and running them here is faster than reading about them in CI output:
+
+```bash
+cargo fmt --all -- --check                                  # Source Quality, the formatting half
+cd src-tauri && cargo check && cargo test                   # Check & Test (Rust)
+cd src-tauri && cargo clippy --all-targets -- -D warnings
+cargo test -p cmtraceopen-parser                            # the parser crate's own suite
+npx tsc --noEmit                                            # TypeScript Check
+npm run test                                                # the vitest suite
+```
+
+`cargo fmt --all -- --check` is the one most easily missed. A hand-wrapped expression that compiles and passes every test it touches still fails `Source Quality`, and the fix is a single `cargo fmt --all`.
+
 ## Changelog
 
 Every user-visible change gets an entry in `CHANGELOG.md` under `## [Unreleased]`, added in the
