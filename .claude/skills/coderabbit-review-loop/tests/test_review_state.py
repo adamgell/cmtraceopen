@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
+from collections.abc import Iterator
 from unittest.mock import patch
 
 
@@ -145,6 +148,43 @@ def review_thread(
             "nodes": list(comments),
         },
     }
+
+
+def coderabbit_review(
+    *,
+    state: str = "COMMENTED",
+    commit: str = "a" * 40,
+) -> dict[str, object]:
+    return {
+        "id": "review",
+        "state": state,
+        "body": "Review complete",
+        "submittedAt": "2026-08-08T12:00:00Z",
+        "author": {"login": "coderabbitai[bot]"},
+        "commit": {"oid": commit},
+    }
+
+
+ADVISORY_CODERABBIT_CONFIG = "reviews:\n  request_changes_workflow: false\n"
+BLOCKING_CODERABBIT_CONFIG = "reviews:\n  request_changes_workflow: true\n"
+
+
+@contextlib.contextmanager
+def coderabbit_config(text: str | None) -> Iterator[None]:
+    """Run inside a directory whose .coderabbit.yaml holds `text`.
+
+    `reviews_are_advisory` reads that file from the working directory, so tests
+    that depend on the review mode need a stubbed file rather than whatever
+    configuration the invoking repository happens to carry.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        if text is not None:
+            (Path(directory) / ".coderabbit.yaml").write_text(
+                text,
+                encoding="utf-8",
+            )
+        with contextlib.chdir(directory):
+            yield
 
 
 class ReviewTransportTests(unittest.TestCase):
@@ -344,6 +384,87 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
 
         self.assertTrue(summary["approved_at_head"])
+
+    def test_advisory_commented_review_at_head_clears_without_approval(
+        self,
+    ) -> None:
+        with coderabbit_config(ADVISORY_CODERABBIT_CONFIG), patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([coderabbit_review()]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertIs(summary["latest_coderabbit_review_at_head"], True)
+        self.assertIs(summary["reviews_are_advisory"], True)
+        self.assertIs(summary["approved_at_head"], False)
+        self.assertIs(summary["review_cleared"], True)
+
+    def test_advisory_commented_review_with_open_thread_does_not_clear(
+        self,
+    ) -> None:
+        coderabbit_comment = {
+            "id": "comment-1",
+            "body": "actionable finding",
+            "createdAt": "2026-08-08T12:01:00Z",
+            "author": {"login": "coderabbitai[bot]"},
+        }
+
+        with coderabbit_config(ADVISORY_CODERABBIT_CONFIG), patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response(
+                [coderabbit_review()],
+                threads=[review_thread(coderabbit_comment)],
+            ),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertIs(summary["reviews_are_advisory"], True)
+        self.assertEqual(1, summary["unresolved_coderabbit_thread_count"])
+        self.assertIs(summary["approved_at_head"], False)
+        self.assertIs(summary["review_cleared"], False)
+
+    def test_advisory_commented_review_behind_head_does_not_clear(self) -> None:
+        with coderabbit_config(ADVISORY_CODERABBIT_CONFIG), patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response(
+                [coderabbit_review(commit="b" * 40)],
+            ),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertIs(summary["latest_coderabbit_review_at_head"], False)
+        self.assertIs(summary["reviews_are_advisory"], True)
+        self.assertIs(summary["review_cleared"], False)
+
+    def test_blocking_coderabbit_config_still_requires_approval(self) -> None:
+        with coderabbit_config(BLOCKING_CODERABBIT_CONFIG), patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([coderabbit_review()]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertIs(summary["latest_coderabbit_review_at_head"], True)
+        self.assertIs(summary["reviews_are_advisory"], False)
+        self.assertIs(summary["approved_at_head"], False)
+        self.assertIs(summary["review_cleared"], False)
+
+    def test_blocking_coderabbit_config_clears_on_head_approval(self) -> None:
+        with coderabbit_config(BLOCKING_CODERABBIT_CONFIG), patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response(
+                [coderabbit_review(state="APPROVED")],
+            ),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertIs(summary["reviews_are_advisory"], False)
+        self.assertIs(summary["approved_at_head"], True)
+        self.assertIs(summary["review_cleared"], True)
 
     def test_spoofed_coderabbit_login_cannot_override_real_bot_review(self) -> None:
         real_review = {
@@ -986,6 +1107,26 @@ class CodeRabbitReviewSummaryTests(unittest.TestCase):
             0,
             result["summary"]["unresolved_coderabbit_thread_count"],
         )
+
+
+class CodeRabbitAdvisoryModeTests(unittest.TestCase):
+    def test_request_changes_workflow_selects_advisory_mode(self) -> None:
+        cases = (
+            ("request_changes_workflow: false\n", True),
+            ("request_changes_workflow: off\n", True),
+            ("reviews:\n  request_changes_workflow: no\n", True),
+            ("request_changes_workflow: false  # advisory\n", True),
+            ("request_changes_workflow: true\n", False),
+            ("# request_changes_workflow: false\n", False),
+            ("reviews:\n  profile: assertive\n", False),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text), coderabbit_config(text):
+                self.assertIs(review_state.reviews_are_advisory(), expected)
+
+    def test_missing_coderabbit_config_stays_blocking(self) -> None:
+        with coderabbit_config(None):
+            self.assertIs(review_state.reviews_are_advisory(), False)
 
 
 class ProvenanceTests(unittest.TestCase):

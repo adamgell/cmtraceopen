@@ -648,7 +648,10 @@ def _validate_coderabbit_raw_verdict(
             "unresolved_coderabbit_thread_count",
             "latest_coderabbit_review",
             "latest_coderabbit_review_state",
+            "latest_coderabbit_review_at_head",
+            "reviews_are_advisory",
             "approved_at_head",
+            "review_cleared",
         },
         f"{label}.summary",
     )
@@ -659,8 +662,18 @@ def _validate_coderabbit_raw_verdict(
         "unresolved_coderabbit_thread_count",
     ):
         _require_int(summary[field], f"{label}.summary.{field}")
-    if summary["approved_at_head"] is not True:
-        _fail(f"{label} must report approved_at_head true")
+    for field in (
+        "latest_coderabbit_review_at_head",
+        "reviews_are_advisory",
+        "approved_at_head",
+        "review_cleared",
+    ):
+        if not isinstance(summary[field], bool):
+            _fail(f"{label}.summary.{field} must be a boolean")
+    if summary["approved_at_head"] and not summary["review_cleared"]:
+        _fail(f"{label} reported an inconsistent CodeRabbit verdict")
+    if summary["review_cleared"] is not True:
+        _fail(f"{label} must report review_cleared true")
     if summary["unresolved_coderabbit_thread_count"] != 0:
         _fail(f"{label} must report zero actionable CodeRabbit threads")
 
@@ -674,16 +687,24 @@ def _validate_coderabbit_raw_verdict(
     )
     author = latest["author"]
     commit = latest["commit"]
+    # Advisory reviews arrive as COMMENTED and never become APPROVED, so the
+    # approved state is required only while the request-changes workflow is on.
+    allowed_states = (
+        {"APPROVED", "COMMENTED"}
+        if summary["reviews_are_advisory"]
+        else {"APPROVED"}
+    )
     if (
-        latest["state"] != "APPROVED"
-        or summary["latest_coderabbit_review_state"] != "APPROVED"
+        latest["state"] != summary["latest_coderabbit_review_state"]
+        or latest["state"] not in allowed_states
+        or summary["latest_coderabbit_review_at_head"] is not True
         or not isinstance(author, dict)
         or not _is_coderabbit_login(author.get("login"))
         or not isinstance(commit, dict)
         or commit.get("oid") != artifact["headSha"]
         or not latest["submittedAt"]
     ):
-        _fail(f"{label} latest CodeRabbit review is not approved at head")
+        _fail(f"{label} latest CodeRabbit review does not clear the head")
 
     reviews = raw["reviews"]
     threads = raw["unresolved_threads"]
