@@ -286,23 +286,30 @@ fn every_fixture_file_is_labeled_with_the_rotation_it_came_from() {
 }
 
 #[test]
-fn firewall_warning_is_the_only_warning_record() {
-    let expected = expected("firewall-warning-state-message");
-    let file = &expected.files[0];
-    let content = read_fixture(
-        &fixture_root()
-            .join("firewall-warning-state-message")
-            .join(&file.name),
-    );
-    let (result, _) = parse_content(&content, &file.name, 0);
-    let warnings = result
-        .entries
+fn firewall_warning_is_the_only_warning_type() {
+    let mut warnings = Vec::new();
+    for id in fixture_dirs() {
+        for file in expected(&id).files {
+            let content = read_fixture(&fixture_root().join(&id).join(&file.name));
+            let (result, _) = parse_content(&content, &file.name, 0);
+            warnings.extend(
+                result
+                    .entries
+                    .into_iter()
+                    .filter(|entry| entry.severity == Severity::Warning)
+                    .map(|entry| (id.clone(), entry.message)),
+            );
+        }
+    }
+    assert!(warnings
         .iter()
-        .filter(|entry| entry.severity == Severity::Warning)
-        .map(|entry| entry.message.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].starts_with("WARNING: Notification Server"));
+        .any(|(id, _)| id == "firewall-warning-state-message"));
+    for (id, message) in &warnings {
+        assert!(
+            message.starts_with("WARNING: Notification Server"),
+            "{id}: unexpected warning {message:?}"
+        );
+    }
 }
 
 #[test]

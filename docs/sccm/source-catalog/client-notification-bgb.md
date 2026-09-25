@@ -40,7 +40,7 @@ Current discovery does not read the `NotificationServer` key, so it never report
 - Each physical line is one record. No multi-line records were observed.
 - The trailing `~~` stays in the message text, because the Simple parser trims only whitespace.
 - The timestamp is local time with a signed bias in minutes (`+240` in the lab). The parser applies the bias; timestamps are ordered within each file.
-- Severity comes only from message text, as the Simple parser does for every source. In the fixtures the firewall `WARNING:` record is the only warning.
+- Severity comes only from message text, as the Simple parser does for every source. In the fixtures, the firewall `WARNING:` message is the only warning type observed.
 
 ## Rotation and minimum bundle
 
