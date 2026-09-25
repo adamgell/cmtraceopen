@@ -250,9 +250,7 @@ fn is_known_named_value_name(name: &str) -> bool {
             // The suffix is the positional number, so it has to be there: the
             // bare prefix is not a form Windows emits, and `all()` over an empty
             // rest would accept it.
-            !rest.is_empty()
-                && rest.len() <= 3
-                && rest.bytes().all(|byte| byte.is_ascii_digit())
+            !rest.is_empty() && rest.len() <= 3 && rest.bytes().all(|byte| byte.is_ascii_digit())
         })
     }) {
         return true;
