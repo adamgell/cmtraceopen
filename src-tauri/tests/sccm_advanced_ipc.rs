@@ -10,7 +10,7 @@ use app_lib::sccm::SccmRole;
 fn environment() -> PrivateSccmEnvironment {
     PrivateSccmEnvironment {
         supported: true,
-        configmgr_version: Some("5.00.9141.1000".to_owned()),
+        site_version: Some("5.00.9141.1000".to_owned()),
         roles: vec![SccmDetectedRole {
             role: SccmRole::SiteServer,
             basis: SccmDiscoveryBasis::Registry,

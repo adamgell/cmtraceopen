@@ -215,7 +215,7 @@ impl SccmAdvancedCapabilityStore {
             .ok_or(SccmCollectorError::AdvancedAuthorizationRejected)?;
         let canonical_root = validate_selected_root(&request.selected_root)?;
         if request.expected_source_version.is_some()
-            && request.expected_source_version != environment.configmgr_version
+            && request.expected_source_version != environment.site_version
         {
             return Err(SccmCollectorError::AdvancedAuthorizationRejected);
         }
@@ -240,7 +240,7 @@ impl SccmAdvancedCapabilityStore {
         let source_version = observed
             .then(|| observed_fact.and_then(|fact| fact.source_version.clone()))
             .flatten()
-            .or_else(|| environment.configmgr_version.clone());
+            .or_else(|| environment.site_version.clone());
         let identity = format!(
             "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
             contract.card_id,
@@ -362,7 +362,7 @@ pub fn advanced_source_options(
                     .iter()
                     .map(|value| (*value).to_owned())
                     .collect(),
-                source_version: environment.configmgr_version.clone(),
+                source_version: environment.site_version.clone(),
                 availability,
                 max_bytes: ADVANCED_CAPTURE_BYTE_LIMIT,
                 max_files: ADVANCED_CAPTURE_FILE_LIMIT,

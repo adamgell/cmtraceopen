@@ -45,6 +45,7 @@ export type SccmSourceDetailCode =
 export type SccmDiscoveryIssueCode =
   | "unsupportedPlatform"
   | "registryAccessDenied"
+  | "versionUnavailable"
   | "cimAccessDenied"
   | "discoveryFailed";
 
@@ -69,7 +70,10 @@ export interface SccmDiscoveryIssue {
 
 export interface SccmEnvironmentDiscovery {
   supported: boolean;
+  /** Client version from SMS\Mobile Client (SmsClientVersion). */
   configmgrVersion: string | null;
+  /** Site server version from SMS\Setup. */
+  siteVersion: string | null;
   roles: SccmDetectedRole[];
   sources: SccmSourceStatus[];
   issues: SccmDiscoveryIssue[];

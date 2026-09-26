@@ -70,6 +70,25 @@ fn public_result_excludes_private_discovery_sentinels() {
 }
 
 #[test]
+fn discovery_carries_client_and_site_versions_to_the_public_shape() {
+    let mut provider = provider(SccmRole::SiteServer, []);
+    provider.environment.configmgr_version = Some("5.00.9128.1000".to_owned());
+    provider.environment.site_version = Some("5.00.9141.1000".to_owned());
+
+    let discovery = discover_environment_with(&provider).unwrap();
+
+    assert_eq!(
+        discovery.configmgr_version.as_deref(),
+        Some("5.00.9128.1000")
+    );
+    assert_eq!(discovery.site_version.as_deref(), Some("5.00.9141.1000"));
+    assert!(discovery
+        .advanced_sources
+        .iter()
+        .all(|option| option.source_version.as_deref() == Some("5.00.9141.1000")));
+}
+
+#[test]
 fn discovery_roles_issues_and_order_are_deterministic() {
     let root = tempfile::tempdir().unwrap();
     let mut provider = provider(

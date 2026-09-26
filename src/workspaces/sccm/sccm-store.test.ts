@@ -5,6 +5,7 @@ import type { SccmEnvironmentDiscovery } from "./types";
 const discovery: SccmEnvironmentDiscovery = {
   supported: true,
   configmgrVersion: null,
+  siteVersion: null,
   roles: [{ role: "client", basis: "registry" }],
   sources: [],
   issues: [],
