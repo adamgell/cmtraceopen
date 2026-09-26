@@ -182,10 +182,12 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
         setup_key_fact(&client_key),
         setup_key_fact(&site_server_key),
     );
-    let client_version = hklm
-        .open_subkey(CLIENT_VERSION_KEY)
-        .and_then(|key| key.get_value::<String, _>(CLIENT_VERSION_VALUE))
-        .ok();
+    let client_version = hklm.open_subkey(CLIENT_VERSION_KEY).ok().and_then(|key| {
+        assigned_client_version(
+            key.get_value::<String, _>("AssignedSiteCode").ok(),
+            key.get_value::<String, _>(CLIENT_VERSION_VALUE).ok(),
+        )
+    });
     let site_version = site_server_key
         .as_ref()
         .ok()
@@ -310,6 +312,19 @@ fn apply_setup_key_facts(
             }),
         }
     }
+}
+
+/// The client build from `SMS\Mobile Client`, accepted only with a site
+/// assignment in the same key. A management point runs CcmExec without a
+/// client, so an unassigned value is not client-version evidence.
+#[cfg(any(test, target_os = "windows"))]
+fn assigned_client_version(
+    assigned_site_code: Option<String>,
+    sms_client_version: Option<String>,
+) -> Option<String> {
+    assigned_site_code
+        .filter(|code| !code.trim().is_empty())
+        .and(sms_client_version)
 }
 
 /// Attaches the client version (`SMS\Mobile Client` `SmsClientVersion`) and the
@@ -1168,6 +1183,25 @@ mod tests {
                 role: Some(SccmRole::Client),
             }]
         );
+    }
+
+    #[test]
+    fn client_version_requires_a_client_site_assignment() {
+        // A management point runs CcmExec without a client; only an assigned
+        // client's SmsClientVersion counts as client-version evidence.
+        assert_eq!(
+            assigned_client_version(Some("PS1".to_owned()), Some("5.00.9141.1011".to_owned())),
+            Some("5.00.9141.1011".to_owned())
+        );
+        assert_eq!(
+            assigned_client_version(None, Some("5.00.9141.1011".to_owned())),
+            None
+        );
+        assert_eq!(
+            assigned_client_version(Some("  ".to_owned()), Some("5.00.9141.1011".to_owned())),
+            None
+        );
+        assert_eq!(assigned_client_version(Some("PS1".to_owned()), None), None);
     }
 
     #[test]
