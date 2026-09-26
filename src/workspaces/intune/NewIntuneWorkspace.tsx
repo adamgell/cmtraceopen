@@ -13,6 +13,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { getLogListMetrics } from "../../lib/log-accessibility";
+import { getWorkspace } from "../registry";
 import { useIntuneStore } from "./intune-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useAppActions } from "../../hooks/use-app-actions";
@@ -279,7 +280,7 @@ export function NewIntuneWorkspace() {
           <Card className={styles.emptyCard}>
             <div className={styles.heroTitleBlock}>
               <Badge appearance="filled" color="brand">
-                New Intune Workspace
+                {getWorkspace("new-intune").label}
               </Badge>
               <Title3 style={inheritFontSize}>Start from the signals, not the scrollback</Title3>
               <Body1 style={inheritFontSize}>
@@ -325,7 +326,7 @@ export function NewIntuneWorkspace() {
         <div className={styles.heroTop}>
           <div className={styles.heroTitleBlock}>
             <Badge appearance="filled" color="brand">
-              New Intune Workspace
+              {getWorkspace("new-intune").label}
             </Badge>
             <Title3 style={inheritFontSize}>
               Operational Triage for Intune Evidence

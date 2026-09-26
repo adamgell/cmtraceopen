@@ -1,6 +1,7 @@
 import { Badge, tokens } from "@fluentui/react-components";
 import { getBaseName } from "../../lib/file-paths";
 import { useUiStore } from "../../stores/ui-store";
+import { getWorkspace } from "../registry";
 import { useIntuneStore } from "./intune-store";
 import {
   EmptyState,
@@ -28,8 +29,13 @@ export function IntuneSidebar() {
   const intuneSelectedFilePath = intuneTimelineScope.filePath;
   const intuneRequestedPath = intuneAnalysisState.requestedPath;
   const hasIntuneResults = intuneSummary != null || intuneIncludedFiles.length > 0;
-  const workspaceTitle = activeView === "new-intune" ? "New Intune Workspace" : "Intune diagnostics workspace";
-  const workspaceBadge = activeView === "new-intune" ? "New Intune" : intuneEvidenceBundle ? "Intune Bundle" : "Intune";
+  const workspaceTitle = getWorkspace(activeView).label;
+  const workspaceBadge =
+    activeView === "new-intune"
+      ? getWorkspace(activeView).label
+      : intuneEvidenceBundle
+        ? "Intune Bundle"
+        : "Intune";
 
   return (
     <>
