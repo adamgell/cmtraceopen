@@ -161,10 +161,9 @@ fn wrapper_script() -> &'static str {
 
 /// The argument vector that launches the wrapper elevated.
 ///
-/// The paths are arguments, not text. `Start-Process -Verb RunAs` needs a
-/// command string, which is why the launcher is a file: this vector names it
-/// and hands it the paths, and the launcher passes them on as an argument
-/// array that PowerShell builds the child command line from.
+/// Rust preserves argv boundaries when starting the launcher with `-File`.
+/// The launcher then quotes these file paths for Start-Process's separate
+/// native command line; neither boundary treats them as PowerShell source.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn launch_args(
     launcher_path: &str,
@@ -199,64 +198,69 @@ fn launch_args(
 mod tests {
     use super::*;
 
-    /// `%TEMP%` contains the user name, so a user named `O'Brien` produces a
-    /// path with an apostrophe in it. Whatever carries that path to PowerShell,
-    /// an apostrophe must not be able to end the string that carries it.
-    const AWKWARD_PATH: &str = r"C:\Users\O'Brien\AppData\Local\Temp\script.ps1";
-
     #[test]
-    fn neither_script_carries_a_path_as_text() {
-        for script in [RUN_CAPTURED_SCRIPT, LAUNCH_ELEVATED_SCRIPT] {
-            assert!(
-                script.contains("param("),
-                "each script must take its paths as parameters"
-            );
-            assert!(
-                !script.contains(":\\"),
-                "a literal path must not appear in the script text"
-            );
-            assert!(!script.contains(AWKWARD_PATH));
+    #[cfg_attr(
+        not(target_os = "windows"),
+        ignore = "requires Windows PowerShell 5.1; run explicitly with pwsh for a local transport check"
+    )]
+    fn native_launch_preserves_paths_and_captures_a_failing_script() {
+        use std::fs;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("O'Brien space [literal] $value; & `data");
+        fs::create_dir(&directory).unwrap();
+        let launcher = directory.join("launch capture.ps1");
+        let harness = directory.join("transport harness.ps1");
+        let wrapper = directory.join("capture wrapper.ps1");
+        let script = directory.join("target script.ps1");
+        let stdout = directory.join("captured stdout.txt");
+        let stderr = directory.join("captured stderr.txt");
+        let exitcode = directory.join("captured exitcode.txt");
+
+        fs::write(&launcher, LAUNCH_ELEVATED_SCRIPT).unwrap();
+        fs::write(
+            &harness,
+            include_str!("scripts/tests/Invoke-TransportHarness.ps1"),
+        )
+        .unwrap();
+        fs::write(&wrapper, RUN_CAPTURED_SCRIPT).unwrap();
+        fs::write(
+            &script,
+            "Write-Output 'stdout preserved'\nWrite-Error 'stderr preserved' -ErrorAction Continue\nexit 23\n",
+        )
+        .unwrap();
+        // run_script reserves each capture file before starting PowerShell.
+        for capture in [&stdout, &stderr, &exitcode] {
+            fs::write(capture, "").unwrap();
         }
-    }
 
-    #[test]
-    fn an_awkward_path_is_delivered_as_one_argument() {
-        let args = launch_args(
-            AWKWARD_PATH,
-            AWKWARD_PATH,
-            AWKWARD_PATH,
-            "out",
-            "err",
-            "code",
-        );
+        let host = if cfg!(target_os = "windows") {
+            "powershell.exe"
+        } else {
+            "pwsh"
+        };
+        let output = std::process::Command::new(host)
+            .args(launch_args(
+                harness.to_str().unwrap(),
+                wrapper.to_str().unwrap(),
+                script.to_str().unwrap(),
+                stdout.to_str().unwrap(),
+                stderr.to_str().unwrap(),
+                exitcode.to_str().unwrap(),
+            ))
+            .env("CMTRACE_TEST_LAUNCHER", &launcher)
+            .output()
+            .expect("PowerShell is required to verify the native argument boundary");
 
-        // The path arrives whole. Without this the assertion above could be
-        // satisfied by dropping the path rather than by carrying it safely.
-        assert_eq!(
-            args.iter().filter(|arg| *arg == AWKWARD_PATH).count(),
-            3,
-            "each path must be its own argument: {args:?}"
-        );
-
-        // Nothing was concatenated into a larger string: every element is a
-        // single value, so no element can be re-parsed as more than one.
         assert!(
-            args.iter().all(|arg| !arg.contains(' ')),
-            "no argument may hold more than one value: {args:?}"
+            output.status.success(),
+            "transport failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
-
-        // And the flags that carry a path are present rather than positional.
-        for flag in [
-            "-WrapperPath",
-            "-ScriptPath",
-            "-StdoutPath",
-            "-StderrPath",
-            "-ExitCodePath",
-        ] {
-            assert!(
-                args.iter().any(|arg| arg == flag),
-                "missing {flag}: {args:?}"
-            );
-        }
+        assert!(stdout.is_file());
+        assert!(stderr.is_file());
+        assert_eq!(fs::read_to_string(exitcode).unwrap(), "23");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("transport verified"));
     }
 }

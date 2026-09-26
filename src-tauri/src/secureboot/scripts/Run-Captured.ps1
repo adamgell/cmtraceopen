@@ -15,5 +15,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-& $ScriptPath *> $StdoutPath 2> $StderrPath
-$LASTEXITCODE | Out-File -FilePath $ExitCodePath -Encoding ascii -NoNewline
+# Redirection uses wildcard-aware paths, even when the value is a variable.
+# Escape those patterns so brackets and backticks name the actual capture files.
+$stdoutPattern = [System.Management.Automation.WildcardPattern]::Escape($StdoutPath)
+$stderrPattern = [System.Management.Automation.WildcardPattern]::Escape($StderrPath)
+& $ScriptPath *> $stdoutPattern 2> $stderrPattern
+$LASTEXITCODE | Out-File -LiteralPath $ExitCodePath -Encoding ascii -NoNewline

@@ -1,9 +1,8 @@
 # Launches the capture wrapper elevated and waits for it.
 #
-# The paths are passed straight through as an argument array. PowerShell builds
-# the child command line from the array, so an element is never re-parsed as
-# syntax and needs no quoting of its own - which is the whole reason this is a
-# separate script rather than a -Command string built by the caller.
+# Start-Process joins ArgumentList elements with spaces; it does not preserve
+# argv boundaries. Quote each value for the native command line, while keeping
+# paths out of PowerShell source by using -File and script parameters.
 param(
     [Parameter(Mandatory = $true)][string]$WrapperPath,
     [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -14,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+$childArguments = @(
     '-NoProfile',
     '-ExecutionPolicy', 'Bypass',
     '-File', $WrapperPath,
@@ -22,4 +21,9 @@ Start-Process -FilePath 'powershell.exe' -ArgumentList @(
     '-StdoutPath', $StdoutPath,
     '-StderrPath', $StderrPath,
     '-ExitCodePath', $ExitCodePath
-) -Verb RunAs -WindowStyle Hidden -Wait
+) | ForEach-Object { '"{0}"' -f $_ }
+
+# These are app-created file paths: Windows filenames cannot contain a double
+# quote, and each path ends in a filename rather than a trailing backslash.
+Start-Process -FilePath 'powershell.exe' -ArgumentList ($childArguments -join ' ') `
+    -Verb RunAs -WindowStyle Hidden -Wait
