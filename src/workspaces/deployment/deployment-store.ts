@@ -37,6 +37,11 @@ export interface DeploymentAnalysisResult {
   failed: number;
   deferred: number;
   unknown: number;
+  /**
+   * Bounds the folder scan hit, so `totalFiles` is never read as the complete
+   * contents of the folder. Empty means the walk covered everything it could see.
+   */
+  limitations: string[];
 }
 
 export type DeploymentPhase =

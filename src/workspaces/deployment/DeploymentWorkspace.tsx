@@ -8,6 +8,46 @@ import { useLogStore } from "../../stores/log-store";
 import { DeploymentErrorCard } from "./DeploymentErrorCard";
 import { DeploymentSuccessTable } from "./DeploymentSuccessTable";
 
+function ScanLimitations({ limitations }: { limitations: string[] }) {
+  if (limitations.length === 0) return null;
+  return (
+    <div
+      style={{
+        padding: "8px 10px",
+        borderRadius: "4px",
+        backgroundColor: tokens.colorNeutralBackground3,
+        borderLeft: `3px solid ${tokens.colorPaletteDarkOrangeForeground1}`,
+      }}
+    >
+      <div
+        style={{
+          fontSize: "13px",
+          fontWeight: 600,
+          marginBottom: "4px",
+          color: tokens.colorPaletteDarkOrangeForeground1,
+        }}
+      >
+        Scan incomplete
+      </div>
+      <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground2 }}>
+        These counts cover the logs that were read, not every log in the folder.
+      </div>
+      <ul
+        style={{
+          margin: "4px 0 0",
+          paddingLeft: "18px",
+          fontSize: "12px",
+          color: tokens.colorNeutralForeground2,
+        }}
+      >
+        {limitations.map((limitation) => (
+          <li key={limitation}>{limitation}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function InventoryBar({
   files,
 }: {
@@ -210,11 +250,14 @@ export function DeploymentWorkspace() {
         }}
       >
         <div style={{ fontSize: "14px" }}>
-          No deployment logs found in this folder.
+          {(result?.limitations.length ?? 0) > 0
+            ? "No deployment logs were found in the paths that were scanned."
+            : "No deployment logs found in this folder."}
         </div>
         <div style={{ fontSize: "12px" }}>
           Expected PSADT, MSI verbose, WiX/Burn, or PatchMyPC logs.
         </div>
+        <ScanLimitations limitations={result?.limitations ?? []} />
       </div>
     );
   }
@@ -268,6 +311,8 @@ export function DeploymentWorkspace() {
         deferred={result.deferred}
         unknown={result.unknown}
       />
+
+      <ScanLimitations limitations={result.limitations} />
 
       {failedFiles.length > 0 && (
         <div>
