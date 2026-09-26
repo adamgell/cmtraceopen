@@ -554,7 +554,7 @@ function decodeDeploymentAnalysisResult(
   value: unknown,
   commandName: string,
 ): DeploymentAnalysisResult {
-  return decodeRecordResponse<DeploymentAnalysisResult>(value, commandName, {
+  const result = decodeRecordResponse<DeploymentAnalysisResult>(value, commandName, {
     folderPath: (field) => typeof field === "string",
     files: (field) => Array.isArray(field) && field.every(isDeploymentLogFile),
     totalFiles: isNonNegativeCommandCount,
@@ -564,6 +564,10 @@ function decodeDeploymentAnalysisResult(
     unknown: isNonNegativeCommandCount,
     limitations: isStringArray,
   });
+  if (result.totalFiles !== result.files.length) {
+    return invalidCommandResponse(commandName);
+  }
+  return result;
 }
 
 function isParserSelectionResponse(value: unknown): boolean {

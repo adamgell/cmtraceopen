@@ -97,6 +97,18 @@ describe("deployment analysis response boundary", () => {
     });
   });
 
+  it.each([0, 2])("rejects totalFiles %s when it contradicts the returned file list", async (totalFiles) => {
+    vi.mocked(invoke).mockResolvedValue({ ...result([file()]), totalFiles });
+
+    await useDeploymentStore.getState().analyzeFolder(result().folderPath);
+
+    expect(useDeploymentStore.getState()).toMatchObject({
+      phase: "error",
+      result: null,
+      errorMessage: "Command 'analyze_deployment_folder' returned an invalid response.",
+    });
+  });
+
   it.each<DeploymentLogFile["format"]>([
     "psadt-cmtrace", "psadt-legacy", "msi-verbose", "psadt-wrapper",
     "burn", "patchmypc", "unknown",
