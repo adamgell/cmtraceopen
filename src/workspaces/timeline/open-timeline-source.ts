@@ -1,4 +1,4 @@
-import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
+import { buildTimelineFromSources } from "../../components/timeline/hooks/buildTimelineFromSources";
 import { listLogFolder } from "../../lib/commands";
 import { useTimelineStore } from "../../stores/timeline-store";
 import type { FolderEntry, LogSource } from "../../types/log";
