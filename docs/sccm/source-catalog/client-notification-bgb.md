@@ -24,7 +24,7 @@ One lab primary site server, observed read-only on 2026-09-25:
 | Coverage window | About 7 days: the rotated file from 2026-09-18, the current file to 2026-09-25 | File contents |
 | Online clients | 2 (1 TCP, 1 HTTP) throughout | `Total online clients` records |
 | Client notification pushes | None in 7 days of passive history; one operator-initiated push (PushID 13) on 2026-09-25, approved by Adam | `BgbServer.log`, and the client's `CcmNotificationAgent.log` |
-| Paired client | The site server's own ConfigMgr client, version `5.00.9141.1011`, logging to `C:Program FilesSMS_CCMLogs` (co-located with the management point) | `SMSMobile Client` `SmsClientVersion`, console |
+| Paired client | The site server's own ConfigMgr client, version `5.00.9141.1011`, logging to `C:\Program Files\SMS_CCM\Logs` (co-located with the management point) | `HKLM\SOFTWARE\Microsoft\SMS\Mobile Client` value `SmsClientVersion`, and the console |
 
 Current discovery does not read the `NotificationServer` key, so it never reports a `clientNotificationServer` role. It also treats the co-located management point's root as a site-install fallback, so capture offers `BgbServer.log` only as an operator-declared candidate. Neither is changed here.
 
