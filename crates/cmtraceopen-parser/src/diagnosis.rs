@@ -2281,7 +2281,10 @@ pub fn summarize_cross_source(
             "Evidence contains symptoms or contributing signals but no confirmed failure.",
         )
     } else if !coverage_gaps.is_empty() {
-        ("insufficientEvidence", "No issues detected.")
+        (
+            "insufficientEvidence",
+            "Evidence is insufficient to determine whether issues are present.",
+        )
     } else {
         ("noFindings", "No issues detected.")
     };
@@ -2378,13 +2381,39 @@ mod tests {
     }
 
     #[test]
-    fn coverage_only_overview_uses_the_human_neutral_headline() {
+    fn coverage_only_overview_reports_insufficient_evidence() {
         let finding =
             super::finding_for_coverage("event", CoverageState::Skipped, "not available".into());
         let summary = super::summarize_cross_source(Vec::new(), vec![finding], Vec::new());
 
         assert_eq!(summary.overview.outcome, "insufficientEvidence");
-        assert_eq!(summary.overview.headline, "No issues detected.");
+        assert!(summary.overview.headline.contains("insufficient"));
+        assert!(!summary
+            .overview
+            .headline
+            .to_lowercase()
+            .contains("no issues"));
+    }
+
+    #[test]
+    fn neutral_summaries_match_the_rendered_contract() {
+        let finding =
+            super::finding_for_coverage("event", CoverageState::Skipped, "not available".into());
+        let incomplete = super::summarize_cross_source(Vec::new(), vec![finding], Vec::new());
+        let complete = super::summarize_cross_source(Vec::new(), Vec::new(), Vec::new());
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/diagnosis/neutral-summaries.json"
+        ))
+        .expect("the frontend diagnosis fixture is valid JSON");
+
+        assert_eq!(
+            serde_json::json!({
+                "insufficientEvidence": incomplete,
+                "noFindings": complete,
+            }),
+            expected,
+            "the rendered fixtures must carry the producer's actual headlines"
+        );
     }
 
     #[test]

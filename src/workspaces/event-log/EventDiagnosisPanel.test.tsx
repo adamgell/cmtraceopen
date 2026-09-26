@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { EventDiagnosisPanel } from "./EventDiagnosisPanel";
+import { OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type { DiagnosisCoverageGap, DiagnosisSummary } from "./types";
+import neutralSummaries from "../../../crates/cmtraceopen-parser/tests/fixtures/diagnosis/neutral-summaries.json";
 
 const coverageGap: DiagnosisCoverageGap = {
   id: "ime-gap",
@@ -174,24 +175,30 @@ describe("EventDiagnosisPanel", () => {
     expect(screen.getByText("Issues detected")).toBeTruthy();
   });
 
-  it.each(["noFindings", "insufficientEvidence"] as const)(
-    "labels the neutral %s outcome in human language",
-    (outcome) => {
+  // The parser's neutral_summaries_match_the_rendered_contract test verifies
+  // these serialized summaries against the real producer. Keep its headline:
+  // replacing it with neutral mock text hid a clean-result claim beside the gap
+  // badge even after the two badge labels became distinct.
+  it.each([
+    ["noFindings", "No issues found"],
+    ["insufficientEvidence", "Insufficient evidence"],
+  ] as const)(
+    "labels the %s outcome with its own wording",
+    (outcome, label) => {
       render(
         <EventDiagnosisPanel
-          summary={{
-            ...summary,
-            overview: {
-              ...summary.overview,
-              outcome,
-              headline: "No issues detected.",
-            },
-          }}
+          summary={neutralSummaries[outcome] as DiagnosisSummary}
         />,
       );
 
-      expect(screen.getByText("No issues detected")).toBeTruthy();
+      expect(screen.getByText(label)).toBeTruthy();
+      // The raw enum name is still not shown to a reader.
       expect(screen.queryByText(outcome)).toBeNull();
+      // The defect: a coverage gap rendered as the clean result's wording. A
+      // panel that cannot conclude must not read as a panel that concluded.
+      if (outcome === "insufficientEvidence") {
+        expect(screen.queryByText(/no issues/i)).toBeNull();
+      }
     },
   );
 
@@ -289,5 +296,24 @@ describe("EventDiagnosisPanel", () => {
     expect(
       screen.getByText("206 error-token event details omitted."),
     ).toBeTruthy();
+  });
+});
+
+describe("OUTCOME_LABELS", () => {
+  it("gives every diagnosis outcome its own wording", () => {
+    // A gap and a clean result must not read the same. insufficientEvidence
+    // means the analysis could not conclude; noFindings means it concluded
+    // nothing was wrong.
+    const labels = Object.values(OUTCOME_LABELS);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("does not report insufficient evidence as a clean result", () => {
+    expect(OUTCOME_LABELS.insufficientEvidence).not.toBe(
+      OUTCOME_LABELS.noFindings,
+    );
+    expect(OUTCOME_LABELS.insufficientEvidence.toLowerCase()).not.toContain(
+      "no issues",
+    );
   });
 });

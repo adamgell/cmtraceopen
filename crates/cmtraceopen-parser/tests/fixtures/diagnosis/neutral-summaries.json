@@ -1,0 +1,66 @@
+{
+  "insufficientEvidence": {
+    "correlations": [],
+    "coverageGaps": [
+      {
+        "detail": "not available",
+        "evidence": [],
+        "id": "coverage:event:Skipped:not available",
+        "source": "event",
+        "state": "skipped"
+      }
+    ],
+    "events": [],
+    "evidence": [],
+    "findings": [
+      {
+        "class": "coverageGap",
+        "confidence": "unknown",
+        "coverageGaps": [
+          {
+            "detail": "not available",
+            "evidence": [],
+            "id": "coverage:event:Skipped:not available",
+            "source": "event",
+            "state": "skipped"
+          }
+        ],
+        "evidence": [],
+        "findingId": "coverage-gap:event:not available",
+        "recommendedChecks": [
+          "Collect or grant access to the event evidence source."
+        ],
+        "severity": "info",
+        "summary": "not available",
+        "title": "event evidence coverage is incomplete"
+      }
+    ],
+    "overview": {
+      "actionableFindingCount": 0,
+      "correlationCount": 0,
+      "coverageGapCount": 1,
+      "errorTokenEventCount": 0,
+      "evidenceCount": 0,
+      "findingCount": 1,
+      "headline": "Evidence is insufficient to determine whether issues are present.",
+      "outcome": "insufficientEvidence"
+    }
+  },
+  "noFindings": {
+    "correlations": [],
+    "coverageGaps": [],
+    "events": [],
+    "evidence": [],
+    "findings": [],
+    "overview": {
+      "actionableFindingCount": 0,
+      "correlationCount": 0,
+      "coverageGapCount": 0,
+      "errorTokenEventCount": 0,
+      "evidenceCount": 0,
+      "findingCount": 0,
+      "headline": "No issues detected.",
+      "outcome": "noFindings"
+    }
+  }
+}
