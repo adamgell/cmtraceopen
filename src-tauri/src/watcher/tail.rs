@@ -13,6 +13,7 @@ use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 
 use crate::error_db::lookup::{detect_error_code_spans, ErrorCodeSpan};
+use crate::fs_identity::{file_identity, identities_differ, FileIdentity};
 use crate::models::log_entry::{
     LogEntry, ParseResult, ParserKind, ParserSpecialization, RecordFraming,
 };
@@ -202,6 +203,9 @@ struct InitialContinuationResult {
 pub struct TailReader {
     path: PathBuf,
     byte_offset: u64,
+    /// Identity of the file generation currently being tailed, so a replacement is
+    /// detected by what the file *is* rather than how large it is.
+    file_identity: Option<FileIdentity>,
     parser_selection: ResolvedParser,
     next_id: u64,
     next_line: u32,
@@ -286,6 +290,7 @@ impl TailReader {
         Self {
             path,
             byte_offset,
+            file_identity: None,
             parser_selection,
             next_id,
             next_line,
@@ -305,6 +310,18 @@ impl TailReader {
         }
     }
 
+    /// Seed the identity of the generation this reader is about to follow.
+    ///
+    /// The caller holds the identity of the file whose parsed bytes produced
+    /// `byte_offset`. Without it the first read cannot tell a replacement from an
+    /// append: an unknown identity is deliberately not treated as a change, and a
+    /// replacement larger than the offset also passes the size test. Called before
+    /// the first read, not after, because the window between construction and that
+    /// read is where a rotation lands in production.
+    pub fn seed_file_identity(&mut self, identity: Option<FileIdentity>) {
+        self.file_identity = identity;
+    }
+
     /// Read new content from the file since last read, parse into entries.
     /// Returns the new entries plus a `reset` flag and updates internal byte_offset.
     pub fn read_new_entries(&mut self) -> Result<TailBatch, crate::error::AppError> {
@@ -313,13 +330,23 @@ impl TailReader {
         let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
         let file_size = metadata.len();
 
-        // File was truncated (e.g. log rotation) — rewind to the beginning and
-        // signal a reset so the frontend replaces (not appends) its stale view.
-        // Line numbers restart at 1 to match the new file generation; ids stay
-        // monotonic so they remain unique across the reset.
+        // A rotation whose replacement is already larger than the offset held for the
+        // previous file is invisible to the size test below: the reader would seek to
+        // the old offset inside a *different* file, never read the new head, and could
+        // parse its first entry from the middle of a line. Identity sees it whatever
+        // the size. Recorded before any early return, so every read reports the
+        // generation it actually opened.
+        let current_identity = file_identity(&file, &metadata);
+        let replaced = identities_differ(self.file_identity, current_identity);
+        self.file_identity = current_identity;
+
+        // The file was replaced or truncated (e.g. log rotation) — rewind to the
+        // beginning and signal a reset so the frontend replaces (not appends) its
+        // stale view. Line numbers restart at 1 to match the new file generation;
+        // ids stay monotonic so they remain unique across the reset.
         let mut batch = TailBatch::empty(false);
         let mut reset = false;
-        if file_size < self.byte_offset {
+        if replaced || file_size < self.byte_offset {
             // Company Portal continuation state belongs to the replaced file
             // generation; discard it instead of publishing stale amendments or
             // stale-numbered records into the fresh view.
@@ -1440,18 +1467,35 @@ impl TailSession {
 /// Start watching a file for changes.
 /// Spawns a background thread that monitors the file and calls `on_new_entries`
 /// whenever new log entries appear.
+/// Where a tail session starts.
+///
+/// These travel together: they all describe the state the initial parse reached,
+/// including the identity of the file whose bytes produced `byte_offset`.
+pub struct TailStart {
+    pub byte_offset: u64,
+    pub parser_selection: ResolvedParser,
+    pub next_id: u64,
+    pub next_line: u32,
+    pub initial_logical_record: Option<InitialLogicalRecord>,
+    pub file_identity: Option<FileIdentity>,
+}
+
 pub fn start_tail_session<F>(
     path: PathBuf,
-    byte_offset: u64,
-    parser_selection: ResolvedParser,
-    next_id: u64,
-    next_line: u32,
-    initial_logical_record: Option<InitialLogicalRecord>,
+    start: TailStart,
     on_new_entries: F,
 ) -> Result<TailSession, crate::error::AppError>
 where
     F: Fn(TailBatch) + Send + 'static,
 {
+    let TailStart {
+        byte_offset,
+        parser_selection,
+        next_id,
+        next_line,
+        initial_logical_record,
+        file_identity,
+    } = start;
     let stop_flag = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
 
@@ -1471,6 +1515,9 @@ where
             ),
             None => TailReader::new(path, byte_offset, parser_selection, next_id, next_line),
         };
+        // Seed before the watcher starts: the first read is triggered by an event
+        // that can arrive long after construction.
+        tail_reader.seed_file_identity(file_identity);
 
         // Create a channel for notify events
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3730,6 +3777,64 @@ mod tests {
         // Line numbers restart at 1 for the new file generation; ids stay monotonic.
         assert_eq!(batch.entries[0].line_number, 1);
         assert_eq!(batch.entries[0].id, 3);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_detects_a_rotated_in_register_larger_than_the_previous_offset() {
+        let path = unique_test_path("tail-reader-rotation-larger");
+        let first_generation =
+            "15/01/2024 08:00:00 First entry\n15/01/2024 08:00:01 Second entry\n";
+        fs::write(&path, first_generation).expect("should write first generation");
+        let path_str = path.to_string_lossy().to_string();
+
+        // The production sequence, exactly: the parse captures the identity of the
+        // file whose bytes produced the offset, the reader is seeded with it, and
+        // only then does the watcher start. No read happens in between, because in
+        // production none does.
+        let (parsed, _selection, identity) = crate::parser::parse_file_identified(&path_str)
+            .expect("the initial parse must succeed");
+        let identity = identity.expect("the parse must report the identity it read");
+        let selection = ResolvedParser::generic_timestamped(DateOrder::DayFirst);
+        let mut reader = TailReader::new(path.clone(), parsed.byte_offset, selection, 2, 3);
+        reader.seed_file_identity(Some(identity));
+
+        // Rotate: the replacement arrives at a new inode and is already LARGER than
+        // the offset held for the old generation, so a size comparison cannot see it.
+        let replacement = concat!(
+            "16/01/2024 09:00:00 Rotated first\n",
+            "16/01/2024 09:00:01 Rotated second\n",
+            "16/01/2024 09:00:02 Rotated third\n",
+            "16/01/2024 09:00:03 Rotated fourth\n",
+            "16/01/2024 09:00:04 Rotated fifth\n",
+        );
+        assert!(
+            replacement.len() as u64 > parsed.byte_offset,
+            "the test needs the replacement to exceed the old offset"
+        );
+        let staging = unique_test_path("tail-reader-rotation-larger-staging");
+        fs::write(&staging, replacement).expect("should write replacement generation");
+        fs::rename(&staging, &path).expect("should rotate the replacement into place");
+
+        let batch = reader
+            .read_new_entries()
+            .expect("rotated tail read should succeed");
+        assert!(
+            batch.reset,
+            "a replacement file must signal a reset even when it is larger than the old offset"
+        );
+        // The head of the new generation must be read, not a slice from mid-file.
+        assert!(
+            !batch.entries.is_empty(),
+            "the replacement generation must be read from its start"
+        );
+        assert!(
+            batch.entries[0].message.contains("Rotated first"),
+            "the first entry must be the head of the new file, got {:?}",
+            batch.entries[0].message
+        );
+        assert_eq!(batch.entries[0].line_number, 1);
 
         fs::remove_file(path).expect("should clean up temp file");
     }

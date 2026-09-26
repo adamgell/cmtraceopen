@@ -23,6 +23,26 @@ use std::path::Path;
 /// `event-log` feature), then reads the file, decodes it, and delegates text
 /// parsing to `cmtraceopen_parser::parser::parse_content`.
 pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
+    parse_file_identified(path).map(|(result, selection, _)| (result, selection))
+}
+
+/// Parse a file and report the identity of the file that was read.
+///
+/// Tail reading needs this: the identity of the generation whose bytes produced
+/// `byte_offset` is the only thing that can tell a replacement from an append
+/// when the replacement is larger than that offset. It is `None` where it cannot
+/// come from the same read as the bytes (an EVTX goes through its own reader),
+/// and callers must treat `None` as unknown rather than as a replacement.
+pub fn parse_file_identified(
+    path: &str,
+) -> Result<
+    (
+        ParseResult,
+        ResolvedParser,
+        Option<crate::fs_identity::FileIdentity>,
+    ),
+    String,
+> {
     let path_obj = Path::new(path);
 
     // Binary file detection by extension — intercept before text decoding
@@ -51,7 +71,9 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
                 if dns_audit::is_dns_evtx(path_obj) {
                     let result = dns_audit::parse_evtx(path)?;
                     let selection = ResolvedParser::dns_audit();
-                    return Ok((result, selection));
+                    // The EVTX reader opens its own handle, so no identity is claimed
+                    // for it rather than one that might describe a later file.
+                    return Ok((result, selection, None));
                 }
                 return Err("This EVTX file does not contain DNS audit events. \
                      Try opening it in the Sysmon workspace instead."
@@ -64,16 +86,40 @@ pub fn parse_file(path: &str) -> Result<(ParseResult, ResolvedParser), String> {
         }
     }
 
-    let content = read_file_content(path)?;
-    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    Ok(cmtraceopen_parser::parser::parse_content(
-        &content, path, file_size,
-    ))
+    let (content, identity, file_size) = read_file_content_identified(path)?;
+    let (result, selection) = cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    Ok((result, selection, identity))
 }
 
 /// Read file content, handling BOM and encoding fallback.
 pub fn read_file_content(path: &str) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+    read_file_content_identified(path).map(|(content, _, _)| content)
+}
+
+/// Read file content together with the identity and length of the file that was
+/// read, all three taken from one handle.
+///
+/// Tail reading needs the identity of the generation whose bytes produced
+/// `byte_offset`. Taking it from a later `metadata(path)` call would describe
+/// whatever the path points at by then, which is the replacement the identity
+/// exists to notice.
+pub fn read_file_content_identified(
+    path: &str,
+) -> Result<(String, Option<crate::fs_identity::FileIdentity>, u64), String> {
+    use std::io::Read;
+
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+    let identity = crate::fs_identity::file_identity(&file, &metadata);
+    let file_size = metadata.len();
+
+    let mut bytes = Vec::with_capacity(file_size.min(8 * 1024 * 1024) as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+
     let encoding = detect_encoding(&bytes);
-    decode_bytes(&bytes, encoding)
+    Ok((decode_bytes(&bytes, encoding)?, identity, file_size))
 }

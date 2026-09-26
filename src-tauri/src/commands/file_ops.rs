@@ -160,7 +160,7 @@ pub fn open_log_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ParseResult, crate::error::AppError> {
-    let (result, parser_selection) = match parser::parse_file(&path) {
+    let (result, parser_selection, file_identity) = match parser::parse_file_identified(&path) {
         Ok(value) => value,
         Err(reason) => return Err(classify_open_failure(&path, reason)),
     };
@@ -179,6 +179,7 @@ pub fn open_log_file(
             parser_selection,
             initial_logical_record,
             byte_offset: result.byte_offset,
+            file_identity,
         },
     );
 
@@ -229,11 +230,17 @@ pub fn parse_files_batch(
     // Per-file failures are logged + emitted as progress inside the closure
     // (where `path` is in scope) so the UI's progress counter still advances
     // when files are skipped, and the warn log includes the offending path.
-    let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), crate::error::AppError>> = paths
+    type BatchParseOutcome = (
+        ParseResult,
+        crate::parser::ResolvedParser,
+        String,
+        Option<crate::fs_identity::FileIdentity>,
+    );
+    let results: Vec<Result<BatchParseOutcome, crate::error::AppError>> = paths
         .par_iter()
         .map(|path| {
             let file_start = std::time::Instant::now();
-            let parse_outcome = parser::parse_file(path);
+            let parse_outcome = parser::parse_file_identified(path);
             let file_ms = file_start.elapsed().as_millis() as u64;
 
             let done = completed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
@@ -243,7 +250,7 @@ pub fn parse_files_batch(
                 .unwrap_or_default();
 
             match parse_outcome {
-                Ok((result, parser_selection)) => {
+                Ok((result, parser_selection, file_identity)) => {
                     log::info!(
                         "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
                         result.entries.len(),
@@ -266,7 +273,7 @@ pub fn parse_files_batch(
                         },
                     );
 
-                    Ok((result, parser_selection, path.clone()))
+                    Ok((result, parser_selection, path.clone(), file_identity))
                 }
                 Err(error) => {
                     log::warn!(
@@ -312,7 +319,7 @@ pub fn parse_files_batch(
 
     for item in results {
         match item {
-            Ok((result, parser_selection, path)) => {
+            Ok((result, parser_selection, path, file_identity)) => {
                 let initial_logical_record =
                     InitialLogicalRecord::from_parse_result(&result, &parser_selection);
                 open_files.insert(
@@ -322,6 +329,7 @@ pub fn parse_files_batch(
                         parser_selection,
                         initial_logical_record,
                         byte_offset: result.byte_offset,
+                        file_identity,
                     },
                 );
                 parse_results.push(result);
@@ -378,21 +386,22 @@ fn open_log_folder_aggregate_impl(
     for entry in file_entries {
         // Skip files we can't read (permission denied, missing, etc.) so a
         // single inaccessible file doesn't abort the whole folder load.
-        let (result, parser_selection) = match parser::parse_file(&entry.path) {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!(
-                    "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
-                    entry.path
-                );
-                parse_child_errors.push(PathDiagnostic {
-                    path: entry.path.clone(),
-                    reason: error.to_string(),
-                });
-                parse_errors = parse_errors.saturating_add(1);
-                continue;
-            }
-        };
+        let (result, parser_selection, file_identity) =
+            match parser::parse_file_identified(&entry.path) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
+                        entry.path
+                    );
+                    parse_child_errors.push(PathDiagnostic {
+                        path: entry.path.clone(),
+                        reason: error.to_string(),
+                    });
+                    parse_errors = parse_errors.saturating_add(1);
+                    continue;
+                }
+            };
         let final_entry_line_number = result.entries.last().map(|entry| entry.line_number);
 
         total_lines = total_lines.saturating_add(result.total_lines);
@@ -412,6 +421,7 @@ fn open_log_folder_aggregate_impl(
             result.byte_offset,
             result.total_lines,
             final_entry_line_number,
+            file_identity,
         ));
     }
 
@@ -444,6 +454,7 @@ fn open_log_folder_aggregate_impl(
             byte_offset,
             file_total_lines,
             final_entry_line_number,
+            file_identity,
         ) in open_file_states
         {
             let initial_logical_record = if InitialLogicalRecord::supports_parser(&parser_selection)
@@ -467,6 +478,7 @@ fn open_log_folder_aggregate_impl(
                     parser_selection,
                     initial_logical_record,
                     byte_offset,
+                    file_identity,
                 },
             );
         }
