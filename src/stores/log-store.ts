@@ -61,7 +61,6 @@ export type SourceStatusKind =
   | "idle"
   | "loading"
   | "loaded"
-  | "auto-selected-file"
   | "awaiting-file-selection"
   | "empty"
   | "missing"
