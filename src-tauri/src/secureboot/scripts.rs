@@ -5,6 +5,17 @@ const DETECT_SCRIPT: &str = include_str!("scripts/Detect-SecureBootCertificateUp
 
 const REMEDIATE_SCRIPT: &str = include_str!("scripts/Remediate-SecureBootCertificateUpdate.ps1");
 
+/// The elevated child's wrapper: runs the requested script, captures its
+/// streams and exit code. Static, and parameterised, so no path is ever part
+/// of its text.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const RUN_CAPTURED_SCRIPT: &str = include_str!("scripts/Run-Captured.ps1");
+
+/// Launches the wrapper elevated. Separate from `run_script` so the paths
+/// travel as arguments rather than inside a `-Command` string.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const LAUNCH_ELEVATED_SCRIPT: &str = include_str!("scripts/Launch-Elevated.ps1");
+
 /// Run the Secure Boot certificate **detection** script.
 ///
 /// Windows-only. On non-Windows platforms returns `AppError::PlatformUnsupported`.
@@ -66,38 +77,42 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     // Write a small wrapper script that the elevated process will execute.
     // It runs the real script, redirects all streams (including Write-Host
     // via *>&1) to the stdout capture file, and writes the exit code.
-    let wrapper_content = format!(
-        "& '{script_path_str}' *> '{stdout_str}' 2> '{stderr_str}'\r\n\
-         $LASTEXITCODE | Out-File -FilePath '{exitcode_str}' -Encoding ascii -NoNewline\r\n",
-    );
-
     let mut wrapper_file = tempfile::Builder::new()
         .suffix("_wrapper.ps1")
         .tempfile()
         .map_err(AppError::Io)?;
 
     wrapper_file
-        .write_all(wrapper_content.as_bytes())
+        .write_all(wrapper_script().as_bytes())
         .map_err(AppError::Io)?;
 
     let wrapper_path = wrapper_file.into_temp_path();
     let wrapper_path_str = wrapper_path.to_string_lossy().to_string();
 
+    let mut launcher_file = tempfile::Builder::new()
+        .suffix("_launch.ps1")
+        .tempfile()
+        .map_err(AppError::Io)?;
+
+    launcher_file
+        .write_all(LAUNCH_ELEVATED_SCRIPT.as_bytes())
+        .map_err(AppError::Io)?;
+
+    let launcher_path = launcher_file.into_temp_path();
+    let launcher_path_str = launcher_path.to_string_lossy().to_string();
+
     // Launch the wrapper elevated via Start-Process -Verb RunAs.
     // This triggers the UAC prompt. The outer (non-elevated) PowerShell
     // blocks on -Wait until the elevated process exits.
     let _output = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &format!(
-                "Start-Process -FilePath 'powershell.exe' \
-                 -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{wrapper_path_str}' \
-                 -Verb RunAs -WindowStyle Hidden -Wait"
-            ),
-        ])
+        .args(launch_args(
+            &launcher_path_str,
+            &wrapper_path_str,
+            &script_path_str,
+            &stdout_str,
+            &stderr_str,
+            &exitcode_str,
+        ))
         .output()
         .map_err(AppError::Io)?;
 
@@ -115,6 +130,7 @@ fn run_script(script_content: &str) -> Result<ScriptExecutionResult, AppError> {
     drop(stderr_path);
     drop(exitcode_path);
     drop(wrapper_path);
+    drop(launcher_path);
 
     Ok(ScriptExecutionResult {
         exit_code,
@@ -128,4 +144,125 @@ fn run_script(_script_content: &str) -> Result<ScriptExecutionResult, AppError> 
     Err(AppError::PlatformUnsupported(
         "Secure Boot script execution requires Windows".to_string(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Command text
+// ---------------------------------------------------------------------------
+
+/// The wrapper script the elevated process runs.
+///
+/// Static text: every path arrives as a parameter, so nothing here can be
+/// turned into syntax by a path that contains a quote character.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn wrapper_script() -> &'static str {
+    RUN_CAPTURED_SCRIPT
+}
+
+/// The argument vector that launches the wrapper elevated.
+///
+/// Rust preserves argv boundaries when starting the launcher with `-File`.
+/// The launcher then quotes these file paths for Start-Process's separate
+/// native command line; neither boundary treats them as PowerShell source.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn launch_args(
+    launcher_path: &str,
+    wrapper_path: &str,
+    script_path: &str,
+    stdout_path: &str,
+    stderr_path: &str,
+    exitcode_path: &str,
+) -> Vec<String> {
+    [
+        ("-NoProfile", None),
+        ("-ExecutionPolicy", None),
+        ("Bypass", None),
+        ("-File", Some(launcher_path)),
+        ("-WrapperPath", Some(wrapper_path)),
+        ("-ScriptPath", Some(script_path)),
+        ("-StdoutPath", Some(stdout_path)),
+        ("-StderrPath", Some(stderr_path)),
+        ("-ExitCodePath", Some(exitcode_path)),
+    ]
+    .iter()
+    .flat_map(|(flag, value)| {
+        let mut parts = vec![(*flag).to_string()];
+        // `-ExecutionPolicy Bypass` is flag-then-value; the rest carry a path.
+        parts.extend(value.map(|value| value.to_string()));
+        parts
+    })
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "windows"),
+        ignore = "requires Windows PowerShell 5.1; run explicitly with pwsh for a local transport check"
+    )]
+    fn native_launch_preserves_paths_and_captures_a_failing_script() {
+        use std::fs;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory = root
+            .path()
+            .join("O'Brien space [literal] $value; & `data ``ticks `[brackets`]");
+        fs::create_dir(&directory).unwrap();
+        let launcher = directory.join("launch capture.ps1");
+        let harness = directory.join("transport harness.ps1");
+        let wrapper = directory.join("capture wrapper.ps1");
+        let script = directory.join("target script.ps1");
+        let stdout = directory.join("captured stdout.txt");
+        let stderr = directory.join("captured stderr.txt");
+        let exitcode = directory.join("captured exitcode.txt");
+
+        fs::write(&launcher, LAUNCH_ELEVATED_SCRIPT).unwrap();
+        fs::write(
+            &harness,
+            include_str!("scripts/tests/Invoke-TransportHarness.ps1"),
+        )
+        .unwrap();
+        fs::write(&wrapper, RUN_CAPTURED_SCRIPT).unwrap();
+        fs::write(
+            &script,
+            "Write-Output 'stdout preserved'\nWrite-Error 'stderr preserved' -ErrorAction Continue\nexit 23\n",
+        )
+        .unwrap();
+        // run_script reserves each capture file before starting PowerShell.
+        for capture in [&stdout, &stderr, &exitcode] {
+            fs::write(capture, "").unwrap();
+        }
+
+        let host = if cfg!(target_os = "windows") {
+            "powershell.exe"
+        } else {
+            "pwsh"
+        };
+        let output = std::process::Command::new(host)
+            .args(launch_args(
+                harness.to_str().unwrap(),
+                wrapper.to_str().unwrap(),
+                script.to_str().unwrap(),
+                stdout.to_str().unwrap(),
+                stderr.to_str().unwrap(),
+                exitcode.to_str().unwrap(),
+            ))
+            .env("CMTRACE_TEST_LAUNCHER", &launcher)
+            .output()
+            .expect("PowerShell is required to verify the native argument boundary");
+
+        assert!(
+            output.status.success(),
+            "transport failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.is_file());
+        assert!(stderr.is_file());
+        assert_eq!(fs::read_to_string(exitcode).unwrap(), "23");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("transport verified"));
+    }
 }
