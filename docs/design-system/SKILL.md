@@ -11,7 +11,7 @@ A **free, open-source web reimagining of Microsoft's CMTrace.exe** — a log vie
 
 > Drop in a log file and start reading. Errors highlight automatically.
 
-CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all live in `cmtraceopen-web/cmtraceopen/src/` — this design system mirrors them. **The codebase is the source of truth.** When this system disagrees with the codebase, the codebase wins; update the system to match.
+CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all live in this repository's `src/` — this design system mirrors them. **The codebase is the source of truth.** When this system disagrees with the codebase, the codebase wins; update the system to match.
 
 ---
 
@@ -19,16 +19,16 @@ CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all
 
 | You need… | Look here (codebase) | Mirrored in this DS |
 |---|---|---|
-| Theme objects, brand ramps | `src/lib/themes/*` | `02-color-themes.html`, `tokens.css` |
-| Semantic color tokens | `src/lib/themes/*-theme.ts` | `03-color-tokens.html`, `tokens.css` |
-| Type ramp & families | `src/lib/themes/typography.ts` | `04-typography.html` |
-| Log row metrics | `src/lib/log-list-metrics.ts` (`getLogListMetrics()`) | `04-typography.html`, `09-components-log-grid.html` |
-| Spacing / radius / shadow | `src/lib/themes/tokens.ts` | `05-spacing-radius-shadow.html` |
-| Motion durations & curves | `src/lib/themes/motion.ts` | `06-motion.html` |
+| Theme objects, brand ramps | `src/lib/themes/` (`brand-ramps.ts`, `palettes.ts`, `registry.ts`) | `02-color-themes.html`, `tokens.css` |
+| Semantic color tokens | `src/lib/themes/theme-*.ts`, `src/lib/themes/tokens.css` | `03-color-tokens.html`, `tokens.css` |
+| Type ramp & families | `src/lib/themes/shared-overrides.ts` (`fontFamily*`) | `04-typography.html` |
+| Log row metrics | `src/lib/log-accessibility.ts` (`getLogListMetrics()`) | `04-typography.html`, `09-components-log-grid.html` |
+| Spacing / radius / shadow | `src/lib/themes/shared-overrides.ts` | `05-spacing-radius-shadow.html` |
+| Motion durations & curves | `src/lib/themes/shared-overrides.ts` (`duration*`) | `06-motion.html` |
 | Icons | `@fluentui/react-icons` | `07-iconography.html` |
-| Buttons, inputs, badges | `src/components/ui/*` | `08-components-buttons-inputs.html` |
-| Log row, gutter, markers | `src/components/log/LogRow.tsx`, `LogGutter.tsx` | `09-components-log-grid.html` |
-| Toolbar, tabs, status bar | `src/components/chrome/*` | `10-components-chrome.html` |
+| Buttons, inputs, badges | `@fluentui/react-components` (imported by ~145 files) | `08-components-buttons-inputs.html` |
+| Log row, gutter, markers | `src/components/log-view/LogRow.tsx` | `09-components-log-grid.html` |
+| Toolbar, tabs, status bar | `src/components/layout/` (`Toolbar.tsx`, `TabStrip.tsx`, `StatusBar.tsx`) | `10-components-chrome.html` |
 | Dialogs, settings, find | `src/components/dialogs/*` | `11-components-dialogs.html` |
 | Full app reference | `src/App.tsx` | `ui-kit.html` |
 
