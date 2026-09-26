@@ -1,0 +1,14 @@
+{
+  "fixtureId": "mp-settings-certificates",
+  "evidence": "Management point settings refresh that logs signing and encryption certificate thumbprints (zeroed). Privacy fixture.",
+  "files": [
+    {
+      "name": "BgbServer.lo_",
+      "side": "server",
+      "rotation": "lo_",
+      "lines": 3,
+      "framedRecords": 3,
+      "unframedLines": []
+    }
+  ]
+}

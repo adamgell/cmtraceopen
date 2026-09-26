@@ -1,0 +1,5 @@
+Get one push message from database.~~  $$<SMS_NOTIFICATION_SERVER><09-25-2026 19:35:04.905+240><thread=7896 (0x1ED8)>
+Starting to send push task (PushID: 13 TaskID: 13 TaskGUID: 00000000-0000-0000-0000-000000000001 TaskType: 1 TaskParam: ) to 1 clients with throttling (strategy: 1 param: 42)~~  $$<SMS_NOTIFICATION_SERVER><09-25-2026 19:35:04.936+240><thread=7896 (0x1ED8)>
+Finished sending push task (PushID: 13 TaskID: 13) to 1 clients~~  $$<SMS_NOTIFICATION_SERVER><09-25-2026 19:35:04.952+240><thread=7896 (0x1ED8)>
+Retrieving push tasks from database...~~  $$<SMS_NOTIFICATION_SERVER><09-25-2026 19:35:04.954+240><thread=7896 (0x1ED8)>
+Generated BGB task status report <siteInstallRoot>\inboxes\bgb.box\Bgb00001.BTS at 09/25/2026 19:35:33. (PushID: 13 ReportedClients: 1 FailedClients: 0)~~  $$<SMS_NOTIFICATION_SERVER><09-25-2026 19:35:33.877+240><thread=4008 (0xFA8)>

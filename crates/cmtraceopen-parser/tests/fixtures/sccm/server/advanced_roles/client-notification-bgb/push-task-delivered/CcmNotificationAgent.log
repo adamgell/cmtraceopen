@@ -1,0 +1,1 @@
+<![LOG[Receive task from server with pushid=13, taskid=13, taskguid=00000000-0000-0000-0000-000000000001, tasktype=1 and taskParam=]LOG]!><time="19:35:04.986+240" date="09-25-2026" component="BgbAgent" context="" type="1" thread="8540" file="bgbconnector.cpp:386">

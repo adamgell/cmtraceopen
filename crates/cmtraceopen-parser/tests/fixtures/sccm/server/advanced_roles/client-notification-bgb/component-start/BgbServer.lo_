@@ -1,0 +1,20 @@
+SMS_EXECUTIVE started SMS_NOTIFICATION_SERVER as thread ID 7288 (0x1C78).  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:53.001+240><thread=4120 (0x1018)>
+===========================================================  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:53.016+240><thread=7288 (0x1C78)>
+Beginning main thread  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:53.016+240><thread=7288 (0x1C78)>
+Register a DB connection...  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:54.720+240><thread=7452 (0x1D1C)>
+Initializing the status message reporting system...  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:54.720+240><thread=7452 (0x1D1C)>
+Inbox source is local on SITESERVER.example.invalid  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:54.720+240><thread=7452 (0x1D1C)>
+    The path to the "Status Manager" inbox is "<siteInstallRoot>\inboxes\statmgr.box\statmsgs".  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:54.735+240><thread=7452 (0x1D1C)>
+    SMS_STATUS_MANAGER is not running as part of this process, the SMS_EXECUTIVE to SMS_STATUS_MANAGER in-memory status message queue will not be used.  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:54.735+240><thread=7452 (0x1D1C)>
+Registered this process as a source of "SMS Server" events.  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.423+240><thread=7452 (0x1D1C)>
+Registered this process as a source of "SMS Client" events.  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.423+240><thread=7452 (0x1D1C)>
+Registered this process as a source of "SMS Provider" events.  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.423+240><thread=7452 (0x1D1C)>
+Status message reporting system initialized successfully.  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.438+240><thread=7452 (0x1D1C)>
+Inbox source is local on SITESERVER.example.invalid  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.454+240><thread=7288 (0x1C78)>
+MP SSL is Disabled, signing certificate (store: SMS , hash 0000000000000000000000000000000000000000), encryption certificate (store: SMS , hash 0000000000000000000000000000000000000000)  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.470+240><thread=7288 (0x1C78)>
+Set message queue control to Database~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.516+240><thread=7452 (0x1D1C)>
+Starting SMS Notification Server...~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.516+240><thread=7452 (0x1D1C)>
+Server GC is OFF~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.516+240><thread=7452 (0x1D1C)>
+Trigger to start TCP listener~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.532+240><thread=7452 (0x1D1C)>
+Listening connections on port 10123. Waiting for clients to connect...~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.548+240><thread=552 (0x228)>
+Listening connections on port 443 for HTTP connection. Waiting for clients to connect...~~  $$<SMS_NOTIFICATION_SERVER><09-23-2026 12:33:56.563+240><thread=7452 (0x1D1C)>
