@@ -44,9 +44,20 @@ npx tsc --noEmit
 
 ### CI Checks (what PR gates enforce)
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+Six required status checks — the `Protect` ruleset over `main`:
+
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
+2. **TypeScript Check** — `npx tsc --noEmit`.
+3. **E2E (Playwright)** — `npm run test:e2e`.
+4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
+
+Three more jobs run on every PR but are not required to merge:
+
+- **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint rather than a formality: the parser crate must stay wasm32-compatible.
+- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+
+Build the Lite edition locally with `npm run app:build:lite` (`--no-default-features`).
 
 ## Architecture
 
@@ -109,6 +120,8 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ## Testing
 
 - **Unit/integration tests**: `src-tauri/tests/` — parser regression tests with synthetic fixtures
+- **Frontend tests**: `npm test` — vitest suites under `src/` (`test:watch`, `test:coverage`)
+- **End-to-end**: `npm run test:e2e` — Playwright specs in `e2e/` (`test:e2e:ui`, `test:e2e:debug`). CI runs this as its own job
 - **Benchmarks**: `src-tauri/benches/intune_pipeline.rs` — Criterion benchmarks for the Intune pipeline (10K records)
 - Run a single test: `cargo test test_name` from `src-tauri/`
 - Run benchmarks: `cargo bench` from `src-tauri/`
