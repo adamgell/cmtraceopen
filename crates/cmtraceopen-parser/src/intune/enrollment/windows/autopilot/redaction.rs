@@ -93,6 +93,19 @@ const VALUE_KIND: &str = "redacted";
 /// a Dell service tag, so real serials are still covered.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
+/// The floor for a value the field itself declares to be an identity.
+///
+/// A value read from an identity field is short because the identity is short,
+/// not because it might be prose, so the prose floor does not describe it and
+/// applying it there masked the typed field while leaving the same value in
+/// narrative. #646 drew this line for the DsRegCmd leaf and #667 implemented it.
+///
+/// The trade is deliberate and it is paid in narrative: a four-byte device name
+/// can also be an ordinary word, and scrubbing it mangles readable evidence
+/// wherever that word appears. A display name keeps the prose floor for exactly
+/// that reason.
+const MIN_SCRUBBED_IDENTIFIER_BYTES: usize = 4;
+
 /// FNV-1a, stable across runs, platforms, and process restarts, which
 /// `DefaultHasher` explicitly is not.
 fn stable_token(kind: &str, value: &str) -> String {
@@ -274,9 +287,19 @@ struct MaskedLiteral {
 }
 
 impl MaskedLiterals {
-    fn new(values: BTreeSet<String>) -> Self {
+    fn new(identifiers: BTreeSet<String>, display_names: BTreeSet<String>) -> Self {
         let mut literals = BTreeMap::new();
-        for value in values {
+        // Identities first: a value that arrives as both is an identity, and the
+        // identifier floor decides it whichever way round the sets are built.
+        for (value, floor) in identifiers
+            .into_iter()
+            .map(|value| (value, MIN_SCRUBBED_IDENTIFIER_BYTES))
+            .chain(
+                display_names
+                    .into_iter()
+                    .map(|value| (value, MIN_SCRUBBED_LITERAL_BYTES)),
+            )
+        {
             let value = value.trim();
             // A mask is not identity, and skipping it is half of what keeps the
             // projection idempotent: on the second pass the typed fields
@@ -289,8 +312,9 @@ impl MaskedLiterals {
             // it sits unlabelled in narrative, so scrubbing it would mangle
             // readable evidence without protecting anything. The floor stays
             // below the seven characters of a Dell service tag, so real serials
-            // are still covered.
-            if value.len() < MIN_SCRUBBED_LITERAL_BYTES {
+            // are still covered. A field that declares an identity holds to the
+            // lower floor instead.
+            if value.len() < floor {
                 continue;
             }
             // The key is the form `mask_value` hashes, so the table and the
@@ -381,7 +405,19 @@ fn redact_export_text(value: &str, literals: &MaskedLiterals) -> String {
 /// masked is decided by a key rather than by the field they sit in;
 /// [`sensitive_value_key`] and [`masked_conflict_literal`] are the shared
 /// decisions for those two.
-fn for_each_masked_value_mut(snapshot: &mut AutopilotSnapshot, mut visit: impl FnMut(&mut String)) {
+/** What a walked value is, which decides the floor its literal holds to. */
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaskClass {
+    /// A field that states an identity: device, tenant, correlation key.
+    Identity,
+    /// A field that labels something rather than naming it.
+    DisplayName,
+}
+
+fn for_each_masked_value_mut(
+    snapshot: &mut AutopilotSnapshot,
+    mut visit: impl FnMut(&mut String, MaskClass),
+) {
     let identity = &mut snapshot.identity;
     let fields = [
         &mut identity.serial_number,
@@ -395,18 +431,20 @@ fn for_each_masked_value_mut(snapshot: &mut AutopilotSnapshot, mut visit: impl F
         &mut identity.device_name,
     ];
     for value in fields.into_iter().flatten() {
-        visit(value);
+        visit(value, MaskClass::Identity);
     }
 
     // `profile_id` survives: it is a tenant object identifier and the only way
     // to line an export up against the Intune profile it describes. The
     // admin-authored display name does not survive.
     if let Some(name) = &mut snapshot.profile.profile_name {
-        visit(name);
+        // The name labels the profile; `profile_id`, which identifies it, is the
+        // identity above.
+        visit(name, MaskClass::DisplayName);
     }
 
     for key in &mut snapshot.esp_linkage.matched_keys {
-        visit(&mut key.value);
+        visit(&mut key.value, MaskClass::Identity);
     }
 }
 
@@ -414,24 +452,37 @@ fn for_each_masked_value_mut(snapshot: &mut AutopilotSnapshot, mut visit: impl F
 ///
 /// Takes `&mut` only to share one walk with the masking pass in
 /// [`for_each_masked_value_mut`]; it changes nothing.
+/// A profile name labels a configuration rather than naming the device or the
+/// tenant it belongs to, so it keeps the prose floor.
+fn display_name_value_key(name: &str) -> bool {
+    name.eq_ignore_ascii_case("profileName")
+}
+
 fn collect_masked_literals(snapshot: &mut AutopilotSnapshot) -> MaskedLiterals {
-    let mut values = BTreeSet::new();
-    for_each_masked_value_mut(snapshot, |value| {
-        values.insert(value.clone());
+    let mut identifiers = BTreeSet::new();
+    let mut display_names = BTreeSet::new();
+    for_each_masked_value_mut(snapshot, |value, class| {
+        match class {
+            MaskClass::Identity => identifiers.insert(value.clone()),
+            MaskClass::DisplayName => display_names.insert(value.clone()),
+        };
     });
     for observation in &snapshot.observations {
         for named in &observation.named_data {
-            if sensitive_value_key(&named.name) {
-                values.insert(named.value.clone());
+            if display_name_value_key(&named.name) {
+                display_names.insert(named.value.clone());
+            } else if sensitive_value_key(&named.name) {
+                identifiers.insert(named.value.clone());
             }
         }
     }
+    // A conflict is two identifiers disagreeing about the same device.
     for conflict in &snapshot.conflicts {
         for value in &conflict.values {
-            values.insert(masked_conflict_literal(value).to_owned());
+            identifiers.insert(masked_conflict_literal(value).to_owned());
         }
     }
-    MaskedLiterals::new(values)
+    MaskedLiterals::new(identifiers, display_names)
 }
 
 /// Return a copy of `snapshot` safe to export by default.
@@ -447,7 +498,7 @@ pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnap
     // `mask_value` everywhere a whole value is masked: it performs the
     // trim/lowercase normalization the module contract promises, so the same
     // identifier masks identically whatever field or casing it arrived in.
-    for_each_masked_value_mut(&mut projected, |value| *value = mask_value(value));
+    for_each_masked_value_mut(&mut projected, |value, _class| *value = mask_value(value));
 
     for observation in &mut projected.observations {
         observation.message = observation
@@ -662,7 +713,8 @@ mod tests {
     /// the whole text -- without re-finding what it already replaced.
     #[test]
     fn the_literal_search_replaces_every_occurrence_including_at_the_tail() {
-        let literals = MaskedLiterals::new(BTreeSet::from(["PC-ÉLODIE".to_owned()]));
+        let literals =
+            MaskedLiterals::new(BTreeSet::from(["PC-ÉLODIE".to_owned()]), BTreeSet::new());
         let token = mask_value("PC-ÉLODIE");
 
         assert_eq!(
@@ -689,8 +741,10 @@ mod tests {
         const CAPITAL: &str = "\u{3A3}\u{39F}\u{3A6}\u{39F}\u{3A5}\u{3A3}.Example";
         const NARRATIVE: &str = "\u{3C3}\u{3BF}\u{3C6}\u{3BF}\u{3C5}\u{3C2}.example";
 
-        let literals =
-            MaskedLiterals::new(BTreeSet::from([CAPITAL.to_owned(), NARRATIVE.to_owned()]));
+        let literals = MaskedLiterals::new(
+            BTreeSet::from([CAPITAL.to_owned(), NARRATIVE.to_owned()]),
+            BTreeSet::new(),
+        );
         let token = mask_value(CAPITAL);
 
         assert_eq!(literals.literals.len(), 1, "one identity, one entry");
