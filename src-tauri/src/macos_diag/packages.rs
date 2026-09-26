@@ -2,6 +2,14 @@ use super::models::{MacosPackageFiles, MacosPackageInfo, MacosPackagesResult};
 use regex::Regex;
 use std::sync::OnceLock;
 
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
+
 fn pkg_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap())
@@ -115,10 +123,13 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
 
     log::info!("Listing installed packages via pkgutil");
 
-    let output = Command::new("pkgutil")
-        .arg("--pkgs")
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_bounded_command(
+        Command::new("pkgutil").arg("--pkgs"),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -138,9 +149,12 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
     // Get detailed info for each Microsoft package
     let mut packages: Vec<MacosPackageInfo> = Vec::new();
     for pkg_id in &ms_ids {
-        let info_output = Command::new("pkgutil")
-            .args(["--pkg-info", pkg_id])
-            .output();
+        let info_output = run_bounded_command(
+            Command::new("pkgutil").args(["--pkg-info", pkg_id]),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
 
         match info_output {
             Ok(out) if out.status.success() => {
@@ -184,10 +198,13 @@ pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, crate
 
     log::info!("Getting package info for: {}", package_id);
 
-    let output = Command::new("pkgutil")
-        .args(["--pkg-info", package_id])
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_bounded_command(
+        Command::new("pkgutil").args(["--pkg-info", package_id]),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -211,10 +228,13 @@ pub fn get_package_files_impl(
 
     log::info!("Getting package files for: {}", package_id);
 
-    let output = Command::new("pkgutil")
-        .args(["--files", package_id])
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_bounded_command(
+        Command::new("pkgutil").args(["--files", package_id]),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

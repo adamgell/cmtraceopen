@@ -2,6 +2,14 @@ use super::models::{
     MacosUnifiedLogEntry, MacosUnifiedLogPreset, MacosUnifiedLogResult, MacosUnifiedLogTimeRange,
 };
 
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
+
 // ---------------------------------------------------------------------------
 // Presets (cross-platform, always compiled)
 // ---------------------------------------------------------------------------
@@ -189,7 +197,8 @@ pub fn query_unified_log_impl(
         }
     };
 
-    let output = cmd.output().map_err(crate::error::AppError::Io)?;
+    let output = run_bounded_command(&mut cmd, TOOL_DEADLINE, TOOL_OUTPUT_BYTES, TOOL_ERROR_BYTES)
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
