@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { analyzeDeploymentFolder } from "../../lib/commands";
 
 export interface DeploymentLogFile {
   path: string;
@@ -71,10 +71,7 @@ export const useDeploymentStore = create<DeploymentState>((set, get) => ({
   analyzeFolder: async (folderPath: string) => {
     set({ phase: "analyzing", errorMessage: null, expandedErrorIndex: null });
     try {
-      const result = await invoke<DeploymentAnalysisResult>(
-        "analyze_deployment_folder",
-        { folderPath }
-      );
+      const result = await analyzeDeploymentFolder(folderPath);
       if (result.totalFiles === 0) {
         set({ phase: "empty", result });
       } else {

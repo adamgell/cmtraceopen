@@ -58,6 +58,10 @@ import type {
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
 import type {
+  DeploymentAnalysisResult,
+  DeploymentLogFile,
+} from "../workspaces/deployment/deployment-store";
+import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
@@ -492,6 +496,74 @@ function isNullableCommandNumber(value: unknown): value is number | null {
 
 function isNullableCommandString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+const DEPLOYMENT_FORMAT_MEMBERS: Record<DeploymentLogFile["format"], true> = {
+  "psadt-cmtrace": true,
+  "psadt-legacy": true,
+  "msi-verbose": true,
+  "psadt-wrapper": true,
+  burn: true,
+  patchmypc: true,
+  unknown: true,
+};
+
+const DEPLOYMENT_OUTCOME_MEMBERS: Record<DeploymentLogFile["outcome"], true> = {
+  success: true,
+  failure: true,
+  deferred: true,
+  unknown: true,
+};
+
+function isDeploymentErrorLine(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isNonNegativeCommandCount(value.lineNumber) &&
+    value.lineNumber <= 4_294_967_295 &&
+    typeof value.message === "string" &&
+    (value.severity === "Error" || value.severity === "Warning")
+  );
+}
+
+function isDeploymentLogFile(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.fileName === "string" &&
+    typeof value.format === "string" &&
+    Object.prototype.hasOwnProperty.call(DEPLOYMENT_FORMAT_MEMBERS, value.format) &&
+    typeof value.outcome === "string" &&
+    Object.prototype.hasOwnProperty.call(DEPLOYMENT_OUTCOME_MEMBERS, value.outcome) &&
+    (value.exitCode === null ||
+      (typeof value.exitCode === "number" &&
+        Number.isInteger(value.exitCode) &&
+        value.exitCode >= -2_147_483_648 &&
+        value.exitCode <= 2_147_483_647)) &&
+    isNullableCommandString(value.errorSummary) &&
+    Array.isArray(value.errorLines) &&
+    value.errorLines.every(isDeploymentErrorLine) &&
+    isNullableCommandString(value.appName) &&
+    isNullableCommandString(value.appVersion) &&
+    isNullableCommandString(value.deployType) &&
+    isNullableCommandString(value.startTime) &&
+    isNullableCommandString(value.endTime)
+  );
+}
+
+function decodeDeploymentAnalysisResult(
+  value: unknown,
+  commandName: string,
+): DeploymentAnalysisResult {
+  return decodeRecordResponse<DeploymentAnalysisResult>(value, commandName, {
+    folderPath: (field) => typeof field === "string",
+    files: (field) => Array.isArray(field) && field.every(isDeploymentLogFile),
+    totalFiles: isNonNegativeCommandCount,
+    succeeded: isNonNegativeCommandCount,
+    failed: isNonNegativeCommandCount,
+    deferred: isNonNegativeCommandCount,
+    unknown: isNonNegativeCommandCount,
+    limitations: isStringArray,
+  });
 }
 
 function isParserSelectionResponse(value: unknown): boolean {
@@ -2237,6 +2309,12 @@ export async function analyzeSysmonLogs(
   });
 }
 
+export async function analyzeDeploymentFolder(
+  folderPath: string,
+): Promise<DeploymentAnalysisResult> {
+  return invokeCommand("analyze_deployment_folder", { folderPath });
+}
+
 export async function analyzeDsregcmd(
   input: string,
   bundlePath?: string | null,
@@ -2954,6 +3032,7 @@ const decodeEspSessionEnvelope: CommandDecoder<EspSessionEnvelope> = (
     snapshot: isCommandRecord,
   });
 const COMMAND_DECODERS = {
+  analyze_deployment_folder: decodeDeploymentAnalysisResult,
   open_log_file: decodeParseResult,
   parse_files_batch: decodeParseResults,
   list_log_folder: decodeFolderListingResult,
