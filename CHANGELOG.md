@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Insertion-string columns (#664)**: A record's unnamed `<Data>` values can be shown as their own columns (`string:1`, `string:2`), discovered from the records in view and capped at ten. An event whose meaning sits in a positional value no longer has to be read by eye.
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed
