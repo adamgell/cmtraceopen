@@ -13,7 +13,9 @@ pub use models::{
     DsregcmdProxyEvidence, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
     DsregcmdWhfbPolicyEvidence,
 };
-pub use redaction::{redacted_analysis, redacted_status_text};
+pub use redaction::{
+    redacted_analysis, redacted_bundle_artifacts, redacted_status_text, DsregcmdBundleArtifact,
+};
 
 /// Pure analyzer entry point: parse `dsregcmd /status` text + evaluate rules.
 ///
@@ -45,6 +47,27 @@ pub fn analyze_text_with_evidence(
     input: &str,
     evidence: DsregcmdBundleEvidence,
 ) -> Result<DsregcmdAnalysisResult, String> {
+    Ok(redaction::redacted_analysis(
+        &analyze_text_with_evidence_preserving_local_values(input, evidence)?,
+    ))
+}
+
+/// Assemble the analysis with the evidence a native collector read, evaluate
+/// every rule, and project nothing.
+///
+/// **Local-only, crate-internal**, for the same reason
+/// [`analyze_text_preserving_local_values`] is: the value still carries what the
+/// capture printed. Everything that publishes goes through
+/// [`analyze_text_with_evidence`].
+///
+/// The assembly is split out from the projection so the bundle hand-off can
+/// read the *classification* the analysis path uses
+/// ([`redaction::redacted_bundle_artifacts`]) instead of declaring a second
+/// list of which fields are identity and drifting from this one.
+pub(crate) fn analyze_text_with_evidence_preserving_local_values(
+    input: &str,
+    evidence: DsregcmdBundleEvidence,
+) -> Result<DsregcmdAnalysisResult, String> {
     let mut result = analyze_text_preserving_local_values(input)?;
 
     evidence.apply_to(&mut result);
@@ -55,7 +78,7 @@ pub fn analyze_text_with_evidence(
     extended.append(&mut rules::build_event_log_diagnostics(&result));
     result.diagnostics.append(&mut extended);
 
-    Ok(redaction::redacted_analysis(&result))
+    Ok(result)
 }
 
 /// Parse and evaluate without projecting anything.

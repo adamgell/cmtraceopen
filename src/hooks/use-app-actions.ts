@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { inspectPathKind } from "../lib/commands";
+import { exportDsregcmdShareableBundle, inspectPathKind, revealInFileManager } from "../lib/commands";
 import {
   analyzeDsregcmdPath,
   analyzeDsregcmdSource,
@@ -147,6 +147,7 @@ export interface AppActionHandlers {
   openKnownSourceById: (sourceId: string, trigger: string) => Promise<void>;
   pasteDsregcmdSource: () => Promise<void>;
   captureDsregcmdSource: () => Promise<void>;
+  exportDsregcmdBundle: () => Promise<void>;
   showFindBar: () => void;
   findNext: (trigger: string) => void;
   findPrevious: (trigger: string) => void;
@@ -607,6 +608,37 @@ export function useAppActions(): AppActionHandlers {
     await analyzeDsregcmdSource({ kind: "capture" });
   }, [isSourceCommandBusy]);
 
+  /**
+   * Project the current capture bundle into a copy that may leave the machine.
+   *
+   * The bundle the workspace holds stays raw, because it is what the analyzer
+   * reads back. This asks for a destination, writes the projected copy of that
+   * same bundle, and then shows it — sending that folder is the whole point, so
+   * the action ends where the artefact is rather than at a path to copy out
+   * (issue #628).
+   */
+  const exportDsregcmdBundle = useCallback(async () => {
+    if (isSourceCommandBusy || !dsregcmdBundlePath) {
+      return;
+    }
+
+    const selected = await open({
+      multiple: false,
+      directory: true,
+    });
+    const destinationPath = normalizeDialogSelection(selected);
+
+    if (!destinationPath) {
+      return;
+    }
+
+    const exported = await exportDsregcmdShareableBundle(
+      dsregcmdBundlePath,
+      destinationPath,
+    );
+    await revealInFileManager(exported.bundlePath);
+  }, [dsregcmdBundlePath, isSourceCommandBusy]);
+
   const showFindBar = useCallback(() => {
     if (!commandState.canFind) {
       return;
@@ -805,6 +837,7 @@ export function useAppActions(): AppActionHandlers {
     openKnownSourceById,
     pasteDsregcmdSource,
     captureDsregcmdSource,
+    exportDsregcmdBundle,
     showFindBar,
     findNext,
     findPrevious,

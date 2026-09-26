@@ -363,7 +363,14 @@ fn load_registry_map(path: &Path, artifact_paths: &mut Vec<String>) -> RegistryK
     }
 }
 
-fn decode_reg_content(bytes: &[u8]) -> Option<String> {
+/// Decode the bytes of a text artifact read out of a capture.
+///
+/// Named for its first caller, the registry export reader, but it is the lane's
+/// general text decoder: a real capture's `.reg` exports are frequently UTF-16LE,
+/// because that is what `reg.exe` writes, so anything reading a bundle artifact
+/// as UTF-8 alone rejects the artefact rather than decoding it. BOM-marked
+/// UTF-16 comes first, then UTF-8, then Windows-1252.
+pub(crate) fn decode_reg_content(bytes: &[u8]) -> Option<String> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let units = bytes[2..]
             .as_chunks::<2>()

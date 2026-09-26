@@ -61,6 +61,7 @@ import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
+  DsregcmdShareableBundle,
 } from "../workspaces/dsregcmd/types";
 import type {
   EspAppFlipBackup,
@@ -2289,6 +2290,24 @@ export async function redactDsregcmdStatusText(input: string): Promise<string> {
   return invokeCommand("redact_dsregcmd_status_text", { input });
 }
 
+/**
+ * Project a capture bundle into the copy that may leave the machine.
+ *
+ * The working bundle is the analyzer's input and stays raw; this writes the
+ * projected copy under `destinationRoot` and returns where it went. The
+ * projection itself belongs to the backend, so the classification is the one
+ * the analysis path uses rather than a second list kept here (issue #628).
+ */
+export async function exportDsregcmdShareableBundle(
+  bundlePath: string,
+  destinationRoot: string,
+): Promise<DsregcmdShareableBundle> {
+  return invokeCommand("export_dsregcmd_shareable_bundle", {
+    bundlePath,
+    destinationRoot,
+  });
+}
+
 export async function getInitialFilePaths(): Promise<string[]> {
   return invokeCommand("get_initial_file_paths");
 }
@@ -3057,6 +3076,11 @@ const COMMAND_DECODERS = {
   inspect_path_kind: decodePathKindResponse,
   write_text_output_file: decodeUnitResponse,
   redact_dsregcmd_status_text: decodeStringResponse,
+  export_dsregcmd_shareable_bundle: (value, commandName) =>
+    decodeRecordResponse<DsregcmdShareableBundle>(value, commandName, {
+      bundlePath: (field) => typeof field === "string",
+      artifactCount: (field) => typeof field === "number",
+    }),
   load_dsregcmd_source: (value, commandName) =>
     decodeRecordResponse<DsregcmdResolvedSource>(value, commandName, {
       input: (field) => typeof field === "string",

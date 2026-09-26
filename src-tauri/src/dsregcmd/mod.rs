@@ -6,8 +6,10 @@
 // `parser::parse_dsregcmd` and `rules::analyze_facts` are crate-internal, and
 // the unprojected analysis is only obtainable through
 // `analyze_text_preserving_local_values`, which is crate-internal too. This
-// crate publishes through `analyze_text_with_evidence` (projected) and
-// `redacted_status_text` (ADR-004 revision 1, Ruling 1).
+// crate publishes through `analyze_text_with_evidence` (projected),
+// `redacted_status_text` (the capture text) and `redacted_bundle_artifacts`
+// (a capture bundle on its way off the machine) — ADR-004 revision 1,
+// Ruling 1.
 //
 // `registry` stays in src-tauri because it reads `.reg` hive files from disk
 // (native-only).
@@ -23,7 +25,8 @@ pub mod connectivity;
 pub mod event_logs;
 
 pub use cmtraceopen_parser::dsregcmd::{
-    redacted_status_text, DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+    redacted_bundle_artifacts, redacted_status_text, DsregcmdActiveEvidence,
+    DsregcmdAnalysisResult, DsregcmdBundleArtifact, DsregcmdBundleEvidence,
     DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDiagnosticInsight,
     DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdEvidenceSource, DsregcmdFacts,
     DsregcmdJoinType, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,

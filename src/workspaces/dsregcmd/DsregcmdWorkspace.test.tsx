@@ -21,6 +21,7 @@ vi.mock("../../hooks/use-app-actions", () => ({
     openSourceFolderDialog: vi.fn(),
     pasteDsregcmdSource: vi.fn(),
     captureDsregcmdSource: vi.fn(),
+    exportDsregcmdBundle: vi.fn(),
     commandState: { canRefresh: false },
     refreshActiveSource: vi.fn(),
   }),

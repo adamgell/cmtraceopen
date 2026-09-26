@@ -90,14 +90,14 @@ use crate::intune::models::{
 };
 
 use super::models::{
-    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdConnectivityResult, DsregcmdDerived,
-    DsregcmdDeviceDetails, DsregcmdDiagnosticFields, DsregcmdDiagnosticInsight,
-    DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdFacts, DsregcmdJoinState,
-    DsregcmdManagementDetails, DsregcmdOsVersionEvidence, DsregcmdPolicyEvidenceValue,
-    DsregcmdPostJoinDiagnostics, DsregcmdPreJoinTests, DsregcmdProxyEvidence,
-    DsregcmdRegistrationState, DsregcmdScheduledTaskEvidence, DsregcmdScpQueryResult,
-    DsregcmdServiceEndpoints, DsregcmdSsoState, DsregcmdTenantDetails, DsregcmdUserState,
-    DsregcmdWhfbPolicyEvidence,
+    DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+    DsregcmdConnectivityResult, DsregcmdDerived, DsregcmdDeviceDetails, DsregcmdDiagnosticFields,
+    DsregcmdDiagnosticInsight, DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdFacts,
+    DsregcmdJoinState, DsregcmdManagementDetails, DsregcmdOsVersionEvidence,
+    DsregcmdPolicyEvidenceValue, DsregcmdPostJoinDiagnostics, DsregcmdPreJoinTests,
+    DsregcmdProxyEvidence, DsregcmdRegistrationState, DsregcmdScheduledTaskEvidence,
+    DsregcmdScpQueryResult, DsregcmdServiceEndpoints, DsregcmdSsoState, DsregcmdTenantDetails,
+    DsregcmdUserState, DsregcmdWhfbPolicyEvidence,
 };
 
 /// The field vocabulary this lane masks with. The shared grammar already emits
@@ -120,6 +120,25 @@ const KIND_HOST: &str = "host";
 /// covered.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 
+/// Shortest value a **typed** sensitive field may contribute.
+///
+/// Below the ordinary floor, because a typed field is what makes the value an
+/// identity: a four-character NetBIOS domain is real, and one was leaking from a
+/// live capture's prose while its typed field was masked.
+///
+/// Not zero, because the reason for the ordinary floor does not vanish at two
+/// characters: `ad` matches as a standalone word in any sentence, so a typed path
+/// with no floor of its own mangled prose the lane had deliberately left alone —
+/// which `a_short_value_does_not_scrub_unrelated_narrative` in this crate's
+/// export-boundary test caught. Bounded matching is not enough on its own: a
+/// short ordinary word is *often* a bounded token.
+///
+/// So the resulting policy is: a typed-sensitive value of four or five bytes may
+/// be scrubbed, at boundaries only. Below four bytes it stays out of generic
+/// narrative replacement because the observed false-positive risk is too high;
+/// a field-specific treatment can be added if evidence ever supports one.
+const MIN_TYPED_SENSITIVE_LITERAL_BYTES: usize = 4;
+
 /// Every identity value this lane classified, paired with the token that
 /// replaces it.
 ///
@@ -133,45 +152,245 @@ const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
 /// that write a case mapping out (`İ` against `i` plus U+0307).
 #[derive(Default)]
 struct IdentityLiterals {
-    /// Literal as classified, paired with its token, longest literal first.
+    /// Classified literals, longest literal first.
     ///
-    /// The scrub no longer depends on that order —
+    /// The scrub does not depend on that order —
     /// [`IdentityLiterals::leftmost_longest_match`] takes the longest match at
     /// the leftmost position itself, so a literal that sits inside a longer one
     /// still cannot cut the longer one in half — but the table is left in the
     /// order it has always held rather than reshuffled for no observable
     /// difference.
-    values: Vec<(String, String)>,
+    values: Vec<ClassifiedLiteral>,
+}
+
+/// One classified identity, paired with the token that replaces it.
+struct ClassifiedLiteral {
+    /// The value as classified, canonicalized.
+    literal: String,
+    /// The value's byte length as it was found, before canonicalization.
+    ///
+    /// Lowercasing can change byte length — `İ` is two bytes and canonicalizes
+    /// to three — so measuring the canonical form at match time would let a value
+    /// clear one floor and be judged against a different length than the one the
+    /// floor was applied to. Both decisions read this field so they cannot
+    /// disagree, and it is the length the insertion floor was applied to.
+    ///
+    /// When a caseless-equal spelling is merged into an existing entry this holds
+    /// the **minimum** of the lengths seen. Merging may only ever make an entry
+    /// more conservatively bounded: using the latest spelling's length would let a
+    /// shorter spelling inherit a longer one's length and lose the boundary guard.
+    literal_bytes: usize,
+    /// The token every spelling of this identity reaches.
+    token: String,
+    /// How the value was found, which is what authorizes replacing it and how it
+    /// is matched. One property rather than a stored boundary flag, so the two
+    /// cannot drift apart.
+    origin: LiteralOrigin,
+}
+
+impl ClassifiedLiteral {
+    /// Whether a match of this literal has to sit on a token boundary.
+    fn requires_boundary(&self) -> bool {
+        self.origin.requires_boundary(self.literal_bytes)
+    }
+}
+
+/// Where a classified literal came from, which is what authorizes replacing it.
+///
+/// The ordinary six-byte floor exists because a short value in prose cannot be
+/// told apart from the sentence around it: scrubbing one mangles readable
+/// evidence without protecting anything a typed field does not already cover.
+/// That reasoning does not reach a value the capture put in a **typed sensitive
+/// field**, because the field is what makes it an identity and it is masked there
+/// either way. Length alone therefore cannot be the whole test, and the typed
+/// value gets its own insertion path rather than a lower floor.
+///
+/// The origin is passed in when a value is registered rather than inferred from
+/// the `kind` at the match site: a `kind` names the token vocabulary — which token
+/// a value reaches — and says nothing about how the value was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiteralOrigin {
+    /// Read out of a typed field this lane masks, so it is an identity whatever
+    /// its length.
+    TypedSensitive,
+    /// Derived from a typed value rather than observed on its own: the short
+    /// hostname of a classified FQDN.
+    DerivedFromTyped,
+    /// A value with no field behind it, which is what the ordinary floor is for.
+    ///
+    /// No producer in this lane yet — every literal it classifies comes from a
+    /// typed field — so this variant holds the policy's *other* insertion path
+    /// open and pins the floor with a test, rather than leaving unstated the rule
+    /// that a caller with no field must still clear it.
+    #[allow(dead_code)]
+    ObservedNarrative,
+}
+
+impl LiteralOrigin {
+    /// The shortest value this origin may contribute.
+    ///
+    /// A typed field is a different authorization from length, not the absence of
+    /// one: it lowers the bar far enough for a short real identifier to count, and
+    /// keeps it above the length at which a value is indistinguishable from the
+    /// text around it.
+    fn floor(self) -> usize {
+        match self {
+            Self::TypedSensitive => MIN_TYPED_SENSITIVE_LITERAL_BYTES,
+            Self::DerivedFromTyped | Self::ObservedNarrative => MIN_SCRUBBED_LITERAL_BYTES,
+        }
+    }
+
+    /// Whether a value of this origin and length is replaced only where the
+    /// characters around it could not continue an identifier.
+    ///
+    /// Two cases are bounded. A *short* value is, because it occurs as a fragment
+    /// of something longer far more easily than a full identity does: `ACME` sits
+    /// inside `ACMECORP`, `MYACME` and `ACME2`. A *derived* value is, because it is
+    /// a fragment by construction: the short hostname sits inside
+    /// `HELPDESK-LAPTOP011`. A value that cleared the floor and was named outright
+    /// keeps the substring behaviour this lane has always had, which is what makes
+    /// a domain lose inside `dc1.corp.contoso.com`.
+    fn requires_boundary(self, literal_len: usize) -> bool {
+        match self {
+            Self::DerivedFromTyped => true,
+            Self::TypedSensitive => literal_len < MIN_SCRUBBED_LITERAL_BYTES,
+            Self::ObservedNarrative => false,
+        }
+    }
+
+    /// The origin two registrations of one literal leave behind.
+    ///
+    /// A registration from a typed field wins over one that merely derived the
+    /// value, so an identity never stays narrower than the lane's own evidence
+    /// for it.
+    fn widen(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::TypedSensitive, _) | (_, Self::TypedSensitive) => Self::TypedSensitive,
+            _ => self,
+        }
+    }
 }
 
 impl IdentityLiterals {
     /// Classify one identity value. Values too short to be told apart from
     /// prose are skipped rather than scrubbed out of narrative over-eagerly.
-    fn push(&mut self, value: &str, kind: &str) {
-        let literal = value.trim();
-        if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
+    fn push(&mut self, value: &str, kind: &str, origin: LiteralOrigin) {
+        let Some(token) = self.push_literal(value, kind, origin) else {
+            // Refused, so there is no token for a derived form to share either.
             return;
+        };
+
+        // A host is the one identity this lane classifies whose short form is a
+        // *separate* literal in the capture: an event record names the machine by
+        // FQDN while the messages around it name the same machine by its short
+        // form. Classifying only the FQDN therefore masked the field it came from
+        // and published the machine in every narrative mention — 190 occurrences
+        // in a live capture. Both spellings reach one token, because they are one
+        // machine.
+        //
+        // The short form passes the same floor below. That minimum is a shared
+        // contract this lane does not change here (issue #646).
+        if kind == KIND_HOST {
+            if let Some((short, _)) = value.trim().split_once('.') {
+                if !short.is_empty() {
+                    self.push_alias(short, &token);
+                }
+            }
+        }
+    }
+
+    /// Classify one literal and return the token it reaches.
+    ///
+    /// `None` when the value is below the scrub floor, so a caller that meant to
+    /// share the token with a derived form knows there is none to share.
+    fn push_literal(&mut self, value: &str, kind: &str, origin: LiteralOrigin) -> Option<String> {
+        let literal = value.trim();
+        if literal.is_empty() {
+            return None;
+        }
+
+        // The floor is unchanged for a value with no field behind it. A typed
+        // field is a different authorization: the field is what says the value is
+        // an identity, so length settles less — but it still settles something,
+        // which is why the typed path has its own floor rather than none.
+        if literal.len() < origin.floor() {
+            return None;
         }
 
         // The table is keyed by, holds, and mints from the canonical form, so a
         // second spelling of an identity already classified cannot reach a
         // second token.
         let canonical = canonical_identity(literal);
-        if self
+        if let Some(existing) = self
             .values
-            .iter()
-            .any(|(classified, _)| caseless_equal(classified, &canonical))
+            .iter_mut()
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
         {
+            // An entry first learned as a derived form widens when a typed field
+            // holds the value outright, rather than staying narrower than the
+            // lane's own evidence for it.
+            //
+            // The byte length is the *minimum* of the spellings seen, never the
+            // latest. A caseless-equal spelling can be shorter as found — `İabc`
+            // is five bytes and its decomposed twin is six, both canonicalizing to
+            // the same string — and taking the longer one would drop the boundary
+            // guard from the shorter spelling that needed it. Merging may only ever
+            // make an entry more conservatively bounded, never less.
+            existing.literal_bytes = existing.literal_bytes.min(literal.len());
+            existing.origin = existing.origin.widen(origin);
+            return Some(existing.token.clone());
+        }
+
+        let token = identity_token(literal, kind);
+        self.values.push(ClassifiedLiteral {
+            literal: canonical,
+            literal_bytes: literal.len(),
+            token: token.clone(),
+            origin,
+        });
+        self.sort_values();
+        Some(token)
+    }
+
+    /// Classify a derived form that has to reach the token of an identity the
+    /// capture already named, rather than minting a second one for one machine.
+    fn push_alias(&mut self, value: &str, token: &str) {
+        let literal = value.trim();
+        if literal.len() < MIN_SCRUBBED_LITERAL_BYTES {
             return;
         }
 
-        self.values.push((canonical, identity_token(literal, kind)));
+        let canonical = canonical_identity(literal);
+        if let Some(existing) = self
+            .values
+            .iter_mut()
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
+        {
+            // A derived form never narrows an identity the capture named outright.
+            // The byte length still takes the minimum of the spellings seen, for
+            // the same reason as in `push_literal`: merging must not be able to
+            // lengthen the value an entry is measured as and drop its guard.
+            existing.literal_bytes = existing.literal_bytes.min(literal.len());
+            existing.origin = existing.origin.widen(LiteralOrigin::DerivedFromTyped);
+            return;
+        }
+
+        self.values.push(ClassifiedLiteral {
+            literal: canonical,
+            literal_bytes: literal.len(),
+            token: token.to_string(),
+            origin: LiteralOrigin::DerivedFromTyped,
+        });
+        self.sort_values();
+    }
+
+    fn sort_values(&mut self) {
         self.values.sort_by(|left, right| {
             right
-                .0
+                .literal
                 .len()
-                .cmp(&left.0.len())
-                .then_with(|| left.0.cmp(&right.0))
+                .cmp(&left.literal.len())
+                .then_with(|| left.literal.cmp(&right.literal))
         });
     }
 
@@ -182,8 +401,8 @@ impl IdentityLiterals {
         let canonical = canonical_identity(value);
         self.values
             .iter()
-            .find(|(classified, _)| caseless_equal(classified, &canonical))
-            .map(|(_, token)| token.as_str())
+            .find(|existing| caseless_equal(&existing.literal, &canonical))
+            .map(|existing| existing.token.as_str())
     }
 
     /// Replace every occurrence of a classified literal, whatever its case.
@@ -226,19 +445,60 @@ impl IdentityLiterals {
         cursor: usize,
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
-        for (literal, token) in &self.values {
-            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
+        for entry in &self.values {
+            let Some((start, end)) = next_acceptable_match(entry, haystack, folded, cursor) else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
                 start < best_start || (start == best_start && end > best_end)
             });
             if replaces {
-                best = Some((start, end, token.as_str()));
+                best = Some((start, end, entry.token.as_str()));
             }
         }
         best
     }
+}
+
+/// Whether a character could continue an identifier, so a short or derived value
+/// must not be replaced across it.
+fn continues_identifier(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_' | '.')
+}
+
+/// Whether `haystack[start..end]` sits on a token boundary.
+fn on_token_boundary(haystack: &str, start: usize, end: usize) -> bool {
+    let before = haystack[..start].chars().next_back();
+    let after = haystack[end..].chars().next();
+    !before.is_some_and(continues_identifier) && !after.is_some_and(continues_identifier)
+}
+
+/// The next match of `entry` at or after `cursor` that the entry's own boundary
+/// rule accepts.
+///
+/// A bounded alias can still reach a later occurrence when the first one it
+/// finds is a fragment of something longer, so the search steps past a rejected
+/// match rather than giving up on the literal.
+fn next_acceptable_match(
+    entry: &ClassifiedLiteral,
+    haystack: &str,
+    folded: &[FoldedChar],
+    cursor: usize,
+) -> Option<(usize, usize)> {
+    let mut from = cursor;
+
+    while let Some((start, end)) = find_ignore_case(haystack, &entry.literal, folded, from) {
+        if !entry.requires_boundary() || on_token_boundary(haystack, start, end) {
+            return Some((start, end));
+        }
+
+        // `start` is a byte offset into `haystack` itself, so stepping one
+        // character past it cannot desynchronize the folded view.
+        let step = haystack[start..].chars().next().map_or(1, char::len_utf8);
+        from = start + step;
+    }
+
+    None
 }
 
 /// The canonical form every classification keys on and mints from: trimmed and
@@ -370,6 +630,187 @@ pub fn redacted_status_text(input: &str) -> String {
         literals: capture_literals(input),
     }
     .text(input)
+}
+
+/// One text artifact of a capture bundle: where it sits in the bundle, and what
+/// it holds.
+///
+/// A projection input and output at once — the hand-off reads the bundle's
+/// files into these, projects them, and writes them back out under the same
+/// relative paths — which is why the path travels with the text rather than
+/// being re-derived on the way out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DsregcmdBundleArtifact {
+    /// The artifact's path relative to the bundle root.
+    pub relative_path: String,
+    /// The artifact's contents, as the capture wrote them.
+    pub text: String,
+}
+
+/// Project every text artifact of a capture bundle into the form that may leave
+/// the machine.
+///
+/// The bundle itself stays raw and this is the hand-off instead. Masking the
+/// files where they are *stored* would change what the analyzer concludes
+/// rather than what anyone publishes: the captured command output is the
+/// analyzer's input, the evidence files are read back by `load_bundle_evidence`,
+/// and the same command output is read again by the ESP lane's bundle reader.
+/// So the working copy keeps every value the rules read, and this projects the
+/// same files on the way out (issue #628).
+///
+/// The classification is the *analysis* one rather than the capture-text one,
+/// because the bundle carries identifiers the command output does not. The
+/// enrollment UPN, the SCP tenant domain and directory id, and the computer an
+/// event was logged on are read out of evidence files, and the shaped grammar
+/// cannot mask a value it has no label for — a bare GUID in a registry key path
+/// or a JSON field is deliberately left visible, since GUIDs are usually
+/// correlation keys. A literal that never enters the table therefore cannot be
+/// scrubbed, which is why the assembled analysis is built unprojected and its
+/// classification is applied to every artifact's text.
+///
+/// A capture whose command output does not parse has no assembled analysis to
+/// read a classification from, and falls back to the capture text's own: its
+/// evidence then loses whatever the shared grammar recognizes by shape rather
+/// than shipping raw.
+///
+/// The artifacts are taken and returned by value so this performs no I/O — the
+/// caller owns the filesystem, exactly as it does for the analysis path — and
+/// so the projected set is a new value rather than a mutation of the raw one.
+///
+/// An artifact whose path identifies it as JSON is projected as JSON — parsed,
+/// every decoded string value projected, serialized back as valid JSON — and
+/// every other artifact keeps the line-oriented pass. The two are not
+/// interchangeable: a real event log escapes its message text, so a
+/// `DOMAIN\account` account name reaches the line-oriented pass preceded by the
+/// `t` of an escaped tab, and `t` is an identifier character, so the boundary
+/// matcher reads the domain as embedded in a longer identifier and refuses to
+/// mask it. Projecting the decoded value removes the encoding from the
+/// boundary question entirely, which a special case for `\t` would not: `\n`,
+/// `\b`, `\f` and `\u0009` are the same problem.
+///
+/// A present artifact that is identified as JSON but does not parse is an
+/// error. Falling back to the line-oriented pass would publish an artifact that
+/// looks projected while retaining whatever that pass could not reach.
+pub fn redacted_bundle_artifacts(
+    capture_text: &str,
+    evidence: DsregcmdBundleEvidence,
+    artifacts: Vec<DsregcmdBundleArtifact>,
+) -> Result<Vec<DsregcmdBundleArtifact>, String> {
+    let projection = Projection {
+        literals: bundle_literals(capture_text, evidence),
+    };
+
+    artifacts
+        .into_iter()
+        .map(|artifact| {
+            let text = if is_json_artifact(&artifact.relative_path) {
+                project_json_artifact(&projection, &artifact.relative_path, &artifact.text)?
+            } else {
+                project_artifact_text(&projection, &artifact.text)
+            };
+
+            Ok(DsregcmdBundleArtifact {
+                relative_path: artifact.relative_path,
+                text,
+            })
+        })
+        .collect()
+}
+
+/// Project one artifact's text, a line at a time.
+///
+/// Line by line because the shared grammar refuses an oversized input rather
+/// than masking it: it replaces any `text` longer than its own input bound with
+/// a single marker. Fed a whole artifact, a real capture's half-megabyte event
+/// log came back as that marker — the evidence was lost *and* the JSON was left
+/// unparseable, so a bundle reopened from the hand-off silently reached
+/// different verdicts (nine findings instead of ten on the machine this was
+/// measured on).
+///
+/// Splitting is safe for these artifacts because they put one value per line —
+/// a `dsregcmd /status` field, one registry value, one JSON value — and a
+/// multi-line value is escaped rather than embedded. So masking per line reaches
+/// every value the whole-file pass reached, while the grammar is never handed an
+/// input it would refuse.
+///
+/// The bound that remains is stated rather than implied: a *single* line longer
+/// than the grammar's input bound would still be replaced wholesale. None of
+/// these artifacts produces one, and the alternative — chunking at an arbitrary
+/// offset — could split an identifier across two chunks and leave it unmasked.
+fn project_artifact_text(projection: &Projection, text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| projection.text(line))
+        .collect()
+}
+
+/// Whether an artifact's path identifies it as JSON, which is what decides how
+/// its text is projected.
+///
+/// By extension rather than by sniffing the first byte: the bundle writes these
+/// files itself through `serde_json`, so the path is the reliable signal, and a
+/// sniffing rule would let a capture artifact that happens to start with `{`
+/// take the JSON path.
+fn is_json_artifact(relative_path: &str) -> bool {
+    relative_path
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("json"))
+}
+
+/// Project a JSON artifact by projecting its **decoded** string values.
+///
+/// Parsing is what takes the encoding out of the boundary question. In the
+/// serialized form the domain in `\tUser Name:\tDOMAIN\\adam_admin\r\n` is
+/// preceded by the `t` of an escaped tab, which the generic matcher reads as an
+/// identifier character and refuses to cross. In the decoded form it is
+/// preceded by a tab, which the same matcher already treats as a boundary — the
+/// same way it treats the account form in non-JSON text.
+///
+/// Numbers, booleans, nulls and object keys are left exactly as they are: they
+/// carry no identity text, and a key is schema rather than capture content.
+///
+/// The re-serialized form is compact rather than a replica of the input's
+/// whitespace, and object members come out in the map's own order rather than
+/// the input's, because `serde_json` is built here without `preserve_order`.
+/// Both are representation changes, not content ones: JSON member order carries
+/// no meaning, every reader of these artifacts deserializes them, and the
+/// canonical form is also what makes a second projection of an already
+/// projected artifact a no-op.
+fn project_json_artifact(
+    projection: &Projection,
+    relative_path: &str,
+    text: &str,
+) -> Result<String, String> {
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
+        format!(
+            "Refusing to project '{relative_path}': it is identified as JSON but does not parse ({error})."
+        )
+    })?;
+
+    project_json_value(projection, &mut value);
+
+    serde_json::to_string(&value).map_err(|error| {
+        format!(
+            "Refusing to project '{relative_path}': the projected JSON could not be serialized ({error})."
+        )
+    })
+}
+
+/// Apply the projection to every string value in a JSON tree, recursively.
+fn project_json_value(projection: &Projection, value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = projection.text(text),
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                project_json_value(projection, item);
+            }
+        }
+        serde_json::Value::Object(members) => {
+            for member in members.values_mut() {
+                project_json_value(projection, member);
+            }
+        }
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null => {}
+    }
 }
 
 impl Projection {
@@ -807,7 +1248,7 @@ fn collect_identity_literals(result: &DsregcmdAnalysisResult) -> IdentityLiteral
     if let Some(enrollment) = &result.enrollment_evidence {
         for entry in &enrollment.enrollments {
             if let Some(upn) = entry.upn.as_deref() {
-                literals.push(upn, KIND_UPN);
+                literals.push(upn, KIND_UPN, LiteralOrigin::TypedSensitive);
             }
         }
     }
@@ -835,6 +1276,24 @@ fn capture_literals(capture_output: &str) -> IdentityLiterals {
     literals
 }
 
+/// The identity literals one whole capture contributes.
+///
+/// The assembled analysis already carries every class this lane classifies —
+/// the command output's own facts, the enrollment UPNs, the SCP domain and
+/// directory id, and the event-log computer names — so its classification is
+/// read directly rather than rebuilt beside it. A second collector would be a
+/// second list, and a class added to the analysis would then reach the typed
+/// projection while quietly missing the hand-off.
+///
+/// Output the parser cannot read assembles no analysis to read from, and falls
+/// back to the capture text's own classification.
+fn bundle_literals(capture_text: &str, evidence: DsregcmdBundleEvidence) -> IdentityLiterals {
+    match super::analyze_text_with_evidence_preserving_local_values(capture_text, evidence) {
+        Ok(result) => collect_identity_literals(&result),
+        Err(_) => capture_literals(capture_text),
+    }
+}
+
 fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals) {
     for (value, kind) in [
         (facts.tenant_details.tenant_id.as_deref(), KIND_TENANT),
@@ -845,7 +1304,7 @@ fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals)
         (facts.diagnostics.user_identity.as_deref(), KIND_UPN),
     ] {
         if let Some(value) = value {
-            literals.push(value, kind);
+            literals.push(value, kind, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -856,10 +1315,10 @@ fn collect_active_evidence_into(
 ) {
     if let Some(scp) = &evidence.scp_query {
         if let Some(domain) = scp.tenant_domain.as_deref() {
-            literals.push(domain, KIND_TENANT);
+            literals.push(domain, KIND_TENANT, LiteralOrigin::TypedSensitive);
         }
         if let Some(azuread_id) = scp.azuread_id.as_deref() {
-            literals.push(azuread_id, KIND_TENANT);
+            literals.push(azuread_id, KIND_TENANT, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -867,7 +1326,7 @@ fn collect_active_evidence_into(
 fn collect_event_log_into(analysis: &EventLogAnalysis, literals: &mut IdentityLiterals) {
     for entry in &analysis.entries {
         if let Some(computer) = entry.computer.as_deref() {
-            literals.push(computer, KIND_HOST);
+            literals.push(computer, KIND_HOST, LiteralOrigin::TypedSensitive);
         }
     }
 }
@@ -877,9 +1336,13 @@ mod tests {
     use super::{
         super::{
             analyze_text, analyze_text_preserving_local_values, analyze_text_with_evidence,
-            models::{DsregcmdAnalysisResult, DsregcmdBundleEvidence},
+            models::{
+                DsregcmdActiveEvidence, DsregcmdAnalysisResult, DsregcmdBundleEvidence,
+                DsregcmdEnrollmentEntry, DsregcmdEnrollmentEvidence, DsregcmdScpQueryResult,
+            },
         },
-        redacted_status_text, IdentityLiterals, KIND_HOST, KIND_TENANT,
+        redacted_bundle_artifacts, redacted_status_text, DsregcmdBundleArtifact, IdentityLiterals,
+        LiteralOrigin, KIND_HOST, KIND_TENANT,
     };
     use crate::intune::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
@@ -1084,16 +1547,31 @@ mod tests {
     /// which is the one-identity-two-tokens failure this table exists to prevent.
     /// So the field that classifies a value first decides its token, and a later
     /// field holding the same value follows it rather than minting a second.
+    /// A host value also derives its short form, which is a second entry on
+    /// purpose — they are two different literals naming one machine. What must
+    /// not happen is two entries for the *same* text.
     #[test]
     fn one_text_reaches_one_token_when_two_kinds_classify_it() {
         let mut literals = IdentityLiterals::default();
-        literals.push("contoso.example", KIND_TENANT);
-        literals.push("contoso.example", KIND_HOST);
+        literals.push(
+            "contoso.example",
+            KIND_TENANT,
+            LiteralOrigin::TypedSensitive,
+        );
+        literals.push("contoso.example", KIND_HOST, LiteralOrigin::TypedSensitive);
 
         let token = literals
             .token_for("contoso.example")
             .expect("the domain was classified");
-        assert_eq!(literals.values.len(), 1, "one text, one entry");
+        assert_eq!(
+            literals
+                .values
+                .iter()
+                .filter(|entry| entry.literal == "contoso.example")
+                .count(),
+            1,
+            "one text, one entry"
+        );
         assert!(
             token.starts_with("[tenant:"),
             "the first classification names the token: {token}"
@@ -1102,6 +1580,12 @@ mod tests {
             literals.token_for("CONTOSO.Example"),
             Some(token),
             "another casing follows the same token"
+        );
+        assert_eq!(
+            literals.token_for("contoso"),
+            Some(token),
+            "the short form derived from the host reaches the token of the value it came from, \
+             rather than minting a second token for one machine"
         );
     }
 
@@ -1234,6 +1718,1026 @@ mod tests {
             projected.contains("strasse.example"),
             "this pair is covered after all; the limitation note and this test need updating: {projected:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The bundle hand-off (issue #628)
+    // -----------------------------------------------------------------------
+
+    const BUNDLE_TENANT_ID: &str = "8f9b2b41-1c0d-4f3a-9a1b-7d2e5c6f8a90";
+    const BUNDLE_TENANT_DOMAIN: &str = "contoso.onmicrosoft.com";
+    const BUNDLE_ON_PREMISES_DOMAIN: &str = "corp.contoso.com";
+    const BUNDLE_DEVICE_ID: &str = "4a1f7c2e-9b3d-4e5f-8a6b-1c2d3e4f5a6b";
+    const BUNDLE_THUMBPRINT: &str = "8E1B0C4A5D6F70819A2B3C4D5E6F70819A2B3C4D";
+    const BUNDLE_ENROLLMENT_UPN: &str = "bruno.diaz@contoso.onmicrosoft.com";
+    const BUNDLE_ENROLLMENT_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const BUNDLE_EVENT_COMPUTER: &str = "HELPDESK-LAPTOP01.corp.contoso.com";
+
+    /// The tenant id sits in the bundle three times, and only one of them is a
+    /// labelled field: `TenantId :` in the command output, the unlabelled
+    /// registry key path under `JoinInfo`, and the SCP query's directory id.
+    const BUNDLE_TENANT_ID_OCCURRENCES: usize = 3;
+
+    /// Each identifier the hand-off is required to keep out of a shareable
+    /// artefact, with the class it belongs to for the failure message.
+    const BUNDLE_IDENTIFIERS: &[(&str, &str)] = &[
+        ("tenant id", BUNDLE_TENANT_ID),
+        ("tenant domain", BUNDLE_TENANT_DOMAIN),
+        ("on-premises domain", BUNDLE_ON_PREMISES_DOMAIN),
+        ("device id", BUNDLE_DEVICE_ID),
+        ("certificate thumbprint", BUNDLE_THUMBPRINT),
+        ("enrollment user principal name", BUNDLE_ENROLLMENT_UPN),
+        ("event log computer name", BUNDLE_EVENT_COMPUTER),
+        ("user SID", USER_SID),
+    ];
+
+    /// The bundle's command output, carrying one identifier of every class this
+    /// projection masks and the SID spelling that makes the
+    /// built-in-Administrator rule fire from the *raw* working copy.
+    ///
+    /// The join flags are the ones that rule is gated on — it reports only a
+    /// device that did not reach Azure AD Join — so a SID reaching this fixture
+    /// is observable as a verdict rather than as a field.
+    fn bundle_capture() -> String {
+        format!(
+            "\n AzureAdJoined : NO\n \
+             DomainJoined : YES\n \
+             TenantId : {BUNDLE_TENANT_ID}\n \
+             TenantName : {BUNDLE_TENANT_DOMAIN}\n \
+             DomainName : {BUNDLE_ON_PREMISES_DOMAIN}\n \
+             DeviceId : {BUNDLE_DEVICE_ID}\n \
+             Thumbprint : {BUNDLE_THUMBPRINT}\n \
+             User Identity : {USER_SID}\n \
+             User Context : SYSTEM\n"
+        )
+    }
+
+    /// A capture bundle as the hand-off sees it: the command output and every
+    /// evidence file, each still carrying what the capture printed.
+    ///
+    /// The evidence files are where the command output does not reach — the
+    /// enrollment UPN, the SCP tenant domain and directory id, and the computer
+    /// an event was logged on — because the shaped grammar cannot mask a value
+    /// it has no label for, and a bare GUID is deliberately left visible.
+    fn unprojected_bundle_artifacts() -> Vec<DsregcmdBundleArtifact> {
+        vec![
+            DsregcmdBundleArtifact {
+                relative_path: "manifest.json".to_string(),
+                text: "{\n  \"manifestPath\": \"manifest.json\",\n  \"source\": \"live-dsregcmd-capture\"\n}\n"
+                    .to_string(),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/command-output/dsregcmd-status.txt".to_string(),
+                text: bundle_capture(),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/registry/cdj-joininfo.reg".to_string(),
+                text: format!(
+                    "Windows Registry Editor Version 5.00\n\n\
+                     [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CloudDomainJoin\\JoinInfo\\{BUNDLE_TENANT_ID}]\n\
+                     \"UserEmail\"=\"{BUNDLE_ENROLLMENT_UPN}\"\n\
+                     \"IdpDomain\"=\"{BUNDLE_TENANT_DOMAIN}\"\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/registry/enrollments.reg".to_string(),
+                text: format!(
+                    "Windows Registry Editor Version 5.00\n\n\
+                     [HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\{{{BUNDLE_ENROLLMENT_GUID}}}]\n\
+                     \"UPN\"=\"{BUNDLE_ENROLLMENT_UPN}\"\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/connectivity/scp-query.json".to_string(),
+                text: format!(
+                    "{{\n  \"scpFound\": true,\n  \"tenantDomain\": \"{BUNDLE_TENANT_DOMAIN}\",\n  \"azureadId\": \"{BUNDLE_TENANT_ID}\",\n  \"domainController\": \"dc1.{BUNDLE_ON_PREMISES_DOMAIN}\"\n}}\n"
+                ),
+            },
+            DsregcmdBundleArtifact {
+                relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+                text: format!(
+                    "{{\n  \"entries\": [\n    {{\n      \"computer\": \"{BUNDLE_EVENT_COMPUTER}\",\n      \"message\": \"registration failed for {BUNDLE_ENROLLMENT_UPN}\"\n    }}\n  ]\n}}\n"
+                ),
+            },
+        ]
+    }
+
+    /// The typed evidence the same files deserialize into, as the application
+    /// reads it back before analyzing.
+    fn bundle_evidence() -> DsregcmdBundleEvidence {
+        DsregcmdBundleEvidence {
+            enrollment_evidence: Some(DsregcmdEnrollmentEvidence {
+                enrollment_count: 1,
+                enrollments: vec![DsregcmdEnrollmentEntry {
+                    guid: Some(BUNDLE_ENROLLMENT_GUID.to_string()),
+                    upn: Some(BUNDLE_ENROLLMENT_UPN.to_string()),
+                    provider_id: Some("MS DM Server".to_string()),
+                    enrollment_state: Some(1),
+                }],
+            }),
+            active_evidence: Some(DsregcmdActiveEvidence {
+                connectivity_tests: Vec::new(),
+                scp_query: Some(DsregcmdScpQueryResult {
+                    scp_found: true,
+                    tenant_domain: Some(BUNDLE_TENANT_DOMAIN.to_string()),
+                    azuread_id: Some(BUNDLE_TENANT_ID.to_string()),
+                    keywords: Vec::new(),
+                    domain_controller: Some(format!("dc1.{BUNDLE_ON_PREMISES_DOMAIN}")),
+                    error: None,
+                }),
+            }),
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(BUNDLE_EVENT_COMPUTER.to_string()),
+                    message: format!("registration failed for {BUNDLE_ENROLLMENT_UPN}"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        }
+    }
+
+    fn joined_artifact_text(artifacts: &[DsregcmdBundleArtifact]) -> String {
+        artifacts
+            .iter()
+            .map(|artifact| artifact.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The canary: the fixture really does carry each identifier in cleartext
+    /// before the projection, so the hand-off assertion below cannot pass
+    /// vacuously because a value stopped being planted.
+    #[test]
+    fn the_unprojected_bundle_carries_every_identifier_the_hand_off_must_mask() {
+        let raw = joined_artifact_text(&unprojected_bundle_artifacts());
+
+        for (label, marker) in BUNDLE_IDENTIFIERS {
+            assert!(
+                raw.contains(marker),
+                "the bundle fixture no longer carries the {label} ({marker}); the hand-off assertion is vacuous"
+            );
+        }
+        assert_eq!(
+            raw.matches(BUNDLE_TENANT_ID).count(),
+            BUNDLE_TENANT_ID_OCCURRENCES,
+            "the fixture no longer plants the tenant id in all three shapes the hand-off has to cover"
+        );
+    }
+
+    /// The acceptance criteria's first half: the shareable artefact carries no
+    /// cleartext tenant id, domain, device id, thumbprint, user principal name
+    /// or SID — including the occurrences no shaped rule reaches.
+    #[test]
+    fn the_hand_off_keeps_every_identifier_out_of_the_shareable_bundle() {
+        let projected = redacted_bundle_artifacts(
+            &bundle_capture(),
+            bundle_evidence(),
+            unprojected_bundle_artifacts(),
+        )
+        .expect("the bundle projects");
+        let shareable = joined_artifact_text(&projected);
+
+        for (label, marker) in BUNDLE_IDENTIFIERS {
+            assert!(
+                !shareable.contains(marker),
+                "the shareable bundle leaks the {label} ({marker}): {shareable}"
+            );
+        }
+    }
+
+    /// The acceptance criteria's second half: the analyzer still reaches its
+    /// existing verdicts, because the projection is built *from* the raw values
+    /// at the hand-off rather than written back over the working copy.
+    #[test]
+    fn projecting_the_hand_off_leaves_the_raw_bundle_reaching_its_verdicts() {
+        let analysis = analyze_text_with_evidence(&bundle_capture(), bundle_evidence())
+            .expect("the bundle fixture analyzes");
+
+        assert!(
+            diagnostic_ids(&analysis).contains(&"builtin-admin-cannot-join"),
+            "the SID in the raw capture no longer reaches the built-in-Administrator rule"
+        );
+        assert!(
+            analysis.enrollment_evidence.is_some()
+                && analysis.active_evidence.is_some()
+                && analysis.event_log_analysis.is_some(),
+            "the bundle evidence no longer reaches the analysis"
+        );
+        assert!(
+            !json(&analysis).contains(BUNDLE_ENROLLMENT_UPN),
+            "the published analysis leaks the enrollment user principal name"
+        );
+    }
+
+    /// The hand-off stays usable: every artifact keeps its path, and the bundle
+    /// classification agrees with the capture-text one, so a value classified
+    /// from the command output reaches the token it always reached.
+    #[test]
+    fn the_hand_off_preserves_every_artifact_path_and_one_token_per_identity() {
+        let artifacts = unprojected_bundle_artifacts();
+        let expected_paths: Vec<String> = artifacts
+            .iter()
+            .map(|artifact| artifact.relative_path.clone())
+            .collect();
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
+            .expect("the bundle projects");
+        let actual_paths: Vec<String> = projected
+            .iter()
+            .map(|artifact| artifact.relative_path.clone())
+            .collect();
+        assert_eq!(
+            actual_paths, expected_paths,
+            "an artifact path was rewritten"
+        );
+
+        let shareable = joined_artifact_text(&projected);
+        let from_capture_text = tokens_of_kind(&redacted_status_text(&bundle_capture()), "tenant");
+        assert!(
+            !from_capture_text.is_empty(),
+            "the capture-text projection minted no tenant token; the comparison below is vacuous"
+        );
+        let from_bundle = tokens_of_kind(&shareable, "tenant");
+        for token in &from_capture_text {
+            assert!(
+                from_bundle.contains(token),
+                "the bundle projection disagreed with the capture-text one: {token} is missing from {from_bundle:?}"
+            );
+        }
+    }
+
+    /// The shared grammar refuses an oversized input rather than masking it, so
+    /// projecting an artifact whole replaced the entire file with its marker. A
+    /// capture's event-log export is routinely several hundred kilobytes, which
+    /// is how this was found: on a live capture the hand-off wrote a 34-byte
+    /// event log, the bundle lost that evidence, and the analysis of the
+    /// reopened bundle reached nine findings instead of ten.
+    #[test]
+    fn the_hand_off_projects_a_large_artifact_instead_of_replacing_it() {
+        let mut entries = String::new();
+        for index in 0..6_000 {
+            entries.push_str(&format!(
+                "    {{\n      \"id\": {index},\n      \"channel\": \"AadOperational\",\n      \"message\": \"event detail line {index}\"\n    }},\n"
+            ));
+        }
+
+        let artifact = vec![DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!(
+                "{{\n  \"sourceKind\": \"Live\",\n  \"entries\": [\n{entries}    {{\n      \"id\": 6001,\n      \"computer\": \"{BUNDLE_EVENT_COMPUTER}\",\n      \"message\": \"registration failed for {BUNDLE_ENROLLMENT_UPN}\"\n    }}\n  ]\n}}\n"
+            ),
+        }];
+        assert!(
+            artifact[0].text.len() > 256 * 1024,
+            "the fixture has to exceed the grammar's input bound to be a regression test"
+        );
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifact)
+            .expect("the bundle projects");
+        let text = &projected[0].text;
+
+        assert!(
+            !text.contains("oversized text omitted"),
+            "the artifact was replaced wholesale instead of projected"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(text).is_ok(),
+            "the projected artifact is no longer parseable JSON"
+        );
+        assert!(
+            !text.contains(BUNDLE_EVENT_COMPUTER) && !text.contains(BUNDLE_ENROLLMENT_UPN),
+            "the oversized artifact kept an identifier in clear"
+        );
+    }
+
+    /// A machine is named twice in a capture: the event record carries the FQDN,
+    /// and the message body names the same machine by its short form. Only the
+    /// FQDN was classified, so every narrative mention of the short form went out
+    /// in clear — 190 of them in a live capture, in a bundle whose `computer`
+    /// field was correctly masked.
+    #[test]
+    fn a_typed_host_scrubs_its_short_form_from_narrative_text() {
+        let fqdn = "HELPDESK-LAPTOP01.corp.contoso.com";
+        let short = "HELPDESK-LAPTOP01";
+
+        let evidence = DsregcmdBundleEvidence {
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(fqdn.to_string()),
+                    message: format!("{short} reported a failure for {USER_SID}"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        };
+
+        let published = json(
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+        );
+
+        assert!(
+            !published.contains(fqdn),
+            "the typed host field kept the FQDN: {published}"
+        );
+        assert!(
+            !published.contains(short),
+            "the short form of a classified host survived in narrative text: {published}"
+        );
+
+        let tokens = tokens_of_kind(&published, "host");
+        assert!(
+            tokens.len() >= 2,
+            "expected the typed host and its narrative mention both masked: {published}"
+        );
+        assert!(
+            tokens.iter().all(|token| *token == tokens[0]),
+            "one machine reached more than one token: {tokens:?}"
+        );
+    }
+
+    /// A short form is far likelier than a full identity to occur as a fragment
+    /// of ordinary text, so it matches only where the characters around it could
+    /// not continue a hostname. `HELPDESK-LAPTOP011` is a different machine.
+    #[test]
+    fn a_short_host_alias_does_not_replace_a_longer_hostname() {
+        let short = "HELPDESK-LAPTOP01";
+        let neighbour = "HELPDESK-LAPTOP011";
+
+        let evidence = DsregcmdBundleEvidence {
+            event_log_analysis: Some(EventLogAnalysis {
+                source_kind: EventLogAnalysisSource::Live,
+                entries: vec![EventLogEntry {
+                    id: 1,
+                    channel: EventLogChannel::AadOperational,
+                    channel_display: "AAD Operational".to_string(),
+                    provider: "Microsoft-Windows-AAD".to_string(),
+                    event_id: 1103,
+                    severity: EventLogSeverity::Error,
+                    timestamp: "2026-08-26T09:15:00Z".to_string(),
+                    computer: Some(format!("{short}.corp.contoso.com")),
+                    message: format!("{neighbour}.corp.contoso.com reported a failure"),
+                    correlation_activity_id: None,
+                    source_file: "AAD.evtx".to_string(),
+                }],
+                ..EventLogAnalysis::default()
+            }),
+            ..DsregcmdBundleEvidence::default()
+        };
+
+        let published = json(
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+        );
+
+        assert!(
+            published.contains(neighbour),
+            "the alias cut a different machine's name in half: {published}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The typed short-literal policy (issue #646)
+    // -----------------------------------------------------------------------
+
+    /// A four-character on-premises domain: below the ordinary six-byte scrub
+    /// floor, and the shape a live capture on a domain-joined machine has.
+    const SHORT_DOMAIN: &str = "ACME";
+
+    fn short_domain_capture(narrative: &str) -> String {
+        format!(
+            "\n AzureAdJoined : NO\n DomainJoined : YES\n \
+             TenantId : {BUNDLE_TENANT_ID}\n DomainName : {SHORT_DOMAIN}\n \
+             Server Message : {narrative}\n"
+        )
+    }
+
+    fn projected_capture(capture: &str) -> serde_json::Value {
+        let analysis = analyze_text_with_evidence(capture, DsregcmdBundleEvidence::default())
+            .expect("the capture analyzes");
+        serde_json::from_str(&json(&analysis)).expect("a dsregcmd analysis serializes")
+    }
+
+    /// A four-character value the capture put in a *typed* field is an identity,
+    /// so it is masked in that field **and** in the narrative around it, and both
+    /// reach one token — whatever their case, however often they occur.
+    ///
+    /// Covers the policy's requirements 1, 2, 3, 7 and 8.
+    #[test]
+    fn a_short_typed_domain_masks_its_field_and_its_narrative_mentions() {
+        let value = projected_capture(&short_domain_capture(
+            "sync to acme failed; retry ACME; then AcMe done",
+        ));
+
+        let domain_token = value["facts"]["tenantDetails"]["domainName"]
+            .as_str()
+            .expect("the domain field is present")
+            .to_string();
+        assert!(
+            domain_token.starts_with("[tenant:"),
+            "the typed field is masked: {domain_token}"
+        );
+
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+        assert!(
+            !message.to_ascii_lowercase().contains("acme"),
+            "narrative text kept the short domain: {message}"
+        );
+        assert_eq!(
+            message.matches(domain_token.as_str()).count(),
+            3,
+            "every occurrence, whatever its case, reaches the typed field's token: {message}"
+        );
+    }
+
+    /// The floor is unchanged for a value with no typed field behind it. The
+    /// *classification* is what authorizes a short replacement, not the length.
+    ///
+    /// Covers requirement 4, and requirement 10 with the existing suite.
+    #[test]
+    fn an_ordinary_short_word_is_still_not_classified() {
+        let mut observed = IdentityLiterals::default();
+        observed.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::ObservedNarrative);
+        assert!(
+            observed.values.is_empty(),
+            "a four-character value observed in prose still has to clear the floor"
+        );
+
+        let mut typed = IdentityLiterals::default();
+        typed.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            typed.values.len(),
+            1,
+            "the same four characters are an identity when a typed field holds them"
+        );
+    }
+
+    /// The typed path has a smaller floor rather than none, and this pins the
+    /// difference: two characters is prose, four is an identifier.
+    #[test]
+    fn a_two_character_typed_value_is_still_too_short_to_scrub() {
+        let mut two = IdentityLiterals::default();
+        two.push("ad", KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert!(
+            two.values.is_empty(),
+            "a two-character typed value must not enter the table"
+        );
+
+        let mut four = IdentityLiterals::default();
+        four.push(SHORT_DOMAIN, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            four.values.len(),
+            1,
+            "a four-character typed value is the leak this policy exists for"
+        );
+    }
+
+    /// One byte length decides both the insertion floor and the boundary
+    /// requirement, so the two cannot disagree.
+    ///
+    /// Unicode lowercasing can change a value's byte length: `İ` (U+0130) is two
+    /// bytes and canonicalizes to `i` plus a combining dot above, three bytes. A
+    /// five-byte value therefore becomes six, which is exactly the length
+    /// `requires_boundary` compares against. Measuring the *original* at insertion
+    /// and the *canonical* form at match time let such a value clear the typed
+    /// floor and then be replaced **inside** a longer identifier — the
+    /// over-matching the boundary rule exists to prevent.
+    #[test]
+    fn a_value_whose_canonical_form_grows_is_still_bounded() {
+        let value = "\u{130}abc";
+        assert_eq!(value.len(), 5, "the fixture is five bytes as it was found");
+        assert_eq!(
+            value.to_lowercase().len(),
+            6,
+            "and six once canonicalized, which is the threshold that hid the gap"
+        );
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(value, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert_eq!(
+            literals.values.len(),
+            1,
+            "the typed value clears the four-byte floor and is classified"
+        );
+
+        // Inside a longer identifier the value is a fragment of that identifier,
+        // not the identifier itself, so a bounded literal must leave it alone.
+        let inside = "x\u{130}abcy";
+        assert_eq!(
+            literals.scrub(inside),
+            inside,
+            "a short typed value must not be replaced inside a larger identifier"
+        );
+    }
+
+    /// A later, shorter spelling of one identity must not inherit the byte length
+    /// of a longer spelling already in the table.
+    ///
+    /// `literal_bytes` decides the boundary requirement. When a six-byte spelling
+    /// registers first and a caseless-equal five-byte spelling arrives second, an
+    /// entry that keeps six stops being bounded — and the five-byte spelling, the
+    /// one that needed the guard, is then replaced inside a longer identifier.
+    /// Deduplication must never make an entry less conservatively bounded.
+    #[test]
+    fn a_later_shorter_spelling_keeps_the_entry_bounded() {
+        // `i` + combining dot above + `abc`: six bytes as found.
+        let decomposed = "i\u{307}abc";
+        // `İabc`: five bytes as found, six once canonicalized.
+        let precomposed = "\u{130}abc";
+        assert_eq!(decomposed.len(), 6);
+        assert_eq!(precomposed.len(), 5);
+        assert_eq!(
+            decomposed.to_lowercase(),
+            precomposed.to_lowercase(),
+            "the two spellings are one identity"
+        );
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        literals.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(literals.values.len(), 1, "one identity, one entry");
+        assert_eq!(
+            literals.values[0].literal_bytes, 5,
+            "the entry keeps the shorter spelling's byte length, not the longer one's"
+        );
+
+        let inside = "x\u{130}abcy";
+        assert_eq!(
+            literals.scrub(inside),
+            inside,
+            "the entry stays bounded, so the fragment is left inside the identifier"
+        );
+    }
+
+    /// Registration order must not decide the boundary requirement.
+    #[test]
+    fn registration_order_does_not_change_the_boundary_decision() {
+        let decomposed = "i\u{307}abc";
+        let precomposed = "\u{130}abc";
+
+        let mut short_first = IdentityLiterals::default();
+        short_first.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        short_first.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        let mut long_first = IdentityLiterals::default();
+        long_first.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        long_first.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(
+            short_first.values[0].literal_bytes, long_first.values[0].literal_bytes,
+            "the entry's byte length must not depend on which spelling arrived first"
+        );
+        assert_eq!(
+            short_first.values[0].requires_boundary(),
+            long_first.values[0].requires_boundary(),
+            "and so the boundary decision must match too"
+        );
+    }
+
+    /// Two spellings of one identity still reach one token.
+    #[test]
+    fn two_spellings_of_one_identity_still_share_one_token() {
+        let decomposed = "i\u{307}abc";
+        let precomposed = "\u{130}abc";
+
+        let mut literals = IdentityLiterals::default();
+        literals.push(decomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+        literals.push(precomposed, KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        assert_eq!(literals.values.len(), 1, "one identity, one entry");
+        let token = literals.values[0].token.clone();
+        let scrubbed = literals.scrub("sync to \u{130}abc done");
+        assert_eq!(
+            scrubbed.matches(token.as_str()).count(),
+            1,
+            "the narrative occurrence reaches the entry's single token: {scrubbed}"
+        );
+    }
+
+    /// Bounded does not mean silent: a value standing alone is still replaced.
+    #[test]
+    fn a_bounded_entry_is_still_replaced_where_it_stands_alone() {
+        let mut literals = IdentityLiterals::default();
+        literals.push("\u{130}abc", KIND_TENANT, LiteralOrigin::TypedSensitive);
+        assert!(
+            literals.values[0].requires_boundary(),
+            "a five-byte typed value is bounded"
+        );
+
+        let scrubbed = literals.scrub("sync to \u{130}abc now");
+        assert!(
+            !scrubbed.contains("\u{130}abc"),
+            "a bounded value is still replaced where it stands alone: {scrubbed}"
+        );
+    }
+
+    /// Projecting an already-projected value changes nothing further.
+    #[test]
+    fn projecting_twice_changes_nothing_the_second_time() {
+        let mut literals = IdentityLiterals::default();
+        literals.push("\u{130}abc", KIND_TENANT, LiteralOrigin::TypedSensitive);
+
+        let once = literals.scrub("sync to \u{130}abc now; skip x\u{130}abcy");
+        let twice = literals.scrub(&once);
+        assert_eq!(once, twice, "projection is idempotent");
+    }
+
+    /// The typed floor is a policy boundary, not an accident of a comparison, so
+    /// the lengths either side of it are pinned: two and three bytes stay out,
+    /// four and five are admitted.
+    #[test]
+    fn the_typed_floor_admits_four_bytes_and_refuses_three() {
+        for (value, admitted) in [
+            ("ad", false),
+            ("abc", false),
+            ("abcd", true),
+            ("abcde", true),
+        ] {
+            let mut literals = IdentityLiterals::default();
+            literals.push(value, KIND_TENANT, LiteralOrigin::TypedSensitive);
+            assert_eq!(
+                !literals.values.is_empty(),
+                admitted,
+                "a {}-byte typed value admitted={} but the policy says {admitted}",
+                value.len(),
+                !literals.values.is_empty()
+            );
+        }
+    }
+
+    /// Four and five byte typed values are not merely admitted — they are scrubbed
+    /// out of the narrative they appear in, at a boundary.
+    #[test]
+    fn a_four_or_five_byte_typed_value_is_scrubbed_from_narrative() {
+        for domain in ["acme", "acmes"] {
+            let capture = format!(
+                "\n AzureAdJoined : NO\n DomainJoined : YES\n \
+                 TenantId : {BUNDLE_TENANT_ID}\n DomainName : {domain}\n \
+                 Server Message : sync to {domain} failed\n"
+            );
+            let value = projected_capture(&capture);
+            let message = value["facts"]["registration"]["serverMessage"]
+                .as_str()
+                .expect("the message field is present");
+
+            assert!(
+                !message.to_ascii_lowercase().contains(domain),
+                "a {}-byte typed domain survived in narrative text: {message}",
+                domain.len()
+            );
+        }
+    }
+
+    /// A rejected occurrence must not end the search for that literal: the same
+    /// value appearing later, on a boundary, still has to be found.
+    #[test]
+    fn a_bounded_occurrence_is_still_found_after_an_earlier_rejected_one() {
+        let value = projected_capture(&short_domain_capture(
+            "ACMECORP failed, then ACME failed too",
+        ));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        assert!(
+            message.contains("ACMECORP"),
+            "the fused occurrence was cut: {message}"
+        );
+        assert!(
+            !message.contains("ACME failed"),
+            "the bounded occurrence after the rejected one was missed: {message}"
+        );
+    }
+
+    /// A short value is replaced only where the characters around it could not
+    /// continue an identifier, so it cannot cut a longer one in half.
+    ///
+    /// Covers requirement 5.
+    #[test]
+    fn a_short_typed_domain_does_not_cut_a_longer_identifier() {
+        let value = projected_capture(&short_domain_capture("ACMECORP MYACME ACME2 acme-corp"));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        for untouched in ["ACMECORP", "MYACME", "ACME2", "acme-corp"] {
+            assert!(
+                message.contains(untouched),
+                "the short domain cut '{untouched}' in half: {message}"
+            );
+        }
+    }
+
+    /// The account form is a boundary, so the domain loses while the account name
+    /// it belongs to stays readable.
+    ///
+    /// Covers requirement 6.
+    #[test]
+    fn a_short_typed_domain_is_replaced_in_an_account_name() {
+        let value = projected_capture(&short_domain_capture(r"sign-in failed for ACME\adam_admin"));
+        let message = value["facts"]["registration"]["serverMessage"]
+            .as_str()
+            .expect("the message field is present");
+
+        assert!(
+            !message.to_ascii_lowercase().contains("acme"),
+            "the domain survived in the account form: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// Projecting what the projection produced changes nothing, which is what
+    /// keeps a second egress pass from disagreeing with the first.
+    ///
+    /// Covers requirement 9.
+    #[test]
+    fn projecting_a_short_typed_domain_is_idempotent() {
+        let capture = short_domain_capture("sync to ACME failed");
+        let once = redacted_status_text(&capture);
+        assert!(
+            !once.to_ascii_lowercase().contains("acme"),
+            "the first pass did not mask the short domain: {once}"
+        );
+        assert_eq!(
+            redacted_status_text(&once),
+            once,
+            "a second pass changed the projected capture"
+        );
+    }
+
+    /// A `dsregcmd-events.json` artifact holding one event message.
+    ///
+    /// `message` is the JSON *source* form of the message, so a caller passes
+    /// `\t` or `\u0009` the way a capture would have written it rather than a
+    /// decoded tab.
+    fn events_json_artifact(message: &str) -> DsregcmdBundleArtifact {
+        DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!("{{\n  \"entries\": [\n    {{ \"message\": \"{message}\" }}\n  ]\n}}\n"),
+        }
+    }
+
+    /// Project a single artifact through the hand-off.
+    fn project_one_artifact(artifact: DsregcmdBundleArtifact) -> String {
+        redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![artifact])
+            .expect("the bundle projects")
+            .into_iter()
+            .next()
+            .expect("one artifact in, one artifact out")
+            .text
+    }
+
+    /// The decoded message of a projected events artifact, which also proves the
+    /// projected artifact is still valid JSON.
+    fn decoded_message(projected: &str) -> String {
+        let value: serde_json::Value =
+            serde_json::from_str(projected).expect("the projected artifact is valid JSON");
+        value["entries"][0]["message"]
+            .as_str()
+            .expect("the message value survives projection")
+            .to_string()
+    }
+
+    /// The token the *typed* `DomainName` field reached, which is the token a
+    /// mention of the same domain in an artifact message has to reach too.
+    fn typed_domain_token() -> String {
+        projected_capture(&short_domain_capture(""))["facts"]["tenantDetails"]["domainName"]
+            .as_str()
+            .expect("the domain field is present")
+            .to_string()
+    }
+
+    /// A real event log escapes its message text, so a `DOMAIN\account` account
+    /// name reaches the line-oriented pass with the domain preceded by the `t`
+    /// of an escaped tab. `t` is an identifier character, so the generic
+    /// boundary matcher reads the domain as embedded inside a longer identifier
+    /// and refuses to mask it: the domain survives projection in the one
+    /// artifact class whose text is escaped.
+    ///
+    /// Measured on a live domain-joined capture this was nine surviving
+    /// occurrences of the on-premises domain in
+    /// `evidence/event-logs/dsregcmd-events.json`.
+    ///
+    /// The decoded value is `\tUser Name:\tACME\adam_admin\r\n`. The serialized
+    /// text — which is what the line-oriented pass sees — is what the fixture
+    /// writes.
+    ///
+    /// Covers requirements 1, 2, 3, 4 and 9.
+    #[test]
+    fn a_json_message_masks_the_domain_in_an_account_name_behind_an_escaped_tab() {
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "the domain survived projection inside an escaped JSON message: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+        assert!(
+            message.contains(&typed_domain_token()),
+            "the artifact mention did not reach the typed field's token: {message}"
+        );
+    }
+
+    /// A capture may write a tab as `\u0009` instead of `\t`. Both decode to a
+    /// tab, and parsing is what makes that irrelevant — which is why the fix is
+    /// not a `\t` special case.
+    ///
+    /// Covers requirement 10.
+    #[test]
+    fn a_json_message_masks_the_domain_behind_a_unicode_escape_tab() {
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "\\u0009User Name:\\u0009{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "the domain survived behind a \\u0009 boundary: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// No token begins or ends inside a word. A splice — `MY[tenant:…]`, or
+    /// `[tenant:…]CORP` — is the partial replacement the boundary rule exists to
+    /// prevent, and it is the failure this test guards rather than any
+    /// particular treatment of the pair.
+    fn assert_no_spliced_token(text: &str) {
+        let characters: Vec<char> = text.chars().collect();
+        for (index, character) in characters.iter().enumerate() {
+            if *character == '[' {
+                if let Some(previous) = index.checked_sub(1).and_then(|i| characters.get(i)) {
+                    assert!(
+                        !previous.is_alphanumeric(),
+                        "a token was spliced into a longer identifier: {text}"
+                    );
+                }
+            }
+            if *character == ']' {
+                if let Some(next) = characters.get(index + 1) {
+                    assert!(
+                        !next.is_alphanumeric(),
+                        "a token was spliced into a longer identifier: {text}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A short value is replaced only where the characters around it could not
+    /// continue an identifier, so it cannot cut a longer one in half — and where
+    /// the value qualifies an account name, whatever the projection does with the
+    /// pair, it never splices a token into the middle of it.
+    ///
+    /// Covers requirements 5, 6, 7 and 8.
+    #[test]
+    fn a_json_message_does_not_cut_a_longer_identifier_with_the_short_domain() {
+        // Bare longer words keep every character.
+        let projected = project_one_artifact(events_json_artifact(
+            "Seen on ACMECORP MYACME ACME2 acme-corp",
+        ));
+        let message = decoded_message(&projected);
+        for untouched in ["ACMECORP", "MYACME", "ACME2", "acme-corp"] {
+            assert!(
+                message.contains(untouched),
+                "the short domain cut '{untouched}' in half: {message}"
+            );
+        }
+
+        // In the account form the domain is a boundary. These are the longer
+        // identifiers requirement 5 names, and the four-byte domain itself: the
+        // invariant is that none of them is partially replaced.
+        for form in [
+            "ACMECORP\\adam_admin",
+            "MYACME\\adam_admin",
+            "ACME2\\adam_admin",
+            "ACME\\adam_admin",
+        ] {
+            // `form` is the decoded shape; the artifact carries JSON source, so
+            // its backslash has to be the escaped one.
+            let source = form.replace('\\', "\\\\");
+            let projected = project_one_artifact(events_json_artifact(&format!(
+                "sign-in failed for {source}"
+            )));
+            let message = decoded_message(&projected);
+
+            assert_no_spliced_token(&message);
+        }
+
+        // The four-byte domain is the one that must go, and the account name it
+        // qualified stays readable.
+        let projected = project_one_artifact(events_json_artifact(&format!(
+            "sign-in failed for {SHORT_DOMAIN}\\\\adam_admin"
+        )));
+        let message = decoded_message(&projected);
+        assert!(
+            !message.contains(SHORT_DOMAIN),
+            "a normally bounded account form kept the domain: {message}"
+        );
+        assert!(
+            message.contains("adam_admin"),
+            "the account name went with the domain: {message}"
+        );
+    }
+
+    /// Projecting a projected JSON artifact changes nothing, which is what keeps
+    /// a second egress pass from disagreeing with the first.
+    ///
+    /// Covers requirement 11.
+    #[test]
+    fn projecting_a_json_artifact_twice_changes_nothing() {
+        let once = project_one_artifact(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+        let twice = project_one_artifact(DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: once.clone(),
+        });
+
+        assert_eq!(twice, once, "a second pass changed the projected artifact");
+    }
+
+    /// An artifact identified as JSON that does not parse fails the hand-off
+    /// rather than taking the line-oriented pass. A silent fallback would
+    /// publish an artifact that looks projected while retaining whatever that
+    /// pass could not reach — the one failure mode the hand-off exists to
+    /// prevent.
+    ///
+    /// Covers the fail-closed requirement.
+    #[test]
+    fn a_malformed_json_artifact_fails_the_hand_off() {
+        let broken = DsregcmdBundleArtifact {
+            relative_path: "evidence/event-logs/dsregcmd-events.json".to_string(),
+            text: format!("{{ \"message\": \"{SHORT_DOMAIN}\\\\adam_admin\", }}"),
+        };
+
+        let error =
+            redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![broken])
+                .expect_err("a malformed JSON artifact must fail the hand-off");
+
+        assert!(
+            error.contains("dsregcmd-events.json"),
+            "the error does not name the artifact that failed: {error}"
+        );
+    }
+
+    /// A non-JSON artifact keeps the line-oriented pass, and the whole hand-off
+    /// stays valid JSON wherever it claims to be JSON.
+    ///
+    /// Covers requirement 1 across every artifact the hand-off writes.
+    #[test]
+    fn every_projectable_artifact_in_the_hand_off_stays_valid_json() {
+        let mut artifacts = unprojected_bundle_artifacts();
+        artifacts.push(events_json_artifact(&format!(
+            "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
+        )));
+
+        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
+            .expect("the bundle projects");
+
+        for artifact in &projected {
+            if artifact.relative_path.ends_with(".json") {
+                serde_json::from_str::<serde_json::Value>(&artifact.text).unwrap_or_else(|error| {
+                    panic!(
+                        "the projected artifact '{}' is not valid JSON: {error}",
+                        artifact.relative_path
+                    )
+                });
+            }
+        }
     }
 
     /// Every `[kind:…]` token in a serialized analysis, in order.
