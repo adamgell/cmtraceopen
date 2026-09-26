@@ -1,6 +1,8 @@
 import {
   makeStyles,
   shorthands,
+  Tab,
+  TabList,
   tokens,
 } from "@fluentui/react-components";
 import { useMacosDiagStore } from "./macos-diag-store";
@@ -8,49 +10,14 @@ import type { MacosDiagTabId } from "./types";
 
 const useStyles = makeStyles({
   strip: {
-    display: "flex",
-    gap: "0px",
     ...shorthands.padding("0px", "20px"),
-    backgroundColor: tokens.colorNeutralBackground1,
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
-  },
-  tab: {
-    fontSize: "12.5px",
-    fontWeight: 500,
-    ...shorthands.padding("10px", "16px"),
-    ...shorthands.border("0px", "none", "transparent"),
-    backgroundColor: "transparent",
-    color: tokens.colorNeutralForeground3,
-    cursor: "pointer",
-    position: "relative" as const,
-    whiteSpace: "nowrap" as const,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    transitionProperty: "color",
-    transitionDuration: "0.15s",
-    ":hover": {
-      color: tokens.colorNeutralForeground1,
-    },
-  },
-  tabActive: {
-    color: tokens.colorBrandForeground1,
-    fontWeight: 600,
-    "::after": {
-      content: '""',
-      position: "absolute" as const,
-      bottom: "0px",
-      left: "12px",
-      right: "12px",
-      height: "2px",
-      backgroundColor: tokens.colorBrandForeground1,
-      ...shorthands.borderRadius("2px", "2px", "0px", "0px"),
-    },
   },
   countBadge: {
     fontSize: "10px",
     fontWeight: 600,
     ...shorthands.padding("1px", "6px"),
+    ...shorthands.margin("0px", "0px", "0px", "6px"),
     ...shorthands.borderRadius(tokens.borderRadiusCircular),
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground3,
@@ -98,27 +65,28 @@ export function MacosDiagTabStrip() {
 
   return (
     <div className={styles.strip}>
-      {TABS.map((tab) => {
-        const isActive = activeTab === tab.id;
-        const count = getCount(tab.id);
+      <TabList
+        selectedValue={activeTab}
+        onTabSelect={(_, data) => setActiveTab(data.value as MacosDiagTabId)}
+      >
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const count = getCount(tab.id);
 
-        return (
-          <button
-            key={tab.id}
-            className={`${styles.tab} ${isActive ? styles.tabActive : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-            {count !== null && (
-              <span
-                className={`${styles.countBadge} ${isActive ? styles.countBadgeActive : ""}`}
-              >
-                {count}
-              </span>
-            )}
-          </button>
-        );
-      })}
+          return (
+            <Tab key={tab.id} value={tab.id}>
+              {tab.label}
+              {count !== null && (
+                <span
+                  className={`${styles.countBadge} ${isActive ? styles.countBadgeActive : ""}`}
+                >
+                  {count}
+                </span>
+              )}
+            </Tab>
+          );
+        })}
+      </TabList>
     </div>
   );
 }
