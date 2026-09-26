@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **The headless event-log exporter is built, documented and shipped (#697)**: `event-log-export` was a complete, tested CLI that nothing built and nothing mentioned — `grep` found it in no workflow and no `.md`, so it could not be obtained from a release or discovered by reading the repository. CI now builds and runs it so the feature-gated binary cannot rot unnoticed, the README documents what it does and how to use it, and a release job attaches a per-target binary to each release ([#697](https://github.com/adamgell/cmtraceopen/issues/697)).
+
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 

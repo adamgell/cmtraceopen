@@ -244,6 +244,60 @@ jobs:
             sbom-npm.cdx.json \
             --clobber
 
+  # The headless exporter is the one export path that runs without a GUI, which is
+  # what a support engineer uses on a machine they do not want to launch the app
+  # on. It is feature-gated, so nothing built it before this job.
+  #
+  # A separate job rather than a step in `release`: the app is published by
+  # tauri-action earlier in that job, and a failure here must not report a
+  # published release as failed.
+  publish-event-log-export:
+    name: Publish exporter (${{ matrix.label }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+            exe: .exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+            exe: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+            exe: ""
+
+    steps:
+      # Build from the tag the release was cut from, not from the branch tip.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.release.outputs.tag_name }}
+
+      - uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --locked --release --target ${{ matrix.target }} --features event-log --bin event-log-export
+
+      - name: Attach it to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          asset="event-log-export-${{ needs.release.outputs.version }}-${{ matrix.target }}${{ matrix.exe }}"
+          cp "src-tauri/target/${{ matrix.target }}/release/event-log-export${{ matrix.exe }}" "$asset"
+          gh release upload "${{ needs.release.outputs.tag_name }}" "$asset" --clobber
+
   publish-updater-manifest:
     name: Publish updater manifest
     needs: release
