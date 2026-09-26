@@ -6,7 +6,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,6 +66,31 @@ function createWorkspace(t) {
   return { bundleRoot, releaseRoot, root };
 }
 
+// The resolver is handed the fixture directory under a second name for the same
+// filesystem object, the way an 8.3 alias, a junction, or a differently-cased
+// profile directory does. A `"junction"` target needs no elevation on Windows
+// and the type is ignored on POSIX.
+function aliasOfDirectory(t, target, name) {
+  const alias = join(dirname(target), name);
+  symlinkSync(target, alias, "junction");
+  t.after(() => rmSync(alias, { recursive: true, force: true }));
+  return alias;
+}
+
+// The selected tool is a file, not a spelling. `realpathSync` resolves 8.3
+// aliases, junctions, symlinks and case differences to one canonical path, so
+// two names for the same tool compare equal while a different tool — an older
+// SDK version, the wrong architecture, a PATH copy — still compares unequal.
+function assertSameFile(actual, expected, message) {
+  const expectedPath = realpathSync.native(expected);
+  const actualPath = existsSync(actual) ? realpathSync.native(actual) : actual;
+  assert.equal(
+    actualPath,
+    expectedPath,
+    `${message}: selected ${actual}, expected ${expected}`,
+  );
+}
+
 function run(root, releaseRoot, environment = {}) {
   return spawnSync(process.execPath, [scriptPath], {
     cwd: root,
@@ -81,26 +108,42 @@ function run(root, releaseRoot, environment = {}) {
 
 test("selects the newest semantic Windows SDK x64 manifest tool", (t) => {
   const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-"));
-  const expected = join(root, "10.0.26100.0", "x64", "mt.exe");
-  writeFixture(join(root, "10.0.9999.0", "x64", "mt.exe"), "older");
+  const binRoot = join(root, "bin");
+  const expected = join(binRoot, "10.0.26100.0", "x64", "mt.exe");
+  writeFixture(join(binRoot, "10.0.9999.0", "x64", "mt.exe"), "older");
   writeFixture(expected, "newer");
-  writeFixture(join(root, "10.0.30000.0", "x86", "mt.exe"), "wrong architecture");
+  writeFixture(
+    join(binRoot, "10.0.30000.0", "x86", "mt.exe"),
+    "wrong architecture",
+  );
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   const result = spawnSync(
     "pwsh",
-    ["-NoLogo", "-NoProfile", "-File", resolveMtPath, "-SdkBinRoot", root],
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-File",
+      resolveMtPath,
+      "-SdkBinRoot",
+      aliasOfDirectory(t, binRoot, "sdk-bin"),
+    ],
     { encoding: "utf8" },
   );
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), expected);
+  assertSameFile(
+    result.stdout.trim(),
+    expected,
+    "newest semantic x64 manifest tool",
+  );
 });
 
 test("an explicit Windows SDK root takes precedence over PATH", (t) => {
   const root = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-explicit-"));
+  const binRoot = join(root, "bin");
   const pathRoot = mkdtempSync(join(tmpdir(), "cmtrace-windows-sdk-mt-path-"));
-  const expected = join(root, "10.0.26100.0", "x64", "mt.exe");
+  const expected = join(binRoot, "10.0.26100.0", "x64", "mt.exe");
   const pathTool = join(pathRoot, "mt.exe");
   writeFixture(expected, "sdk");
   writeFixture(pathTool, "path");
@@ -110,7 +153,14 @@ test("an explicit Windows SDK root takes precedence over PATH", (t) => {
 
   const result = spawnSync(
     "pwsh",
-    ["-NoLogo", "-NoProfile", "-File", resolveMtPath, "-SdkBinRoot", root],
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-File",
+      resolveMtPath,
+      "-SdkBinRoot",
+      aliasOfDirectory(t, binRoot, "sdk-bin"),
+    ],
     {
       encoding: "utf8",
       env: {
@@ -121,7 +171,11 @@ test("an explicit Windows SDK root takes precedence over PATH", (t) => {
   );
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), expected);
+  assertSameFile(
+    result.stdout.trim(),
+    expected,
+    "explicit SDK root over PATH",
+  );
 });
 
 test("Windows SDK enumeration errors retain their original diagnostic", (t) => {

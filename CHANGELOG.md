@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **Windows SDK provenance test (#648)**: The test asked which *spelling* of the SDK tool path came back rather than which *file* was selected, so a second name for one directory (an 8.3 alias, a junction, a differently-cased profile path) failed it on a workstation while the selection was correct on a runner. Both assertions now compare `realpathSync.native` on each side, and the fixtures reach the resolver through an alias so the condition is exercised rather than assumed.
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 
