@@ -211,7 +211,16 @@ jobs:
         shell: pwsh
         run: |
           $installer = "$env:TEMP\mpdev.msi"
+          # The digest is pinned because this build of mpdev runs in a job that holds
+          # the update-signing key: which bytes are installed decides what that key
+          # signs. A re-tagged or substituted build fails here instead of being run.
+          $mpdevSha256 = "27605362406b9e24434d34064539c79706cbfb95c2c8cc5a2ec7924ca4abc0f0"
           Invoke-WebRequest -Uri "https://cdn.masterpackager.com/installer/dev/2.1.1/mpdev_self_contained_x64_2.1.1.msi" -OutFile $installer
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $mpdevSha256) {
+            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+            throw "Master Packager Dev 2.1.1 digest mismatch: expected $mpdevSha256, got $actual"
+          }
           Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
           "C:\Program Files\Master Packager Ltd\Master Packager Dev" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
