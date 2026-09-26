@@ -18,6 +18,13 @@ function dismissSplash() {
   }
 }
 
+// The splash is dismissed from an effect below, so a throw during the first
+// render would leave it up indefinitely - indistinguishable from a slow start.
+// Clear it from a window-level failure too: this covers render throws before the
+// tree mounts, and async failures no React boundary can catch.
+window.addEventListener("error", dismissSplash, { once: true });
+window.addEventListener("unhandledrejection", dismissSplash, { once: true });
+
 function AppRoot() {
   useAppMenu();
 
