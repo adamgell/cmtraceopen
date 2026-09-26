@@ -23,7 +23,6 @@ export const logWorkspace: WorkspaceDefinition = {
     detailsPane: true,
     infoPane: true,
     footerBar: true,
-    multiFileDrop: true,
     fontSizing: true,
     tailing: true,
     knownSources: true,

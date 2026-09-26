@@ -14,7 +14,6 @@ export const timelineWorkspace: WorkspaceDefinition = {
     }))
   ),
   capabilities: {
-    multiFileDrop: true,
     fontSizing: true,
   },
   fileFilters: [
