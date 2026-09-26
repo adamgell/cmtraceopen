@@ -11,6 +11,7 @@ const {
   openLogFile,
   collectDnsDhcpFromDomain,
   enableDnsDebugLogging,
+  disableDnsDebugLogging,
   openDialog,
   confirmDialog,
 } = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const {
   openLogFile: vi.fn(),
   collectDnsDhcpFromDomain: vi.fn(),
   enableDnsDebugLogging: vi.fn(),
+  disableDnsDebugLogging: vi.fn(),
   openDialog: vi.fn(),
   confirmDialog: vi.fn(),
 }));
@@ -31,6 +33,7 @@ vi.mock("../../lib/commands", () => ({
   openLogFile,
   collectDnsDhcpFromDomain,
   enableDnsDebugLogging,
+  disableDnsDebugLogging,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -97,6 +100,52 @@ describe("DnsDhcpWorkspace", () => {
     expect(screen.getByText("DNS Server")).toBeVisible();
     expect(screen.getByRole("button", { name: "Enable DNS debug logging" })).toBeEnabled();
     expect(checkDnsLoggingStatus).toHaveBeenCalled();
+  });
+
+  it("says what enabling costs before the button is pressed (DNS-004)", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({
+      dnsServerInstalled: true,
+      dhcpServerInstalled: false,
+      debugLoggingEnabled: false,
+      logFilePath: "C:\\Windows\\System32\\dns\\dns.log",
+    });
+
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+
+    await screen.findByText("Server Status");
+    // The warning belongs before the click, and it has to name the file and the
+    // growth rather than warn in the abstract.
+    const warning = screen.getByText(/The DNS service does not rotate it/);
+    expect(warning).toBeVisible();
+    expect(warning.textContent).toContain("C:\\Windows\\System32\\dns\\dns.log");
+    expect(
+      screen.getByRole("button", { name: "Enable DNS debug logging" }),
+    ).toBeEnabled();
+  });
+
+  it("turns logging back off from the place it was turned on (DNS-005)", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({
+      dnsServerInstalled: true,
+      dhcpServerInstalled: false,
+      debugLoggingEnabled: true,
+      logFilePath: "C:\\Windows\\System32\\dns\\dns.log",
+    });
+    disableDnsDebugLogging.mockResolvedValue("DNS debug logging disabled.");
+
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+
+    const disable = await screen.findByRole("button", {
+      name: "Disable DNS debug logging",
+    });
+    fireEvent.click(disable);
+
+    await waitFor(() => expect(disableDnsDebugLogging).toHaveBeenCalled());
+    // A one-way switch was the defect: the enable must not still be offered.
+    expect(
+      screen.queryByRole("button", { name: "Enable DNS debug logging" }),
+    ).toBeNull();
   });
 
   it("prompts before collecting from domain DCs (DNS-002)", async () => {

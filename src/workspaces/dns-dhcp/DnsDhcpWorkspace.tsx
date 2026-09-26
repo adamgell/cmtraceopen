@@ -8,6 +8,7 @@ import {
   inspectPathKind,
   listLogFolder,
   checkDnsLoggingStatus,
+  disableDnsDebugLogging,
   enableDnsDebugLogging,
   collectDnsDhcpFromDomain,
   type DnsLoggingStatus,
@@ -310,6 +311,22 @@ export function DnsDhcpWorkspace() {
     setEnabling(false);
   };
 
+  const handleDisableDnsLogging = async () => {
+    setEnabling(true);
+    setEnableResult(null);
+    try {
+      const result = await disableDnsDebugLogging();
+      setEnableResult(result);
+      const status = await checkDnsLoggingStatus();
+      setLoggingStatus(status);
+    } catch (err) {
+      setEnableResult(
+        `Failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    setEnabling(false);
+  };
+
   const handleOpenFiles = async () => {
     setLocalError(null);
     try {
@@ -490,6 +507,20 @@ export function DnsDhcpWorkspace() {
                 />
                 {!loggingStatus.debugLoggingEnabled && (
                   <div style={{ marginTop: 4, marginBottom: 4 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: tokens.colorNeutralForeground3,
+                        marginBottom: 6,
+                        maxWidth: 420,
+                      }}
+                    >
+                      Enabling writes a line to{" "}
+                      {loggingStatus.logFilePath ?? "the DNS log file"} for every
+                      query this server answers, so the file grows with traffic.
+                      The DNS service does not rotate it: decide how long to keep
+                      it before you enable this on a busy resolver.
+                    </div>
                     <Button
                       size="small"
                       appearance="primary"
@@ -497,6 +528,29 @@ export function DnsDhcpWorkspace() {
                       disabled={enabling}
                     >
                       {enabling ? "Enabling..." : "Enable DNS debug logging"}
+                    </Button>
+                  </div>
+                )}
+                {loggingStatus.debugLoggingEnabled && (
+                  <div style={{ marginTop: 4, marginBottom: 4 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: tokens.colorNeutralForeground3,
+                        marginBottom: 6,
+                        maxWidth: 420,
+                      }}
+                    >
+                      This file grows with query volume and the DNS service does
+                      not rotate it. Turning it off clears only the switches this
+                      app set, so anything the server was already logging stays on.
+                    </div>
+                    <Button
+                      size="small"
+                      onClick={() => void handleDisableDnsLogging()}
+                      disabled={enabling}
+                    >
+                      {enabling ? "Working..." : "Disable DNS debug logging"}
                     </Button>
                   </div>
                 )}
