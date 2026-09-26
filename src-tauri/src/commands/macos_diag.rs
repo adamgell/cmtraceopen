@@ -55,6 +55,10 @@ pub fn macos_query_unified_log(
 pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "macos")]
     {
+        // Deliberately non-waiting: `spawn` returns without waiting for the
+        // launcher to exit and the handle is discarded, so there is no wait to
+        // bound. A deadline would not close the pane the user asked for - the
+        // shell hands off and is meant to outlive this call.
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()
