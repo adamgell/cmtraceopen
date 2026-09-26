@@ -631,11 +631,15 @@ const MAX_DEPLOYMENT_SCAN_DEPTH: usize = 32;
 /// Upper bound on collected paths, so a wide tree cannot accumulate without limit.
 const MAX_DEPLOYMENT_LOG_FILES: usize = 5_000;
 
+/// Counts all directory entries, including non-logs, across the entire walk.
+const MAX_DEPLOYMENT_SCAN_ENTRIES: usize = 50_000;
+
 /// What the bounded walk found, and which bound stopped it.
 #[derive(Default)]
 struct DeploymentScan {
     files: Vec<String>,
     limitations: Vec<String>,
+    entries_seen: usize,
 }
 
 impl DeploymentScan {
@@ -669,18 +673,51 @@ fn collect_log_files(dir: &Path, scan: &mut DeploymentScan, depth: usize) {
         ));
         return;
     }
+    if scan.entries_seen >= MAX_DEPLOYMENT_SCAN_ENTRIES {
+        scan.record_limitation(format!(
+            "Directory entry budget of {MAX_DEPLOYMENT_SCAN_ENTRIES} was exhausted."
+        ));
+        return;
+    }
 
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => {
+            scan.record_limitation(format!("Directory could not be read: {}", dir.display()));
+            return;
+        }
     };
 
     // `read_dir` yields entries in an unspecified order, which would make the set
-    // that survives the file budget vary between runs on the same folder.
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    // that survives the file budget vary between runs on the same folder. Buffer
+    // only within the shared entry budget. One extra entry detects overflow; an
+    // overflowing directory contributes no arbitrary prefix of its contents.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        if scan.entries_seen >= MAX_DEPLOYMENT_SCAN_ENTRIES {
+            scan.record_limitation(format!(
+                "Directory entry budget of {MAX_DEPLOYMENT_SCAN_ENTRIES} was exhausted."
+            ));
+            return;
+        }
+        scan.entries_seen += 1;
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(_) => scan.record_limitation(format!(
+                "Directory entry could not be read: {}",
+                dir.display()
+            )),
+        }
+    }
     paths.sort();
 
     for path in paths {
+        if scan.files.len() >= MAX_DEPLOYMENT_LOG_FILES {
+            scan.record_limitation(format!(
+                "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+            ));
+            return;
+        }
         // `symlink_metadata` reports the link itself rather than following it, so
         // a link pointing at an ancestor cannot be entered as a cycle. `is_dir()`
         // would follow it, which is how the recursion previously had no floor.
@@ -689,6 +726,7 @@ fn collect_log_files(dir: &Path, scan: &mut DeploymentScan, depth: usize) {
         // neither directory nor file. The branch below decides what a link means
         // rather than letting it fall through.
         let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            scan.record_limitation(format!("Path could not be inspected: {}", path.display()));
             continue;
         };
         let file_type = metadata.file_type();
@@ -1114,6 +1152,7 @@ mod tests {
 mod collect_log_files_tests {
     use super::{
         collect_log_files, DeploymentScan, MAX_DEPLOYMENT_LOG_FILES, MAX_DEPLOYMENT_SCAN_DEPTH,
+        MAX_DEPLOYMENT_SCAN_ENTRIES,
     };
 
     fn scan(root: &std::path::Path) -> DeploymentScan {
@@ -1226,6 +1265,20 @@ mod collect_log_files_tests {
     }
 
     #[test]
+    fn a_flat_directory_cannot_exceed_the_file_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..=MAX_DEPLOYMENT_LOG_FILES {
+            std::fs::write(dir.path().join(format!("{index:05}.log")), b"").unwrap();
+        }
+
+        let found = scan(dir.path());
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert!(found.limitations.iter().any(|l| l.contains("File budget")));
+        assert!(found.files.first().unwrap().ends_with("00000.log"));
+        assert!(found.files.last().unwrap().ends_with("04999.log"));
+    }
+
+    #[test]
     fn the_file_budget_is_reported_when_it_is_already_spent() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("visible.log"), b"x\n").unwrap();
@@ -1234,7 +1287,7 @@ mod collect_log_files_tests {
         // precondition on the scan, so a full scan is equivalent to a spent one.
         let mut spent = DeploymentScan {
             files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES],
-            limitations: Vec::new(),
+            ..DeploymentScan::default()
         };
         collect_log_files(dir.path(), &mut spent, 0);
 
@@ -1248,5 +1301,97 @@ mod collect_log_files_tests {
             "spending the budget must be reported: {:?}",
             spent.limitations
         );
+    }
+
+    #[test]
+    fn the_file_budget_is_shared_across_nested_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b", "c"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("one.log"), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES - 2],
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert_eq!(
+            found.files[MAX_DEPLOYMENT_LOG_FILES - 2],
+            dir.path().join("a").join("one.log").to_string_lossy()
+        );
+        assert_eq!(
+            found.files.last().unwrap(),
+            &dir.path().join("b").join("one.log").to_string_lossy()
+        );
+        assert!(found.limitations.iter().any(|l| l.contains("File budget")));
+    }
+
+    #[test]
+    fn exactly_filling_the_budgets_does_not_claim_missing_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("last.log"), b"").unwrap();
+        let mut found = DeploymentScan {
+            files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES - 1],
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 1,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert!(found.limitations.is_empty());
+    }
+
+    #[test]
+    fn non_log_entries_exhaust_the_budget_without_selecting_an_arbitrary_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["first.log", "ignored.txt", "last.log"] {
+            std::fs::write(dir.path().join(name), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 2,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert!(found.files.is_empty());
+        assert!(found.limitations.iter().any(|l| l.contains("entry budget")));
+    }
+
+    #[test]
+    fn the_entry_budget_is_shared_across_directories_and_preserves_completed_work() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("one.log"), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            // The root's two directories and a/one.log use the remaining entries.
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 3,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert_eq!(found.files.len(), 1);
+        assert_eq!(
+            found.files[0],
+            dir.path().join("a").join("one.log").to_string_lossy()
+        );
+        assert!(found.limitations.iter().any(|l| l.contains("entry budget")));
+    }
+
+    #[test]
+    fn an_unreadable_directory_is_a_coverage_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let found = scan(&dir.path().join("missing"));
+        assert!(found.files.is_empty());
+        assert!(found
+            .limitations
+            .iter()
+            .any(|l| l.contains("could not be read")));
     }
 }
