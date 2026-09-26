@@ -66,6 +66,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The Linux Rust job failed while linking with `ld` terminated by signal 7
+      # (SIGBUS) on three runs in one day -- main merges and a PR, on a different
+      # test binary each time (issue #676). That is the signature of a
+      # memory-mapped write failing when the backing store cannot take it, and
+      # this job links several large test binaries after a cold build.
+      #
+      # None of what is removed here is used by this job: webkit2gtk and gtk come
+      # from the system-dependencies step below. `df` is printed so the next
+      # failure, if there is one, carries the disk state with it.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
