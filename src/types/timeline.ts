@@ -94,5 +94,4 @@ export type TimelineError =
   | { kind: "notFound"; id: string }
   | { kind: "tooLarge"; estimated: number; limit: number }
   | { kind: "noSources" }
-  | { kind: "sourceRead"; path: string; message: string }
   | { kind: "internal"; message: string };
