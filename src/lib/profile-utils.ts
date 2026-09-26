@@ -267,26 +267,80 @@ export interface ParsedPayload {
 }
 
 /**
- * Given a starting index just after an opening '{', find the matching '}'.
+ * A delimiter scanner that knows when it is inside a quoted value.
+ *
+ * A payload value can hold a brace or a paren: a template URL
+ * (`https://x/{0}/r`), a regex, a filter expression. Counting one as structure
+ * ends a block early and every setting after it is dropped without a word —
+ * worse in a viewer than a parse error, because the profile still looks
+ * complete. A backslash escape inside a value (`\"`) is a character rather than
+ * the end of the value, so it cannot close the region either.
+ *
+ * One rule, used by both callers: one walks a whole string, the other walks the
+ * payload line by line.
+ */
+function delimiterScanner(open: string, close: string) {
+  let inQuote = false;
+  let escaped = false;
+  return (ch: string): "open" | "close" | null => {
+    if (escaped) {
+      escaped = false;
+      return null;
+    }
+    if (inQuote) {
+      if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inQuote = false;
+      }
+      return null;
+    }
+    if (ch === '"') {
+      inQuote = true;
+      return null;
+    }
+    if (ch === open) return "open";
+    if (ch === close) return "close";
+    return null;
+  };
+}
+
+/**
+ * The index of the delimiter that closes the block opened at `openIndex`, or
+ * null when the block never closes.
+ */
+function findClosingDelimiter(
+  text: string,
+  openIndex: number,
+  open: string,
+  close: string,
+): number | null {
+  const scan = delimiterScanner(open, close);
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i++) {
+    const kind = scan(text[i]);
+    if (kind === "open") {
+      depth++;
+    } else if (kind === "close") {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Given the index of an opening '{', find the matching '}'.
  * Returns the content between the braces (exclusive), or null if unmatched.
  */
-function extractBracedBlock(data: string, startIndex: number): string | null {
-  let depth = 1;
-  let i = startIndex;
-  while (i < data.length && depth > 0) {
-    if (data[i] === "{") {
-      depth++;
-    } else if (data[i] === "}") {
-      depth--;
-    }
-    if (depth > 0) {
-      i++;
-    }
-  }
-  if (depth !== 0) {
+function extractBracedBlock(data: string, openIndex: number): string | null {
+  const close = findClosingDelimiter(data, openIndex, "{", "}");
+  if (close === null) {
     return null;
   }
-  return data.slice(startIndex, i);
+  return data.slice(openIndex + 1, close);
 }
 
 /**
@@ -300,16 +354,24 @@ function collectBalancedBlock(
   open: string,
   close: string,
 ): { block: string; nextIdx: number } {
+  const scan = delimiterScanner(open, close);
   let depth = 0;
   let block = "";
   for (let j = startIdx; j < lines.length; j++) {
-    const l = lines[j];
-    for (const ch of l) {
-      if (ch === open) depth++;
-      if (ch === close) depth--;
+    const line = lines[j];
+    for (let k = 0; k < line.length; k++) {
+      const kind = scan(line[k]);
+      if (kind === "open") {
+        depth++;
+      } else if (kind === "close") {
+        depth--;
+      }
     }
-    block += l + "\n";
+    block += line + "\n";
     if (depth === 0) {
+      // Whole lines, always, so the caller never re-reads the line it just
+      // consumed - a block that closes on the last line has no trailing
+      // newline to count.
       return { block, nextIdx: j + 1 };
     }
   }
@@ -335,7 +397,7 @@ function parseArrayOfDicts(raw: string, arrayKey: string): ParsedPayloadEntry[] 
   while (pos < inner.length) {
     const braceStart = inner.indexOf("{", pos);
     if (braceStart < 0) break;
-    const block = extractBracedBlock(inner, braceStart + 1);
+    const block = extractBracedBlock(inner, braceStart);
     if (!block) break;
     pos = braceStart + 1 + block.length + 1;
 
@@ -506,7 +568,7 @@ export function parsePayloadData(data: string): ParsedPayload {
     }
     // Extract the mcx_preference_settings block
     const mcxStart = mcxMatch.index! + mcxMatch[0].length;
-    const settingsBlock = extractBracedBlock(data, mcxStart);
+    const settingsBlock = extractBracedBlock(data, mcxStart - 1);
     if (settingsBlock) {
       result.entries = parseFlatDict(settingsBlock);
       enrichEntries(result.entries);
