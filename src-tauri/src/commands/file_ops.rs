@@ -838,6 +838,85 @@ pub struct FileHashResult {
     pub size_bytes: u64,
 }
 
+/// The extension the session save dialog writes (`session-save.ts`).
+const SESSION_EXTENSION: &str = "cmtrace";
+
+/// A session holds tab metadata and filter state, not log content, so this is
+/// generous rather than tight. It exists so a mistaken or hostile path cannot
+/// pull an arbitrary large file into the frontend in one call.
+const MAX_SESSION_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a saved session file.
+///
+/// Restoring a session is the one flow whose path the user does not choose at
+/// the moment they use it - it comes from the recent-sessions list - so the fs
+/// plugin's dialog-driven scope cannot cover it. This command is what replaces
+/// that, and it accepts only the extension the app's own save dialog writes:
+/// a narrower authority than `fs:read-all`, rather than the same authority
+/// wearing a command name. The frontend still validates the parsed shape.
+///
+/// Asynchronous so the read does not run on the main thread, which is where
+/// Tauri runs a non-async command. A `.cmtrace` that is a FIFO with no writer
+/// would otherwise block it indefinitely, and so would a slow filesystem.
+#[tauri::command]
+pub async fn read_session_file(path: String) -> Result<String, crate::error::AppError> {
+    tokio::task::spawn_blocking(move || read_session_file_blocking(&path))
+        .await
+        .map_err(|error| {
+            crate::error::AppError::InvalidInput(format!("session read task failed: {error}"))
+        })?
+}
+
+fn read_session_file_blocking(path: &str) -> Result<String, crate::error::AppError> {
+    use std::io::Read as _;
+
+    let requested = Path::new(path);
+
+    let is_session_extension = requested
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(SESSION_EXTENSION));
+    if !is_session_extension {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "not a session file: {}",
+            requested.display()
+        )));
+    }
+
+    // Checked before opening rather than after: opening a FIFO with no writer
+    // waits for one, so the refusal has to happen on the metadata that `stat`
+    // returns without touching the file's contents.
+    let metadata = std::fs::metadata(requested).map_err(crate::error::AppError::Io)?;
+    if !metadata.is_file() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "not a regular file: {}",
+            requested.display()
+        )));
+    }
+    if metadata.len() > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file is {} bytes, over the {MAX_SESSION_BYTES} byte limit: {}",
+            metadata.len(),
+            requested.display()
+        )));
+    }
+
+    // Bounded while reading, not only at the metadata check: a file that grows
+    // between the two would otherwise be read past the limit and returned.
+    let file = std::fs::File::open(requested).map_err(crate::error::AppError::Io)?;
+    let mut text = String::new();
+    let read = std::io::Read::take(file, MAX_SESSION_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(crate::error::AppError::Io)?;
+    if read as u64 > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file grew past the {MAX_SESSION_BYTES} byte limit while it was being read: {}",
+            requested.display()
+        )));
+    }
+
+    Ok(text)
+}
+
 #[tauri::command]
 pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
     use sha2::{Digest, Sha256};
@@ -915,12 +994,85 @@ fn index_aggregate_entries(
 mod tests {
     use super::{
         index_aggregate_entries, list_log_folder, merge_folder_diagnostics,
-        open_log_folder_aggregate_impl, PathDiagnostic, MAX_FOLDER_LISTING_ERRORS,
+        open_log_folder_aggregate_impl, read_session_file_blocking, PathDiagnostic,
+        MAX_FOLDER_LISTING_ERRORS,
     };
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// The refusal is the behaviour worth pinning: this command exists to be a
+    /// narrower authority than `fs:read-all`, so a path outside the extension
+    /// the app's own save dialog writes has to come back as an error rather
+    /// than as file content.
+    #[test]
+    fn read_session_file_accepts_only_the_session_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "cmtrace-session-read-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let session = dir.join("saved.cmtrace");
+        fs::write(&session, "{\"tabs\":[]}").expect("write session");
+        let other = dir.join("id_rsa");
+        fs::write(&other, "private key material").expect("write other file");
+        // Created deliberately: without it this would pass for the wrong reason
+        // (a missing path rather than a directory), and the comment would be a
+        // claim the test does not make.
+        let directory = dir.join("folder.cmtrace");
+        fs::create_dir_all(&directory).expect("create directory named like a session");
+
+        assert_eq!(
+            read_session_file_blocking(&session.to_string_lossy()).expect("session reads"),
+            "{\"tabs\":[]}"
+        );
+        assert!(read_session_file_blocking(&other.to_string_lossy()).is_err());
+        assert!(read_session_file_blocking(&dir.join("absent").to_string_lossy()).is_err());
+        assert!(read_session_file_blocking(&directory.to_string_lossy()).is_err());
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// The refusal has to happen before the file is opened. Opening a FIFO with
+    /// no writer waits for one, which is how a `.cmtrace` named pipe could hold
+    /// the command thread; `metadata` answers for a FIFO without touching its
+    /// contents, so the check is made there and the wait never starts.
+    #[cfg(unix)]
+    #[test]
+    fn read_session_file_refuses_a_fifo_without_waiting_for_a_writer() {
+        let dir = std::env::temp_dir().join(format!(
+            "cmtrace-session-fifo-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let fifo = dir.join("trap.cmtrace");
+        let created = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(created.success(), "mkfifo created the fixture");
+
+        // Nothing ever opens the write end, so any implementation that opens
+        // first will block here rather than return.
+        let started = std::time::Instant::now();
+        let result = read_session_file_blocking(&fifo.to_string_lossy());
+        let waited = started.elapsed();
+
+        assert!(result.is_err(), "a fifo is not a session file");
+        assert!(
+            waited < std::time::Duration::from_secs(5),
+            "the refusal must not wait for a writer; it took {waited:?}"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
 
     /// Proves the wiring, not just the classifier: an unreadable folder must
     /// reach the frontend as `AccessDenied` rather than as "folder does not
