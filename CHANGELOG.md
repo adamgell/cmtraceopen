@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **DsRegCmd responsiveness test (#669)**: The assertion that the bundle analysis does not block the command thread passed while the condition it exists to catch was reintroduced, because the test ran its runtime on its own thread and could not observe anything while a synchronous analysis held it. The runtime now runs on a separate OS thread and the simulated I/O stage is released by the test rather than by the clock, so the assertion is made while the stage is held. The focused test also stopped sleeping to create the condition, which took it from 1.1s to 0.2s.
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
 
