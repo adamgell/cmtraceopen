@@ -207,7 +207,9 @@ mod tests {
         use std::fs;
 
         let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("O'Brien space [literal] $value; & `data");
+        let directory = root
+            .path()
+            .join("O'Brien space [literal] $value; & `data ``ticks `[brackets`]");
         fs::create_dir(&directory).unwrap();
         let launcher = directory.join("launch capture.ps1");
         let harness = directory.join("transport harness.ps1");

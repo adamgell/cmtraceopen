@@ -16,8 +16,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Redirection uses wildcard-aware paths, even when the value is a variable.
-# Escape those patterns so brackets and backticks name the actual capture files.
-$stdoutPattern = [System.Management.Automation.WildcardPattern]::Escape($StdoutPath)
-$stderrPattern = [System.Management.Automation.WildcardPattern]::Escape($StderrPath)
+# Escape every wildcard and the escape character itself. Windows PowerShell 5.1's
+# WildcardPattern.Escape leaves backticks unescaped, so it cannot preserve these paths.
+$stdoutPattern = $StdoutPath -replace '([`*?\[\]])', '`$1'
+$stderrPattern = $StderrPath -replace '([`*?\[\]])', '`$1'
 & $ScriptPath *> $stdoutPattern 2> $stderrPattern
 $LASTEXITCODE | Out-File -LiteralPath $ExitCodePath -Encoding ascii -NoNewline
