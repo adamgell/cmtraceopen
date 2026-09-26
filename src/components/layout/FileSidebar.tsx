@@ -37,7 +37,7 @@ interface FileSidebarProps {
   onCollapse?: () => void;
 }
 
-function isFolderLikeSource(source: LogSource | null): boolean {
+export function isFolderLikeSource(source: LogSource | null): boolean {
   if (!source) {
     return false;
   }
@@ -45,11 +45,11 @@ function isFolderLikeSource(source: LogSource | null): boolean {
   return source.kind === "folder" || (source.kind === "known" && source.pathKind === "folder");
 }
 
-function formatCount(count: number, singular: string, plural = `${singular}s`) {
+export function formatCount(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function formatBytes(sizeBytes: number | null): string {
+export function formatBytes(sizeBytes: number | null): string {
   if (sizeBytes === null) {
     return "Size unknown";
   }
@@ -70,8 +70,11 @@ function formatBytes(sizeBytes: number | null): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function formatModified(unixMs: number | null): string {
-  if (!unixMs) {
+export function formatModified(unixMs: number | null): string {
+  // `!unixMs` would also reject 0, which is a real timestamp (1970-01-01).
+  // The backend maps a file's mtime through duration_since(UNIX_EPOCH), so a
+  // zeroed mtime arrives as Some(0) rather than None.
+  if (unixMs === null) {
     return "Modified time unavailable";
   }
 
