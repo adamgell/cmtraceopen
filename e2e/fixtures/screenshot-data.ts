@@ -218,6 +218,7 @@ function buildLogEntries(): LogEntry[] {
 const LOG_ENTRIES = buildLogEntries();
 
 export const MOCK_LOG_PARSE_RESULT: ParseResult = {
+  modifiedUnixMs: Date.parse("2026-01-15T12:00:00.000Z"),
   entries: LOG_ENTRIES,
   formatDetected: "Ccm",
   parserSelection: {

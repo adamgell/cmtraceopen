@@ -83,6 +83,7 @@ const parseResult: ParseResult = {
   parseErrors: 0,
   filePath: folderEntries[0].path,
   fileSize: 1,
+  modifiedUnixMs: null,
   byteOffset: 0,
 };
 
@@ -1016,6 +1017,28 @@ describe("source loading progress ownership", () => {
 
     expect(result?.source).toEqual(folderSource);
     expect(commands.listLogSourceFolder).toHaveBeenCalledWith(folderSource);
+  });
+
+  it("carries each file's modified time into the source entries", async () => {
+    const rows: ParseResult[] = [
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/AppEnforce.log",
+        modifiedUnixMs: 1_700_000_000_000,
+      },
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/CIAgent.log",
+        modifiedUnixMs: null,
+      },
+    ];
+    commands.parseFilesBatch.mockResolvedValueOnce(rows);
+
+    await loadFilesAsLogSource(rows.map((row) => row.filePath));
+
+    expect(
+      useLogStore.getState().sourceEntries.map((entry) => entry.modifiedUnixMs),
+    ).toEqual([1_700_000_000_000, null]);
   });
 
   it("clears prior progress before starting a multi-file load", async () => {
