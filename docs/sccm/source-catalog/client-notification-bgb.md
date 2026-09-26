@@ -12,7 +12,7 @@ This contract describes what server-side `BgbServer.log` evidence looks like and
 
 ## Observation
 
-One lab primary site server, observed read-only on 2026-09-25:
+One lab primary site server on 2026-09-25, observed read-only except for one operator-initiated client notification that Adam approved (PushID 13, a machine policy request to the site server's own client). Repeating or extending that capture needs Adam's approval again.
 
 | Fact | Observation | Source |
 | --- | --- | --- |
