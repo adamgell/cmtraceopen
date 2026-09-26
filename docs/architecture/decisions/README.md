@@ -13,3 +13,4 @@ A file named `ADR-NNN-...-revision-N.md` revises the ADR it names. An accepted r
 | `ADR-003-chronology-terminal-precedence.md` | Accepted for Framework v1 |
 | `ADR-004-redaction-scope.md` | Boundary accepted; superseded in part by revision 1 |
 | `ADR-004-redaction-scope-revision-1.md` | ACCEPTED. Eight rulings on the redaction contract |
+| `ADR-005-event-viewer-large-explicit-loads.md` | Proposed — recorded as the resolution of issue #635. Confirm at merge. |
