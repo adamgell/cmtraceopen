@@ -70,7 +70,22 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
+| `event_log/` | Event Viewer: bounded channel queries, live tail, capture, archive, export |
+| `sccm/` | Client and server diagnostics, plus the private bundle store |
+| `secureboot/` | Secure Boot certificate detect/remediate scripts and the elevated runner |
+| `esp/` | Autopilot ESP/Bootstrapping analysis: process, registry, bundle, system facts |
+| `collector/` | Evidence collection: artifact staging and bundle assembly |
+| `timeline/` | Cross-source incident correlation and timeline building |
+| `elevation/` | Restart-as-administrator: one-time restore tickets, validated requests |
+| `jamf/` | Jamf Connect and macOS MDM policy log analysis |
+| `macos_diag/` | macOS diagnostics via native tools (`pkgutil`, `profiles`, `system_profiler`, `mdatp`) |
+| `graph_api/` | Microsoft Graph integration — opt-in, Windows-only WAM token path. The app's only network egress besides the updater |
 | `menu.rs` | Native application menu |
+
+The Parser Architecture section below covers `src-tauri/src/parser/`. The pure parser library that
+`crates/cmtraceopen-parser/` builds is separate and stays wasm32-compatible: no OS I/O, registry, WMI,
+network, or Tauri in that crate, which `cargo check -p cmtraceopen-parser --target wasm32-unknown-unknown`
+enforces.
 
 ### Frontend Module Map (`src/`)
 
@@ -79,10 +94,12 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `workspaces/` | The analysis surfaces, one directory each: `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
+| `components/panels/` | Docked analysis panels shared across workspaces |
+| `components/registry-view/` | Rendered registry-source views |
+| `components/timeline/` | Shared timeline rendering |
+| `components/common/` | Cross-workspace primitives |
+| `stores/` | 6 Zustand stores: `log`, `filter`, `marker`, `registry`, `timeline`, `ui` |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
