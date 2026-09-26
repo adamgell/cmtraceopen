@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { OUTCOME_LABELS, EventDiagnosisPanel } from "./EventDiagnosisPanel";
 import type { DiagnosisCoverageGap, DiagnosisSummary } from "./types";
+import neutralSummaries from "../../../crates/cmtraceopen-parser/tests/fixtures/diagnosis/neutral-summaries.json";
 
 const coverageGap: DiagnosisCoverageGap = {
   id: "ime-gap",
@@ -174,10 +175,10 @@ describe("EventDiagnosisPanel", () => {
     expect(screen.getByText("Issues detected")).toBeTruthy();
   });
 
-  // Previously parameterised over both outcomes and asserting they shared the
-  // text "No issues detected" - which is the conflation this test now prevents.
-  // The wording is spelled out here rather than read from the map, so that
-  // re-collapsing the two labels fails this test and not only the map invariant.
+  // The parser's neutral_summaries_match_the_rendered_contract test verifies
+  // these serialized summaries against the real producer. Keep its headline:
+  // replacing it with neutral mock text hid a clean-result claim beside the gap
+  // badge even after the two badge labels became distinct.
   it.each([
     ["noFindings", "No issues found"],
     ["insufficientEvidence", "Insufficient evidence"],
@@ -186,16 +187,7 @@ describe("EventDiagnosisPanel", () => {
     (outcome, label) => {
       render(
         <EventDiagnosisPanel
-          summary={{
-            ...summary,
-            overview: {
-              ...summary.overview,
-              outcome,
-              // Neutral headline: the assertion below is about the badge the
-              // panel derives from the outcome, not about text echoed back.
-              headline: "Diagnosis summary.",
-            },
-          }}
+          summary={neutralSummaries[outcome] as DiagnosisSummary}
         />,
       );
 
@@ -204,7 +196,9 @@ describe("EventDiagnosisPanel", () => {
       expect(screen.queryByText(outcome)).toBeNull();
       // The defect: a coverage gap rendered as the clean result's wording. A
       // panel that cannot conclude must not read as a panel that concluded.
-      expect(screen.queryByText("No issues detected")).toBeNull();
+      if (outcome === "insufficientEvidence") {
+        expect(screen.queryByText(/no issues/i)).toBeNull();
+      }
     },
   );
 
