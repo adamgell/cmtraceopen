@@ -737,8 +737,13 @@ fn collect_log_files(dir: &Path, scan: &mut DeploymentScan, depth: usize) {
             // that is what ends a cycle, and not following it is the point.
             match std::fs::metadata(&path) {
                 Ok(target) if target.is_file() => scan.push_log(&path),
-                _ => scan.record_limitation(format!(
+                Ok(target) if target.is_dir() => scan.record_limitation(format!(
                     "Symlinked directory was not scanned: {}",
+                    path.display()
+                )),
+                Ok(_) => {}
+                Err(_) => scan.record_limitation(format!(
+                    "Symlink target could not be inspected: {}",
                     path.display()
                 )),
             }
@@ -1239,6 +1244,32 @@ mod collect_log_files_tests {
         // log was read. Only directory links are refused, so that behaviour stands.
         assert_eq!(found.files.len(), 1, "{:?}", found.files);
         assert_eq!(found.limitations, Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_reports_target_inspection_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken.log"))
+            .unwrap();
+
+        let found = scan(dir.path());
+        assert!(found.files.is_empty());
+        assert_eq!(found.limitations.len(), 1);
+        assert!(found.limitations[0].contains("Symlink target could not be inspected"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_socket_is_not_reported_as_a_skipped_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::os::unix::fs::symlink(&socket, dir.path().join("socket.log")).unwrap();
+
+        let found = scan(dir.path());
+        assert!(found.files.is_empty());
+        assert!(found.limitations.is_empty());
     }
 
     #[test]
