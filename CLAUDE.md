@@ -79,10 +79,12 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `components/common/` | Shared sidebar primitives |
+| `components/panels/` | Quick-stats panel and its subviews |
+| `components/registry-view/` | Registry key tree, value table, viewer |
+| `components/timeline/` | Swim-lane canvas, ruler, brush overlay, incident panels |
+| `workspaces/` | One directory per workspace (see `workspaces/registry.ts`): log, intune, new-intune, dsregcmd, sysmon, event-log, esp-diagnostics, sccm, deployment, dns-dhcp, secureboot, macos-jamf, macos-diag, timeline |
+| `stores/` | 6 Zustand stores: filter, log, marker, registry, timeline, ui |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
