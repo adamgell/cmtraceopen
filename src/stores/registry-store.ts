@@ -138,13 +138,36 @@ function findTreeNode(
   return undefined;
 }
 
+/**
+ * The tree node for a path, matched the way Windows matches registry keys.
+ *
+ * A file can spell a key in another case than the tree displays, so resolving
+ * with `===` finds nothing and the caller reveals nothing.
+ */
+function findTreeNodeByPath(
+  nodes: RegistryTreeNode[],
+  path: string,
+): RegistryTreeNode | undefined {
+  const wanted = path.toLowerCase();
+  for (const node of nodes) {
+    if (node.fullPath.toLowerCase() === wanted) return node;
+    const match = findTreeNodeByPath(node.children, path);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 function navigateToMatch(state: RegistryState, matchIndex: number) {
   const keyIdx = state.searchMatches[matchIndex];
   if (keyIdx == null || !state.registryData) return;
   const key = state.registryData.keys[keyIdx];
-  if (key) {
-    useRegistryStore.getState().expandToPath(key.path);
-  }
+  if (!key) return;
+
+  // Expand and select the node the tree holds, not the spelling the file used:
+  // the ancestors are keyed by the tree's casing, so a raw path expands nothing
+  // and leaves the match hidden behind a collapsed parent.
+  const node = findTreeNodeByPath(state.tree, key.path);
+  useRegistryStore.getState().expandToPath(node ? node.fullPath : key.path);
 }
 
 // ---- Module-level cache for tab switching ----
