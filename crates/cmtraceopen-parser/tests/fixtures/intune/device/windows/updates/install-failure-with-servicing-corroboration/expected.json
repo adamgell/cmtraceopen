@@ -1,0 +1,101 @@
+{
+  "scenario": "install-failure-with-servicing-corroboration",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "cbs-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "dism-log",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": "windowsUpdate",
+      "matchesExpectation": true
+    }
+  },
+  "updateChain": {
+    "state": "installFailed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000003.1",
+        "state": "installFailed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": true
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/install-failed/KB5000003.1",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "cbs-log#2",
+          "sourceArtifactId": "cbs-log"
+        },
+        {
+          "evidenceId": "dism-log#2",
+          "sourceArtifactId": "dism-log"
+        },
+        {
+          "evidenceId": "wu-20",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "CBS and DISM corroborate an install failure but never establish one",
+    "a supplemental line is retained only when it names the update explicitly"
+  ]
+}

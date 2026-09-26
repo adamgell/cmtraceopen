@@ -1,0 +1,85 @@
+{
+  "scenario": "privacy-safe-deterministic-export",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-setting-reports",
+      "status": "available"
+    },
+    {
+      "artifactId": "policy-registry",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "wsus",
+      "configured": "wsus",
+      "scanned": "wsus",
+      "matchesExpectation": true
+    }
+  },
+  "updateChain": {
+    "state": "installed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000012.1",
+        "state": "installed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "sharedUpdateSource"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "report-service-url",
+          "sourceArtifactId": "mdm-setting-reports"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/installed/KB5000012.1",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "the default export carries no policy value and no file path",
+    "Microsoft-defined identifiers survive the export because they name no one"
+  ]
+}

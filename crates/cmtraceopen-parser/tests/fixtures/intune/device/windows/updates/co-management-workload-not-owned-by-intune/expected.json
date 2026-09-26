@@ -1,0 +1,60 @@
+{
+  "scenario": "co-management-workload-not-owned-by-intune",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-setting-reports",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "notOwnedByIntune",
+    "workloadOwner": "configurationManager",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "wsus",
+      "configured": null,
+      "scanned": "wsus",
+      "matchesExpectation": true
+    }
+  },
+  "updateChain": {
+    "state": "insufficientEvidence",
+    "rebootPending": false,
+    "unkeyedObservationCount": 1,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/workload-not-owned-by-intune",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "device-facts",
+          "sourceArtifactId": "device-facts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "workload ownership outranks a clean policy application",
+    "no applied finding is emitted when Intune does not own the workload"
+  ]
+}

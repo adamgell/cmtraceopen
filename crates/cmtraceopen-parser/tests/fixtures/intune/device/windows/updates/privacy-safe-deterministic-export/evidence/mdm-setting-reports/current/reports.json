@@ -1,0 +1,44 @@
+{"_comment": "SYNTHETIC FIXTURE: tenant-shaped policy value",
+  "settingReports": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "report-service-url",
+          "sourceArtifactId": "mdm-setting-reports"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-setting-reports",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": null,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T00:30:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T00:30:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/Policy/Config/Update/UpdateServiceUrl",
+      "settingId": null,
+      "policyId": "00000000-0000-0000-0000-0000000000a1",
+      "displayName": null,
+      "outcome": "applied",
+      "value": "http://wsus.example.invalid:8530",
+      "error": null,
+      "namedData": [
+        {
+          "name": "Message5",
+          "value": "http://wsus.example.invalid:8530"
+        }
+      ]
+    }
+  ]
+}

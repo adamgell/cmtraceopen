@@ -1,0 +1,37 @@
+{"_comment": "SYNTHETIC FIXTURE: scan source policy",
+  "registryFacts": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "reg-scan-source",
+          "sourceArtifactId": "policy-registry"
+        },
+        "provenance": {
+          "sourceKind": "registry",
+          "sourceArtifactId": "policy-registry",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": null,
+          "registry": {
+            "hive": "HKEY_LOCAL_MACHINE",
+            "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate",
+            "valueName": "SetPolicyDrivenUpdateSourceForQualityUpdates"
+          },
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T00:40:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T00:40:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "value": "0",
+      "namedData": []
+    }
+  ]
+}

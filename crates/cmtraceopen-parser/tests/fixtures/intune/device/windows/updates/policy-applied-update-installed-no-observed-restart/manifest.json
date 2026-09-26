@@ -1,0 +1,78 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "policy-applied-update-installed-no-observed-restart",
+  "workload": "device/windows/updates",
+  "description": "A policy was applied and the update installed. The corpus holds no record of a completed restart, so this scenario pins the installation and the absence of a pending-restart record -- not a restart.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-facts",
+      "family": "suppliedFact",
+      "sourceKind": "suppliedFact",
+      "payloadKind": "deviceFacts",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device.json",
+      "sanitizedSourcePath": "SYNTHETIC://suppliedFact/device.json",
+      "relativePath": "evidence/device-facts/current/device.json",
+      "bytesCopied": 928,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "family": "mdmDiagnostics",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://mdmDiagnostics/events.json",
+      "relativePath": "evidence/mdm-admin-events/current/events.json",
+      "bytesCopied": 1838,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "policy-registry",
+      "family": "registry",
+      "sourceKind": "registry",
+      "payloadKind": "registryFacts",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "registry.json",
+      "sanitizedSourcePath": "SYNTHETIC://registry/registry.json",
+      "relativePath": "evidence/policy-registry/current/registry.json",
+      "bytesCopied": 1094,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 8149,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

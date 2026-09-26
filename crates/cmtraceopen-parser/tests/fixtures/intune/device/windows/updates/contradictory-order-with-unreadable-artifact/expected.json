@@ -1,0 +1,105 @@
+{
+  "scenario": "contradictory-order-with-unreadable-artifact",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events-malformed",
+      "status": "parseFailed"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "inProgress",
+    "rebootPending": null,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000011.1",
+        "state": "inProgress",
+        "confidence": "low",
+        "orderContradiction": true,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/contradictory-order/KB5000011.1",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-44",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-45",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/wu-client-events-malformed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-client-events-malformed"
+      ]
+    }
+  ],
+  "assertions": [
+    "an impossible phase ordering caps the transaction's confidence",
+    "the terminal state follows the records' own timestamps, not the order the artifact listed them in: the install at 01:00 is earlier, so the download that started at 02:00 is the client's last statement and no install is claimed",
+    "an unreadable client artifact means no restart can be claimed either way, so rebootPending stays unknown rather than false",
+    "a parseFailed artifact keeps its bytes and reports parseFailed coverage",
+    "a record whose offset cannot be read is cited as evidence but is never the reading the verdict rests on: the state, the confidence and the ordering verdict stay exactly as the placed records state them"
+  ]
+}

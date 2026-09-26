@@ -1,0 +1,78 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "contradictory-order-with-unreadable-artifact",
+  "workload": "device/windows/updates",
+  "description": "The install is stamped before its own download, so the ordering is contradictory and the state is read at low confidence. The second client artifact is unreadable, so its records never reach the analyzer: this scenario pins contradictory ordering and an unreadable artifact, not offset handling. One of the install records is repeated with an offset outside any real range and no normalized time, so its place in the order cannot be read at all.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-facts",
+      "family": "suppliedFact",
+      "sourceKind": "suppliedFact",
+      "payloadKind": "deviceFacts",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device.json",
+      "sanitizedSourcePath": "SYNTHETIC://suppliedFact/device.json",
+      "relativePath": "evidence/device-facts/current/device.json",
+      "bytesCopied": 928,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "family": "mdmDiagnostics",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://mdmDiagnostics/events.json",
+      "relativePath": "evidence/mdm-admin-events/current/events.json",
+      "bytesCopied": 1833,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 4932,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events-malformed",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": null,
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events-malformed/current/events.json",
+      "bytesCopied": 88,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}
