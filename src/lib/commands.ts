@@ -538,6 +538,7 @@ function isParseResultResponse(value: unknown): value is ParseResult {
     isFiniteCommandNumber(value.parseErrors) &&
     typeof value.filePath === "string" &&
     isFiniteCommandNumber(value.fileSize) &&
+    isNullableCommandNumber(value.modifiedUnixMs) &&
     isFiniteCommandNumber(value.byteOffset)
   );
 }

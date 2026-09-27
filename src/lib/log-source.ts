@@ -9,6 +9,7 @@ import {
   stopTail,
 } from "./commands";
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
+import type { TabEntrySnapshot } from "./tab-snapshot-cache";
 import { getColumnsForParser, getColumnsForAggregate } from "./column-config";
 import { getBaseName } from "./file-paths";
 import { offerElevationForSourceFailure } from "./elevation-recovery";
@@ -579,6 +580,36 @@ export async function getKnownSourceMetadataById(
 
   return knownSources.find((source) => source.id === sourceId) ?? null;
 }
+
+/**
+ * A synthetic parse result for a cached tab switch.
+ *
+ * One builder for both cached paths, so a field cannot be added to one of them and forgotten in the
+ * other -- which is exactly how the modified time came to be missing on one path only. The tab
+ * snapshot retains no file metadata, so no modified time is claimed here; `null` says the platform
+ * has none to report, which is what the sidebar renders as unavailable.
+ *
+ * The cast is for the two fields the snapshot stores as nullable while the result type does not.
+ */
+function cachedParseResult(
+  filePath: string,
+  cached: TabEntrySnapshot,
+  overrides: Partial<ParseResult> = {},
+): ParseResult {
+  return {
+    entries: cached.entries,
+    formatDetected: cached.formatDetected ?? null,
+    parserSelection: cached.parserSelection ?? null,
+    totalLines: cached.totalLines,
+    parseErrors: 0,
+    filePath,
+    fileSize: 0,
+    modifiedUnixMs: null,
+    byteOffset: cached.byteOffset,
+    ...overrides,
+  } as ParseResult;
+}
+
 export async function loadSelectedLogFile(
   filePath: string,
   source: LogSource,
@@ -620,16 +651,11 @@ export async function loadSelectedLogFile(
       useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source), "registry");
       useRegistryStore.getState().setRegistryData(regData);
 
-      return {
+      return cachedParseResult(filePath, cached, {
         entries: [],
-        formatDetected: cached.formatDetected ?? null,
-        parserSelection: cached.parserSelection ?? null,
         totalLines: 0,
-        parseErrors: 0,
-        filePath,
-        fileSize: 0,
         byteOffset: 0,
-      } as ParseResult;
+      });
     }
 
     console.info("[log-source] loadSelectedLogFile from cache (instant)", { filePath });
@@ -654,16 +680,7 @@ export async function loadSelectedLogFile(
     useUiStore.getState().openTab(filePath, fileName, buildTabSourceContext(source));
 
     // Return a synthetic ParseResult to satisfy callers
-    return {
-      entries: cached.entries,
-      formatDetected: cached.formatDetected ?? null,
-      parserSelection: cached.parserSelection ?? null,
-      totalLines: cached.totalLines,
-      parseErrors: 0,
-      filePath,
-      fileSize: 0,
-      byteOffset: cached.byteOffset,
-    } as ParseResult;
+    return cachedParseResult(filePath, cached);
   }
 
   console.info("[log-source] loading selected file (IPC)", {
@@ -970,13 +987,16 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     const commonDir = getCommonDirectory(paths);
     const source: LogSource = { kind: "folder", path: commonDir };
 
-    // Build sidebar entries from the file list
+    // Build sidebar entries from the file list. The modified time comes from
+    // the parse result: the backend has it from the same metadata as the size,
+    // and writing a placeholder here is what made every multi-file open read
+    // "Modified time unavailable".
     const folderEntries: FolderEntry[] = results.map((r) => ({
       path: r.filePath,
       name: r.filePath.split(/[\\/]/).pop() ?? r.filePath,
       isDir: false,
       sizeBytes: r.fileSize,
-      modifiedUnixMs: 0,
+      modifiedUnixMs: r.modifiedUnixMs,
     }));
 
     if (!isCurrentTabSwitch(loadGeneration)) return false;

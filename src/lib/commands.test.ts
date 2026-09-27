@@ -217,6 +217,7 @@ describe("parse and folder IPC response validation", () => {
       parseErrors: 0,
       filePath: "C:\\Logs\\App.log",
       fileSize: 0,
+      modifiedUnixMs: null,
       byteOffset: 0,
     };
     const folderListing = {

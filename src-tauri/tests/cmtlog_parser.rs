@@ -216,3 +216,30 @@ fn content_fallback_detection() {
     assert_eq!(format!("{:?}", selection.provenance), "Heuristic");
     assert_eq!(format!("{:?}", selection.parse_quality), "Structured");
 }
+
+/// The sidebar shows each source file's modified time, and this result is the
+/// only place the frontend can get it from: the pure parser never reads a file,
+/// so the adapter has to supply the time alongside the size. Without it a
+/// multi-file open reads "Modified time unavailable" for every file while the
+/// same files listed from their folder show real times.
+#[test]
+fn parse_file_reports_the_sources_modified_time() {
+    let fixture = TempLogFixture::new("modified-time.log", fixture_content());
+    let path_str = fixture.path.to_string_lossy().to_string();
+
+    let (result, _) =
+        app_lib::parser::parse_file(&path_str).expect("fixture should parse successfully");
+
+    let metadata = fs::metadata(&fixture.path).expect("fixture metadata");
+    let expected = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since_epoch| since_epoch.as_millis() as u64);
+
+    assert!(
+        result.modified_unix_ms.is_some(),
+        "a real file has a modified time to report"
+    );
+    assert_eq!(result.modified_unix_ms, expected);
+}
