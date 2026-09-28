@@ -3,7 +3,7 @@ import { buildTimeline } from "../../../lib/commands";
 import { deferred } from "../../../test-utils/deferred";
 import { useTimelineStore } from "../../../stores/timeline-store";
 import type { TimelineBundle } from "../../../types/timeline";
-import { buildTimelineFromSources } from "./useTimelineBundle";
+import { buildTimelineFromSources } from "./buildTimelineFromSources";
 
 vi.mock("../../../lib/commands", () => ({
   buildTimeline: vi.fn(),
