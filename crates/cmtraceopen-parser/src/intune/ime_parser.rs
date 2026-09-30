@@ -364,6 +364,26 @@ fn parse_attributes(attrs: &str) -> ParsedImeAttrs<'_> {
     parsed
 }
 
+/// The zoneless wall clock a record's date and time fields describe.
+fn naive_wall_clock(
+    month: u32,
+    day: u32,
+    year: i32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<chrono::NaiveDateTime> {
+    chrono::NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour, minute, second)
+}
+
+/// The offset in force now, for a clock the local zone cannot place.
+fn current_local_offset_minutes() -> Option<i32> {
+    chrono::Local::now()
+        .offset()
+        .local_minus_utc()
+        .checked_div(60)
+}
+
 // The tuple return avoids an extra struct for internal parsing.
 #[allow(clippy::type_complexity)]
 fn parse_timestamp_fields(
@@ -391,11 +411,20 @@ fn parse_timestamp_fields(
     };
 
     // When no timezone offset is embedded in the log (the norm for IME logs),
-    // fall back to the machine's current local UTC offset so the display column
-    // shows the correct local time rather than treating local time as UTC.
+    // fall back to the local offset so the display column shows the correct local
+    // time rather than treating local time as UTC - the offset in force when the
+    // clock was written, not the one in force now. Taking now's offset put a log
+    // from the other side of a DST transition an hour out, in the display column
+    // and in the epoch together.
+    //
+    // A clock the zone cannot place - inside a DST gap, or an hour a fall-back
+    // repeats - keeps the offset in force now, as this did before. CBS.log and
+    // dism.log report no epoch for those clocks; changing that here is a decision
+    // rather than a fix, so this keeps the column and says so.
     let effective_tz = timezone_offset.or_else(|| {
-        let offset_secs = chrono::Local::now().offset().local_minus_utc();
-        offset_secs.checked_div(60)
+        naive_wall_clock(month, day, year, hour, minute, second)
+            .and_then(crate::parser::local_minus_utc_minutes_at)
+            .or_else(current_local_offset_minutes)
     });
 
     let (timestamp_millis, timestamp_display) =
@@ -893,8 +922,19 @@ mod tests {
             .and_utc()
             .timestamp_millis();
 
-        // Compute what the timestamp should be with the local-timezone fallback.
-        let local_offset_mins = chrono::Local::now().offset().local_minus_utc() / 60;
+        // The fallback is the offset in force at the record's instant, not the one
+        // in force now: a record from the other side of a DST transition is an
+        // hour out otherwise. A zone that shifts at midnight puts this record in a
+        // gap, where the parser keeps the offset in force now as it always did.
+        let record_wall_clock = chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
+            .unwrap()
+            .and_hms_milli_opt(0, 22, 30, 0)
+            .unwrap();
+        let local_offset_mins = record_wall_clock
+            .and_local_timezone(chrono::Local)
+            .earliest()
+            .map(|value| value.offset().local_minus_utc() / 60)
+            .unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60);
         let expected = crate::parser::ccm::naive_to_utc_millis(
             chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
                 .unwrap()

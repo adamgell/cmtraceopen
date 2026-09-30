@@ -66,6 +66,22 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
     }
 }
 
+/// The offset in force at a zoneless wall clock, in `Local::now().offset()
+/// .local_minus_utc()`'s convention: minutes to add to the wall clock to reach
+/// UTC, so a zone west of Greenwich is negative.
+///
+/// Resolved for the instant the clock reads, not for the instant this runs: a
+/// log written on the other side of a DST transition is an hour out in the
+/// display column and in the epoch together when the offset is taken from
+/// `Local::now()`. Uses the same resolution as [`local_wall_clock_millis`], so a
+/// clock the zone cannot place (a gap, or a repeated hour) yields `None` here
+/// too, and the caller decides what to render instead.
+pub(crate) fn local_minus_utc_minutes_at(naive: NaiveDateTime) -> Option<i32> {
+    let local = local_wall_clock_millis(naive)?;
+    let wall_as_utc = naive.and_utc().timestamp_millis();
+    i32::try_from((wall_as_utc - local) / 60_000).ok()
+}
+
 /// The first instant the local zone can represent at or after `naive`, for a
 /// wall clock that falls inside a DST gap.
 ///
