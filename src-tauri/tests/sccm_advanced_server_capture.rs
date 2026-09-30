@@ -57,9 +57,20 @@ fn advanced_contract_is_exactly_the_six_capture_only_sources() {
             "BgbServer.log",
         ]
     );
-    assert!(contracts
-        .iter()
-        .all(|contract| contract.card_version == "1.0.0"));
+    let cards = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/source-cards",
+    );
+    for contract in contracts {
+        let card: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(cards.join(format!("{}.json", contract.card_id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            card["cardVersion"], contract.card_version,
+            "{}: capture contract version must match its source card",
+            contract.card_id
+        );
+    }
     assert!(contracts.iter().all(|contract| {
         !contract.source_id.to_ascii_lowercase().contains("sql")
             && contract
