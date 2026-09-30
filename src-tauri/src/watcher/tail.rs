@@ -199,6 +199,22 @@ struct InitialContinuationResult {
     remaining_start: Option<usize>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingReset {
+    Truncated,
+    Replaced,
+}
+
+/// A successful decode candidate. Carries are installed only after the read
+/// succeeds, so an error cannot consume a generation transition or old input.
+#[derive(Default)]
+struct DecodedTailBytes {
+    text: String,
+    pending_byte: Option<u8>,
+    pending_utf8_bytes: Vec<u8>,
+    pending_utf8_selection: Option<ResolvedParser>,
+}
+
 /// Manages incremental reading of a log file from a tracked byte offset.
 pub struct TailReader {
     path: PathBuf,
@@ -206,6 +222,9 @@ pub struct TailReader {
     /// Identity of the file generation currently being tailed, so a replacement is
     /// detected by what the file *is* rather than how large it is.
     file_identity: Option<FileIdentity>,
+    /// An observed reset remains owed to the consumer until a read succeeds,
+    /// even if a truncated file regrows past the old offset before retry.
+    pending_reset: Option<PendingReset>,
     parser_selection: ResolvedParser,
     next_id: u64,
     next_line: u32,
@@ -291,6 +310,7 @@ impl TailReader {
             path,
             byte_offset,
             file_identity: None,
+            pending_reset: None,
             parser_selection,
             next_id,
             next_line,
@@ -330,26 +350,50 @@ impl TailReader {
         let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
         let file_size = metadata.len();
 
-        // A rotation whose replacement is already larger than the offset held for the
-        // previous file is invisible to the size test below: the reader would seek to
-        // the old offset inside a *different* file, never read the new head, and could
-        // parse its first entry from the middle of a line. Identity sees it whatever
-        // the size. Recorded before any early return, so every read reports the
-        // generation it actually opened.
+        // Observe the generation through this handle, but do not commit it or
+        // consume old pending input until both the read and decode succeed.
         let current_identity = file_identity(&file, &metadata);
-        let replaced = identities_differ(self.file_identity, current_identity);
-        self.file_identity = current_identity;
-
-        // The file was replaced or truncated (e.g. log rotation) — rewind to the
-        // beginning and signal a reset so the frontend replaces (not appends) its
-        // stale view. Line numbers restart at 1 to match the new file generation;
-        // ids stay monotonic so they remain unique across the reset.
+        if identities_differ(self.file_identity, current_identity) {
+            self.pending_reset = Some(PendingReset::Replaced);
+        } else if file_size < self.byte_offset && self.pending_reset.is_none() {
+            self.pending_reset = Some(PendingReset::Truncated);
+        }
+        let reset = self.pending_reset.is_some();
+        let read_offset = if reset { 0 } else { self.byte_offset };
         let mut batch = TailBatch::empty(false);
-        let mut reset = false;
-        if replaced || file_size < self.byte_offset {
-            // Company Portal continuation state belongs to the replaced file
-            // generation; discard it instead of publishing stale amendments or
-            // stale-numbered records into the fresh view.
+
+        if !reset && self.pending_parser_selection_changed() {
+            batch.append(self.finalize_pending_input());
+            self.file_identity = current_identity;
+            return Ok(batch);
+        }
+
+        if !reset && self.company_portal_debounce_elapsed(now) {
+            batch.append(self.flush_pending_logical_record());
+        }
+
+        if !reset && file_size == read_offset {
+            self.file_identity = current_identity;
+            return Ok(batch);
+        }
+
+        file.seek(SeekFrom::Start(read_offset))
+            .map_err(crate::error::AppError::Io)?;
+        let mut buffer = vec![0u8; (file_size - read_offset) as usize];
+        file.read_exact(&mut buffer)
+            .map_err(crate::error::AppError::Io)?;
+        // The bytes belong to the opened generation. Reopening the path for
+        // its BOM could inspect a different replacement. Also probe after an
+        // empty reset, when its first bytes arrive on a later poll.
+        let encoding = if read_offset == 0 {
+            parser::detect_encoding(&buffer)
+        } else {
+            self.encoding
+        };
+        let decoded = self.decode_tail_bytes(buffer, encoding, reset)?;
+
+        if reset {
+            // Company Portal continuations are never finalized into a reset.
             self.pending_initial_logical_record = None;
             self.discarding_capped_initial_line = false;
             let company_portal_owner = self
@@ -367,44 +411,27 @@ impl TailReader {
                 self.pending_fragment.clear();
                 self.pending_fragment_selection = None;
             }
-            batch.append(self.finalize_pending_input());
-            self.byte_offset = 0;
+            // Keep the existing truncation finalization contract, but never
+            // mix records from a replaced generation into its replacement.
+            if self.pending_reset == Some(PendingReset::Truncated) {
+                batch.append(self.finalize_pending_input());
+            }
             self.pending_fragment.clear();
             self.pending_fragment_selection = None;
             self.inventory_line_continuation = false;
             self.pending_logical_record = None;
-            self.pending_byte = None;
-            self.pending_utf8_bytes.clear();
-            self.pending_utf8_selection = None;
             self.next_line = 1;
             batch.reset = true;
-            reset = true;
         }
 
-        if !reset && self.pending_parser_selection_changed() {
-            batch.append(self.finalize_pending_input());
-            return Ok(batch);
-        }
-
-        if !reset && self.company_portal_debounce_elapsed(now) {
-            batch.append(self.flush_pending_logical_record());
-        }
-
-        // No new data
-        if file_size == self.byte_offset {
-            return Ok(batch);
-        }
-
-        // Seek to our byte offset
-        file.seek(SeekFrom::Start(self.byte_offset))
-            .map_err(crate::error::AppError::Io)?;
-
-        let bytes_to_read = file_size - self.byte_offset;
-        let mut buffer = vec![0u8; bytes_to_read as usize];
-        file.read_exact(&mut buffer)
-            .map_err(crate::error::AppError::Io)?;
-
-        let new_text = self.decode_tail_bytes(buffer)?;
+        self.file_identity = current_identity;
+        self.pending_reset = None;
+        self.byte_offset = read_offset;
+        self.encoding = encoding;
+        self.pending_byte = decoded.pending_byte;
+        self.pending_utf8_bytes = decoded.pending_utf8_bytes;
+        self.pending_utf8_selection = decoded.pending_utf8_selection;
+        let new_text = decoded.text;
         let received_text = !new_text.is_empty();
 
         let inventory_dialect = inventory_logical_dialect(&self.parser_selection);
@@ -542,9 +569,15 @@ impl TailReader {
         Ok(batch)
     }
 
-    fn decode_tail_bytes(&mut self, buffer: Vec<u8>) -> Result<String, crate::error::AppError> {
-        if self.encoding != FileEncoding::Utf8 {
-            let decode_buffer = if let Some(previous_byte) = self.pending_byte.take() {
+    fn decode_tail_bytes(
+        &self,
+        buffer: Vec<u8>,
+        encoding: FileEncoding,
+        reset: bool,
+    ) -> Result<DecodedTailBytes, crate::error::AppError> {
+        if encoding != FileEncoding::Utf8 {
+            let previous_byte = if reset { None } else { self.pending_byte };
+            let decode_buffer = if let Some(previous_byte) = previous_byte {
                 let mut combined = Vec::with_capacity(buffer.len().saturating_add(1));
                 combined.push(previous_byte);
                 combined.extend_from_slice(&buffer);
@@ -552,30 +585,42 @@ impl TailReader {
             } else {
                 buffer
             };
-            let decode_len = if decode_buffer.len() % 2 == 0 {
-                decode_buffer.len()
-            } else {
-                let split = decode_buffer.len() - 1;
-                self.pending_byte = Some(decode_buffer[split]);
-                split
-            };
-            return crate::parser::decode_bytes(&decode_buffer[..decode_len], self.encoding)
-                .map_err(|error| {
+            let decode_len = decode_buffer.len() - decode_buffer.len() % 2;
+            let pending_byte = decode_buffer.get(decode_len).copied();
+            let text =
+                parser::decode_bytes(&decode_buffer[..decode_len], encoding).map_err(|error| {
                     crate::error::AppError::Internal(format!(
                         "Failed to decode tailed bytes: {error}"
                     ))
-                });
+                })?;
+            return Ok(DecodedTailBytes {
+                text,
+                pending_byte,
+                ..DecodedTailBytes::default()
+            });
         }
 
-        let previous_carry = std::mem::take(&mut self.pending_utf8_bytes);
-        let previous_carry_selection = self.pending_utf8_selection.take();
-        let decoded_start_offset = self.byte_offset.saturating_sub(previous_carry.len() as u64);
+        let previous_carry = if reset {
+            &[][..]
+        } else {
+            &self.pending_utf8_bytes
+        };
+        let previous_carry_selection = if reset {
+            None
+        } else {
+            self.pending_utf8_selection.clone()
+        };
+        let decoded_start_offset = if reset {
+            0
+        } else {
+            self.byte_offset.saturating_sub(previous_carry.len() as u64)
+        };
         let mut decode_buffer = if previous_carry.is_empty() {
             buffer
         } else {
             let mut combined =
                 Vec::with_capacity(previous_carry.len().saturating_add(buffer.len()));
-            combined.extend_from_slice(&previous_carry);
+            combined.extend_from_slice(previous_carry);
             combined.extend_from_slice(&buffer);
             combined
         };
@@ -585,12 +630,13 @@ impl TailReader {
         }
 
         match String::from_utf8(decode_buffer) {
-            Ok(text) => Ok(text),
+            Ok(text) => Ok(DecodedTailBytes {
+                text,
+                ..DecodedTailBytes::default()
+            }),
             Err(error) => {
                 let utf8_error = error.utf8_error();
                 if utf8_error.error_len().is_some() {
-                    self.pending_utf8_bytes = previous_carry;
-                    self.pending_utf8_selection = previous_carry_selection;
                     return Err(crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
                     ));
@@ -600,19 +646,21 @@ impl TailReader {
                 let mut bytes = error.into_bytes();
                 let incomplete = bytes.split_off(valid_up_to);
                 if incomplete.len() > 3 {
-                    self.pending_utf8_bytes = previous_carry;
-                    self.pending_utf8_selection = previous_carry_selection;
                     return Err(crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
                     ));
                 }
-                self.pending_utf8_bytes = incomplete;
-                self.pending_utf8_selection =
-                    previous_carry_selection.or_else(|| Some(self.parser_selection.clone()));
-                String::from_utf8(bytes).map_err(|_| {
+                let text = String::from_utf8(bytes).map_err(|_| {
                     crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
                     )
+                })?;
+                Ok(DecodedTailBytes {
+                    text,
+                    pending_utf8_bytes: incomplete,
+                    pending_utf8_selection: previous_carry_selection
+                        .or_else(|| Some(self.parser_selection.clone())),
+                    ..DecodedTailBytes::default()
                 })
             }
         }
@@ -3837,5 +3885,214 @@ mod tests {
         assert_eq!(batch.entries[0].line_number, 1);
 
         fs::remove_file(path).expect("should clean up temp file");
+    }
+}
+
+#[cfg(test)]
+mod replacement_regression_tests {
+    use super::*;
+    use std::fs;
+
+    const SIMPLE: &str = include_str!("../../tests/corpus/simple/clean/basic.log");
+    const INVENTORY: &str =
+        include_str!("../../tests/corpus/intune_device_inventory/clean/InventoryAdaptor.log_");
+
+    fn replace_file(path: &Path, bytes: &[u8]) {
+        let staging = path.with_extension("replacement");
+        fs::write(&staging, bytes).unwrap();
+        fs::rename(staging, path).unwrap();
+    }
+
+    fn encode(text: &str, encoding: FileEncoding) -> Vec<u8> {
+        match encoding {
+            FileEncoding::Utf8 => text.as_bytes().to_vec(),
+            FileEncoding::Utf16Le | FileEncoding::Utf16Be => {
+                let little = encoding == FileEncoding::Utf16Le;
+                let mut bytes = if little {
+                    vec![0xff, 0xfe]
+                } else {
+                    vec![0xfe, 0xff]
+                };
+                for unit in text.encode_utf16() {
+                    bytes.extend_from_slice(&if little {
+                        unit.to_le_bytes()
+                    } else {
+                        unit.to_be_bytes()
+                    });
+                }
+                bytes
+            }
+        }
+    }
+
+    fn reader_after_parse(path: &Path) -> TailReader {
+        let (parsed, selection, identity) =
+            parser::parse_file_identified(path.to_str().unwrap()).unwrap();
+        let mut reader = TailReader::new(
+            path.to_path_buf(),
+            parsed.byte_offset,
+            selection,
+            parsed.entries.len() as u64,
+            parsed.total_lines + 1,
+        );
+        reader.seed_file_identity(identity);
+        reader
+    }
+
+    #[test]
+    fn replacement_discards_old_pending_inventory_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("InventoryAdaptor.log_");
+        let old = INVENTORY.lines().take(2).collect::<Vec<_>>().join("\n") + "\n";
+        fs::write(&path, &old).unwrap();
+        let selection =
+            ResolvedParser::intune_device_inventory(DeviceInventoryLogDialect::InventoryAdaptor);
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+        assert!(reader.read_new_entries().unwrap().entries.is_empty());
+        assert!(reader.pending_logical_record.is_some());
+
+        // Transform the existing corpus's message without inventing a format.
+        let replacement = INVENTORY.replace("Adapter result:", "Replacement adapter result:");
+        assert!(replacement.len() as u64 > reader.byte_offset);
+        replace_file(&path, replacement.as_bytes());
+        let batch = reader.read_new_entries().unwrap();
+        assert!(batch.reset);
+        assert_eq!(
+            batch.entries.len(),
+            1,
+            "old-generation pending content must not enter the reset batch"
+        );
+        assert!(batch.entries[0]
+            .message
+            .starts_with("Replacement adapter result:"));
+        assert_eq!(batch.entries[0].line_number, 1);
+    }
+
+    #[test]
+    fn replacement_refreshes_encoding_from_its_own_bytes() {
+        for (old_encoding, new_encoding) in [
+            (FileEncoding::Utf16Le, FileEncoding::Utf16Be),
+            (FileEncoding::Utf16Be, FileEncoding::Utf16Le),
+            (FileEncoding::Utf8, FileEncoding::Utf16Le),
+            (FileEncoding::Utf8, FileEncoding::Utf16Be),
+            (FileEncoding::Utf16Le, FileEncoding::Utf8),
+            (FileEncoding::Utf16Be, FileEncoding::Utf8),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("basic.log");
+            let initial = SIMPLE.split_inclusive('\n').next().unwrap();
+            fs::write(&path, encode(initial, old_encoding)).unwrap();
+            let mut reader = reader_after_parse(&path);
+            let replacement = encode(SIMPLE, new_encoding);
+            assert!(replacement.len() as u64 > reader.byte_offset);
+            replace_file(&path, &replacement);
+            let batch = reader.read_new_entries().unwrap();
+            assert!(batch.reset);
+            assert_eq!(
+                batch.entries.len(),
+                3,
+                "{old_encoding:?} -> {new_encoding:?}"
+            );
+            assert_eq!(
+                batch.entries[0].message, "Starting CcmExec service",
+                "{old_encoding:?} -> {new_encoding:?}"
+            );
+            assert_eq!(batch.entries[0].line_number, 1);
+        }
+    }
+
+    #[test]
+    fn replacement_retry_keeps_reset_after_decode_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("basic.log");
+        fs::write(&path, SIMPLE.split_inclusive('\n').next().unwrap()).unwrap();
+        let mut reader = reader_after_parse(&path);
+        let mut invalid = SIMPLE.as_bytes().to_vec();
+        invalid.push(0xff);
+        assert!(invalid.len() as u64 > reader.byte_offset);
+        replace_file(&path, &invalid);
+        assert!(reader.read_new_entries().is_err());
+
+        let replacement = fs::File::open(&path).unwrap();
+        let identity = file_identity(&replacement, &replacement.metadata().unwrap());
+        drop(replacement);
+        // Repair the SAME generation. Another rename would hide the lost reset.
+        fs::write(&path, SIMPLE).unwrap();
+        let repaired = fs::File::open(&path).unwrap();
+        assert_eq!(
+            identity,
+            file_identity(&repaired, &repaired.metadata().unwrap())
+        );
+        drop(repaired);
+        let batch = reader.read_new_entries().unwrap();
+        assert!(
+            batch.reset,
+            "a failed replacement read must not consume the reset signal"
+        );
+        assert_eq!(batch.entries.len(), 3);
+        assert_eq!(batch.entries[0].message, "Starting CcmExec service");
+        assert_eq!(batch.entries[0].line_number, 1);
+        assert!(!reader.read_new_entries().unwrap().reset);
+    }
+    #[test]
+    fn truncation_retry_keeps_pending_record_when_file_regrows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("InventoryAdaptor.log_");
+        let old = INVENTORY.replace("Completed action", "Old completed action");
+        fs::write(&path, &old).unwrap();
+        let selection =
+            ResolvedParser::intune_device_inventory(DeviceInventoryLogDialect::InventoryAdaptor);
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+        assert_eq!(reader.read_new_entries().unwrap().entries.len(), 1);
+        let old_offset = reader.byte_offset;
+        assert!(reader.pending_logical_record.is_some());
+
+        fs::write(&path, [0xff]).unwrap();
+        assert!(reader.read_new_entries().is_err());
+        // Keep the same inode and grow beyond even the original offset. The
+        // already observed truncation must survive both the error and regrowth.
+        let repaired = INVENTORY
+            .replace("Adapter result:", "New adapter result:")
+            .repeat(2);
+        assert!(repaired.len() as u64 > old_offset);
+        fs::write(&path, &repaired).unwrap();
+        let batch = reader.read_new_entries().unwrap();
+        assert!(
+            batch.reset,
+            "the observed truncation must survive a failed read and regrowth"
+        );
+        assert!(
+            batch.entries[0].message.starts_with("Old completed action"),
+            "truncation must still finalize its old pending record exactly once"
+        );
+        assert_eq!(
+            batch
+                .entries
+                .iter()
+                .filter(|e| e.message.starts_with("Old completed action"))
+                .count(),
+            1
+        );
+        assert_eq!(batch.entries[1].line_number, 1);
+        let again = reader.read_new_entries().unwrap();
+        assert!(!again.reset);
+        assert!(again.entries.is_empty());
+    }
+    #[test]
+    fn replacement_empty_then_append_detects_its_encoding() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("basic.log");
+        fs::write(&path, SIMPLE).unwrap();
+        let mut reader = reader_after_parse(&path);
+        replace_file(&path, &[]);
+        let empty = reader.read_new_entries().unwrap();
+        assert!(empty.reset);
+        assert!(empty.entries.is_empty());
+        fs::write(&path, encode(SIMPLE, FileEncoding::Utf16Be)).unwrap();
+        let appended = reader.read_new_entries().unwrap();
+        assert!(!appended.reset, "the empty generation was already reported");
+        assert_eq!(appended.entries.len(), 3);
+        assert_eq!(appended.entries[0].message, "Starting CcmExec service");
+        assert_eq!(appended.entries[0].line_number, 1);
     }
 }
