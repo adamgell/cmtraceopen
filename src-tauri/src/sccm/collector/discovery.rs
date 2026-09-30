@@ -241,15 +241,19 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
         }
     }
 
-    match Command::new("powershell.exe")
-        .args([
+    // The WMI query walks providers on the target host, so it is the kind of
+    // call that can hang rather than fail. Bounded, so it ends instead.
+    match crate::process_util::run_bounded_command(
+        Command::new("powershell.exe").args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             FIXED_ROLE_QUERY,
-        ])
-        .output()
-    {
+        ]),
+        crate::process_util::TOOL_DEADLINE,
+        crate::process_util::TOOL_OUTPUT_BYTES,
+        crate::process_util::TOOL_ERROR_BYTES,
+    ) {
         Ok(output) if output.status.success() => {
             apply_cim_service_facts(
                 &mut environment,

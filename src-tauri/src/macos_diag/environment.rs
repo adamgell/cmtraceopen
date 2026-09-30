@@ -3,8 +3,16 @@ use super::models::MacosLogFileEntry;
 // detect_full_disk_access has an arm on every target, so this one cannot be
 // macOS-gated alongside the rest.
 use super::models::FdaStatus;
+
 #[cfg(target_os = "macos")]
 use super::models::{MacosDiagDirectoryStatus, MacosDiagToolAvailability};
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -149,9 +157,13 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
 
     // --- macOS version via sw_vers ---
     let (macos_version, macos_build) = {
-        let output = Command::new("sw_vers")
-            .output()
-            .map_err(crate::error::AppError::Io)?;
+        let output = run_bounded_command(
+            &mut Command::new("sw_vers"),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        )
+        .map_err(crate::error::AppError::Io)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_sw_vers_output(&stdout)
     };
@@ -161,11 +173,14 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
 
     // --- Tool availability ---
     let tool_available = |name: &str| -> bool {
-        Command::new("which")
-            .arg(name)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        run_bounded_command(
+            Command::new("which").arg(name),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        )
+        .map(|o| o.status.success())
+        .unwrap_or(false)
     };
 
     let tools = MacosDiagToolAvailability {
