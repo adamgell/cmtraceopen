@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   formatDisplayDateTime,
   formatDisplayTime,
@@ -36,29 +36,30 @@ describe("parseDisplayDateTime", () => {
     const marked = parseDisplayDateTime(`${day} 14:22:31 UTC`);
     const bare = parseDisplayDateTime(`${day} 14:22:31`);
 
-    expect(marked?.toISOString()).toBe(`${day}T14:22:31.000Z`);
-    expect(bare).not.toBeNull();
-    expect(bare!.getHours()).toBe(14);
-    expect(bare!.getMinutes()).toBe(22);
-    expect(bare!.getSeconds()).toBe(31);
+    assert.isNotNull(marked);
+    assert.isNotNull(bare);
+    expect(marked.toISOString()).toBe(`${day}T14:22:31.000Z`);
+    expect(bare.getHours()).toBe(14);
+    expect(bare.getMinutes()).toBe(22);
+    expect(bare.getSeconds()).toBe(31);
 
     // Use the timestamp's offset, not today's: they can straddle a DST change.
     // Keep the assertion in UTC too, where the two forms must coincide.
-    const offsetMinutes = bare!.getTimezoneOffset();
-    expect(bare!.getTime() - marked!.getTime()).toBe(offsetMinutes * 60_000);
+    const offsetMinutes = bare.getTimezoneOffset();
+    expect(bare.getTime() - marked.getTime()).toBe(offsetMinutes * 60_000);
   });
 
   it("reads a month-first Windows timestamp", () => {
     const parsed = parseDisplayDateTime("03-09-2026 14:22:31");
-    expect(parsed).not.toBeNull();
+    assert.isNotNull(parsed);
     // Month 03, day 09 — the opposite reading would give 3 September.
-    expect(parsed!.getMonth()).toBe(2);
-    expect(parsed!.getDate()).toBe(9);
+    expect(parsed.getMonth()).toBe(2);
+    expect(parsed.getDate()).toBe(9);
   });
 
   it("exposes the same result as an epoch value", () => {
     const s = "2026-03-09T14:22:31Z";
-    expect(parseDisplayDateTimeValue(s)).toBe(parseDisplayDateTime(s)!.getTime());
+    expect(parseDisplayDateTimeValue(s)).toBe(parseDisplayDateTime(s)?.getTime());
     expect(parseDisplayDateTimeValue(null)).toBeNull();
   });
 });
