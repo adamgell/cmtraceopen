@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatDisplayDateTime,
   formatDisplayTime,
@@ -7,6 +7,10 @@ import {
 } from "./date-time-format";
 
 describe("parseDisplayDateTime", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns null for absent or unusable input", () => {
     expect(parseDisplayDateTime(null)).toBeNull();
     expect(parseDisplayDateTime(undefined)).toBeNull();
@@ -22,25 +26,26 @@ describe("parseDisplayDateTime", () => {
     expect(parseDisplayDateTime(d.getTime())?.getTime()).toBe(d.getTime());
   });
 
-  it("does not shift a timestamp that says UTC", () => {
-    // The invariant: a value carrying an explicit UTC marker is offset-invariant,
-    // while the same clock reading without one is read in the host zone. On a UTC
-    // host those coincide, so this compares the two forms against each other
-    // rather than against a hardcoded hour, which makes it meaningful anywhere.
-    const marked = parseDisplayDateTime("2026-03-09 14:22:31 UTC");
-    const bare = parseDisplayDateTime("2026-03-09 14:22:31");
+  it.each([
+    ["2026-09-30T12:00:00Z", "2026-03-09"],
+    ["2026-03-09T12:00:00Z", "2026-09-30"],
+  ])("preserves UTC and local time with now=%s and timestamp=%s", (now, day) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
 
-    expect(marked).not.toBeNull();
+    const marked = parseDisplayDateTime(`${day} 14:22:31 UTC`);
+    const bare = parseDisplayDateTime(`${day} 14:22:31`);
+
+    expect(marked?.toISOString()).toBe(`${day}T14:22:31.000Z`);
     expect(bare).not.toBeNull();
-    expect(marked!.getUTCHours()).toBe(14);
-    expect(marked!.getUTCMinutes()).toBe(22);
+    expect(bare!.getHours()).toBe(14);
+    expect(bare!.getMinutes()).toBe(22);
+    expect(bare!.getSeconds()).toBe(31);
 
-    const offsetMinutes = new Date().getTimezoneOffset();
-    if (offsetMinutes !== 0) {
-      // Off UTC the bare form must sit exactly the host offset away; the marked
-      // form must not move. This is the case the UTC normalisation protects.
-      expect(bare!.getTime() - marked!.getTime()).toBe(offsetMinutes * 60_000);
-    }
+    // Use the timestamp's offset, not today's: they can straddle a DST change.
+    // Keep the assertion in UTC too, where the two forms must coincide.
+    const offsetMinutes = bare!.getTimezoneOffset();
+    expect(bare!.getTime() - marked!.getTime()).toBe(offsetMinutes * 60_000);
   });
 
   it("reads a month-first Windows timestamp", () => {
