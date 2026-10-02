@@ -210,6 +210,11 @@ jobs:
       - name: Frontend tests
         run: npm run test
 
+      - name: Date parsing timezone regressions
+        run: |
+          TZ=UTC npm run test -- src/lib/date-time-format.test.ts
+          TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts
+
       - name: CI bundle output contract tests
         run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs
 
