@@ -308,9 +308,11 @@ export function MacosDiagUnifiedLogTab() {
   const styles = useStyles();
   const unifiedLogResult = useMacosDiagStore((s) => s.unifiedLogResult);
   const loading = useMacosDiagStore((s) => s.unifiedLogLoading);
+  const queryError = useMacosDiagStore((s) => s.unifiedLogError);
   const presetId = useMacosDiagStore((s) => s.unifiedLogPresetId);
   const setUnifiedLogResult = useMacosDiagStore((s) => s.setUnifiedLogResult);
   const setLoading = useMacosDiagStore((s) => s.setUnifiedLogLoading);
+  const setQueryError = useMacosDiagStore((s) => s.setUnifiedLogError);
   const setPresetId = useMacosDiagStore((s) => s.setUnifiedLogPresetId);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
@@ -318,7 +320,6 @@ export function MacosDiagUnifiedLogTab() {
   const [timeRangeMinutes, setTimeRangeMinutes] = useState(60);
   const [maxResults, setMaxResults] = useState(5000);
   const [hideNoise, setHideNoise] = useState(true);
-  const [queryError, setQueryError] = useState<string | null>(null);
 
   // Column resize state
   const [colWidths, setColWidths] = useState({ timestamp: 170, process: 140, level: 80 });
@@ -384,7 +385,7 @@ export function MacosDiagUnifiedLogTab() {
       setUnifiedLogResult(null);
       setQueryError(err instanceof Error ? err.message : String(err));
     }
-  }, [presetId, timeRangeMinutes, maxResults, setLoading, setUnifiedLogResult]);
+  }, [presetId, timeRangeMinutes, maxResults, setLoading, setUnifiedLogResult, setQueryError]);
 
   return (
     <>

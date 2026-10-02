@@ -264,14 +264,12 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
     };
 
     // --- Collect raw text output for display ---
-    let raw_output = run_complete_command(
+    let raw_output = profile_raw_output(run_complete_command(
         Command::new("system_profiler").args(["SPConfigurationProfileDataType"]),
         TOOL_DEADLINE,
         TOOL_OUTPUT_BYTES,
         TOOL_ERROR_BYTES,
-    )
-    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-    .map_err(crate::error::AppError::Io)?;
+    ))?;
 
     // --- Enrollment status ---
     let enrollment_status = {
@@ -308,6 +306,25 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
     })
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn profile_raw_output(
+    output: std::io::Result<crate::process_util::BoundedCommandOutput>,
+) -> Result<String, crate::error::AppError> {
+    match output {
+        Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            Err(crate::error::AppError::Io(error))
+        }
+        Err(error) => {
+            // Raw text is an optional display alongside separately collected
+            // structured profiles and enrollment facts. Its absence must not
+            // discard those results; incomplete captured evidence still fails.
+            log::warn!("Failed to collect system_profiler raw output: {}", error);
+            Ok(String::new())
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppError> {
     Err(crate::error::AppError::PlatformUnsupported(
@@ -322,6 +339,40 @@ pub fn list_profiles_impl() -> Result<MacosProfilesResult, crate::error::AppErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_raw_display_does_not_discard_profile_results() {
+        for kind in [
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::PermissionDenied,
+        ] {
+            assert_eq!(profile_raw_output(Err(kind.into())).unwrap(), "");
+        }
+    }
+
+    #[test]
+    fn complete_raw_display_is_preserved() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let output = crate::process_util::BoundedCommandOutput {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"Profiles:\n".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        assert_eq!(profile_raw_output(Ok(output)).unwrap(), "Profiles:\n");
+    }
+
+    #[test]
+    fn incomplete_raw_display_still_fails_closed() {
+        assert!(
+            matches!(profile_raw_output(Err(std::io::ErrorKind::InvalidData.into())), Err(crate::error::AppError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData)
+        );
+    }
 
     #[test]
     fn test_parse_enrollment_enrolled_dep() {

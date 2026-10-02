@@ -44,6 +44,44 @@ afterEach(() => {
 });
 
 describe("unified log query failures", () => {
+  it.each(["success", "clear"])("clears the stored error on %s", async (transition) => {
+    vi.mocked(macosQueryUnifiedLog).mockRejectedValueOnce(oversizedError);
+    render(<MacosDiagUnifiedLogTab />);
+    fireEvent.click(screen.getByRole("button", { name: "Run Query" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(oversizedError);
+
+    act(() => {
+      if (transition === "success") {
+        useMacosDiagStore.getState().setUnifiedLogResult(previousResult);
+      } else {
+        useMacosDiagStore.getState().clear();
+      }
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(useMacosDiagStore.getState().unifiedLogError).toBeNull();
+  });
+
+  it.each(["before", "after"])("preserves an error that arrives %s unmount", async (timing) => {
+    useMacosDiagStore.getState().setUnifiedLogResult(previousResult);
+    let rejectQuery!: (error: string) => void;
+    vi.mocked(macosQueryUnifiedLog).mockReturnValueOnce(
+      new Promise((_resolve, reject) => { rejectQuery = reject; }),
+    );
+    const tab = render(<MacosDiagUnifiedLogTab />);
+    fireEvent.click(screen.getByRole("button", { name: "Run Query" }));
+    if (timing === "after") tab.unmount();
+
+    await act(async () => { rejectQuery(oversizedError); });
+    if (timing === "before") tab.unmount();
+    render(<MacosDiagUnifiedLogTab />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(oversizedError);
+    expect(screen.queryByText("Previous query entry")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Select a preset and time range/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Query" })).toBeEnabled();
+  });
+
   it("clears the error while retrying and shows fresh results on success", async () => {
     vi.mocked(macosQueryUnifiedLog).mockRejectedValueOnce(oversizedError);
     render(<MacosDiagUnifiedLogTab />);
