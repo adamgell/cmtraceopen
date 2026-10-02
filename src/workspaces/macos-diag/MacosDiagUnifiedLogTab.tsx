@@ -286,6 +286,10 @@ const useStyles = makeStyles({
     textAlign: "center" as const,
     color: tokens.colorNeutralForeground3,
   },
+  errorText: {
+    color: tokens.colorPaletteRedForeground1,
+    marginBottom: "12px",
+  },
 });
 
 function getLevelClass(
@@ -314,6 +318,7 @@ export function MacosDiagUnifiedLogTab() {
   const [timeRangeMinutes, setTimeRangeMinutes] = useState(60);
   const [maxResults, setMaxResults] = useState(5000);
   const [hideNoise, setHideNoise] = useState(true);
+  const [queryError, setQueryError] = useState<string | null>(null);
 
   // Column resize state
   const [colWidths, setColWidths] = useState({ timestamp: 170, process: 140, level: 80 });
@@ -365,6 +370,7 @@ export function MacosDiagUnifiedLogTab() {
   });
 
   const runQuery = useCallback(async () => {
+    setQueryError(null);
     setLoading(true);
     try {
       const result = await macosQueryUnifiedLog(
@@ -375,7 +381,8 @@ export function MacosDiagUnifiedLogTab() {
       setUnifiedLogResult(result);
     } catch (err) {
       console.error("[macos-diag] unified log query failed", err);
-      setLoading(false);
+      setUnifiedLogResult(null);
+      setQueryError(err instanceof Error ? err.message : String(err));
     }
   }, [presetId, timeRangeMinutes, maxResults, setLoading, setUnifiedLogResult]);
 
@@ -463,6 +470,12 @@ export function MacosDiagUnifiedLogTab() {
           <span style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>
             Querying unified log...
           </span>
+        </div>
+      )}
+
+      {queryError !== null && (
+        <div role="alert" className={styles.errorText}>
+          Unified log query failed: {queryError}
         </div>
       )}
 
@@ -600,7 +613,7 @@ export function MacosDiagUnifiedLogTab() {
       )}
 
       {/* Empty State */}
-      {!loading && !unifiedLogResult && (
+      {!loading && !unifiedLogResult && queryError === null && (
         <div className={styles.emptyState}>
           <Body1>
             Select a preset and time range, then click Run Query to search the

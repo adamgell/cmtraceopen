@@ -70,7 +70,7 @@ interface MacosDiagState {
   setSelectedPackageFiles: (files: MacosPackageFiles | null) => void;
   setPackageDrillLoading: (loading: boolean) => void;
 
-  setUnifiedLogResult: (result: MacosUnifiedLogResult) => void;
+  setUnifiedLogResult: (result: MacosUnifiedLogResult | null) => void;
   setUnifiedLogLoading: (loading: boolean) => void;
   setUnifiedLogPresetId: (presetId: string) => void;
 
