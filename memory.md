@@ -113,10 +113,12 @@ Staff notes live in each member's subdirectory:
 
 `cmtraceopen` has an extraordinary development footprint across multiple git worktree directories. This is not just "developed in Claude/Codex" — it IS a parallel development ecosystem.
 
-- **87 git worktrees** registered, measured 2026-09-24 — counted rather than described, because the
-  previous figure here read "450+": 86 in `.worktrees/`, 31 in `~/.codex/worktrees/`, and none in
-  `/private/tmp/cmtraceopen-*`. The forest is real; it is a fifth of the size the layout block below
-  used to claim, which is what cleaning up merged lanes does to a count nobody retakes.
+- The 2026-09-24 inventory recorded **87 registered git worktrees** and separate directory
+  counts of 86 under `.worktrees/`, 31 under `~/.codex/worktrees/`, and none under
+  `/private/tmp/cmtraceopen-*`. The record does not establish which Codex directories belong
+  to this repository or are included in the registered total. These directory counts are
+  therefore not a breakdown of the 87 and must not be added to it. Re-run `git worktree list`
+  and inspect the directory registrations on that host before using the historical counts.
 - **246 SCCM branches** for issues #318 through #482 (diagnostic program: client health, intake, policy, DP, SUP, hierarchy, cross-side correlation)
 - **~40 Intune branches** covering IME corrections, Company Portal multi-platform (Windows/macOS/iOS/Android), WUfB recovery, device inventory
 - Many worktrees have **1,000+ commits** from main — deep parallel feature development with real code changes and merge activity
@@ -124,12 +126,12 @@ Staff notes live in each member's subdirectory:
 ### Worktree Directory Layout
 ```
 Users/Adam.Gell/repo/cmtraceopen/
-  .worktrees/                 # 86 worktrees, all registered with `git worktree list`
-  ~/.codex/worktrees/         # 31 Codex-specific worktrees
+  .worktrees/                 # 86 directories recorded on 2026-09-24
+  ~/.codex/worktrees/         # 31 directories; repository/registration scope unverified
   /private/tmp/cmtraceopen-*  # none present as of 2026-09-24
 ```
 
-These directories track the full state of every Claude/Codex agent session as parallel working copies.
+These are historical directory observations, not a verified inventory of all agent sessions.
 
 ## Model Tiering Details
 
