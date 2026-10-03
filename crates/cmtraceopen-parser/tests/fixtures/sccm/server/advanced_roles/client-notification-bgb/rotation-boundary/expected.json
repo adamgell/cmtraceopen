@@ -1,0 +1,24 @@
+{
+  "fixtureId": "rotation-boundary",
+  "evidence": "Tail of BgbServer.lo_ ending in the unframed rename marker, then the head of the current BgbServer.log that continues it.",
+  "files": [
+    {
+      "name": "BgbServer.lo_",
+      "side": "server",
+      "rotation": "lo_",
+      "lines": 5,
+      "framedRecords": 4,
+      "unframedLines": [
+        5
+      ]
+    },
+    {
+      "name": "BgbServer.log",
+      "side": "server",
+      "rotation": "current",
+      "lines": 4,
+      "framedRecords": 4,
+      "unframedLines": []
+    }
+  ]
+}

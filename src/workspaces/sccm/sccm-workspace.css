@@ -182,7 +182,7 @@
 
 .sccm-environment-strip {
   display: grid;
-  grid-template-columns: minmax(140px, 0.6fr) minmax(180px, 0.8fr) minmax(300px, 2fr);
+  grid-template-columns: minmax(140px, 0.6fr) minmax(160px, 0.7fr) minmax(160px, 0.7fr) minmax(300px, 2fr);
   border: 1px solid var(--colorNeutralStroke1);
   background: var(--colorNeutralBackground1);
 }
@@ -495,7 +495,7 @@
   }
 
   .sccm-environment-strip {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
   }
 
   .sccm-role-fact {
