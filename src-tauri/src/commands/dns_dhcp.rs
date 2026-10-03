@@ -33,17 +33,71 @@ pub fn check_dns_logging_status() -> DnsLoggingStatus {
     }
 }
 
+/// The diagnostic switches this feature owns.
+///
+/// The reader parses query records, so it needs the query category with the
+/// answers, one packet direction and one transport. The cmdlet requires at least
+/// one option from each of those groups, which is why the list is these five and
+/// not a single flag.
+///
+/// `-All` would also flip categories this feature never reads — notifications,
+/// Dynamic Update, zone transfers, packet capture, write-back, and the event-log
+/// switches — on what may be a production resolver. Enabling and disabling use
+/// this one list, so neither direction disturbs a setting an operator chose.
+#[cfg(any(test, target_os = "windows"))]
+const OWNED_DIAGNOSTIC_SWITCHES: [&str; 5] = [
+    "Queries",
+    "Answers",
+    "ReceivePackets",
+    "UdpPackets",
+    "EnableLoggingToFile",
+];
+
+/// Build the PowerShell that sets this feature's switches, and report the log
+/// path so the caller can name it.
+#[cfg(any(test, target_os = "windows"))]
+fn diagnostics_command(enable: bool) -> String {
+    let value = if enable { "$true" } else { "$false" };
+    let switches = OWNED_DIAGNOSTIC_SWITCHES
+        .iter()
+        .map(|name| format!("-{name} {value}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "Set-DnsServerDiagnostics {switches}; \
+         $s = (Get-DnsServer).ServerSetting; \
+         Write-Output \"LogFilePath=$($s.LogFilePath)\""
+    )
+}
+
 /// Enable DNS debug logging on this machine via PowerShell.
 /// Requires the app to be running elevated (Administrator).
 #[tauri::command]
 pub fn enable_dns_debug_logging() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        enable_dns_debug_logging_windows()
+        set_dns_debug_logging_windows(true)
     }
     #[cfg(not(target_os = "windows"))]
     {
         Err("DNS debug logging can only be enabled on Windows Server.".to_string())
+    }
+}
+
+/// Turn off the DNS debug logging this feature enabled.
+///
+/// The switch it is left as it was set, from the same place it was set, and it
+/// clears exactly the switches `enable` set, so a server that already logged
+/// something else keeps doing it.
+#[tauri::command]
+pub fn disable_dns_debug_logging() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        set_dns_debug_logging_windows(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("DNS debug logging can only be changed on Windows Server.".to_string())
     }
 }
 
@@ -138,22 +192,17 @@ fn check_dns_logging_status_windows() -> DnsLoggingStatus {
 }
 
 #[cfg(target_os = "windows")]
-fn enable_dns_debug_logging_windows() -> Result<String, String> {
+fn set_dns_debug_logging_windows(enable: bool) -> Result<String, String> {
     let output = crate::process_util::hidden_command("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Set-DnsServerDiagnostics -All $true; \
-             $s = (Get-DnsServer).ServerSetting; \
-             Write-Output \"LogFilePath=$($s.LogFilePath)\"",
-        ])
+        .args(["-NoProfile", "-Command", &diagnostics_command(enable)])
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let action = if enable { "enable" } else { "disable" };
         return Err(format!(
-            "Failed to enable DNS logging (run as Administrator): {}",
+            "Failed to {action} DNS logging (run as Administrator): {}",
             stderr.trim()
         ));
     }
@@ -165,7 +214,47 @@ fn enable_dns_debug_logging_windows() -> Result<String, String> {
         .map(|l| l.trim_start_matches("LogFilePath=").trim().to_string())
         .unwrap_or_else(|| "C:\\Windows\\System32\\dns\\dns.log".to_string());
 
-    Ok(format!("DNS debug logging enabled. Log file: {}", log_path))
+    Ok(if enable {
+        format!(
+            "DNS debug logging enabled. Log file: {log_path}. This file grows with query volume \
+             and is not rotated by the DNS service; plan for its retention."
+        )
+    } else {
+        format!("DNS debug logging disabled. Log file: {log_path}")
+    })
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::{diagnostics_command, OWNED_DIAGNOSTIC_SWITCHES};
+
+    /// Enable and disable must differ in the value only: if they ever drift apart,
+    /// disabling stops restoring what enabling changed.
+    #[test]
+    fn enabling_and_disabling_set_the_same_switches() {
+        let on = diagnostics_command(true);
+        let off = diagnostics_command(false);
+
+        assert!(on.contains("$true"));
+        assert!(off.contains("$false"));
+        assert_eq!(
+            on.replace("$true", "$false"),
+            off,
+            "the two directions must set the same switches"
+        );
+    }
+
+    /// `-All` is what this replaced: it flips every category, including ones the
+    /// reader never parses.
+    #[test]
+    fn the_command_names_every_switch_and_never_uses_all() {
+        let command = diagnostics_command(true);
+
+        assert!(!command.contains("-All"));
+        for name in OWNED_DIAGNOSTIC_SWITCHES {
+            assert!(command.contains(&format!("-{name} $true")), "{name}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
