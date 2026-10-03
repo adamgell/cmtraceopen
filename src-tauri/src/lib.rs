@@ -352,8 +352,6 @@ pub fn run() {
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::stop_esp_diagnostics_session,
             #[cfg(feature = "esp-diagnostics")]
-            commands::esp_diagnostics::restart_esp_as_administrator,
-            #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::esp_flip_app_installed,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::esp_restore_app_state,
@@ -726,7 +724,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
-    use cmtraceopen_parser::esp::EspIdentityEvidence;
+    use cmtraceopen_parser::intune::enrollment::windows::esp::EspIdentityEvidence;
     #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 

@@ -1256,7 +1256,7 @@ pub(crate) fn validate_diagnosis_coverage_gaps(
 
 /// Normalized diagnosis input extracted from one validated native event record.
 pub(crate) struct DiagnosisEventInput {
-    pub(crate) entry: cmtraceopen_parser::intune::models::EventLogEntry,
+    pub(crate) entry: cmtraceopen_parser::intune::apps::windows::ime::models::EventLogEntry,
     pub(crate) event_data: Vec<String>,
     pub(crate) raw_xml: String,
     pub(crate) record_id_text: Option<String>,
@@ -1275,24 +1275,24 @@ pub(crate) fn diagnosis_event_input(
     };
     let severity = match record.level {
         super::models::EvtxLevel::Critical => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Critical
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Critical
         }
         super::models::EvtxLevel::Error => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Error
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Error
         }
         super::models::EvtxLevel::Warning => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Warning
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Warning
         }
         super::models::EvtxLevel::Information => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Information
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Information
         }
         super::models::EvtxLevel::Verbose => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Verbose
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Verbose
         }
     };
     let channel =
-        cmtraceopen_parser::intune::models::EventLogChannel::from_channel_string(&record.channel);
-    let entry = cmtraceopen_parser::intune::models::EventLogEntry {
+        cmtraceopen_parser::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(&record.channel);
+    let entry = cmtraceopen_parser::intune::apps::windows::ime::models::EventLogEntry {
         id: event_record_id,
         channel,
         channel_display: record.channel,

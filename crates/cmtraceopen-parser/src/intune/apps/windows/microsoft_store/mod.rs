@@ -4,7 +4,7 @@
 //!
 //! This is a **semantic analyzer over supplied evidence**, not a log format.
 //! Raw IME records are framed by the shared CCM parser
-//! ([`crate::intune::ime_parser`]) and Windows events arrive already normalized
+//! ([`crate::parser::ccm::logical`]) and Windows events arrive already normalized
 //! as [`crate::intune::normalized::NormalizedWindowsEvent`]; only then is
 //! anything classified. The module performs no I/O of any kind and pulls in no
 //! EVTX or Windows API dependency.

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 
-use super::ime_parser::ImeLine;
 use super::models::{AppPolicyMetadata, DetectionRuleMetadata, ReturnCodeEntry};
+use crate::parser::ccm::logical::ImeLine;
 
 const GET_POLICIES_PREFIX: &str = "Get policies = ";
 
