@@ -12,6 +12,14 @@ vi.mock("../log-view/LogListView", () => ({
   },
 }));
 
+vi.mock("../registry-view/RegistryViewer", () => ({
+  RegistryViewer: () => {
+    const filePath = useRegistryStore((state) => state.registryData?.filePath);
+    if (filePath === "/logs/broken.reg") throw new Error("registry rendering failed");
+    return <div>registry content</div>;
+  },
+}));
+
 // The status bar and workspaces lazily subscribe to native events; this test
 // only exercises view routing.
 vi.mock("@tauri-apps/api/event", () => ({
@@ -34,6 +42,7 @@ import { AppShell } from "./AppShell";
 import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import * as logSource from "../../lib/log-source";
+import { useRegistryStore } from "../../stores/registry-store";
 
 describe("AppShell workspace routing", () => {
   beforeEach(() => {
@@ -44,6 +53,7 @@ describe("AppShell workspace routing", () => {
       disconnect() {}
     });
     useLogStore.getState().clear();
+    useRegistryStore.getState().clear();
     useUiStore.setState(useUiStore.getInitialState(), true);
     useUiStore.setState({ currentPlatform: "macos" });
   });
@@ -151,6 +161,35 @@ describe("AppShell workspace routing", () => {
     expect(useLogStore.getState().openFilePath).toBe("/logs/healthy.log");
     expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
     expect(screen.getByText("log content")).toBeTruthy();
+  });
+
+  it("recovers when registry data arrives after the selected file changes", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const registryData = {
+      keys: [], filePath: "/logs/broken.reg", fileSize: 0,
+      totalKeys: 0, totalValues: 0, parseErrors: 0,
+    };
+    useRegistryStore.getState().setRegistryData(registryData);
+    useUiStore.getState().setEnabledWorkspaces(["log"]);
+    useUiStore.getState().openTab("/logs/healthy.reg", "healthy.reg", null, "registry");
+    useUiStore.getState().openTab("/logs/broken.reg", "broken.reg", null, "registry");
+    useLogStore.getState().setOpenFilePath("/logs/broken.reg");
+    render(<AppShell />);
+    expect(screen.getByRole("alert").textContent).toContain("registry rendering failed");
+
+    await act(async () => {
+      useUiStore.getState().switchTab(0);
+      // Registry tab loading publishes the path before awaiting its data.
+      useLogStore.getState().setOpenFilePath("/logs/healthy.reg");
+    });
+    expect(screen.getByRole("alert").textContent).toContain("registry rendering failed");
+    await act(async () => {
+      useRegistryStore.getState().setRegistryData({ ...registryData, filePath: "/logs/healthy.reg" });
+    });
+
+    expect(useUiStore.getState().activeView).toBe("log");
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
+    expect(screen.getByText("registry content")).toBeTruthy();
   });
 
   it("keeps the macOS JAMF workspace active when a log opens from its log list", async () => {

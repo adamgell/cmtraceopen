@@ -31,6 +31,7 @@ import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
+import { useRegistryStore } from "../../stores/registry-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
 import { WorkspaceErrorBoundary } from "./WorkspaceErrorBoundary";
@@ -121,6 +122,7 @@ export function AppShell() {
   );
 
   const activeTabId = useUiStore((s) => s.openTabs[s.activeTabIndex]?.id);
+  const activeTabKind = useUiStore((s) => s.openTabs[s.activeTabIndex]?.fileKind);
   const collectionProgress = useUiStore((s) => s.collectionProgress);
   const collectionResult = useUiStore((s) => s.collectionResult);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
@@ -136,10 +138,11 @@ export function AppShell() {
   const createDiff = useLogStore((s) => s.createDiff);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const openFilePath = useLogStore((s) => s.openFilePath);
-  // Reset a failed log view when its source changes, including async tab loads
-  // and closing the last file. A selected tab can still hold the previous data.
+  const registryFilePath = useRegistryStore((s) => s.registryData?.filePath);
+  // Reset on source replacement/closure. Registry data can arrive after the
+  // selected path changes, so its loaded identity must also clear a caught error.
   const workspaceBoundaryKey = activeView === "log"
-    ? `${activeView}:${openFilePath ?? ""}`
+    ? JSON.stringify([activeView, openFilePath, activeTabKind === "registry" ? registryFilePath : null])
     : activeView;
 
   useCollectionProgressListener();
