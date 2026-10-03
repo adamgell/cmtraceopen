@@ -151,10 +151,16 @@ pub struct ErrorCodeMention {
 /// Code values preserve the matched literal even when its meaning comes from
 /// an equivalent Win32 or HRESULT database entry.
 pub fn detect_error_code_mentions(message: &str) -> Vec<ErrorCodeMention> {
+    let mut byte_end = 0;
+    let mut utf16_end = 0;
     code_mentions(message)
         .into_iter()
         .map(|(start, end, code_val)| {
-            let (char_start, char_end) = utf16_offsets(message, start, end);
+            // Count each gap once; rescanning the whole prefix makes dense input quadratic.
+            let char_start = utf16_end + message[byte_end..start].encode_utf16().count();
+            let char_end = char_start + (end - start); // The matched code is ASCII.
+            byte_end = end;
+            utf16_end = char_end;
             match find_error_code(code_val) {
                 Some(ec) => ErrorCodeMention {
                     start: char_start,
@@ -868,6 +874,39 @@ mod tests {
         assert!(mentions[0].outcome.is_none());
         // And the known-only detection still drops it.
         assert!(detect_error_code_spans("Failed with 0xDEADBEEF").is_empty());
+    }
+
+    #[test]
+    fn mentions_keep_utf16_offsets_across_unicode_gaps_and_skipped_tokens() {
+        // Combine the existing emoji, known-code and unknown-code exemplars.
+        let message = "🔥 error 0x00000005 Ñoño 0xDEADBEEF longer 0x800700050 🔥 0x80070005";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 3);
+        for (mention, (start, end, hex)) in mentions.iter().zip([
+            (9, 19, "0x00000005"),
+            (25, 35, "0xDEADBEEF"),
+            (58, 68, "0x80070005"),
+        ]) {
+            assert_eq!((mention.start, mention.end), (start, end));
+            assert_eq!(mention.code_hex, hex);
+            assert_eq!(js_slice(message, mention.start, mention.end), hex);
+        }
+    }
+
+    #[test]
+    fn mentions_preserve_every_repeated_unknown_code_and_its_offsets() {
+        // A bounded repetition of the existing unknown-code exemplar.
+        let message = "0xDEADBEEF ".repeat(4096);
+        let mentions = detect_error_code_mentions(&message);
+
+        assert_eq!(mentions.len(), 4096);
+        assert_eq!((mentions[0].start, mentions[0].end), (0, 10));
+        let last = mentions.last().unwrap();
+        assert_eq!((last.start, last.end), (45045, 45055));
+        assert!(mentions.iter().all(|mention| {
+            mention.code_hex == "0xDEADBEEF" && !mention.known && mention.outcome.is_none()
+        }));
     }
 
     #[test]
