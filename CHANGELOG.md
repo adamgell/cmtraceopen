@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **DsRegCmd responsiveness test (#669)**: Earlier assertions ran inside the current-thread runtime and could not observe a synchronous analysis blocking that thread. The runtime now runs on a separate OS thread: the test waits for a held simulated I/O stage, then verifies the runtime can schedule an unrelated task before releasing the stage. Stage-entry, gate, and worker-completion waits are bounded so setup failures fail the test instead of hanging it. The hook remains available in debug builds and test builds, including release-profile tests; shipped release builds ignore the delay environment variable.
 - **The CI workflow declares a `merge_group` trigger (#756)**: A merge queue tests a temporary merge commit and reports the same required checks that gate `main`. Without this trigger a queued pull request waits for checks that never start, so the queue stalls instead of merging - and the failure looks like a hung queue rather than a missing line, which is why a test now asserts the trigger is present. The changed-range whitespace check also selects its base from `merge_group.base_sha` and takes the merge-base range there, instead of falling back to the empty tree and re-checking the whole repository.
 
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
