@@ -6,7 +6,7 @@
 //! final eight MiB for an attachment or a single poll.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ use crate::esp::discovery::{
     open_verified_regular_file, DiscoveredLogSource, DiscoveryPathFailureKind,
     DiscoverySourceOrigin, MAX_ACTIVE_TAILS, MAX_INITIAL_READ_BYTES,
 };
+use crate::fs_identity::{file_identity, identities_differ, FileIdentity};
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
 use crate::parser::{self, ResolvedParser};
 
@@ -870,50 +871,6 @@ fn open_tail_file(path: &Path) -> Result<File, EspTailFailure> {
         kind: failure.kind,
         detail: format!("open verified tail failed: {}", failure.detail),
     })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileIdentity {
-    volume: u64,
-    index: u64,
-}
-
-#[cfg(unix)]
-fn file_identity(_file: &File, metadata: &Metadata) -> Option<FileIdentity> {
-    use std::os::unix::fs::MetadataExt;
-    Some(FileIdentity {
-        volume: metadata.dev(),
-        index: metadata.ino(),
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn file_identity(file: &File, _metadata: &Metadata) -> Option<FileIdentity> {
-    use std::os::windows::io::AsRawHandle;
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: the handle is borrowed from the live `File`, and the output
-    // points to a valid initialized structure for the duration of the call.
-    unsafe {
-        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information).ok()?;
-    }
-    Some(FileIdentity {
-        volume: information.dwVolumeSerialNumber as u64,
-        index: ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64,
-    })
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn file_identity(_file: &File, _metadata: &Metadata) -> Option<FileIdentity> {
-    None
-}
-
-fn identities_differ(previous: Option<FileIdentity>, current: Option<FileIdentity>) -> bool {
-    matches!((previous, current), (Some(left), Some(right)) if left != right)
 }
 
 fn tail_failure(path: &Path, operation: &str, error: std::io::Error) -> EspTailFailure {
