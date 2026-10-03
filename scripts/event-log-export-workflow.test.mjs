@@ -53,7 +53,7 @@ test("CI, release and README select only event-log with the lockfile", () => {
   const smoke = steps(job(ci, "check")).find((step) => step.startsWith("name: Build and smoke the headless event-log exporter"));
   assert.ok(smoke, "missing exporter smoke step");
   for (const block of [smoke, publisher, read("README.md")]) {
-    const commands = block.split("\n").filter((line) => /cargo (build|run).*--bin event-log-export/.test(line));
+    const commands = block.split("\n").filter((line) => /cargo (build|run|test).*--(?:bin event-log-export|test event_log_export_cli)/.test(line));
     assert.ok(commands.length > 0, "expected exporter commands");
     for (const command of commands) {
       assert.match(command, /--locked\b/);
@@ -61,7 +61,8 @@ test("CI, release and README select only event-log with the lockfile", () => {
       assert.match(command, /--features event-log\b/);
     }
   }
-  assert.match(smoke, /cargo run.*-- --help/);
+  assert.match(smoke, /cargo test.*--test event_log_export_cli/);
+  assert.doesNotMatch(smoke, /-- --help/);
   assert.match(publisher, /cargo build.*--release.*--target \$\{\{ matrix.target \}\}/);
 });
 

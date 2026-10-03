@@ -107,12 +107,11 @@ jobs:
         run: cargo test
 
       # Default full-feature checks/tests already cover the exporter. Also build
-      # and smoke the event-log-only feature selection used for release assets.
+      # and exercise the actual CLI with the release feature selection. The
+      # process-level tests cover exports and errors without relying on --help.
       - name: Build and smoke the headless event-log exporter
         working-directory: src-tauri
-        run: |
-          cargo build --locked --no-default-features --features event-log --bin event-log-export
-          cargo run --locked --quiet --no-default-features --features event-log --bin event-log-export -- --help > /dev/null
+        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
 
       - name: Rust check (lite)
         working-directory: src-tauri
