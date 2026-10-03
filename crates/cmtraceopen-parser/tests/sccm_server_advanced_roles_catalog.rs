@@ -71,6 +71,10 @@ struct SourceCard {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RawParserFamily {
     Ccm,
+    /// Legacy SMS trace framing (`message$$<component><time><thread>`), `ParserKind::Simple`.
+    /// Descriptive only: the SCCM evidence spine carries CCM records, so a Simple card
+    /// cannot be rule-validated until a Simple-framed evidence path exists.
+    Simple,
     Unsupported,
     Unknown(String),
 }
@@ -83,6 +87,7 @@ impl<'de> Deserialize<'de> for RawParserFamily {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
             "ccm" => Self::Ccm,
+            "simple" => Self::Simple,
             "unsupported" => Self::Unsupported,
             _ => Self::Unknown(value),
         })
@@ -739,10 +744,11 @@ fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
         );
         assert!(
             matches!(
-                card.promotion.state,
-                PromotionState::Candidate | PromotionState::Deferred
+                (card.card_id.as_str(), &card.promotion.state),
+                (_, PromotionState::Candidate | PromotionState::Deferred)
+                    | ("client-notification-bgb", PromotionState::Observed)
             ),
-            "{filename}: no lab-observed or rule-validated evidence exists"
+            "{filename}: only client-notification-bgb has lab-observed evidence (#479), and no card is rule-validated"
         );
         assert!(card.semantic_policy.capture_guidance_only);
         assert!(!card.semantic_policy.can_create_transactions);
@@ -996,4 +1002,13 @@ fn only_a_fully_linked_rule_validated_card_is_semantically_admitted() {
     let unvalidated_key = validate_card(&card);
     assert_eq!(unvalidated_key.issues, ["ruleValidatedKeyPolicyInvalid"]);
     assert!(!unvalidated_key.admitted_to_semantic_catalog);
+
+    // The SCCM evidence spine carries only CCM logical records (`normalize_ccm_artifact`),
+    // so a Simple-framed source can be described but never semantically admitted.
+    card.correlation_policy.key_state = KeyState::Validated;
+    card.correlation_policy.allowed_key_kinds = vec!["requestId".to_owned()];
+    card.raw_parser_family = RawParserFamily::Simple;
+    let simple_framed = validate_card(&card);
+    assert_eq!(simple_framed.issues, ["ruleValidatedMetadataInvalid"]);
+    assert!(!simple_framed.admitted_to_semantic_catalog);
 }

@@ -286,6 +286,10 @@ const useStyles = makeStyles({
     textAlign: "center" as const,
     color: tokens.colorNeutralForeground3,
   },
+  errorText: {
+    color: tokens.colorPaletteRedForeground1,
+    marginBottom: "12px",
+  },
 });
 
 function getLevelClass(
@@ -304,9 +308,11 @@ export function MacosDiagUnifiedLogTab() {
   const styles = useStyles();
   const unifiedLogResult = useMacosDiagStore((s) => s.unifiedLogResult);
   const loading = useMacosDiagStore((s) => s.unifiedLogLoading);
+  const queryError = useMacosDiagStore((s) => s.unifiedLogError);
   const presetId = useMacosDiagStore((s) => s.unifiedLogPresetId);
   const setUnifiedLogResult = useMacosDiagStore((s) => s.setUnifiedLogResult);
   const setLoading = useMacosDiagStore((s) => s.setUnifiedLogLoading);
+  const setQueryError = useMacosDiagStore((s) => s.setUnifiedLogError);
   const setPresetId = useMacosDiagStore((s) => s.setUnifiedLogPresetId);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
@@ -365,6 +371,7 @@ export function MacosDiagUnifiedLogTab() {
   });
 
   const runQuery = useCallback(async () => {
+    setQueryError(null);
     setLoading(true);
     try {
       const result = await macosQueryUnifiedLog(
@@ -375,9 +382,10 @@ export function MacosDiagUnifiedLogTab() {
       setUnifiedLogResult(result);
     } catch (err) {
       console.error("[macos-diag] unified log query failed", err);
-      setLoading(false);
+      setUnifiedLogResult(null);
+      setQueryError(err instanceof Error ? err.message : String(err));
     }
-  }, [presetId, timeRangeMinutes, maxResults, setLoading, setUnifiedLogResult]);
+  }, [presetId, timeRangeMinutes, maxResults, setLoading, setUnifiedLogResult, setQueryError]);
 
   return (
     <>
@@ -463,6 +471,12 @@ export function MacosDiagUnifiedLogTab() {
           <span style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>
             Querying unified log...
           </span>
+        </div>
+      )}
+
+      {queryError !== null && (
+        <div role="alert" className={styles.errorText}>
+          Unified log query failed: {queryError}
         </div>
       )}
 
@@ -600,7 +614,7 @@ export function MacosDiagUnifiedLogTab() {
       )}
 
       {/* Empty State */}
-      {!loading && !unifiedLogResult && (
+      {!loading && !unifiedLogResult && queryError === null && (
         <div className={styles.emptyState}>
           <Body1>
             Select a preset and time range, then click Run Query to search the

@@ -26,9 +26,9 @@ CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all
 | Spacing / radius / shadow | `src/lib/themes/tokens.css` | `tokens.css` |
 | Motion durations & curves | `src/lib/themes/shared-overrides.ts` (the complete set; `tokens.css` carries only a partial motion mirror) | `tokens.css` (partial) |
 | Icons | `@fluentui/react-icons` | — |
-| Buttons, inputs, badges | `src/components/ui/*` | — |
+| Buttons, inputs, badges | `@fluentui/react-components` (used directly by application components) | — |
 | Log row, gutter, markers | `src/components/log-view/LogRow.tsx` (the gutter is a slot in the row, not a separate component) | — |
-| Toolbar, tabs, status bar | `src/components/chrome/*` | — |
+| Toolbar, tabs, status bar | `src/components/layout/Toolbar.tsx`, `TabStrip.tsx`, `StatusBar.tsx` | — |
 | Dialogs, settings, find | `src/components/dialogs/*` | — |
 | Full app reference | `src/App.tsx` | — |
 
