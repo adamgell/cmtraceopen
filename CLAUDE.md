@@ -46,8 +46,8 @@ npx tsc --noEmit
 
 Six required status checks — the `Protect` ruleset over `main`:
 
-1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
-2. **TypeScript Check** — `npx tsc --noEmit`, `npm run test`, CI bundle-output and release-script contract tests via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny check` and `cargo audit`.
+2. **TypeScript Check** — `npx tsc --noEmit`, `npm run test`, `TZ=UTC npm run test -- src/lib/date-time-format.test.ts`, `TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts`, CI bundle-output and release-script contract tests via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
 3. **E2E (Playwright)** — `npm run test:e2e`.
 4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
 
@@ -119,7 +119,8 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 
 ## Testing
 
-- **Unit/integration tests**: `src-tauri/tests/` — parser regression tests with synthetic fixtures
+- **Parser regression tests**: `crates/cmtraceopen-parser/tests/` — fixture-backed parser tests
+- **Native integration tests**: `src-tauri/tests/` — application and platform integration coverage
 - **Frontend tests**: `npm test` — vitest suites under `src/` (`test:watch`, `test:coverage`)
 - **End-to-end**: `npm run test:e2e` — Playwright specs in `e2e/` (`test:e2e:ui`, `test:e2e:debug`). CI runs this as its own job
 - **Benchmarks**: `src-tauri/benches/intune_pipeline.rs` — Criterion benchmarks for the Intune pipeline (10K records)

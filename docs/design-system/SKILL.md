@@ -19,7 +19,7 @@ CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all
 
 | You need… | Look here (codebase) | Mirrored in this DS |
 |---|---|---|
-| Theme objects, brand ramps | `src/lib/themes/*` | `tokens.css` |
+| Theme objects, brand ramps | `src/lib/themes/*` | `tokens.css` (partial: complete Teal ramp, alternate-theme anchors only; full alternate ramps remain in code) |
 | Semantic color tokens | `src/lib/themes/theme-*.ts` | `tokens.css` |
 | Type ramp & families | `src/lib/themes/shared-overrides.ts` | `tokens.css` |
 | Log row metrics | `src/lib/log-accessibility.ts` (`getLogListMetrics()`) | — |
