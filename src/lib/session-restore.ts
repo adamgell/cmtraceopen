@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
@@ -26,7 +25,12 @@ export async function openSessionDialog(): Promise<string | null> {
 export async function restoreSession(sessionPath: string): Promise<string | null> {
   let content: string;
   try {
-    content = await readTextFile(sessionPath);
+    // Read through Rust rather than the fs plugin: this path comes from the
+    // recent-sessions list rather than a dialog, so the plugin's scope never
+    // covers it - the read used to be refused after a restart for that reason.
+    // `read_session_file` accepts only the extension the save dialog writes and
+    // the shape below is still validated here.
+    content = await invoke<string>("read_session_file", { path: sessionPath });
   } catch (error) {
     console.error("[session] failed to read session file", { sessionPath, error });
     return null;
