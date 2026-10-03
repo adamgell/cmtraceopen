@@ -110,6 +110,12 @@ jobs:
         working-directory: src-tauri
         run: cargo check --no-default-features
 
+      - name: Rust check (ESP without collector)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features esp-diagnostics
+
+      - name: Rust check (collector without ESP)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features collector
+
       - name: Rust tests (lite)
         working-directory: src-tauri
         run: cargo test --no-default-features

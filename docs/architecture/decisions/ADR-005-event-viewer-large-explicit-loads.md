@@ -1,6 +1,8 @@
 # ADR-005: Who owns a very large explicit event load
 
-- **Status:** Proposed — recorded as the resolution of issue #635. Confirm at merge.
+- **Status:** ACCEPTED 2026-09-24 — the condition this line set ("confirm at merge") is met.
+  The resolution landed as `a7a21428` on `main`, PR #639 merged 2026-09-19, and issue #635 is
+  closed. The revisit criteria below remain the trigger for reopening it, not the status.
 - **Context:** The Event Viewer workspace bounds the automatic load at
   `AUTO_LOAD_MAX_EVENTS` (2,000 events per channel) and says so on screen when a
   channel comes back at the bound. That bound is deliberately not applied to the
