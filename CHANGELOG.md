@@ -10,7 +10,6 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **Evidence collector tests now run in CI**: The collector's 29 Pester tests now run in the Windows PowerShell 5.1 job. The culture regression test uses a fixed UTC clock and asserts the exact Gregorian timestamp under `fa-IR`, preserving the bundle ID shape and nonce checks. Its path setup uses Windows PowerShell 5.1-compatible `Join-Path` calls.
 - **External diagnostic tools run under a deadline (#684)**: The bounded-command runner the ESP queries used was private to that module and compiled only on Windows, so the macOS diagnostic tools (`mdatp`, `pkgutil`, `profiles`, `system_profiler`, `sw_vers`, `log`) and the SCCM CIM query ran with no deadline at all: a tool that hangs froze a synchronous command, which is a frozen window rather than a slow one. The runner now lives in `process_util` as one cross-platform primitive with a neutral error type, the ESP lane keeps its own vocabulary through a thin adapter, and the tools whose output is read are bounded by it. The launches that are deliberately unbounded say so where they are: opening a folder in Finder or Explorer, opening System Settings, and the elevated boot-script wrapper that blocks on the UAC prompt.
 - **A rotated-in log larger than the old offset is detected as a new file**: Tail rotation was detected by size, so a replacement that had already grown past the offset held for the previous file was missed: the reader sought into the middle of the new file, never read its head, and could emit a partial first entry. Rotation is now detected by file identity ([#687](https://github.com/adamgell/cmtraceopen/issues/687)).
 
@@ -30,6 +29,8 @@ All notable changes to this project will be documented in this file.
 
 - **Supply chain (RUSTSEC-2026-0285)**: Raise `rustls` to 0.23.45. The advisory published against 0.23.38 turned the `cargo deny` gate red on every push and pull request, without any code change being responsible.
 - **JAMF workspace e2e coverage (#314)**: Added `e2e/jamf.spec.ts`, which switches into the macOS JAMF workspace, loads a log into it, and walks every tab (Overview, Logs, Policies, Profiles, Self Service, JAMF Connect) against fixtures taken from the committed JAMF corpus. The workspace is platform-gated twice, by `platforms: ["macos"]` and by the `macos-diag` backend feature, so the spec emulates a macOS host for the OS-plugin platform and the build's workspace allowlist, the same way the other specs compensate for not running under Tauri.
+
+- **Evidence collector tests now run in CI**: The collector's 29 Pester tests now run in the Windows PowerShell 5.1 job. The culture regression test uses a fixed UTC clock and asserts the exact Gregorian timestamp under `fa-IR`, preserving the bundle ID shape and nonce checks. Its path setup uses Windows PowerShell 5.1-compatible `Join-Path` calls.
 
 ## [1.6.0] - 2026-09-14
 
