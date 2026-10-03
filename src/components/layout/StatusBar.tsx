@@ -374,9 +374,7 @@ export function StatusBar() {
     );
 
     leftParts = [
-      activeView === "new-intune"
-        ? "New Intune Workspace"
-        : "Intune Diagnostics",
+      getWorkspace(activeView).label,
       intuneAnalysisState.phase === "analyzing"
         ? "Analyzing"
         : intuneAnalysisState.phase === "error"
@@ -596,7 +594,7 @@ export function StatusBar() {
       : activeView === "intune"
         ? "Intune"
         : activeView === "new-intune"
-          ? "New Intune"
+          ? getWorkspace(activeView).label
           : activeView === "sysmon"
             ? "Sysmon Analysis"
             : activeView === "event-log"

@@ -1,6 +1,14 @@
 use super::models::{MacosDefenderHealthStatus, MacosDefenderResult};
+
 #[cfg(target_os = "macos")]
 use super::{environment::scan_log_directory, models::MacosLogFileEntry};
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_complete_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -91,7 +99,12 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppE
 
     // --- Health ---
     let health = {
-        let output = Command::new("mdatp").arg("health").output();
+        let output = run_complete_command(
+            Command::new("mdatp").arg("health"),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
         match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -107,6 +120,9 @@ pub fn inspect_defender_impl() -> Result<MacosDefenderResult, crate::error::AppE
                 } else {
                     Some(parse_mdatp_health_output(&stdout))
                 }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                return Err(crate::error::AppError::Io(e));
             }
             Err(e) => {
                 log::info!("mdatp not available: {}", e);
