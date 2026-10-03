@@ -39,7 +39,10 @@ export function EvtxDetailPane() {
   const records = useEvtxStore((s) => s.records);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const [showRawXml, setShowRawXml] = useState(false);
-  const [errorCodes, setErrorCodes] = useState<ErrorCodeMention[]>([]);
+  const [resolvedCodes, setResolvedCodes] = useState<{
+    text: string;
+    mentions: ErrorCodeMention[];
+  } | null>(null);
 
   const logDetailsFontSize = useUiStore((s) => s.logDetailsFontSize);
   const fontSize = clampLogDetailsFontSize(logDetailsFontSize);
@@ -62,12 +65,13 @@ export function EvtxDetailPane() {
       .filter((value) => value.length > 0)
       .join("\n");
   }, [record]);
+  const errorCodes = resolvedCodes?.text === codeSourceText ? resolvedCodes.mentions : [];
 
   // Detection lives in the parser crate, so this asks rather than decides what a
   // code looks like. A code the database does not hold comes back marked unknown.
   useEffect(() => {
     if (codeSourceText.length === 0) {
-      setErrorCodes([]);
+      setResolvedCodes(null);
       return;
     }
     let cancelled = false;
@@ -79,16 +83,17 @@ export function EvtxDetailPane() {
         // One line per distinct code: an event that repeats a code in its event
         // data should not repeat it in the list.
         const seen = new Set<string>();
-        setErrorCodes(
-          (Array.isArray(mentions) ? mentions : []).filter((mention) => {
+        setResolvedCodes({
+          text: codeSourceText,
+          mentions: (Array.isArray(mentions) ? mentions : []).filter((mention) => {
             if (seen.has(mention.codeHex)) return false;
             seen.add(mention.codeHex);
             return true;
           }),
-        );
+        });
       })
       .catch(() => {
-        if (!cancelled) setErrorCodes([]);
+        if (!cancelled) setResolvedCodes(null);
       });
     return () => {
       cancelled = true;

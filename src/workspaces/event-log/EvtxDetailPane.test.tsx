@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
 
@@ -142,5 +142,40 @@ describe("EvtxDetailPane error codes", () => {
 
     expect(screen.getByText("Update failed with 0x80070005")).toBeInTheDocument();
     expect(screen.queryByText("Error codes in this event")).not.toBeInTheDocument();
+  });
+
+  it.each(["success", "failure"] as const)("hides the previous event's codes while awaiting lookup %s", async (outcome) => {
+    let settleLookup: ((result: ReturnType<typeof mention>[] | Error) => void) | undefined;
+    const nextLookup = new Promise<ReturnType<typeof mention>[]>((resolve, reject) => {
+      settleLookup = (result) => result instanceof Error ? reject(result) : resolve(result);
+    });
+    invoke.mockImplementation((command: string, args: { text?: string }) => {
+      if (command !== "resolve_error_codes_in_text") return Promise.resolve(null);
+      return args.text?.includes("0xDEADBEEF")
+        ? nextLookup
+        : Promise.resolve([mention({ description: "Previous event failure", known: true })]);
+    });
+    const second = { ...RECORD, id: 2, message: "Next event 0xDEADBEEF" };
+    useEvtxStore.setState({ records: [
+      { ...RECORD, message: "Update failed with 0x80070005" }, second,
+    ] });
+    render(<EvtxDetailPane />);
+    expect(await screen.findByText("Previous event failure")).toBeInTheDocument();
+
+    act(() => useEvtxStore.setState({ selectedRecordId: second.id }));
+    expect(screen.getByText(second.message)).toBeInTheDocument();
+    expect(screen.queryByText("Previous event failure")).not.toBeInTheDocument();
+    expect(screen.queryByText("Error codes in this event")).not.toBeInTheDocument();
+
+    if (!settleLookup) throw new Error("lookup promise was not initialized");
+    const settle = settleLookup;
+    if (outcome === "success") {
+      await act(async () => settle([mention({ codeHex: "0xDEADBEEF" })]));
+      expect(screen.getByText("0xDEADBEEF")).toBeInTheDocument();
+    } else {
+      await act(async () => settle(new Error("lookup unavailable")));
+      expect(screen.queryByText("Error codes in this event")).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText("Previous event failure")).not.toBeInTheDocument();
   });
 });
