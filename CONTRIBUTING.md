@@ -62,8 +62,8 @@ npx tsc --noEmit
 
 Six required status checks, on the `Protect` ruleset over `main`:
 
-1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
-2. **TypeScript Check** — the `frontend` job, which is more than its name: `npm ci`, `npx tsc --noEmit`, `npm run test` (the vitest suite), the bundle-output and release-script contract tests under `scripts/` via `node --test`, and `npm audit --audit-level=high`.
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny check` and `cargo audit`.
+2. **TypeScript Check** — the `frontend` job, which is more than its name: `npm ci`, `npx tsc --noEmit`, `npm run test` (the vitest suite), `TZ=UTC npm run test -- src/lib/date-time-format.test.ts`, `TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts`, the bundle-output and release-script contract tests under `scripts/` via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
 3. **E2E (Playwright)** — `npm run test:e2e`.
 4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
 
