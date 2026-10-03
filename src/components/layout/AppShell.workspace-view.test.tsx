@@ -1,5 +1,13 @@
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const logRenderer = vi.hoisted(() => ({ throws: false }));
+vi.mock("../log-view/LogListView", () => ({
+  LogListView: () => {
+    if (logRenderer.throws) throw new Error("log rendering failed");
+    return <div>log content</div>;
+  },
+}));
 
 // The status bar and workspaces lazily subscribe to native events; this test
 // only exercises view routing.
@@ -25,6 +33,7 @@ import { useUiStore } from "../../stores/ui-store";
 
 describe("AppShell workspace routing", () => {
   beforeEach(() => {
+    logRenderer.throws = false;
     useLogStore.getState().clear();
     useUiStore.setState(useUiStore.getInitialState(), true);
     useUiStore.setState({ currentPlatform: "macos" });
@@ -32,6 +41,16 @@ describe("AppShell workspace routing", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("contains a failed log renderer and recovers when switching workspace", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    logRenderer.throws = true;
+    render(<AppShell />);
+    expect(screen.getByRole("alert").textContent).toContain("log rendering failed");
+    await act(async () => useUiStore.getState().setActiveWorkspace("macos-jamf"));
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
   });
 
   it("keeps the macOS JAMF workspace active when a log opens from its log list", async () => {

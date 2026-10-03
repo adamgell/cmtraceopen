@@ -7,6 +7,7 @@ import { getThemeById } from "./lib/themes";
 import { useUiStore } from "./stores/ui-store";
 import { initializeDateTimeFormatting, refreshDateTimeFormatting } from "./lib/date-time-format";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { AppErrorBoundary } from "./components/layout/AppErrorBoundary";
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
@@ -110,7 +111,9 @@ document.head.appendChild(style);
 async function bootstrap() {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootWrapper>
-      <ThemedApp />
+      <AppErrorBoundary onError={dismissSplash}>
+        <ThemedApp />
+      </AppErrorBoundary>
     </RootWrapper>
   );
 }

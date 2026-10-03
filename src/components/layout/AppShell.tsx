@@ -557,7 +557,9 @@ export function AppShell() {
             backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          {renderWorkspace()}
+          <WorkspaceErrorBoundary workspaceId={activeView} key={activeView}>
+            {renderWorkspace()}
+          </WorkspaceErrorBoundary>
         </div>
       </div>
 
