@@ -456,7 +456,9 @@ fn reporting_events_clean_fixture_detects_and_parses_rows() {
         parsed.entries[0].timestamp_display.as_deref(),
         Some("2024-01-15 08:00:00.123")
     );
-    assert!(parsed.entries[0].message.contains("Success | Installation"));
+    assert!(parsed.entries[0]
+        .message
+        .contains("Success | AGENT_INSTALLING_SUCCEEDED | Content Install"));
     assert_eq!(parsed.entries[1].severity, "Error");
     assert!(parsed.entries[1].message.contains("HRESULT 0x80240022"));
 }
@@ -488,7 +490,7 @@ fn reporting_events_mixed_fixture_preserves_fallback_rows() {
     assert_eq!(parsed.entries.len(), 4);
     assert_eq!(
         parsed.entries[1].message,
-        "{33333333-3333-3333-3333-333333333333}\tnot-a-timestamp\t2\tSoftware Update\t3\t{44444444-4444-4444-4444-444444444444}\t0x80240022\tWindows Update Agent\tFailure\tInstallation\tInstallation failed for KB5034441"
+        "{33333333-3333-3333-3333-333333333333}\tnot-a-timestamp\t1\t162\t[AGENT_DOWNLOAD_FAILED]\t101\t{44444444-4444-4444-4444-444444444444}\t1\t80240022\tWindows Update Agent\tFailure\tContent Download\tDownload failed for KB5034441"
     );
     assert_eq!(parsed.entries[2].message, "orphan raw line");
     assert_eq!(parsed.entries[3].severity, "Warning");

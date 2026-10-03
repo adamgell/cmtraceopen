@@ -2,8 +2,22 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startTail, stopTail } from "../lib/commands";
 import { useLogStore } from "../stores/log-store";
-import type { LogEntry, TailPayload } from "../types/log";
+import type {
+  AggregateSourceFile,
+  LogEntry,
+  ParserSelectionInfo,
+  TailPayload,
+} from "../types/log";
 import { useFileWatcher } from "./use-file-watcher";
+
+const PLAIN_SELECTION: ParserSelectionInfo = {
+  parser: "plain",
+  implementation: "plainText",
+  provenance: "fallback",
+  parseQuality: "textFallback",
+  recordFraming: "physicalLine",
+  dateOrder: null,
+};
 
 const eventMocks = vi.hoisted(() => ({
   tailListener: null as ((event: { payload: unknown }) => void) | null,
@@ -239,6 +253,8 @@ describe("useFileWatcher tail start state", () => {
           parseErrors: 0,
           fileSize: 512,
           byteOffset: 512,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/logs/b.log",
@@ -246,6 +262,8 @@ describe("useFileWatcher tail start state", () => {
           parseErrors: 0,
           fileSize: 256,
           byteOffset: 256,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ],
       entries: [
@@ -337,6 +355,8 @@ describe("useFileWatcher tail start state", () => {
           parseErrors: 0,
           fileSize: 512,
           byteOffset: 512,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ],
       entries: [
@@ -366,13 +386,15 @@ describe("useFileWatcher tail start state", () => {
   });
 
   it("restarts aggregate tails when the same files are explicitly reloaded", async () => {
-    const aggregateFiles = [
+    const aggregateFiles: AggregateSourceFile[] = [
       {
         filePath: "/logs/a.log",
         totalLines: 1,
         parseErrors: 0,
         fileSize: 512,
         byteOffset: 512,
+        formatDetected: "Plain",
+        parserSelection: PLAIN_SELECTION,
       },
     ];
     useLogStore.setState({
@@ -411,6 +433,8 @@ describe("useFileWatcher tail start state", () => {
           parseErrors: 1,
           fileSize: 512,
           byteOffset: 512,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/logs/b.log",
@@ -418,6 +442,8 @@ describe("useFileWatcher tail start state", () => {
           parseErrors: 0,
           fileSize: 256,
           byteOffset: 256,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ],
       entries: [

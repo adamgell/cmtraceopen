@@ -1,6 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useLogStore, getCachedTabSnapshot, setCachedTabSnapshot, clearAllTabSnapshots } from "./log-store";
-import type { LogEntry, TailEntryAmendment } from "../types/log";
+import {
+  useLogStore,
+  getAggregateParserDisplay,
+  getCachedTabSnapshot,
+  setCachedTabSnapshot,
+  clearAllTabSnapshots,
+} from "./log-store";
+import type {
+  AggregateSourceFile,
+  LogEntry,
+  LogFormat,
+  ParserSelectionInfo,
+  TailEntryAmendment,
+} from "../types/log";
+const PLAIN_SELECTION: ParserSelectionInfo = {
+  parser: "plain",
+  implementation: "plainText",
+  provenance: "fallback",
+  parseQuality: "textFallback",
+  recordFraming: "physicalLine",
+  dateOrder: null,
+};
+
 
 function makeEntry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
   return {
@@ -19,6 +40,73 @@ function makeEntry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
     ...overrides,
   };
 }
+
+const CBS_SELECTION: ParserSelectionInfo = {
+  parser: "cbs",
+  implementation: "genericTimestamped",
+  provenance: "dedicated",
+  parseQuality: "semiStructured",
+  recordFraming: "logicalRecord",
+  dateOrder: null,
+};
+
+const DISM_SELECTION: ParserSelectionInfo = { ...CBS_SELECTION, parser: "dism" };
+
+function aggregateSourceFile(
+  filePath: string,
+  formatDetected: LogFormat,
+  parserSelection: ParserSelectionInfo,
+): AggregateSourceFile {
+  return {
+    filePath,
+    totalLines: 1,
+    parseErrors: 0,
+    fileSize: 1,
+    byteOffset: 1,
+    formatDetected,
+    parserSelection,
+  };
+}
+
+describe("getAggregateParserDisplay", () => {
+  it("reports the dedicated provenance an aggregate of dedicated parsers shares", () => {
+    const display = getAggregateParserDisplay([
+      aggregateSourceFile("/Windows/Logs/CBS/CBS.log", "Timestamped", CBS_SELECTION),
+      aggregateSourceFile("/Windows/Logs/DISM/dism.log", "Timestamped", DISM_SELECTION),
+    ]);
+
+    expect(display).toEqual({
+      parserCount: 2,
+      parserLabel: null,
+      formatLabel: "Timestamped",
+      provenanceLabel: "Dedicated",
+      qualityLabel: "Semi-structured",
+    });
+  });
+
+  it("says the stream is mixed rather than claiming one of its files' formats", () => {
+    const display = getAggregateParserDisplay([
+      aggregateSourceFile("/Windows/Logs/CBS/CBS.log", "Timestamped", CBS_SELECTION),
+      aggregateSourceFile("/Windows/Logs/test.log", "Plain", PLAIN_SELECTION),
+    ]);
+
+    expect(display?.formatLabel).toBe("Mixed");
+    expect(display?.parserCount).toBe(2);
+  });
+
+  it("names the single parser of a one-file stream", () => {
+    const display = getAggregateParserDisplay([
+      aggregateSourceFile("/Windows/Logs/CBS/CBS.log", "Timestamped", CBS_SELECTION),
+    ]);
+
+    expect(display?.parserLabel).toBe("CBS");
+    expect(display?.formatLabel).toBe("Timestamped");
+  });
+
+  it("reports no display for a stream with no files", () => {
+    expect(getAggregateParserDisplay([])).toBeNull();
+  });
+});
 
 describe("log-store", () => {
   beforeEach(() => {
@@ -81,6 +169,7 @@ describe("log-store", () => {
           codeDecimal: "-2147024891",
           description: "Access is denied.",
           category: "Win32",
+          outcome: "failure",
         },
       ],
     };
@@ -232,13 +321,15 @@ describe("log-store", () => {
       const entries = [
         makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
       ];
-      const aggregateFiles = [
+      const aggregateFiles: AggregateSourceFile[] = [
         {
           filePath: "/test.log",
           totalLines: 1,
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ];
       useLogStore.getState().setEntries(entries);
@@ -326,6 +417,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/b.log",
@@ -333,6 +426,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(6);
@@ -361,6 +456,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/b.log",
@@ -368,6 +465,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(2);
@@ -393,6 +492,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(1);
@@ -418,6 +519,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(3);
@@ -442,6 +545,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/b.log",
@@ -449,6 +554,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(5);
@@ -472,6 +579,8 @@ describe("log-store", () => {
           parseErrors: 1,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/b.log",
@@ -479,6 +588,8 @@ describe("log-store", () => {
           parseErrors: 2,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
 
@@ -508,6 +619,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
         {
           filePath: "/b.log",
@@ -515,6 +628,8 @@ describe("log-store", () => {
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ]);
       useLogStore.getState().setTotalLines(2);
@@ -578,13 +693,15 @@ describe("log-store", () => {
       const entries = [
         makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
       ];
-      const aggregateFiles = [
+      const aggregateFiles: AggregateSourceFile[] = [
         {
           filePath: "/a.log",
           totalLines: 1,
           parseErrors: 0,
           fileSize: 100,
           byteOffset: 100,
+          formatDetected: "Plain",
+          parserSelection: PLAIN_SELECTION,
         },
       ];
       useLogStore.getState().setEntries(entries);

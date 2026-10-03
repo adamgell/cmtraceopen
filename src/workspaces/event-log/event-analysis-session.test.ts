@@ -28,7 +28,7 @@ import {
   EVENT_LOG_ANALYSIS_IDENTITY_BYTE_LIMIT,
   EVENT_LOG_ANALYSIS_MESSAGE_BYTE_LIMIT,
 } from "./event-analysis-session";
-import type { LogEntry } from "../../types/log";
+import type { ErrorCodeSpan, LogEntry } from "../../types/log";
 import type { EvtxRecord } from "./types";
 
 const encoder = new TextEncoder();
@@ -245,7 +245,7 @@ describe("buildEventLogAnalysisSession", () => {
     const message = `Anchored sample message ${"🙂".repeat(
       Math.ceil(EVENT_LOG_ANALYSIS_CHUNK_BYTE_LIMIT / 4) + 1_024,
     )}`;
-    const errorCodeSpans = [
+    const errorCodeSpans: ErrorCodeSpan[] = [
       {
         start: 0,
         end: 10,
@@ -253,6 +253,7 @@ describe("buildEventLogAnalysisSession", () => {
         codeDecimal: "2147942405",
         description: "Access is denied",
         category: "Win32",
+        outcome: "failure",
       },
     ];
     const tags = ["deployment", "anchored-test"];
