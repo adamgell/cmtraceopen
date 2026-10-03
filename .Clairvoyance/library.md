@@ -34,7 +34,7 @@ Adam's current direct instruction is highest authority. Root `AGENTS.md` contain
 
 || Path | Subject | Description |
 ||------|---------|-------------|
-|| `library.md` (repo root) | Full catalog | Path/subject index for entire cmtraceopen tree |
+|| `library.md` (repo root) | Task routing | Maps tasks to relevant documents |
 || `CLAUDE.md` | Architecture | Frontend/backend maps, commands, testing |
 || `AGENTS.md` | Agent rules | Simplicity and growth rules |
 || `soul.md` | Agent soul | CMTrace Open specialist identity and rules |

@@ -188,6 +188,10 @@ Visit the [CMTrace Open Wiki](https://github.com/adamgell/CMTraceOpen/wiki) for 
 
 CMTrace Open welcomes contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build commands, architecture overview, and coding guidelines.
 
+## Questions and Feedback
+
+Questions, feedback, feature ideas, and general discussion all belong in GitHub Issues. [Open a feedback or question issue](https://github.com/adamgell/cmtraceopen/issues/new?template=feedback.yml).
+
 ## Disclaimer
 
 CMTrace is a tool developed and distributed by Microsoft Corporation. CMTrace Open is an independent open-source project and is **not** affiliated with, endorsed by, or connected with Microsoft Corporation. See [DISCLAIMER.md](DISCLAIMER.md) for full details.
