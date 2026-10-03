@@ -81,7 +81,7 @@ fn analyze_dsregcmd_blocking(
     // (issue #627).
     let evidence = bundle_path.map(load_bundle_evidence).unwrap_or_default();
 
-    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence)?;
+    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence, chrono::Utc::now())?;
 
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -214,8 +214,14 @@ fn export_dsregcmd_shareable_bundle_blocking(
     let evidence = load_bundle_evidence(&bundle_root.to_string_lossy());
     let artifacts = read_bundle_text_artifacts(&bundle_root)?;
 
-    let projected = crate::dsregcmd::redacted_bundle_artifacts(&capture_text, evidence, artifacts)
-        .map_err(crate::error::AppError::InvalidInput)?;
+    let evaluated_at = chrono::Utc::now();
+    let projected = crate::dsregcmd::redacted_bundle_artifacts(
+        &capture_text,
+        evidence,
+        artifacts,
+        evaluated_at,
+    )
+    .map_err(crate::error::AppError::InvalidInput)?;
 
     let shareable_root = create_shareable_bundle_root(Path::new(destination_root))?;
     let artifact_count = write_shareable_bundle(&shareable_root, &projected)?;
@@ -2109,6 +2115,54 @@ mod tests {
                 .contains("does not contain dsregcmd evidence"),
             "expected the missing-evidence error, saw: {error}"
         );
+    }
+
+    #[test]
+    fn exporting_projection_failure_creates_no_output() {
+        for malformed_json in [false, true] {
+            let bundle = build_shareable_export_fixture();
+            let (relative_path, invalid_text, expected_error) = if malformed_json {
+                ("evidence/event-logs/dsregcmd-events.json", "{", "JSON")
+            } else {
+                // Remove the fields from the existing fixture's status capture.
+                (
+                    "evidence/command-output/dsregcmd-status.txt",
+                    "",
+                    "classification failed",
+                )
+            };
+            std::fs::write(bundle.path().join(relative_path), invalid_text)
+                .expect("invalidate projection input");
+            let raw_before = read_bundle_tree_text(bundle.path());
+            for existing_destination in [false, true] {
+                let parent = tempfile::tempdir().expect("create destination parent");
+                let destination = parent.path().join("export");
+                if existing_destination {
+                    std::fs::create_dir(&destination).expect("create empty destination");
+                }
+                let error = export_dsregcmd_shareable_bundle_blocking(
+                    &bundle.path().to_string_lossy(),
+                    &destination.to_string_lossy(),
+                )
+                .expect_err("projection must fail before writing output");
+                assert!(matches!(error, crate::error::AppError::InvalidInput(_)));
+                assert!(error.to_string().contains(expected_error), "{error}");
+                if existing_destination {
+                    assert_eq!(
+                        std::fs::read_dir(&destination)
+                            .expect("read destination")
+                            .count(),
+                        0
+                    );
+                } else {
+                    assert!(
+                        !destination.exists(),
+                        "failed projection created its destination"
+                    );
+                }
+                assert_eq!(read_bundle_tree_text(bundle.path()), raw_before);
+            }
+        }
     }
 
     /// A minimal bundle holding one planted registry artifact, written with the

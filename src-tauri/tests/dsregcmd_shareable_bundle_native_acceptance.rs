@@ -182,7 +182,10 @@ fn status_text(artifacts: &[(String, String)]) -> Option<String> {
 }
 
 fn diagnostic_ids(text: &str) -> Vec<String> {
-    analyze_text_with_evidence(text, DsregcmdBundleEvidence::default())
+    let evaluated_at = chrono::DateTime::parse_from_rfc3339("2026-03-10T10:30:00Z")
+        .expect("fixed acceptance evaluation instant")
+        .with_timezone(&chrono::Utc);
+    analyze_text_with_evidence(text, DsregcmdBundleEvidence::default(), evaluated_at)
         .expect("the capture analyzes")
         .diagnostics
         .iter()

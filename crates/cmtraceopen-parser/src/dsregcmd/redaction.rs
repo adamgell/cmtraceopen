@@ -80,6 +80,8 @@
 //! a fifth (Ruling 5). A lane that forked the derivation would keep the unkeyed
 //! one, and the fix would not reach it.
 
+use chrono::{DateTime, Utc};
+
 use crate::intune::apps::windows::common::{
     caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
     FoldedChar,
@@ -690,13 +692,16 @@ pub struct DsregcmdBundleArtifact {
 /// A present artifact that is identified as JSON but does not parse is an
 /// error. Falling back to the line-oriented pass would publish an artifact that
 /// looks projected while retaining whatever that pass could not reach.
+/// `evaluated_at` is passed unchanged to the analysis used for classification;
+/// use the same instant when analyzing the capture and its projected bundle.
 pub fn redacted_bundle_artifacts(
     capture_text: &str,
     evidence: DsregcmdBundleEvidence,
     artifacts: Vec<DsregcmdBundleArtifact>,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<Vec<DsregcmdBundleArtifact>, String> {
     let projection = Projection {
-        literals: bundle_literals(capture_text, evidence)?,
+        literals: bundle_literals(capture_text, evidence, evaluated_at)?,
     };
 
     artifacts
@@ -1289,9 +1294,14 @@ fn capture_literals(capture_output: &str) -> IdentityLiterals {
 fn bundle_literals(
     capture_text: &str,
     evidence: DsregcmdBundleEvidence,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<IdentityLiterals, String> {
-    let result = super::analyze_text_with_evidence_preserving_local_values(capture_text, evidence)
-        .map_err(|_| "Cannot export bundle: dsregcmd capture classification failed".to_string())?;
+    let result = super::analyze_text_with_evidence_preserving_local_values(
+        capture_text,
+        evidence,
+        evaluated_at,
+    )
+    .map_err(|_| "Cannot export bundle: dsregcmd capture classification failed".to_string())?;
     Ok(collect_identity_literals(&result))
 }
 
@@ -1348,6 +1358,13 @@ mod tests {
     use crate::intune::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
     };
+    use chrono::{DateTime, Duration, Utc};
+
+    fn evaluated_at() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-03-10T10:30:00Z")
+            .expect("fixed fixture evaluation instant")
+            .with_timezone(&Utc)
+    }
 
     /// A capture carrying one identifier of every class this projection masks.
     const IDENTITY_CAPTURE: &str = r#"
@@ -1391,8 +1408,11 @@ mod tests {
     /// carrying it — can only be asserted from inside.
     #[test]
     fn the_unprojected_analysis_carries_every_identity_the_projection_masks() {
-        let local = json(&analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses"));
-        let published = json(&analyze_text(IDENTITY_CAPTURE).expect("parses"));
+        let local = json(
+            &analyze_text_preserving_local_values(IDENTITY_CAPTURE, evaluated_at())
+                .expect("parses"),
+        );
+        let published = json(&analyze_text(IDENTITY_CAPTURE, evaluated_at()).expect("parses"));
 
         for (label, marker) in PLANTED_IDENTIFIERS {
             assert!(
@@ -1411,8 +1431,9 @@ mod tests {
     /// produced. This is why the assembly lives here instead of in a caller.
     #[test]
     fn a_sid_user_identity_is_masked_without_losing_the_diagnosis_it_produced() {
-        let local = analyze_text_preserving_local_values(SID_CAPTURE).expect("parses");
-        let published = analyze_text(SID_CAPTURE).expect("parses");
+        let local =
+            analyze_text_preserving_local_values(SID_CAPTURE, evaluated_at()).expect("parses");
+        let published = analyze_text(SID_CAPTURE, evaluated_at()).expect("parses");
 
         assert!(
             local
@@ -1436,8 +1457,9 @@ mod tests {
 
     #[test]
     fn projecting_does_not_drop_or_rename_a_diagnostic() {
-        let local = analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses");
-        let published = analyze_text(IDENTITY_CAPTURE).expect("parses");
+        let local =
+            analyze_text_preserving_local_values(IDENTITY_CAPTURE, evaluated_at()).expect("parses");
+        let published = analyze_text(IDENTITY_CAPTURE, evaluated_at()).expect("parses");
 
         let local_ids = diagnostic_ids(&local);
         let published_ids = diagnostic_ids(&published);
@@ -1498,7 +1520,7 @@ mod tests {
         let capture = " TenantName : ÉLODIE.Example\n \
                        DomainName : élodie.example\n \
                        Server Message : retry against ÉLODIE.Example failed\n";
-        let published = json(&analyze_text(capture).expect("parses"));
+        let published = json(&analyze_text(capture, evaluated_at()).expect("parses"));
 
         let tokens = tokens_of_kind(&published, "tenant");
         assert_eq!(
@@ -1521,7 +1543,7 @@ mod tests {
     /// never presented.
     #[test]
     fn a_missing_value_is_evidence_of_absence_not_a_masked_identity() {
-        let published = analyze_text(" AzureAdJoined : NO\n DomainJoined : NO\n")
+        let published = analyze_text(" AzureAdJoined : NO\n DomainJoined : NO\n", evaluated_at())
             .expect("a capture with no tenant or device id analyzes");
 
         let missing_tenant = published
@@ -1671,7 +1693,7 @@ mod tests {
             ..DsregcmdBundleEvidence::default()
         };
         let published = {
-            let analysis = analyze_text_with_evidence(IDENTITY_CAPTURE, evidence)
+            let analysis = analyze_text_with_evidence(IDENTITY_CAPTURE, evidence, evaluated_at())
                 .expect("the dsregcmd capture analyzes");
             serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
         };
@@ -1896,6 +1918,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bundle_analysis_and_projection_share_the_evaluation_instant() {
+        use super::super::analyze_text_with_evidence_preserving_local_values;
+        use super::super::models::DsregcmdCaptureConfidence::{High, Low, Medium};
+
+        // The fixed recent-interactive exemplar in dsregcmd_evaluation_clock.rs.
+        let capture = "\n AzureAdJoined : YES\n DomainJoined : YES\n AzureAdPrt : YES\n AzureAdPrtUpdateTime : 2026-03-10 10:30:00.000 UTC\n Client Time : 2026-03-10 10:30:00.000 UTC\n User Context : UN-ELEVATED User\n SessionIsNotRemote : YES\n";
+        for (elapsed_minutes, expected) in [(0, High), (16, Medium), (1441, Low)] {
+            let instant = evaluated_at() + Duration::minutes(elapsed_minutes);
+            let local = analyze_text_with_evidence_preserving_local_values(
+                capture,
+                bundle_evidence(),
+                instant,
+            )
+            .expect("local capture analyzes");
+            let published = analyze_text_with_evidence(capture, bundle_evidence(), instant)
+                .expect("published capture analyzes");
+            assert_eq!(local.derived.capture_confidence, expected);
+            assert_eq!(published.derived.capture_confidence, expected);
+            assert_eq!(diagnostic_ids(&local), diagnostic_ids(&published));
+
+            let artifact = DsregcmdBundleArtifact {
+                relative_path: "evidence/command-output/dsregcmd-status.txt".to_string(),
+                text: capture.to_string(),
+            };
+            let projected = redacted_bundle_artifacts(
+                capture,
+                bundle_evidence(),
+                vec![artifact.clone()],
+                instant,
+            )
+            .expect("bundle projects");
+            let repeated =
+                redacted_bundle_artifacts(capture, bundle_evidence(), vec![artifact], instant)
+                    .expect("bundle projects repeatedly");
+            assert_eq!(projected[0].text, repeated[0].text);
+            let reopened =
+                analyze_text_with_evidence(&projected[0].text, bundle_evidence(), instant)
+                    .expect("projected capture analyzes");
+            assert_eq!(reopened.derived.capture_confidence, expected);
+            assert_eq!(diagnostic_ids(&published), diagnostic_ids(&reopened));
+        }
+    }
+
     /// The acceptance criteria's first half: the shareable artefact carries no
     /// cleartext tenant id, domain, device id, thumbprint, user principal name
     /// or SID — including the occurrences no shaped rule reaches.
@@ -1914,6 +1980,7 @@ mod tests {
                 capture,
                 bundle_evidence(),
                 unprojected_bundle_artifacts(),
+                evaluated_at(),
             );
             assert!(
                 result.is_err(),
@@ -1928,6 +1995,7 @@ mod tests {
             "AzureAdJoined : NO",
             bundle_evidence(),
             unprojected_bundle_artifacts(),
+            evaluated_at(),
         )
         .expect("a minimally recognized capture remains valid");
         let text = joined_artifact_text(&projected);
@@ -1937,6 +2005,7 @@ mod tests {
             "AzureAdJoined : NO",
             DsregcmdBundleEvidence::default(),
             vec![],
+            evaluated_at(),
         )
         .is_ok());
     }
@@ -1947,6 +2016,7 @@ mod tests {
             &bundle_capture(),
             bundle_evidence(),
             unprojected_bundle_artifacts(),
+            evaluated_at(),
         )
         .expect("the bundle projects");
         let shareable = joined_artifact_text(&projected);
@@ -1964,8 +2034,9 @@ mod tests {
     /// at the hand-off rather than written back over the working copy.
     #[test]
     fn projecting_the_hand_off_leaves_the_raw_bundle_reaching_its_verdicts() {
-        let analysis = analyze_text_with_evidence(&bundle_capture(), bundle_evidence())
-            .expect("the bundle fixture analyzes");
+        let analysis =
+            analyze_text_with_evidence(&bundle_capture(), bundle_evidence(), evaluated_at())
+                .expect("the bundle fixture analyzes");
 
         assert!(
             diagnostic_ids(&analysis).contains(&"builtin-admin-cannot-join"),
@@ -1994,8 +2065,13 @@ mod tests {
             .map(|artifact| artifact.relative_path.clone())
             .collect();
 
-        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
-            .expect("the bundle projects");
+        let projected = redacted_bundle_artifacts(
+            &bundle_capture(),
+            bundle_evidence(),
+            artifacts,
+            evaluated_at(),
+        )
+        .expect("the bundle projects");
         let actual_paths: Vec<String> = projected
             .iter()
             .map(|artifact| artifact.relative_path.clone())
@@ -2046,8 +2122,13 @@ mod tests {
             "the fixture has to exceed the grammar's input bound to be a regression test"
         );
 
-        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifact)
-            .expect("the bundle projects");
+        let projected = redacted_bundle_artifacts(
+            &bundle_capture(),
+            bundle_evidence(),
+            artifact,
+            evaluated_at(),
+        )
+        .expect("the bundle projects");
         let text = &projected[0].text;
 
         assert!(
@@ -2096,7 +2177,8 @@ mod tests {
         };
 
         let published = json(
-            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence, evaluated_at())
+                .expect("the capture analyzes"),
         );
 
         assert!(
@@ -2149,7 +2231,8 @@ mod tests {
         };
 
         let published = json(
-            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence).expect("the capture analyzes"),
+            &analyze_text_with_evidence(IDENTITY_CAPTURE, evidence, evaluated_at())
+                .expect("the capture analyzes"),
         );
 
         assert!(
@@ -2175,8 +2258,9 @@ mod tests {
     }
 
     fn projected_capture(capture: &str) -> serde_json::Value {
-        let analysis = analyze_text_with_evidence(capture, DsregcmdBundleEvidence::default())
-            .expect("the capture analyzes");
+        let analysis =
+            analyze_text_with_evidence(capture, DsregcmdBundleEvidence::default(), evaluated_at())
+                .expect("the capture analyzes");
         serde_json::from_str(&json(&analysis)).expect("a dsregcmd analysis serializes")
     }
 
@@ -2547,12 +2631,17 @@ mod tests {
 
     /// Project a single artifact through the hand-off.
     fn project_one_artifact(artifact: DsregcmdBundleArtifact) -> String {
-        redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![artifact])
-            .expect("the bundle projects")
-            .into_iter()
-            .next()
-            .expect("one artifact in, one artifact out")
-            .text
+        redacted_bundle_artifacts(
+            &short_domain_capture(""),
+            bundle_evidence(),
+            vec![artifact],
+            evaluated_at(),
+        )
+        .expect("the bundle projects")
+        .into_iter()
+        .next()
+        .expect("one artifact in, one artifact out")
+        .text
     }
 
     /// The decoded message of a projected events artifact, which also proves the
@@ -2747,9 +2836,13 @@ mod tests {
             text: format!("{{ \"message\": \"{SHORT_DOMAIN}\\\\adam_admin\", }}"),
         };
 
-        let error =
-            redacted_bundle_artifacts(&short_domain_capture(""), bundle_evidence(), vec![broken])
-                .expect_err("a malformed JSON artifact must fail the hand-off");
+        let error = redacted_bundle_artifacts(
+            &short_domain_capture(""),
+            bundle_evidence(),
+            vec![broken],
+            evaluated_at(),
+        )
+        .expect_err("a malformed JSON artifact must fail the hand-off");
 
         assert!(
             error.contains("dsregcmd-events.json"),
@@ -2768,8 +2861,13 @@ mod tests {
             "\\tUser Name:\\t{SHORT_DOMAIN}\\\\adam_admin\\r\\n"
         )));
 
-        let projected = redacted_bundle_artifacts(&bundle_capture(), bundle_evidence(), artifacts)
-            .expect("the bundle projects");
+        let projected = redacted_bundle_artifacts(
+            &bundle_capture(),
+            bundle_evidence(),
+            artifacts,
+            evaluated_at(),
+        )
+        .expect("the bundle projects");
 
         for artifact in &projected {
             if artifact.relative_path.ends_with(".json") {

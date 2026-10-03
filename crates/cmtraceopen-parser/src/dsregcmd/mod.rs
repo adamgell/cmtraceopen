@@ -1,3 +1,6 @@
+use chrono::DateTime;
+use chrono::Utc;
+
 pub mod derive;
 pub mod extended;
 pub mod models;
@@ -19,6 +22,9 @@ pub use redaction::{
 
 /// Pure analyzer entry point: parse `dsregcmd /status` text + evaluate rules.
 ///
+/// `evaluated_at` is the caller-supplied instant used to judge capture freshness.
+/// Pass the same instant when reproducing an analysis. This path reads no clock.
+///
 /// The returned analysis is the **projected** export form: the tenant id, the
 /// tenant and on-premises domains, the device id, the device certificate
 /// thumbprint, the user principal name and the user SID have been masked by
@@ -30,14 +36,18 @@ pub use redaction::{
 ///
 /// Returns `Err(String)` with a human-readable parse failure; callers wrap
 /// into their own error type as needed.
-pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
-    analyze_text_with_evidence(input, DsregcmdBundleEvidence::default())
+pub fn analyze_text(
+    input: &str,
+    evaluated_at: DateTime<Utc>,
+) -> Result<DsregcmdAnalysisResult, String> {
+    analyze_text_with_evidence(input, DsregcmdBundleEvidence::default(), evaluated_at)
 }
 
 /// The analyzer entry point the application uses: parse `dsregcmd /status`
 /// text, attach the evidence a native collector read from a capture bundle,
 /// evaluate every rule, and project the result.
 ///
+/// `evaluated_at` has the same capture-freshness meaning as in [`analyze_text`].
 /// The bundle evidence is passed in because this crate performs no I/O. The
 /// assembly lives here rather than in the caller so the extended diagnostics
 /// are built from the unprojected values the evidence carries — several of them
@@ -46,9 +56,10 @@ pub fn analyze_text(input: &str) -> Result<DsregcmdAnalysisResult, String> {
 pub fn analyze_text_with_evidence(
     input: &str,
     evidence: DsregcmdBundleEvidence,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<DsregcmdAnalysisResult, String> {
     Ok(redaction::redacted_analysis(
-        &analyze_text_with_evidence_preserving_local_values(input, evidence)?,
+        &analyze_text_with_evidence_preserving_local_values(input, evidence, evaluated_at)?,
     ))
 }
 
@@ -67,8 +78,9 @@ pub fn analyze_text_with_evidence(
 pub(crate) fn analyze_text_with_evidence_preserving_local_values(
     input: &str,
     evidence: DsregcmdBundleEvidence,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<DsregcmdAnalysisResult, String> {
-    let mut result = analyze_text_preserving_local_values(input)?;
+    let mut result = analyze_text_preserving_local_values(input, evaluated_at)?;
 
     evidence.apply_to(&mut result);
     rules::apply_enrollment_cross_reference(&mut result);
@@ -92,7 +104,8 @@ pub(crate) fn analyze_text_with_evidence_preserving_local_values(
 /// publishes calls [`analyze_text`] or [`analyze_text_with_evidence`].
 pub(crate) fn analyze_text_preserving_local_values(
     input: &str,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<DsregcmdAnalysisResult, String> {
     let facts = parser::parse_dsregcmd(input)?;
-    Ok(rules::analyze_facts(facts, input))
+    Ok(rules::analyze_facts(facts, input, evaluated_at))
 }
