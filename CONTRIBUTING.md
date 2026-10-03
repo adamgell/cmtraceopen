@@ -71,18 +71,18 @@ Three more jobs run on every PR but are not required to merge:
 
 - **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
 - **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
-- **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+- **ESP Diagnostics (Windows)** — installer file-association cleanup, parser tests and Clippy, native and Graph ESP diagnostics, and the full application's all-features build, tests, manifest verification and Clippy on Windows.
 
-The Windows jobs are also the only place `#[cfg(target_os = "windows")]` code is compiled. `cargo check` and `cargo test` on Linux or macOS skip it entirely, tests included, and pass without reading a line of it. A change under that gate is therefore verified by CI alone until the Windows jobs run, and it is worth saying so in the pull request rather than implying local coverage. Two compile errors in one pull request reached CI that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
+Native `cargo check` and `cargo test` on Linux or macOS skip `#[cfg(target_os = "windows")]` code, tests included. Contributors on those hosts need the Windows CI jobs or a separate Windows run to verify that code; contributors developing on Windows can compile and test it locally. State which checks actually ran in the pull request. Two compile errors in one pull request reached CI from a non-Windows workstation that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
 
 ## Before you push
 
-Every required check has a local equivalent, and running them here is faster than reading about them in CI output:
+Run this focused local checklist from the repository root before pushing. It covers formatting, the default Rust configuration, parser tests and the frontend; it does not replace the remaining CI checks listed above, including Lite, audits, E2E and platform builds:
 
 ```bash
 cargo fmt --all -- --check                                  # Source Quality, the formatting half
-cd src-tauri && cargo check && cargo test                   # Check & Test (Rust)
-cd src-tauri && cargo clippy --all-targets -- -D warnings
+(cd src-tauri && cargo check && cargo test)                 # default Rust configuration
+(cd src-tauri && cargo clippy --all-targets -- -D warnings)
 cargo test -p cmtraceopen-parser                            # the parser crate's own suite
 npx tsc --noEmit                                            # TypeScript Check
 npm run test                                                # the vitest suite
