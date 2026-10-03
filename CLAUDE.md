@@ -47,7 +47,7 @@ npx tsc --noEmit
 Six required status checks — the `Protect` ruleset over `main`:
 
 1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny` and `cargo audit`.
-2. **TypeScript Check** — `npx tsc --noEmit`.
+2. **TypeScript Check** — `npx tsc --noEmit`, `npm run test`, CI bundle-output and release-script contract tests via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
 3. **E2E (Playwright)** — `npm run test:e2e`.
 4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
 
