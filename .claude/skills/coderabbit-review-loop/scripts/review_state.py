@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import subprocess
 from typing import Any
@@ -33,6 +34,7 @@ query($owner: String!, $repo: String!, $number: Int!, $threads: String, $reviews
           state
           body
           submittedAt
+          updatedAt
           author { login }
           commit { oid }
         }
@@ -333,7 +335,13 @@ def _fetch_complete_snapshot(
 
     if metadata is None:
         raise SystemExit("pull request metadata was never collected")
-    reviews = list({review["id"]: review for review in reviews}.values())
+    unique_reviews: dict[str, dict[str, Any]] = {}
+    for review in reviews:
+        previous = unique_reviews.get(review["id"])
+        if previous is not None and previous != review:
+            raise SystemExit("pull request review changed during pagination")
+        unique_reviews[review["id"]] = review
+    reviews = list(unique_reviews.values())
     threads = list({thread["id"]: thread for thread in threads}.values())
     threads = [_complete_thread_comments(thread) for thread in threads]
     return metadata, reviews, threads
@@ -361,6 +369,59 @@ def _snapshot_identity(
     }
 
 
+def _review_time(review: dict[str, Any], field: str) -> datetime:
+    value = review.get(field)
+    if isinstance(value, str):
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if timestamp.tzinfo is not None:
+                return timestamp
+        except ValueError:
+            pass
+    raise SystemExit(f"CodeRabbit review {field} is invalid: {review['id']}")
+
+
+def _coderabbit_review_events(
+    reviews: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return submitted reviews and the latest substantive verdict(s).
+
+    The two accepted logins are aliases for one CodeRabbit reviewer. Tied
+    verdicts stay together so neither API order nor opaque IDs decide approval.
+    """
+    submitted = []
+    verdicts = []
+    for review in reviews:
+        if not is_coderabbit(review.get("author")):
+            continue
+        state = review.get("state")
+        if state == "PENDING" and review.get("submittedAt") is None:
+            continue
+        if state not in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED"):
+            raise SystemExit(f"CodeRabbit review state is invalid: {review['id']}")
+        submitted_at = _review_time(review, "submittedAt")
+        submitted.append((submitted_at, review))
+        if state == "COMMENTED":
+            continue
+        verdict_at = submitted_at
+        if state == "DISMISSED":
+            # Dismissal mutates an existing review, keeping its submittedAt.
+            # updatedAt bounds the dismissal conservatively: a subsequent edit
+            # can delay approval eligibility, but cannot revive an old approval.
+            verdict_at = _review_time(review, "updatedAt")
+            if verdict_at < submitted_at:
+                raise SystemExit(f"CodeRabbit review updatedAt precedes submittedAt: {review['id']}")
+        verdicts.append((verdict_at, review))
+
+    submitted.sort(key=lambda item: (item[0], item[1]["id"]))
+    latest_time = max((timestamp for timestamp, _ in verdicts), default=None)
+    effective = sorted(
+        (review for timestamp, review in verdicts if timestamp == latest_time),
+        key=lambda review: review["id"],
+    )
+    return [review for _, review in submitted], effective
+
+
 def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
     first = _fetch_complete_snapshot(owner, repo, number)
     second = _fetch_complete_snapshot(owner, repo, number)
@@ -370,11 +431,7 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
         raise SystemExit("pull request review state changed during pagination")
 
     metadata, reviews, threads = second
-    coderabbit_reviews = [
-        review for review in reviews
-        if is_coderabbit(review.get("author")) and review.get("submittedAt") is not None
-    ]
-    coderabbit_reviews.sort(key=lambda review: review.get("submittedAt") or "")
+    coderabbit_reviews, effective_reviews = _coderabbit_review_events(reviews)
     unresolved = [thread for thread in threads if not thread["isResolved"]]
     unresolved_coderabbit = [
         thread
@@ -383,9 +440,13 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
     ]
     latest = coderabbit_reviews[-1] if coderabbit_reviews else None
     approved_at_head = bool(
-        latest
-        and latest.get("state") == "APPROVED"
-        and (latest.get("commit") or {}).get("oid") == metadata["head_sha"]
+        effective_reviews
+        and all(
+            review["state"] == "APPROVED"
+            and isinstance(review.get("commit"), dict)
+            and review["commit"].get("oid") == metadata["head_sha"]
+            for review in effective_reviews
+        )
     )
 
     return {
@@ -397,6 +458,7 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
             "unresolved_coderabbit_thread_count": len(unresolved_coderabbit),
             "latest_coderabbit_review": latest,
             "latest_coderabbit_review_state": latest.get("state") if latest else None,
+            "effective_coderabbit_reviews": effective_reviews,
             "approved_at_head": approved_at_head,
         },
         "unresolved_threads": unresolved,
