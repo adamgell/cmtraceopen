@@ -1,21 +1,6 @@
 import { eventDateKey, formatEventTime } from "./evtx-time";
 import { describe, expect, it } from "vitest";
-import {
-  availableColumns,
-  discoverMappedProperties,
-  mappedColumnId,
-  columnValue,
-  columnWidth,
-  defaultColumnConfig,
-  EVTX_COLUMNS,
-  moveColumn,
-  sanitizeColumnConfig,
-  type EvtxColumnId,
-  type EvtxColumnSpec,
-  toggleColumn,
-  visibleColumns,
-  type EvtxColumnConfig,
-} from "./evtx-columns";
+import { EVTX_COLUMNS, MAX_INSERTION_STRING_COLUMNS, availableColumns, columnValue, columnWidth, defaultColumnConfig, discoverInsertionStrings, discoverMappedProperties, mappedColumnId, moveColumn, retainedInsertionStrings, sanitizeColumnConfig, stringColumnPosition, toggleColumn, type EvtxColumnConfig, type EvtxColumnId, type EvtxColumnSpec, visibleColumns } from "./evtx-columns";
 import type { EvtxRecord } from "./types";
 
 /**
@@ -255,8 +240,108 @@ describe("map columns", () => {
     expect(columnWidth(config, visible[1])).toBe(200);
   });
 
+  it("rejects an insertion-string id that is not the canonical spelling", () => {
+    // Only what `stringColumnId` writes is a column: a persisted configuration
+    // carrying `string:1.5`, `string:1e0` or `string:01` names nothing, and
+    // accepting it lets a stray id inflate the discovered count or reach the
+    // renderer as a fractional position.
+    for (const id of ["string:1.5", "string:1e0", "string:01", "string: 2", "string:0", "string:11"]) {
+      expect(stringColumnPosition(id)).toBeNull();
+    }
+    expect(stringColumnPosition("string:1")).toBe(1);
+    expect(stringColumnPosition("string:10")).toBe(10);
+  });
+
   it("still rejects an id that is neither fixed nor a map column", () => {
     const config = sanitizeColumnConfig({ order: ["level", "notAColumn", "mapped:"] });
     expect(config.order).toEqual(["level"]);
+  });
+});
+
+describe("insertion-string columns", () => {
+  const field = (name: string, value: string) => ({ name, value });
+
+  it("offers a column per value the records carry, after the map columns", () => {
+    const columns = availableColumns(["PayloadData1"], 3).map((column) => column.id);
+    expect(columns).toEqual([
+      ...EVTX_COLUMNS.map((column) => column.id),
+      "mapped:PayloadData1",
+      "string:1",
+      "string:2",
+      "string:3",
+    ]);
+  });
+
+  it("counts the widest record and stops at the cap", () => {
+    expect(
+      discoverInsertionStrings([record({ eventData: [field("A", "1")] })])
+    ).toBe(1);
+    expect(
+      discoverInsertionStrings([
+        record({ eventData: [field("A", "1")] }),
+        record({
+          eventData: Array.from({ length: 14 }, (_, index) =>
+            field(`F${index}`, `${index}`)
+          ),
+        }),
+      ])
+    ).toBe(MAX_INSERTION_STRING_COLUMNS);
+    expect(availableColumns([], 99)).toHaveLength(
+      EVTX_COLUMNS.length + MAX_INSERTION_STRING_COLUMNS
+    );
+  });
+
+  it("renders the value in that position and nothing for a shorter record", () => {
+    const wide = record({
+      eventData: [field("Product", "Contoso"), field("Version", "2.1")],
+    });
+    expect(columnValue(wide, "string:1")).toBe("Contoso");
+    expect(columnValue(wide, "string:2")).toBe("2.1");
+    expect(columnValue(wide, "string:3")).toBe("");
+    expect(columnValue(record(), "string:1")).toBe("");
+  });
+
+  it("keeps a stored insertion-string column and refuses one past the cap", () => {
+    const kept = sanitizeColumnConfig({
+      order: ["level", "string:2"],
+      widths: { "string:2": 90 },
+    });
+    expect(kept.order).toEqual(["level", "string:2"]);
+    expect(kept.widths["string:2"]).toBe(90);
+    expect(sanitizeColumnConfig({ order: ["level", "string:11"] }).order).toEqual([
+      "level",
+    ]);
+    expect(sanitizeColumnConfig({ order: ["level", "string:0"] }).order).toEqual([
+      "level",
+    ]);
+  });
+
+  it("resolves their label from the id alone", () => {
+    expect(visibleColumns(config(["string:2"])).map((spec) => spec.label)).toEqual([
+      "String 2",
+    ]);
+  });
+
+  it("keeps an arranged column offerable when the records are narrower", () => {
+    const arranged = sanitizeColumnConfig({ order: ["level", "string:3"] });
+    expect(retainedInsertionStrings(arranged)).toBe(3);
+
+    const narrowerRecords = [record({ eventData: [field("A", "1")] })];
+    const offered = availableColumns(
+      [],
+      Math.max(
+        discoverInsertionStrings(narrowerRecords),
+        retainedInsertionStrings(arranged)
+      )
+    ).map((column) => column.id);
+    expect(offered).toContain("string:3");
+    expect(offered).not.toContain("string:4");
+
+    // A hidden column keeps its width, so it stays offerable too.
+    expect(retainedInsertionStrings(config([], { "string:4": 90 }))).toBe(4);
+  });
+
+  it("is hidden until an operator asks for it", () => {
+    expect(defaultColumnConfig().order).not.toContain("string:1");
   });
 });

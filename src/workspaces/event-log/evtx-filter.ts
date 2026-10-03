@@ -14,6 +14,7 @@ import {
 import {
   availableColumns,
   columnValue,
+  discoverInsertionStrings,
   discoverMappedProperties,
   type EvtxColumnId,
 } from "./evtx-columns";
@@ -257,7 +258,10 @@ function searchableValues(
     scope === "visibleColumns" && visibleColumns
       ? visibleColumns
       : discoveredColumns ??
-        availableColumns(discoverMappedProperties([record])).map((column) => column.id);
+        availableColumns(
+          discoverMappedProperties([record]),
+          discoverInsertionStrings([record])
+        ).map((column) => column.id);
   const values = columns.map((id) => columnValue(record, id, timeZoneMode));
   if (scope === "allColumns") values.push(...record.eventData.map((field) => field.value));
   return values.map((value) => normalizeText(value, caseSensitive)).filter(Boolean);
@@ -398,7 +402,10 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
     input.quickFilter?.query.trim() &&
     input.quickFilter.mode !== "eventIds" &&
     (input.quickFilter.scope === "allColumns" || input.visibleColumns === undefined)
-      ? availableColumns(discoverMappedProperties(input.records)).map((column) => column.id)
+      ? availableColumns(
+          discoverMappedProperties(input.records),
+          discoverInsertionStrings(input.records)
+        ).map((column) => column.id)
       : undefined;
   const predicateInput = {
     ...input,
