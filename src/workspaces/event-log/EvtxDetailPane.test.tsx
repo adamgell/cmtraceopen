@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvtxRecord } from "./types";
 
@@ -104,7 +104,7 @@ describe("EvtxDetailPane error codes", () => {
               known: true,
               description: "Access is denied.",
               category: "Win32",
-              outcome: "Failure",
+              outcome: "failure",
             }),
           ])
         : Promise.resolve(null),
@@ -117,6 +117,40 @@ describe("EvtxDetailPane error codes", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Access is denied\./)).toBeInTheDocument();
     expect(screen.getByText(/Win32/)).toBeInTheDocument();
+  });
+
+  it("shows Win32 and HRESULT forms separately while deduplicating repeated literals", async () => {
+    const message = "Update failed with 0x00000005 and 0x80070005";
+    useEvtxStore.setState({
+      records: [{ ...RECORD, message, eventData: [{ name: "Error", value: "0x00000005" }] }],
+    });
+    const win32 = mention({
+      start: 19,
+      end: 29,
+      codeHex: "0x00000005",
+      codeDecimal: "5",
+      known: true,
+      description: "Access is denied.",
+      category: "Windows",
+      outcome: "failure",
+    });
+    invoke.mockImplementation((command: string) =>
+      command === "resolve_error_codes_in_text"
+        ? Promise.resolve([
+            win32,
+            { ...win32, start: 34, end: 44, codeHex: "0x80070005", codeDecimal: "-2147024891" },
+            { ...win32, start: 45, end: 55 },
+          ])
+        : Promise.resolve(null),
+    );
+
+    render(<EvtxDetailPane />);
+
+    await screen.findByText("Error codes in this event");
+    const codes = within(screen.getByRole("list"));
+    expect(codes.getAllByText("0x00000005")).toHaveLength(1);
+    expect(codes.getAllByText("0x80070005")).toHaveLength(1);
+    expect(codes.getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("labels a code the database cannot explain instead of staying silent", async () => {

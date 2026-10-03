@@ -9,6 +9,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useMarkerStore } from "../../stores/marker-store";
 import { useUiStore } from "../../stores/ui-store";
+import type { ErrorCodeOutcome } from "../../types/log";
 import {
   evtxMarkerKey,
   getEvtxMarker,
@@ -30,7 +31,7 @@ interface ErrorCodeMention {
   description: string;
   /** Empty when `known` is false. */
   category: string;
-  outcome: "Failure" | "Success" | "SuccessRequiresAction" | null;
+  outcome: ErrorCodeOutcome | null;
   known: boolean;
 }
 

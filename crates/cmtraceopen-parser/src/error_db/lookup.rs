@@ -148,6 +148,8 @@ pub struct ErrorCodeMention {
 /// operator reading one event needs to tell "no code here" from "a code we
 /// cannot explain", and the latter is evidence about the code rather than
 /// silence.
+/// Code values preserve the matched literal even when its meaning comes from
+/// an equivalent Win32 or HRESULT database entry.
 pub fn detect_error_code_mentions(message: &str) -> Vec<ErrorCodeMention> {
     code_mentions(message)
         .into_iter()
@@ -157,8 +159,8 @@ pub fn detect_error_code_mentions(message: &str) -> Vec<ErrorCodeMention> {
                 Some(ec) => ErrorCodeMention {
                     start: char_start,
                     end: char_end,
-                    code_hex: format!("0x{:08X}", ec.code),
-                    code_decimal: format!("{}", ec.code as i32),
+                    code_hex: format!("0x{code_val:08X}"),
+                    code_decimal: format!("{}", code_val as i32),
                     description: ec.description.to_string(),
                     category: ec.category.label().to_string(),
                     outcome: Some(error_code_outcome(ec.code)),
@@ -800,6 +802,56 @@ mod tests {
         assert_eq!(mentions[0].code_hex, "0x80070005");
         assert!(!mentions[0].description.is_empty());
         assert!(mentions[0].outcome.is_some());
+    }
+
+    #[test]
+    fn mentions_preserve_literal_win32_code_when_borrowing_hresult_meaning() {
+        // Transform the known-code exemplar above to its Win32 form.
+        let message = "Failed with 0x00000005 while copying";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 1);
+        let mention = &mentions[0];
+        assert_eq!(mention.code_hex, "0x00000005");
+        assert_eq!(mention.code_decimal, "5");
+        assert_eq!(js_slice(message, mention.start, mention.end), "0x00000005");
+        assert!(mention.known);
+        assert!(mention.description.contains("Access is denied"));
+        assert_eq!(mention.category, "Windows");
+        assert_eq!(mention.outcome, Some(ErrorCodeOutcome::Failure));
+    }
+
+    #[test]
+    fn mentions_keep_win32_and_hresult_forms_distinct() {
+        // Transform the existing multiple-code span exemplar to equivalent forms.
+        let message = "Error 0x00000005 and then 0x80070005";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 2);
+        for (mention, (hex, decimal)) in mentions
+            .iter()
+            .zip([("0x00000005", "5"), ("0x80070005", "-2147024891")])
+        {
+            assert_eq!(mention.code_hex, hex);
+            assert_eq!(mention.code_decimal, decimal);
+            assert_eq!(js_slice(message, mention.start, mention.end), hex);
+            assert!(mention.known);
+            assert!(mention.description.contains("Access is denied"));
+            assert_eq!(mention.outcome, Some(ErrorCodeOutcome::Failure));
+        }
+    }
+
+    #[test]
+    fn legacy_lookup_and_spans_keep_canonical_hresult_values() {
+        let lookup = lookup_error_code("0x00000005");
+        assert!(lookup.found);
+        assert_eq!(lookup.code_hex, "0x80070005");
+        assert_eq!(lookup.code_decimal, "-2147024891");
+
+        let spans = detect_error_code_spans("Failed with 0x00000005 while copying");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].code_hex, "0x80070005");
+        assert_eq!(spans[0].code_decimal, "-2147024891");
     }
 
     #[test]
