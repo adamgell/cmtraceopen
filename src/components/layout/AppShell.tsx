@@ -120,7 +120,7 @@ export function AppShell() {
     (s) => s.setShowFileAssociationPrompt
   );
 
-  const activeTabIndex = useUiStore((s) => s.activeTabIndex);
+  const activeTabId = useUiStore((s) => s.openTabs[s.activeTabIndex]?.id);
   const collectionProgress = useUiStore((s) => s.collectionProgress);
   const collectionResult = useUiStore((s) => s.collectionResult);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
@@ -135,6 +135,12 @@ export function AppShell() {
   const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
   const createDiff = useLogStore((s) => s.createDiff);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  const openFilePath = useLogStore((s) => s.openFilePath);
+  // Reset a failed log view when its source changes, including async tab loads
+  // and closing the last file. A selected tab can still hold the previous data.
+  const workspaceBoundaryKey = activeView === "log"
+    ? `${activeView}:${openFilePath ?? ""}`
+    : activeView;
 
   useCollectionProgressListener();
   useParseProgressListener();
@@ -304,18 +310,19 @@ export function AppShell() {
   // Prompt standalone Windows users to associate .log files like CMTrace.exe
   useFileAssociationPrompt();
 
+  // Track tab identity: closing the first tab can replace it at the same index.
   // When the active tab changes, load the corresponding file using stored source context.
   // This avoids redundant folder re-parsing — switchToTab uses the tab's source context
   // to restore the folder sidebar and load only the selected file.
   useEffect(() => {
-    const tabs = useUiStore.getState().openTabs;
-    if (activeTabIndex < 0 || activeTabIndex >= tabs.length) return;
-    const tab = tabs[activeTabIndex];
+    const { openTabs, activeTabIndex } = useUiStore.getState();
+    const tab = openTabs[activeTabIndex];
+    if (!tab) return;
     useUiStore.getState().ensureLogViewVisible("tab-switch");
     switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
       console.error("[tab-switch] failed to load", tab.filePath, err);
     });
-  }, [activeTabIndex]);
+  }, [activeTabId]);
 
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {
@@ -557,7 +564,7 @@ export function AppShell() {
             backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          <WorkspaceErrorBoundary workspaceId={activeView} key={activeView}>
+          <WorkspaceErrorBoundary workspaceId={activeView} key={workspaceBoundaryKey}>
             {renderWorkspace()}
           </WorkspaceErrorBoundary>
         </div>

@@ -46,8 +46,10 @@ export class WorkspaceErrorBoundary extends Component<Props, State> {
           This workspace could not be displayed
         </h2>
         <p style={{ margin: "0 0 12px" }}>
-          The <code>{this.props.workspaceId}</code> workspace stopped while rendering. Other
-          workspaces are unaffected — switch to one from the sidebar.
+          The <code>{this.props.workspaceId}</code> workspace stopped while rendering.{" "}
+          {this.props.workspaceId === "log"
+            ? "Open another file to continue, or switch workspaces from the sidebar."
+            : "Other workspaces are unaffected — switch to one from the sidebar."}
         </p>
         <pre
           style={{
