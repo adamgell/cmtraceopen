@@ -669,9 +669,8 @@ pub struct DsregcmdBundleArtifact {
 /// classification is applied to every artifact's text.
 ///
 /// A capture whose command output does not parse has no assembled analysis to
-/// read a classification from, and falls back to the capture text's own: its
-/// evidence then loses whatever the shared grammar recognizes by shape rather
-/// than shipping raw.
+/// classify its evidence. Refuse the export rather than publish artifacts with
+/// an empty identity table.
 ///
 /// The artifacts are taken and returned by value so this performs no I/O — the
 /// caller owns the filesystem, exactly as it does for the analysis path — and
@@ -697,7 +696,7 @@ pub fn redacted_bundle_artifacts(
     artifacts: Vec<DsregcmdBundleArtifact>,
 ) -> Result<Vec<DsregcmdBundleArtifact>, String> {
     let projection = Projection {
-        literals: bundle_literals(capture_text, evidence),
+        literals: bundle_literals(capture_text, evidence)?,
     };
 
     artifacts
@@ -1285,13 +1284,15 @@ fn capture_literals(capture_output: &str) -> IdentityLiterals {
 /// second list, and a class added to the analysis would then reach the typed
 /// projection while quietly missing the hand-off.
 ///
-/// Output the parser cannot read assembles no analysis to read from, and falls
-/// back to the capture text's own classification.
-fn bundle_literals(capture_text: &str, evidence: DsregcmdBundleEvidence) -> IdentityLiterals {
-    match super::analyze_text_with_evidence_preserving_local_values(capture_text, evidence) {
-        Ok(result) => collect_identity_literals(&result),
-        Err(_) => capture_literals(capture_text),
-    }
+/// Refuse publication when the capture cannot be classified. Falling back to
+/// the same invalid capture would discard the evidence's identity literals.
+fn bundle_literals(
+    capture_text: &str,
+    evidence: DsregcmdBundleEvidence,
+) -> Result<IdentityLiterals, String> {
+    let result = super::analyze_text_with_evidence_preserving_local_values(capture_text, evidence)
+        .map_err(|_| "Cannot export bundle: dsregcmd capture classification failed".to_string())?;
+    Ok(collect_identity_literals(&result))
 }
 
 fn collect_fact_literals(facts: &DsregcmdFacts, literals: &mut IdentityLiterals) {
@@ -1898,6 +1899,48 @@ mod tests {
     /// The acceptance criteria's first half: the shareable artefact carries no
     /// cleartext tenant id, domain, device id, thumbprint, user principal name
     /// or SID — including the occurrences no shaped rule reaches.
+    #[test]
+    fn bundle_publication_refuses_unclassifiable_capture_text() {
+        // Derive an invalid capture from the existing exemplar by keeping only
+        // its headings. Evidence still contains identities that shaped masking
+        // cannot discover without the assembled classification.
+        let headings = bundle_capture()
+            .lines()
+            .filter(|line| !line.contains(':'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for capture in [headings.as_str(), "", " \n\t"] {
+            let result = redacted_bundle_artifacts(
+                capture,
+                bundle_evidence(),
+                unprojected_bundle_artifacts(),
+            );
+            assert!(
+                result.is_err(),
+                "unclassified evidence must not be published"
+            );
+        }
+    }
+
+    #[test]
+    fn minimal_capture_still_classifies_optional_bundle_evidence() {
+        let projected = redacted_bundle_artifacts(
+            "AzureAdJoined : NO",
+            bundle_evidence(),
+            unprojected_bundle_artifacts(),
+        )
+        .expect("a minimally recognized capture remains valid");
+        let text = joined_artifact_text(&projected);
+        assert!(!text.contains(BUNDLE_EVENT_COMPUTER));
+        assert!(!text.contains(BUNDLE_TENANT_ID));
+        assert!(redacted_bundle_artifacts(
+            "AzureAdJoined : NO",
+            DsregcmdBundleEvidence::default(),
+            vec![],
+        )
+        .is_ok());
+    }
+
     #[test]
     fn the_hand_off_keeps_every_identifier_out_of_the_shareable_bundle() {
         let projected = redacted_bundle_artifacts(
