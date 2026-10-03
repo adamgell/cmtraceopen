@@ -26,7 +26,7 @@ Turn CMTrace Open into the definitive open-source Windows diagnostics tool for C
 
 ## Execution contract
 
-The full operating contract lives at `~/.hermes/cmtrace-pm-charter.md` (checkpoint SHAs, recovery branch policy, per-slice gates, reporting style). The operator provisions this file and grants Main read access before the first orchestrated run; no orchestration or setup component creates or mutates it. Main reads this charter and then that routed execution contract before loading the repository orchestration skill or driving any repo work. If the contract is absent or unreadable, Main fails closed before orchestration. Repo-side rules: `AGENTS.md` (no backward-compat, simplest working design, layered growth).
+The full operating contract lives at `.claude/skills/cmtraceopen/references/execution-charter.md` (recovery branch policy, per-slice gates, reporting style). It is checked in; no orchestration or setup component creates or mutates it outside a reviewed change. Main reads this charter and then that routed execution contract before loading the repository orchestration skill or driving any repo work. If the contract is absent or unreadable, Main fails closed before orchestration. Repo-side rules: `AGENTS.md` (no backward-compat, simplest working design, layered growth).
 
 ## Success looks like
 
