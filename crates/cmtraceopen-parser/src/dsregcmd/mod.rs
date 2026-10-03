@@ -20,6 +20,9 @@ pub use redaction::{redacted_analysis, redacted_status_text};
 
 /// Pure analyzer entry point: parse `dsregcmd /status` text + evaluate rules.
 ///
+/// `evaluated_at` is the caller-supplied instant used to judge capture freshness.
+/// Pass the same instant when reproducing an analysis. This path reads no clock.
+///
 /// The returned analysis is the **projected** export form: the tenant id, the
 /// tenant and on-premises domains, the device id, the device certificate
 /// thumbprint, the user principal name and the user SID have been masked by
@@ -42,6 +45,7 @@ pub fn analyze_text(
 /// text, attach the evidence a native collector read from a capture bundle,
 /// evaluate every rule, and project the result.
 ///
+/// `evaluated_at` has the same capture-freshness meaning as in [`analyze_text`].
 /// The bundle evidence is passed in because this crate performs no I/O. The
 /// assembly lives here rather than in the caller so the extended diagnostics
 /// are built from the unprojected values the evidence carries — several of them
