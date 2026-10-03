@@ -258,6 +258,15 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             ok_json(&result)
         }
 
+        "resolve_error_codes_in_text" => {
+            let text = match req.args.get("text").and_then(|v| v.as_str()) {
+                Some(t) => t.to_string(),
+                None => return err_json("missing `text` argument"),
+            };
+            let result = crate::commands::error_lookup::resolve_error_codes_in_text(text);
+            ok_json(&result)
+        }
+
         "search_error_codes" => {
             let query = match req.args.get("query").and_then(|v| v.as_str()) {
                 Some(q) => q.to_string(),
