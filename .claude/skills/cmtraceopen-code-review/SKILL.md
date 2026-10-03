@@ -23,35 +23,15 @@ first, named gate states (CI, CodeRabbit `approved_at_head` via the
 feedback with reasoning. Merging is the repository owner's action; the review ends
 at the report.
 
-## Delegating a review to Hermes
+## Dispatching the review (Main only)
 
-Launch rules, each learned from a failed launch (2026-08-08):
+This section is for the session that requests the review. If you are the
+`code-review` staff role or the `cmtrace-code-review` subagent, skip it: you
+return the report, and Main validates and posts it.
 
-1. Everything the review needs must exist ON MAIN and on disk before launching -
-   an unmerged skill or charter branch means Hermes finds nothing and wanders
-   into stale refs.
-2. Launch from the repo directory so relative paths resolve, and state in the
-   prompt that all charter files are on main.
-3. The prompt must say, verbatim: "read branch files ONLY via git show
-   origin/BRANCH:PATH - never git checkout." A --yolo session in the shared root
-   checkout once checked out the PR branch, which yanked the charter and skills
-   out from under every other session. Verify `git branch --show-current` is
-   main after any Hermes session ends.
-4. Do not pass `-m`: Hermes routes per his own tiering (his direct API keys are
-   unset; gateway model names are not enumerable from the CLI). If a GPT tier is
-   explicitly required, Adam's pick is luna, never sol.
-5. Redirect output straight to a log file, never through a pipe (`| tail`
-   buffers everything and hides a silent death). `hermes --cli` also buffers
-   stdout until exit when non-interactive, so the desktop UI is the live view -
-   monitor the observable outcome (the PR comment, the process), not the log.
-6. After launching, verify the process exists (`pgrep`) before reporting it
-   running, and arm a watcher that fires on success AND on death.
-
-Working launch shape:
-
-```bash
-cd /Users/Adam.Gell/repo/cmtraceopen && hermes --cli --yolo \
-  --skills cmtraceopen-code-review \
-  -z "<task: target PR; charter on main; git show only, never checkout; read-only; one report comment>" \
-  > /tmp/hermes-review.log 2>&1 &
-```
+In Claude Code, Main dispatches the `cmtrace-code-review` subagent with the target head, the base, and the
+gate artifacts (CI result, the `coderabbit-review-loop` state snapshot, contract
+conformance evidence). Write its final JSON to a temporary file and run
+`python3 .omp/skills/cmtraceopen-dev/scripts/validate_agent_output.py --role code-review --input <file>`;
+only `{"ok":true,"role":"code-review"}` accepts it. Post a clean `review_report` on the
+pull request as the charter review.

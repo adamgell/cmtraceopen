@@ -35,6 +35,10 @@ pub struct OpenFile {
     pub initial_logical_record: Option<InitialLogicalRecord>,
     /// Current byte offset for tail tracking
     pub byte_offset: u64,
+    /// Identity of the file those bytes came from. Tail reading needs it to tell a
+    /// replacement from an append, and it is `None` when the parse could not take
+    /// it from the same read as the bytes.
+    pub file_identity: Option<crate::fs_identity::FileIdentity>,
 }
 
 /// Cancellation state for one logical live-channel load.
