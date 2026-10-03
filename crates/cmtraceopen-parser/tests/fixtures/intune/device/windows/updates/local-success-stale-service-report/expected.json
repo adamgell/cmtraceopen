@@ -66,7 +66,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/installed/KB5000006.1",
+      "findingId": "intune/windows/updates/update/installed/KB5000006.1.{aaaaaaaa-0000-0000-0000-000000000006}",
       "severity": "info",
       "confidence": "high",
       "evidence": [
@@ -82,7 +82,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/reporting-mismatch/KB5000006.1",
+      "findingId": "intune/windows/updates/update/reporting-mismatch/KB5000006.1.{aaaaaaaa-0000-0000-0000-000000000006}",
       "severity": "warning",
       "confidence": "medium",
       "evidence": [

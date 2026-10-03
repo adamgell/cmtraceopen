@@ -70,7 +70,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/install-failed/KB5000003.1",
+      "findingId": "intune/windows/updates/update/install-failed/KB5000003.1.{aaaaaaaa-0000-0000-0000-000000000003}",
       "severity": "error",
       "confidence": "high",
       "evidence": [

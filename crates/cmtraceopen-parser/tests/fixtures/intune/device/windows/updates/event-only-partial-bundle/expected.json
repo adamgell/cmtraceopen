@@ -60,7 +60,7 @@
       ]
     },
     {
-      "findingId": "intune/windows/updates/update/installed/KB5000007.1",
+      "findingId": "intune/windows/updates/update/installed/KB5000007.1.{aaaaaaaa-0000-0000-0000-000000000007}",
       "severity": "info",
       "confidence": "high",
       "evidence": [

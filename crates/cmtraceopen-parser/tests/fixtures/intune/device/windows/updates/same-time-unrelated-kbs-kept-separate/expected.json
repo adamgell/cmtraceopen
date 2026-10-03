@@ -70,7 +70,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/install-failed/KB5000009.1",
+      "findingId": "intune/windows/updates/update/install-failed/KB5000009.1.{aaaaaaaa-0000-0000-0000-000000000009}",
       "severity": "error",
       "confidence": "high",
       "evidence": [
@@ -86,7 +86,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/installed/KB5000008.1",
+      "findingId": "intune/windows/updates/update/installed/KB5000008.1.{aaaaaaaa-0000-0000-0000-000000000008}",
       "severity": "info",
       "confidence": "high",
       "evidence": [

@@ -62,7 +62,7 @@
   },
   "findings": [
     {
-      "findingId": "intune/windows/updates/update/install-failed/KB5000010.1",
+      "findingId": "intune/windows/updates/update/install-failed/KB5000010.1.{aaaaaaaa-0000-0000-0000-000000000010}",
       "severity": "error",
       "confidence": "high",
       "evidence": [

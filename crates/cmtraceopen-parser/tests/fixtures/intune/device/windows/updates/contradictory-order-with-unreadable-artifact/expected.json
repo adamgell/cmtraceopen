@@ -66,7 +66,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/evidence/contradictory-order/KB5000011.1",
+      "findingId": "intune/windows/updates/evidence/contradictory-order/KB5000011.1.{aaaaaaaa-0000-0000-0000-000000000011}",
       "severity": "warning",
       "confidence": "high",
       "evidence": [

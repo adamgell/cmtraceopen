@@ -62,7 +62,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "intune/windows/updates/update/deferred/KB5000004.1",
+      "findingId": "intune/windows/updates/update/deferred/KB5000004.1.{aaaaaaaa-0000-0000-0000-000000000004}",
       "severity": "info",
       "confidence": "high",
       "evidence": [
