@@ -4,6 +4,8 @@ interface Props {
   /** Workspace id, used in the message so a report names the failing surface. */
   workspaceId: string;
   children: ReactNode;
+  /** Retry a caught error when this source identity changes; keep healthy children mounted. */
+  resetKey?: unknown;
 }
 
 interface State {
@@ -34,6 +36,12 @@ export class WorkspaceErrorBoundary extends Component<Props, State> {
       error,
       info.componentStack,
     );
+  }
+
+  componentDidUpdate(prevProps: Props, prevState: State): void {
+    if (prevState.error && this.state.error && !Object.is(prevProps.resetKey, this.props.resetKey)) {
+      this.setState({ error: null });
+    }
   }
 
   render(): ReactNode {

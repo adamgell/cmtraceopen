@@ -137,6 +137,9 @@ export function AppShell() {
   const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
   const createDiff = useLogStore((s) => s.createDiff);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  // createDiff replaces this snapshot even for the same sources; display-mode
+  // changes keep it. Leaving comparison mode clears it and retries the log view.
+  const comparisonEntries = useLogStore((s) => s.sourceOpenMode === "diff" ? s.diffState?.entriesA : undefined);
   const openFilePath = useLogStore((s) => s.openFilePath);
   const registryFilePath = useRegistryStore((s) => s.registryData?.filePath);
   // Reset on source replacement/closure. Registry data can arrive after the
@@ -567,7 +570,11 @@ export function AppShell() {
             backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          <WorkspaceErrorBoundary workspaceId={activeView} key={workspaceBoundaryKey}>
+          <WorkspaceErrorBoundary
+            workspaceId={activeView}
+            key={workspaceBoundaryKey}
+            resetKey={activeView === "log" ? comparisonEntries : undefined}
+          >
             {renderWorkspace()}
           </WorkspaceErrorBoundary>
         </div>

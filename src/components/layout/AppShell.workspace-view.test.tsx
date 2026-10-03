@@ -2,6 +2,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const logRenderer = vi.hoisted(() => ({ throws: false }));
+const diffRenderer = vi.hoisted(() => ({ throws: false }));
 vi.mock("../log-view/LogListView", () => ({
   LogListView: () => {
     const filePath = useLogStore((state) => state.openFilePath);
@@ -17,6 +18,14 @@ vi.mock("../registry-view/RegistryViewer", () => ({
     const filePath = useRegistryStore((state) => state.registryData?.filePath);
     if (filePath === "/logs/broken.reg") throw new Error("registry rendering failed");
     return <div>registry content</div>;
+  },
+}));
+
+vi.mock("../log-view/DiffView", () => ({
+  DiffView: () => {
+    const diffState = useLogStore((state) => state.diffState);
+    if (diffRenderer.throws) throw new Error("comparison rendering failed");
+    return diffState ? <div>comparison content</div> : null;
   },
 }));
 
@@ -43,10 +52,27 @@ import { useLogStore } from "../../stores/log-store";
 import { useUiStore } from "../../stores/ui-store";
 import * as logSource from "../../lib/log-source";
 import { useRegistryStore } from "../../stores/registry-store";
+import { clearAllTabSnapshots, setCachedTabSnapshot } from "../../lib/tab-snapshot-cache";
+
+const comparisonA = { filePath: "/logs/a.log", label: "a.log" };
+const comparisonB = { filePath: "/logs/b.log", label: "b.log" };
+
+function createComparison() {
+  for (const source of [comparisonA, comparisonB]) {
+    setCachedTabSnapshot(source.filePath, {
+      entries: [], formatDetected: null, parserSelection: null,
+      totalLines: 0, byteOffset: 0, selectedSourceFilePath: source.filePath,
+      sourceOpenMode: "single-file", activeColumns: [],
+    });
+  }
+  useLogStore.getState().createDiff(comparisonA, comparisonB);
+}
 
 describe("AppShell workspace routing", () => {
   beforeEach(() => {
     logRenderer.throws = false;
+    diffRenderer.throws = false;
+    clearAllTabSnapshots();
     vi.spyOn(logSource, "switchToTab").mockResolvedValue(undefined);
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
@@ -62,6 +88,7 @@ describe("AppShell workspace routing", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    clearAllTabSnapshots();
   });
 
   it("contains a failed log renderer and recovers when switching workspace", async () => {
@@ -190,6 +217,53 @@ describe("AppShell workspace routing", () => {
     expect(useUiStore.getState().activeView).toBe("log");
     expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
     expect(screen.getByText("registry content")).toBeTruthy();
+  });
+
+  it("recovers when recreating a failed comparison with the same sources", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    diffRenderer.throws = true;
+    createComparison();
+    render(<AppShell />);
+    expect(screen.getByRole("alert").textContent).toContain("comparison rendering failed");
+
+    // A replacement that still fails must remain contained, without a retry loop.
+    await act(async () => createComparison());
+    expect(screen.getByRole("alert").textContent).toContain("comparison rendering failed");
+    diffRenderer.throws = false;
+    await act(async () => createComparison());
+
+    expect(useLogStore.getState().openFilePath).toBeNull();
+    expect(useUiStore.getState().activeView).toBe("log");
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
+    expect(screen.getByText("comparison content")).toBeTruthy();
+  });
+
+  it("recovers when closing a failed comparison", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    diffRenderer.throws = true;
+    createComparison();
+    render(<AppShell />);
+    expect(screen.getByRole("alert").textContent).toContain("comparison rendering failed");
+
+    await act(async () => useLogStore.getState().closeDiff());
+
+    expect(useLogStore.getState().openFilePath).toBeNull();
+    expect(useLogStore.getState().diffState).toBeNull();
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
+    expect(screen.getByText("log content")).toBeTruthy();
+  });
+
+  it("recovers a failed log renderer when creating a comparison", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    logRenderer.throws = true;
+    render(<AppShell />);
+    expect(screen.getByRole("alert").textContent).toContain("log rendering failed");
+
+    await act(async () => createComparison());
+
+    expect(useLogStore.getState().openFilePath).toBeNull();
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
+    expect(screen.getByText("comparison content")).toBeTruthy();
   });
 
   it("keeps the macOS JAMF workspace active when a log opens from its log list", async () => {

@@ -36,6 +36,55 @@ describe("WorkspaceErrorBoundary", () => {
     expect(alert.textContent).toContain("parser returned an unexpected shape");
   });
 
+  it("retries a caught error only when the reset identity changes", () => {
+    const initialSource = {};
+    const { rerender } = render(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={initialSource}>
+        <Boom />
+      </WorkspaceErrorBoundary>,
+    );
+    rerender(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={initialSource}>
+        <div>healthy source</div>
+      </WorkspaceErrorBoundary>,
+    );
+    expect(screen.getByTestId("workspace-error-boundary")).toBeTruthy();
+
+    rerender(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={{}}>
+        <Boom />
+      </WorkspaceErrorBoundary>,
+    );
+    expect(screen.getByTestId("workspace-error-boundary")).toBeTruthy();
+
+    rerender(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={{}}>
+        <div>healthy source</div>
+      </WorkspaceErrorBoundary>,
+    );
+    expect(screen.queryByTestId("workspace-error-boundary")).toBeNull();
+    expect(screen.getByText("healthy source")).toBeTruthy();
+  });
+
+  it("preserves healthy child state when the reset identity changes", () => {
+    function Counter() {
+      const [count, setCount] = useState(0);
+      return <button onClick={() => setCount(count + 1)}>Count {count}</button>;
+    }
+    const { rerender } = render(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={{}}>
+        <Counter />
+      </WorkspaceErrorBoundary>,
+    );
+    fireEvent.click(screen.getByText("Count 0"));
+    rerender(
+      <WorkspaceErrorBoundary workspaceId="log" resetKey={{}}>
+        <Counter />
+      </WorkspaceErrorBoundary>,
+    );
+    expect(screen.getByText("Count 1")).toBeTruthy();
+  });
+
   it("clears the error when the boundary is remounted for another workspace", async () => {
     function Switcher() {
       const [id, setId] = useState("sccm");
