@@ -5,6 +5,8 @@ mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod elevation;
+#[cfg(any(feature = "collector", feature = "esp-diagnostics"))]
+mod env_expand;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "esp-diagnostics")]
