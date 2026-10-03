@@ -55,6 +55,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Backend module map expanded**: `CLAUDE.md` now describes additional backend modules, distinguishes parser-crate re-exports from native modules, and identifies both Graph integration and active DsRegCmd connectivity checks as network users alongside the updater. The parser architecture description separates pure-crate ownership and policy from the WASM compilation gate.
+
 - **The second Intune workspace is named for what it does**: it was labelled "New Intune Workspace", a development name shown beside "Intune Diagnostics" with nothing to tell a reader which to use. It is now "Intune Analysis", and its name comes from the workspace definition rather than five separate copies, so a rename is one edit ([#701](https://github.com/adamgell/cmtraceopen/issues/701)).
 
 - **Device Inventory framing (#511)**: Logical-record framing for Device Inventory is lossless and bounded so oversized or partial continuations cannot starve the open/tail paths or drop producer evidence.

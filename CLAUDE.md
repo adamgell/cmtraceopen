@@ -73,15 +73,39 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | Module | Purpose |
 |--------|---------|
 | `commands/` | Tauri IPC command handlers — the API surface between frontend and backend |
-| `parser/` | Log format auto-detection and parsing (CCM, simple, CBS, DISM, Panther, plain text) |
+| `parser/` | Native file-reading and binary-format shim; re-exports the pure parser crate's text parsing API |
 | `intune/` | IME diagnostics pipeline: event tracking, timeline, download stats, EVTX parsing |
 | `dsregcmd/` | Device registration analysis: output parsing, diagnostic rules, registry hives |
-| `error_db/` | Embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
-| `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
+| `error_db` (re-export) | Parser crate's embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
+| `models` (re-export) | Parser crate's shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
+| `event_log/` | Event Viewer: bounded channel queries, live tail, capture, archive, export |
+| `sccm/` | Client and server diagnostics, plus the private bundle store |
+| `secureboot/` | Secure Boot certificate detect/remediate scripts and the elevated runner |
+| `esp/` | Autopilot ESP/Bootstrapping analysis: process, registry, bundle, system facts |
+| `collector/` | Evidence collection: artifact staging and bundle assembly |
+| `timeline/` | Cross-source incident correlation and timeline building |
+| `elevation/` | Restart-as-administrator: one-time restore tickets, validated requests |
+| `jamf/` | Jamf Connect and macOS MDM policy log analysis |
+| `macos_diag/` | macOS diagnostics via native tools (`pkgutil`, `profiles`, `system_profiler`, `mdatp`) |
+| `graph_api.rs`, `graph_api/` | Microsoft Graph integration — opt-in, Windows-only WAM token path and Graph client/model helpers |
+| `constants.rs` | Default evidence bundle entry point directories |
+| `error.rs` | Typed application errors and source-operation context for IPC |
+| `ipc_bridge.rs` | Debug-only IPC bridge |
+| `process_util.rs` | Child-process helpers that suppress console windows on Windows |
+| `single_instance.rs` | Desktop second-launch argument handoff to the running window |
 | `menu.rs` | Native application menu |
+
+Network use also includes the updater and active DsRegCmd diagnostics:
+`dsregcmd/connectivity.rs` sends HTTPS HEAD requests to four Microsoft endpoints.
+
+The Parser Architecture section below describes the pure implementation in
+`crates/cmtraceopen-parser/`, re-exported by the native `src-tauri/src/parser/` shim.
+The pure crate's policy excludes OS I/O, registry, WMI, network, and Tauri APIs.
+`cargo check -p cmtraceopen-parser --target wasm32-unknown-unknown` checks target
+compatibility; it does not by itself prove compliance with that policy.
 
 ### Frontend Module Map (`src/`)
 
@@ -90,16 +114,18 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `workspaces/` | The analysis surfaces, one directory each: `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
+| `components/panels/` | Docked analysis panels shared across workspaces |
+| `components/registry-view/` | Rendered registry-source views |
+| `components/timeline/` | Shared timeline rendering |
+| `components/common/` | Cross-workspace primitives |
+| `stores/` | 6 Zustand stores: `log`, `filter`, `marker`, `registry`, `timeline`, `ui` |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
 ### Parser Architecture
 
-The parser system in `src-tauri/src/parser/` uses a `ResolvedParser` that bundles:
+The parser system in `crates/cmtraceopen-parser/src/parser/` uses a `ResolvedParser` that bundles:
 - `ParserKind` — format variant (CCM, Simple, ReportingEvents, etc.)
 - `ParserImplementation` — actual parsing logic
 - `ParseQuality` — Structured / SemiStructured / Unstructured
