@@ -127,9 +127,9 @@ These are documented, not speculative. Always verify state before acting:
 
 | Checkpoint | SHA | Status | Issues |
 |---|---|---|---|
-| Client health (#320) | `6ccf8dafa7` | **MERGED** via #340; issue closed | none |
-| DP post-SUP (#329) | `a03af515fa` | **MERGED** via #385 | none |
-| SUP coverage (#330) | `76e2b0b910d` | **MERGED** via #377 | none |
+| Client health (#320) | `6ccf8dafa7` | **MERGED into `main` via #490**; #340 was preparation | none |
+| DP post-SUP (#329) | `a03af515fa` | **MERGED into `main` via #490**; #385 was preparation | none |
+| SUP coverage (#330) | `76e2b0b910d` | **MERGED into `main` via #490**; #377 was preparation | none |
 | Intune CP (#366) | `04e1ecba6f` | **MERGED** via #460 | none |
 
 All four rows read "blocked" until 2026-09-24, seven weeks after the work merged. See `memory.md` for the full note.

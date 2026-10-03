@@ -74,7 +74,9 @@ verify, never as state.
 
 ## Recovery Branches (Evidence Only)
 
-Never batch-merge these. Extract reviewed issue-scoped slices into fresh worktrees. Preserve refs. Check merged equivalents for closed macOS/iOS issues before any PR.
+Preserve these refs as historical evidence. This inventory does not authorize extraction,
+new recovery PRs, or batch merges; establish a current issue and check merged equivalents
+before starting any separately authorized recovery work.
 
 | Branch | SHA | Target Issue |
 |---|---|---|
