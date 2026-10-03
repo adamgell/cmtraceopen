@@ -1,3 +1,5 @@
+//! Host environment expansion shared by native diagnostic modules.
+
 use std::env;
 
 /// Expand Windows-style `%VARNAME%` environment variable tokens in a path string.
