@@ -30,7 +30,7 @@ use cmtraceopen_parser::dsregcmd::{
     analyze_text, analyze_text_with_evidence, redacted_status_text, DsregcmdActiveEvidence,
     DsregcmdBundleEvidence, DsregcmdConnectivityResult, DsregcmdScpQueryResult,
 };
-use cmtraceopen_parser::intune::models::{
+use cmtraceopen_parser::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
 };
 use regex::Regex;

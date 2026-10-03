@@ -18,7 +18,7 @@ pub use cmtraceopen_parser::dsregcmd::{derive, extended, models, parser, rules};
 //   connectivity  - uses ureq for HTTPS probes + process_util for nltest/powershell
 //   event_logs    - calls into intune::eventlog_win32 and intune::evtx_parser
 // Both consume crate types (DsregcmdConnectivityResult, EventLogAnalysis, etc.)
-// via `crate::intune::models::*` and `crate::dsregcmd::models::*`.
+// via `crate::intune::apps::windows::ime::models::*` and `crate::dsregcmd::models::*`.
 pub mod connectivity;
 pub mod event_logs;
 

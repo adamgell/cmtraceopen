@@ -82,7 +82,9 @@ fn escape_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::esp::models::{EspTimelineKind, EspTimestamp, EspTimestampKind};
+    use crate::intune::enrollment::windows::esp::models::{
+        EspTimelineKind, EspTimestamp, EspTimestampKind,
+    };
 
     fn timeline_entry(entry_id: &str, normalized_utc: &str) -> EspTimelineEntry {
         EspTimelineEntry {

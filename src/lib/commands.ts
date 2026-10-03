@@ -69,7 +69,6 @@ import type {
   EspElevationState,
   EspGraphOverlay,
   EspGraphRequest,
-  EspRelaunchResult,
   EspSessionEnvelope,
 } from "../workspaces/esp-diagnostics/types";
 import type { EspSessionCaptureMeta } from "../workspaces/esp-diagnostics/esp-session-capture";
@@ -2538,10 +2537,6 @@ export async function stopEspDiagnosticsSession(
   return invokeCommand("stop_esp_diagnostics_session", { sessionId });
 }
 
-export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
-  return invokeCommand("restart_esp_as_administrator");
-}
-
 export async function graphFetchEspDiagnostics(
   request: EspGraphRequest,
 ): Promise<EspGraphOverlay> {
@@ -3190,11 +3185,6 @@ const COMMAND_DECODERS = {
   start_esp_diagnostics_session: decodeEspSessionEnvelope,
   get_esp_diagnostics_session: decodeEspSessionEnvelope,
   stop_esp_diagnostics_session: decodeUnitResponse,
-  restart_esp_as_administrator: (value, commandName) =>
-    decodeRecordResponse<EspRelaunchResult>(value, commandName, {
-      launched: (field) => typeof field === "boolean",
-      reason: (field) => typeof field === "string",
-    }),
   graph_fetch_esp_diagnostics: (value, commandName) =>
     decodeRecordResponse<EspGraphOverlay>(value, commandName, {
       requestId: (field) => typeof field === "string",

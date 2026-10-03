@@ -17,7 +17,9 @@ use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use crate::esp::{process_start_instant, EspTimestamp, EspTimestampKind};
+use crate::intune::enrollment::windows::esp::{
+    process_start_instant, EspTimestamp, EspTimestampKind,
+};
 use crate::models::log_entry::{LogEntry, Severity};
 
 /// Severity normalized across both sides of the merge.

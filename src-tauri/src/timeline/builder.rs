@@ -119,7 +119,8 @@ pub fn build_timeline(
     ];
     let mut sources: Vec<TimelineSourceMeta> = Vec::new();
     let mut indexes: HashMap<u16, Vec<EntryIndex>> = HashMap::new();
-    let mut ime_events: HashMap<u16, Vec<crate::intune::models::IntuneEvent>> = HashMap::new();
+    let mut ime_events: HashMap<u16, Vec<crate::intune::apps::windows::ime::models::IntuneEvent>> =
+        HashMap::new();
     let mut runtimes: HashMap<u16, SourceRuntime> = HashMap::new();
     let mut errors: Vec<SourceError> = Vec::new();
     let mut total_entries: u64 = 0;
@@ -317,7 +318,7 @@ fn parse_to_index(
 #[cfg(feature = "intune-diagnostics")]
 fn extract_ime_events(
     folder: &std::path::Path,
-) -> Result<Vec<crate::intune::models::IntuneEvent>, anyhow::Error> {
+) -> Result<Vec<crate::intune::apps::windows::ime::models::IntuneEvent>, anyhow::Error> {
     let rd = std::fs::read_dir(folder)
         .map_err(|e| anyhow::anyhow!("read_dir {}: {}", folder.display(), e))?;
 
@@ -343,25 +344,34 @@ fn extract_ime_events(
     }
 
     // Parse each file, build a global GUID registry, then extract events.
-    let mut per_file: Vec<(String, Vec<crate::intune::ime_parser::ImeLine>)> = Vec::new();
-    let mut registry = crate::intune::guid_registry::GuidRegistry::new();
+    let mut per_file: Vec<(
+        String,
+        Vec<cmtraceopen_parser::parser::ccm::logical::ImeLine>,
+    )> = Vec::new();
+    let mut registry = crate::intune::apps::windows::ime::guid_registry::GuidRegistry::new();
     for p in &files {
         let content = std::fs::read_to_string(p)
             .map_err(|e| anyhow::anyhow!("read_to_string {}: {}", p.display(), e))?;
-        let lines = crate::intune::ime_parser::parse_ime_content(&content);
+        let lines = cmtraceopen_parser::parser::ccm::logical::parse_ime_content(&content);
         registry.ingest_lines(&lines);
         per_file.push((p.to_string_lossy().to_string(), lines));
     }
 
-    let mut all_events: Vec<crate::intune::models::IntuneEvent> = Vec::new();
+    let mut all_events: Vec<crate::intune::apps::windows::ime::models::IntuneEvent> = Vec::new();
     for (source_file, lines) in &per_file {
-        let events = crate::intune::event_tracker::extract_events(lines, source_file, &registry);
+        let events = crate::intune::apps::windows::ime::event_tracker::extract_events(
+            lines,
+            source_file,
+            &registry,
+        );
         all_events.extend(events);
     }
 
     // Run the same timeline build (dedupe + sort + epoch_ms population) used
     // by the intune command path.
-    Ok(crate::intune::timeline::build_timeline(all_events))
+    Ok(crate::intune::apps::windows::ime::timeline::build_timeline(
+        all_events,
+    ))
 }
 
 /// When built without the `intune-diagnostics` feature, IME event extraction
@@ -370,7 +380,7 @@ fn extract_ime_events(
 #[cfg(not(feature = "intune-diagnostics"))]
 fn extract_ime_events(
     _folder: &std::path::Path,
-) -> Result<Vec<crate::intune::models::IntuneEvent>, anyhow::Error> {
+) -> Result<Vec<crate::intune::apps::windows::ime::models::IntuneEvent>, anyhow::Error> {
     Err(anyhow::anyhow!(
         "IME event extraction requires the `intune-diagnostics` feature"
     ))

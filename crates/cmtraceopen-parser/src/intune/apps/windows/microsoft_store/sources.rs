@@ -11,7 +11,7 @@
 //!    deployment record, and a plain-text export with no channel metadata can
 //!    never be promoted into one.
 
-use crate::intune::ime_parser::ImeLine;
+use crate::parser::ccm::logical::ImeLine;
 
 /// A CCM-framed text artifact this leaf knows how to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,7 +188,7 @@ pub fn classify_event_source(provider: &str, channel: &str) -> StoreEventSource 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intune::ime_parser::parse_ime_content;
+    use crate::parser::ccm::logical::parse_ime_content;
 
     fn ccm(component: &str, message: &str) -> String {
         format!(

@@ -1,7 +1,7 @@
 use crate::dsregcmd::models::{
     DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdFacts, DsregcmdJoinType,
 };
-use crate::intune::models::IntuneDiagnosticSeverity;
+use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
 use super::derive::{
     aggregated_error_text, contains_aadsts_code, contains_text, contains_win32_code, derive_facts,
@@ -1424,7 +1424,7 @@ mod tests {
         DsregcmdCaptureConfidence, DsregcmdDiagnosticPhase, DsregcmdJoinType,
     };
     use crate::dsregcmd::parser::parse_dsregcmd;
-    use crate::intune::models::IntuneDiagnosticSeverity;
+    use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
     use chrono::Utc;
 
     const HYBRID_SAMPLE: &str = r#"
@@ -2411,7 +2411,7 @@ mod tests {
     #[test]
     fn time_skew_rule_requires_time_specific_messages() {
         use super::build_event_log_diagnostics;
-        use crate::intune::models::{
+        use crate::intune::apps::windows::ime::models::{
             EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry,
             EventLogSeverity,
         };

@@ -13,15 +13,16 @@ use std::path::Path;
 
 use regex::Regex;
 
-#[cfg(test)]
-use super::guid_registry::explicit_app_identity_context;
-use super::guid_registry::{
-    explicit_app_identity_context_with_named_guid_fallback, extract_app_name, is_fallback_name,
-    ExplicitAppIdentity, GuidRegistry, GUID_PATTERN,
-};
-use super::ime_parser::ImeLine;
+use super::guid_registry::GuidRegistry;
 use super::models::DownloadStat;
 use super::timeline::parse_timestamp;
+#[cfg(test)]
+use crate::intune::common::identity::explicit_app_identity_context;
+use crate::intune::common::identity::{
+    explicit_app_identity_context_with_named_guid_fallback, extract_app_name, is_fallback_name,
+    ExplicitAppIdentity, GUID_PATTERN,
+};
+use crate::parser::ccm::logical::ImeLine;
 use std::sync::OnceLock;
 
 pub(crate) fn download_re() -> &'static Regex {
@@ -1003,7 +1004,7 @@ mod tests {
             extract_content_id(message).as_deref(),
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
         );
-        // extract_display_name delegates to guid_registry::extract_app_name
+        // extract_display_name delegates to identity::extract_app_name
         assert_eq!(
             extract_display_name(message).as_deref(),
             Some("Contoso App")

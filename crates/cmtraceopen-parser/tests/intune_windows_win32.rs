@@ -20,7 +20,7 @@ use cmtraceopen_parser::intune::apps::windows::win32::{
     analyze_win32_bundle, derive_findings, redacted_export_projection, Win32Analysis,
     Win32SourceInput,
 };
-use cmtraceopen_parser::intune::ime_parser::parse_ime_content;
+use cmtraceopen_parser::parser::ccm::logical::parse_ime_content;
 use serde_json::{json, Value};
 use support::{
     access_state_for_capture_state, load_json, mutated, scenario_names, validate_scenario, Failures,

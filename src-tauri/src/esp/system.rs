@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     normalize_timestamp, EspClassifiedString, EspDeliveryOptimizationEventKind,
     EspDeliveryOptimizationEvidence, EspDeliveryOptimizationObservation, EspElevationState,
     EspEvidenceProvenance, EspEvidenceRef, EspHardwareEvidence, EspObservationContext,
@@ -2133,7 +2133,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use cmtraceopen_parser::esp::{EspSensitivity, EspSourceAccessState, EspSystemFact};
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
+        EspSensitivity, EspSourceAccessState, EspSystemFact,
+    };
 
     use super::*;
 

@@ -84,7 +84,7 @@ use crate::intune::apps::windows::common::{
     caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
     FoldedChar,
 };
-use crate::intune::models::{
+use crate::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
     EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, IntuneTimestampBounds,
 };
@@ -881,7 +881,7 @@ mod tests {
         },
         redacted_status_text, IdentityLiterals, KIND_HOST, KIND_TENANT,
     };
-    use crate::intune::models::{
+    use crate::intune::apps::windows::ime::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
     };
 

@@ -5,7 +5,7 @@ use crate::dsregcmd::models::{
     DsregcmdCaptureConfidence, DsregcmdDerived, DsregcmdDiagnosticInsight, DsregcmdDiagnosticPhase,
     DsregcmdFacts, DsregcmdJoinType,
 };
-use crate::intune::models::IntuneDiagnosticSeverity;
+use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 use std::sync::OnceLock;
 
 pub(super) const NETWORK_ERROR_MARKERS: &[&str] = &[

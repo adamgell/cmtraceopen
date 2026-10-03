@@ -12,7 +12,7 @@ use super::bundle_ops::{
     unsafe_ancestor_reason,
 };
 use super::known_sources::KnownSourcePathKind;
-use crate::intune::models::EvidenceBundleMetadata;
+use crate::intune::apps::windows::ime::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
     AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
 };

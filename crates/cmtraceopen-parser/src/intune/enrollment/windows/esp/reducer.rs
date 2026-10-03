@@ -12,7 +12,7 @@ use super::normalize::{
 };
 use super::rules::derive_findings;
 use super::timeline::{sort_timeline_entries, stable_record_id, stable_timeline_entry_id};
-use crate::intune::guid_registry::{extract_app_id, extract_app_name, is_fallback_name};
+use crate::intune::common::identity::{extract_app_id, extract_app_name, is_fallback_name};
 
 pub const MAX_RETAINED_EVIDENCE_RECORDS: usize = 25_000;
 pub const MAX_RETAINED_EVIDENCE_SERIALIZED_BYTES: usize = 32 * 1024 * 1024;

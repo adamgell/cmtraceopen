@@ -218,7 +218,7 @@ fn load_active_evidence_from_bundle(
 
 fn load_event_log_from_bundle(
     bundle_path: &Path,
-) -> Option<crate::intune::models::EventLogAnalysis> {
+) -> Option<crate::intune::apps::windows::ime::models::EventLogAnalysis> {
     let path = bundle_path
         .join("evidence")
         .join("event-logs")
@@ -1434,7 +1434,7 @@ mod tests {
         );
         write_bundle_json(
             &event_logs_dir.join("dsregcmd-events.json"),
-            &crate::intune::models::EventLogAnalysis::default(),
+            &crate::intune::apps::windows::ime::models::EventLogAnalysis::default(),
         );
 
         temp_dir

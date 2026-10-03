@@ -5,7 +5,7 @@
 //! citable record; everything else lands in
 //! [`AutopilotOutcome::InsufficientEvidence`] alongside a named next artifact.
 //!
-//! The Autopilot contract is a **sibling** of `crate::esp`, not a superset of
+//! The Autopilot contract is a **sibling** of `crate::intune::enrollment::windows::esp`, not a superset of
 //! it. Autopilot owns device identity/registration, profile discovery,
 //! retrieval and application, OOBE facts, and the handoff into enrollment and
 //! ESP. ESP continues to own app/profile progress and blocking status *after*
