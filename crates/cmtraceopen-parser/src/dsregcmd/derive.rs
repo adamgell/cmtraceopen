@@ -25,7 +25,11 @@ fn certificate_timestamp_re() -> &'static Regex {
 })
 }
 
-pub(super) fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDerived {
+pub(super) fn derive_facts(
+    facts: &DsregcmdFacts,
+    raw_input: &str,
+    evaluated_at: DateTime<Utc>,
+) -> DsregcmdDerived {
     let join_type = derive_join_type(facts);
     let join_type_label = join_type_label(join_type).to_string();
     let mdm_enrolled = if facts.management_details.mdm_url.is_some()
@@ -108,8 +112,12 @@ pub(super) fn derive_facts(facts: &DsregcmdFacts, raw_input: &str) -> DsregcmdDe
     };
     let dominant_phase = derive_dominant_phase(facts);
     let phase_summary = phase_summary(dominant_phase).to_string();
-    let (capture_confidence, capture_confidence_reason) =
-        derive_capture_confidence(facts, prt_reference_time, remote_session_system);
+    let (capture_confidence, capture_confidence_reason) = derive_capture_confidence(
+        facts,
+        prt_reference_time,
+        remote_session_system,
+        evaluated_at,
+    );
 
     DsregcmdDerived {
         join_type,
@@ -255,6 +263,7 @@ fn derive_capture_confidence(
     facts: &DsregcmdFacts,
     reference_time: Option<DateTime<Utc>>,
     remote_session_system: Option<bool>,
+    evaluated_at: DateTime<Utc>,
 ) -> (DsregcmdCaptureConfidence, String) {
     if remote_session_system == Some(true) {
         return (
@@ -269,7 +278,7 @@ fn derive_capture_confidence(
         .as_deref()
         .and_then(parse_dsregcmd_timestamp)
     {
-        let age_minutes = Utc::now()
+        let age_minutes = evaluated_at
             .signed_duration_since(client_time)
             .num_minutes()
             .abs();

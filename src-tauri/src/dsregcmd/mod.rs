@@ -35,10 +35,15 @@ pub mod registry;
 
 /// Desktop entry point — same contract as the crate's `analyze_text` but
 /// wraps the parse error into the Tauri-facing `AppError`.
+///
+/// `evaluated_at` is the instant the capture-freshness rules are judged against.
+/// It is a parameter because the parser crate reads no clock (see #738); the
+/// application boundary, which may, supplies it.
 pub fn analyze_text_with_evidence(
     input: &str,
     evidence: DsregcmdBundleEvidence,
+    evaluated_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<DsregcmdAnalysisResult, crate::error::AppError> {
-    cmtraceopen_parser::dsregcmd::analyze_text_with_evidence(input, evidence)
+    cmtraceopen_parser::dsregcmd::analyze_text_with_evidence(input, evidence, evaluated_at)
         .map_err(crate::error::AppError::InvalidInput)
 }
