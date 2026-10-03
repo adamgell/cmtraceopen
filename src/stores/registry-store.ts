@@ -167,7 +167,8 @@ function navigateToMatch(state: RegistryState, matchIndex: number) {
   // the ancestors are keyed by the tree's casing, so a raw path expands nothing
   // and leaves the match hidden behind a collapsed parent.
   const node = findTreeNodeByPath(state.tree, key.path);
-  useRegistryStore.getState().expandToPath(node ? node.fullPath : key.path);
+  if (!node) return;
+  useRegistryStore.getState().expandToPath(node.fullPath);
 }
 
 // ---- Module-level cache for tab switching ----

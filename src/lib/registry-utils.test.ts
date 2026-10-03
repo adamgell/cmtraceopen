@@ -48,7 +48,8 @@ describe("buildRegistryTree", () => {
     expect(paths).not.toContain("hklm\\software\\B");
 
     const parent = tree[0].children[0];
-    const child = parent.children.find((c) => c.name === "B")!;
+    const child = parent.children.find((c) => c.name === "B");
+    if (!child) throw new Error("Expected the B child in the registry tree");
     const parentPrefix = parent.fullPath + "\\";
     expect(child.fullPath.startsWith(parentPrefix)).toBe(true);
   });

@@ -24,10 +24,11 @@ export function buildRegistryTree(keys: RegistryKey[]): RegistryTreeNode[] {
       currentPath = j === 0 ? parts[j] : currentPath + "\\" + parts[j];
       const lookupKey = currentPath.toLowerCase();
 
-      if (nodeMap.has(lookupKey)) {
+      const existingNode = nodeMap.get(lookupKey);
+      if (existingNode) {
         // Node already exists — update keyIndex if this is the exact key
         if (j === parts.length - 1) {
-          nodeMap.get(lookupKey)!.keyIndex = i;
+          existingNode.keyIndex = i;
         }
         continue;
       }

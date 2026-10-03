@@ -32,7 +32,8 @@ describe("registry store case-insensitive subtrees", () => {
       .setRegistryData(data(["HKLM\\Software\\A", "hklm\\software\\B"]));
 
     const parent = useRegistryStore.getState().tree[0].children[0];
-    const child = parent.children.find((node) => node.name === "B")!;
+    const child = parent.children.find((node) => node.name === "B");
+    if (!child) throw new Error("Expected the B child in the registry tree");
 
     // Loading a file expands every branch, so this toggle is the collapse.
     expect(useRegistryStore.getState().expandedPaths.has(parent.fullPath)).toBe(
@@ -50,7 +51,8 @@ describe("registry store case-insensitive subtrees", () => {
       .setRegistryData(data(["HKLM\\Software\\A", "hklm\\software\\B"]));
 
     const parent = useRegistryStore.getState().tree[0].children[0];
-    const child = parent.children.find((node) => node.name === "B")!;
+    const child = parent.children.find((node) => node.name === "B");
+    if (!child) throw new Error("Expected the B child in the registry tree");
 
     // Loading expands every branch, so collapse first: the reveal has to do
     // the work for the assertion to mean anything.
