@@ -2,6 +2,14 @@ use super::models::{MacosPackageFiles, MacosPackageInfo, MacosPackagesResult};
 use regex::Regex;
 use std::sync::OnceLock;
 
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_complete_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
+
 fn pkg_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| Regex::new(r"^[a-zA-Z0-9._-]+$").unwrap())
@@ -115,10 +123,13 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
 
     log::info!("Listing installed packages via pkgutil");
 
-    let output = Command::new("pkgutil")
-        .arg("--pkgs")
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_complete_command(
+        Command::new("pkgutil").arg("--pkgs"),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -138,9 +149,12 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
     // Get detailed info for each Microsoft package
     let mut packages: Vec<MacosPackageInfo> = Vec::new();
     for pkg_id in &ms_ids {
-        let info_output = Command::new("pkgutil")
-            .args(["--pkg-info", pkg_id])
-            .output();
+        let info_output = run_complete_command(
+            Command::new("pkgutil").args(["--pkg-info", pkg_id]),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        );
 
         match info_output {
             Ok(out) if out.status.success() => {
@@ -163,6 +177,9 @@ pub fn list_packages_impl() -> Result<MacosPackagesResult, crate::error::AppErro
                     install_time: None,
                 });
             }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                return Err(crate::error::AppError::Io(e));
+            }
             Err(e) => {
                 log::warn!("Failed to get info for {}: {}", pkg_id, e);
             }
@@ -184,10 +201,13 @@ pub fn get_package_info_impl(package_id: &str) -> Result<MacosPackageInfo, crate
 
     log::info!("Getting package info for: {}", package_id);
 
-    let output = Command::new("pkgutil")
-        .args(["--pkg-info", package_id])
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_complete_command(
+        Command::new("pkgutil").args(["--pkg-info", package_id]),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -211,10 +231,13 @@ pub fn get_package_files_impl(
 
     log::info!("Getting package files for: {}", package_id);
 
-    let output = Command::new("pkgutil")
-        .args(["--files", package_id])
-        .output()
-        .map_err(crate::error::AppError::Io)?;
+    let output = run_complete_command(
+        Command::new("pkgutil").args(["--files", package_id]),
+        TOOL_DEADLINE,
+        TOOL_OUTPUT_BYTES,
+        TOOL_ERROR_BYTES,
+    )
+    .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -224,11 +247,19 @@ pub fn get_package_files_impl(
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_pkgutil_files(&stdout, package_id))
+    parse_package_files_output(&output, package_id)
 }
 
 // ---------------------------------------------------------------------------
+#[cfg(any(target_os = "macos", test))]
+fn parse_package_files_output(
+    output: &crate::process_util::BoundedCommandOutput,
+    package_id: &str,
+) -> Result<MacosPackageFiles, crate::error::AppError> {
+    crate::process_util::ensure_complete_output(output).map_err(crate::error::AppError::Io)?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_pkgutil_files(&stdout, package_id))
+}
 // Non-macOS stubs
 // ---------------------------------------------------------------------------
 
@@ -264,6 +295,34 @@ pub fn get_package_files_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn truncated_output_is_refused_before_returning_a_complete_prefix() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let mut output = crate::process_util::BoundedCommandOutput {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"usr/local/bin/mdatp\nusr/local/share/mdatp/config.json\n".to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: true,
+            stderr_truncated: false,
+        };
+        assert!(
+            parse_package_files_output(&output, "com.microsoft.wdav").is_err(),
+            "truncated stdout was presented as complete"
+        );
+        output.stdout_truncated = false;
+        assert!(
+            parse_package_files_output(&output, "com.microsoft.wdav").is_ok(),
+            "complete output was refused"
+        );
+        output.stderr_truncated = true;
+        assert!(
+            parse_package_files_output(&output, "com.microsoft.wdav").is_err(),
+            "truncated stderr was ignored"
+        );
+    }
 
     #[test]
     fn test_parse_pkgutil_pkgs_output() {

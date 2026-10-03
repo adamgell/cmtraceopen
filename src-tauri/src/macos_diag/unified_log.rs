@@ -2,6 +2,14 @@ use super::models::{
     MacosUnifiedLogEntry, MacosUnifiedLogPreset, MacosUnifiedLogResult, MacosUnifiedLogTimeRange,
 };
 
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_bounded_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
+
 // ---------------------------------------------------------------------------
 // Presets (cross-platform, always compiled)
 // ---------------------------------------------------------------------------
@@ -189,7 +197,8 @@ pub fn query_unified_log_impl(
         }
     };
 
-    let output = cmd.output().map_err(crate::error::AppError::Io)?;
+    let output = run_bounded_command(&mut cmd, TOOL_DEADLINE, TOOL_OUTPUT_BYTES, TOOL_ERROR_BYTES)
+        .map_err(crate::error::AppError::Io)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -197,8 +206,7 @@ pub fn query_unified_log_impl(
         log::warn!("log show exited with status {}: {}", output.status, stderr);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let (entries, total_matched, capped) = parse_ndjson_log_entries(&stdout, result_cap);
+    let (entries, total_matched, capped) = parse_unified_log_output(&output, result_cap)?;
 
     Ok(MacosUnifiedLogResult {
         entries,
@@ -210,6 +218,15 @@ pub fn query_unified_log_impl(
     })
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn parse_unified_log_output(
+    output: &crate::process_util::BoundedCommandOutput,
+    result_cap: usize,
+) -> Result<(Vec<MacosUnifiedLogEntry>, usize, bool), crate::error::AppError> {
+    crate::process_util::ensure_complete_output(output).map_err(crate::error::AppError::Io)?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_ndjson_log_entries(&stdout, result_cap))
+}
 #[cfg(not(target_os = "macos"))]
 pub fn query_unified_log_impl(
     _preset_id: &str,
@@ -228,6 +245,31 @@ pub fn query_unified_log_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn truncated_output_is_refused_before_returning_a_complete_prefix() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let mut output = crate::process_util::BoundedCommandOutput {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"{\"timestamp\":\"2024-01-01\",\"processImagePath\":\"/bin/test\",\"messageType\":\"Info\",\"eventMessage\":\"ok\"}\n".to_vec(), stderr: Vec::new(), stdout_truncated: true, stderr_truncated: false,
+        };
+        assert!(
+            parse_unified_log_output(&output, 5000).is_err(),
+            "truncated stdout was presented as complete"
+        );
+        output.stdout_truncated = false;
+        assert!(
+            parse_unified_log_output(&output, 5000).is_ok(),
+            "complete output was refused"
+        );
+        output.stderr_truncated = true;
+        assert!(
+            parse_unified_log_output(&output, 5000).is_err(),
+            "truncated stderr was ignored"
+        );
+    }
 
     #[test]
     fn test_get_presets() {

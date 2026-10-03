@@ -123,9 +123,11 @@ fn build_entry_from_caps(caps: &regex::Captures<'_>, file_path: &str) -> Option<
         .trim_end()
         .to_string();
 
+    // The prefix is the servicing host's local clock with no offset; see
+    // `local_wall_clock_millis` for why it must not be promoted to UTC.
     let timestamp = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
-        .map(|dt| dt.and_utc().timestamp_millis());
+        .and_then(super::local_wall_clock_millis);
 
     Some(LogEntry {
         id: 0,
@@ -260,6 +262,7 @@ fn fallback_entry(id: u64, line_number: u32, line: &str, file_path: &str) -> Log
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn test_matches_dism_record() {
@@ -339,6 +342,38 @@ mod tests {
         assert_eq!(entries[3].component.as_deref(), Some("DPX"));
         assert_eq!(entries[4].component.as_deref(), Some("WCP"));
         assert_eq!(entries[4].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_timestamp_is_the_local_wall_clock_and_not_a_utc_promotion() {
+        // #657: reading the zoneless prefix as UTC left the Date/Time column
+        // (the file's own text) and every epoch consumer (Time Range, sorting,
+        // elapsed) an offset apart.
+        let lines = [
+            "2024-01-15 08:00:00, Info                  DISM   DISM Package Manager: Processing",
+        ];
+
+        let (entries, _) = parse_lines(&lines, "C:/Windows/Logs/DISM/dism.log");
+        let timestamp = entries[0].timestamp.expect("timestamp");
+
+        let rendered = chrono::Local
+            .timestamp_millis_opt(timestamp)
+            .single()
+            .expect("local instant");
+        assert_eq!(rendered.naive_local().to_string(), "2024-01-15 08:00:00");
+
+        // The zone this instant actually sits in decides whether the two
+        // readings can be told apart: a zone that happened to sit on UTC that
+        // day cannot.
+        if rendered.offset().local_minus_utc() != 0 {
+            let as_utc = chrono::NaiveDate::from_ymd_opt(2024, 1, 15)
+                .expect("date")
+                .and_hms_opt(8, 0, 0)
+                .expect("time")
+                .and_utc()
+                .timestamp_millis();
+            assert_ne!(entries[0].timestamp, Some(as_utc));
+        }
     }
 
     #[test]
