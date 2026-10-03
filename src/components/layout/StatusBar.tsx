@@ -466,7 +466,9 @@ export function StatusBar() {
           : deploymentPhase === "error"
             ? "Analysis failed"
             : deploymentPhase === "empty"
-              ? "No deployment logs found"
+              ? deploymentResult && deploymentResult.limitations.length > 0
+                ? "Scan incomplete"
+                : "No deployment logs found"
               : "Ready",
     ];
     if (deploymentResult) {

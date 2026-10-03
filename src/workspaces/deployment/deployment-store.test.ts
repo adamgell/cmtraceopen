@@ -109,6 +109,29 @@ describe("deployment analysis response boundary", () => {
     });
   });
 
+  it.each([
+    ["success", { succeeded: 0, failed: 1, deferred: 0, unknown: 0 }],
+    ["failure", { succeeded: 1, failed: 0, deferred: 0, unknown: 0 }],
+    ["deferred", { succeeded: 0, failed: 0, deferred: 0, unknown: 1 }],
+    ["unknown", { succeeded: 0, failed: 0, deferred: 1, unknown: 0 }],
+  ] as const)("rejects contradictory %s aggregates even when their sum matches", async (outcome, counts) => {
+    vi.mocked(invoke).mockResolvedValue({
+      ...result([{ ...file(), outcome }]), ...counts,
+    });
+    await useDeploymentStore.getState().analyzeFolder(result().folderPath);
+    expect(useDeploymentStore.getState()).toMatchObject({
+      phase: "error", result: null,
+      errorMessage: "Command 'analyze_deployment_folder' returned an invalid response.",
+    });
+  });
+
+  it("rejects nonzero outcomes for an empty scan", async () => {
+    vi.mocked(invoke).mockResolvedValue({ ...result(), unknown: 1 });
+    await useDeploymentStore.getState().analyzeFolder(result().folderPath);
+    expect(useDeploymentStore.getState().phase).toBe("error");
+    expect(useDeploymentStore.getState().result).toBeNull();
+  });
+
   it.each<DeploymentLogFile["format"]>([
     "psadt-cmtrace", "psadt-legacy", "msi-verbose", "psadt-wrapper",
     "burn", "patchmypc", "unknown",

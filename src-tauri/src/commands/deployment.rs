@@ -7,6 +7,7 @@
 use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::error_db::lookup::lookup_error_code;
@@ -634,21 +635,34 @@ const MAX_DEPLOYMENT_LOG_FILES: usize = 5_000;
 /// Counts all directory entries, including non-logs, across the entire walk.
 const MAX_DEPLOYMENT_SCAN_ENTRIES: usize = 50_000;
 
+/// Maximum distinct details retained, plus one notice when more are omitted.
+const MAX_DEPLOYMENT_LIMITATION_DETAILS: usize = 20;
+
 /// What the bounded walk found, and which bound stopped it.
 #[derive(Default)]
 struct DeploymentScan {
     files: Vec<String>,
     limitations: Vec<String>,
+    retained_limitations: HashSet<String>,
     entries_seen: usize,
 }
 
 impl DeploymentScan {
-    /// Records that the walk did not cover everything it could see. Deduplicated,
-    /// so a bound hit on many branches is reported once rather than per branch.
+    /// Keep a deterministic first-seen sample with bounded storage and hash
+    /// membership checks. Do not retain omitted paths in the deduplication set.
     fn record_limitation(&mut self, detail: String) {
-        if !self.limitations.contains(&detail) {
-            self.limitations.push(detail);
+        if self.retained_limitations.contains(&detail) {
+            return;
         }
+        if self.retained_limitations.len() >= MAX_DEPLOYMENT_LIMITATION_DETAILS {
+            if self.limitations.len() == MAX_DEPLOYMENT_LIMITATION_DETAILS {
+                self.limitations
+                    .push("Additional scan limitations were omitted.".to_string());
+            }
+            return;
+        }
+        self.retained_limitations.insert(detail.clone());
+        self.limitations.push(detail);
     }
 
     fn push_log(&mut self, path: &Path) {
@@ -1164,6 +1178,85 @@ mod collect_log_files_tests {
         let mut scan = DeploymentScan::default();
         collect_log_files(root, &mut scan, 0);
         scan
+    }
+
+    #[test]
+    fn limitation_details_are_bounded_and_keep_first_seen_order() {
+        let mut found = DeploymentScan::default();
+        // Exercise more unique path warnings than can be shown, without a large
+        // filesystem fixture or a timing-dependent performance assertion.
+        for index in 0..1_000 {
+            let detail = format!("Path could not be inspected: path-{index}");
+            found.record_limitation(detail.clone());
+            found.record_limitation(detail);
+        }
+        assert_eq!(found.limitations.len(), 21);
+        assert_eq!(found.retained_limitations.len(), 20);
+        for index in 0..20 {
+            assert_eq!(
+                found.limitations[index],
+                format!("Path could not be inspected: path-{index}")
+            );
+        }
+        assert_eq!(
+            found.limitations[20],
+            "Additional scan limitations were omitted."
+        );
+    }
+
+    #[test]
+    fn repeated_limitations_do_not_consume_the_detail_budget() {
+        let mut found = DeploymentScan::default();
+        for _ in 0..1_000 {
+            found.record_limitation("Directory depth budget of 32 was exhausted.".to_string());
+        }
+        assert_eq!(
+            found.limitations,
+            ["Directory depth budget of 32 was exhausted."]
+        );
+    }
+
+    #[test]
+    fn exactly_filling_the_detail_budget_does_not_claim_omission() {
+        let mut found = DeploymentScan::default();
+        for index in 0..20 {
+            found.record_limitation(format!("Path could not be inspected: path-{index}"));
+        }
+        for _ in 0..100 {
+            found.record_limitation("Path could not be inspected: path-19".to_string());
+        }
+        assert_eq!(found.limitations.len(), 20);
+        assert!(found
+            .limitations
+            .iter()
+            .all(|detail| !detail.contains("omitted")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn many_directory_links_keep_a_bounded_deterministic_sample_and_continue_scanning() {
+        let dir = tempfile::tempdir().unwrap();
+        // A small number above the presentation cap is sufficient; no 50K tree.
+        for index in 0..25 {
+            std::os::unix::fs::symlink(dir.path(), dir.path().join(format!("link-{index:02}")))
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("visible.log"), b"").unwrap();
+        let first = scan(dir.path());
+        let second = scan(dir.path());
+        assert_eq!(first.files, second.files);
+        assert_eq!(
+            first.files,
+            [dir.path().join("visible.log").to_string_lossy()]
+        );
+        assert_eq!(first.limitations, second.limitations);
+        assert_eq!(first.limitations.len(), 21);
+        assert!(first.limitations[0].ends_with("link-00"));
+        assert!(first.limitations[19].ends_with("link-19"));
+        assert_eq!(
+            first.limitations[20],
+            "Additional scan limitations were omitted."
+        );
     }
 
     #[test]

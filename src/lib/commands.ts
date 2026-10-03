@@ -564,7 +564,15 @@ function decodeDeploymentAnalysisResult(
     unknown: isNonNegativeCommandCount,
     limitations: isStringArray,
   });
-  if (result.totalFiles !== result.files.length) {
+  const outcomes = { success: 0, failure: 0, deferred: 0, unknown: 0 };
+  for (const file of result.files) outcomes[file.outcome] += 1;
+  if (
+    result.totalFiles !== result.files.length ||
+    result.succeeded !== outcomes.success ||
+    result.failed !== outcomes.failure ||
+    result.deferred !== outcomes.deferred ||
+    result.unknown !== outcomes.unknown
+  ) {
     return invalidCommandResponse(commandName);
   }
   return result;

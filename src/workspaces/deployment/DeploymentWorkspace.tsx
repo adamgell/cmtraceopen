@@ -30,7 +30,7 @@ function ScanLimitations({ limitations }: { limitations: string[] }) {
         Scan incomplete
       </div>
       <div style={{ fontSize: "12px", color: tokens.colorNeutralForeground2 }}>
-        These counts cover the logs that were read, not every log in the folder.
+        These counts cover logs discovered in the scanned paths, not every log in the folder.
       </div>
       <ul
         style={{

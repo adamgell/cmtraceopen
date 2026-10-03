@@ -170,8 +170,11 @@ describe("DeploymentWorkspace fixtures", () => {
     });
     render(<DeploymentWorkspace />);
 
-    // The counts are the logs that were read, not the folder's contents, and the
-    // workspace has to say so.
+    // The existing fixture includes an unknown result; discovery does not
+    // establish that every file was successfully read.
+    expect(screen.getByText(
+      "These counts cover logs discovered in the scanned paths, not every log in the folder.",
+    )).toBeInTheDocument();
     expect(screen.getByText("Scan incomplete")).toBeInTheDocument();
     expect(
       screen.getByText("Directory depth budget of 32 was exhausted."),
