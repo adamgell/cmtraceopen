@@ -1,0 +1,10 @@
+Retrieving online resync flag from database...~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:10:13.036+240><thread=8460 (0x210C)>
+Total online clients: 2 (TCP: 1 HTTP: 1)~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:10:13.036+240><thread=8460 (0x210C)>
+Online/Offline normal clients since last successful report: 0~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:10:13.036+240><thread=8460 (0x210C)>
+Retrieving online resync flag from database...~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:13.036+240><thread=8460 (0x210C)>
+Need resync!~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:13.036+240><thread=8460 (0x210C)>
+Total online clients: 2 (TCP: 1 HTTP: 1)~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:13.036+240><thread=8460 (0x210C)>
+Generated BGB online status FULL report <siteInstallRoot>\inboxes\bgb.box\Bgb00001.BOS (version: 15) at 09/19/2026 00:11:13~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:13.036+240><thread=8460 (0x210C)>
+Receiving message from queue timeout.~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:21.645+240><thread=8492 (0x212C)>
+Retrieving push tasks from database...~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:11:21.645+240><thread=8492 (0x212C)>
+Retrieving online resync flag from database...~~  $$<SMS_NOTIFICATION_SERVER><09-19-2026 00:12:13.051+240><thread=8460 (0x210C)>

@@ -169,9 +169,10 @@ See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a deta
 GUI, which is what makes it useful on a machine where you would rather not launch
 the app — pulling a channel from a customer's host, or scripting an export.
 
-It is attached to every release, named for the version and target it was built for
-(for example `event-log-export-1.6.0-x86_64-pc-windows-msvc.exe`), and it is built
-from source by CI on every change.
+The release workflow builds separate Windows x64, macOS arm64 and Linux x64
+assets, named for their version and target (for example
+`event-log-export-1.6.0-x86_64-pc-windows-msvc.exe`). CI also builds and smoke-tests
+the exporter with the same feature selection.
 
 ```
 usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>]
@@ -184,7 +185,7 @@ usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>]
 # Print one channel as CSV
 event-log-export --source System.evtx --channel System --format csv --output -
 
-# Every level below Warning, as JSON, to a file
+# Critical and Error events, as JSON, to a file
 event-log-export --source Application.evtx --level Critical --level Error \
   --format json --output application-errors.json
 
@@ -202,11 +203,18 @@ Build it from a checkout with:
 
 ```bash
 cd src-tauri
-cargo build --release --features event-log --bin event-log-export
+cargo build --locked --release --no-default-features --features event-log --bin event-log-export
 ```
 
-The exporter is compiled behind the `event-log` feature, so the default build of
-the app does not include it.
+The `event-log` feature is required and is already included by the default
+`full` feature. The command above selects only `event-log`; the binary is written
+to `src-tauri/target/release/` (`event-log-export.exe` on Windows).
+
+The exporter shares the app's Rust library, so source builds still need the
+[platform prerequisites](CONTRIBUTING.md#prerequisites), including GTK/WebKit development
+libraries on Linux. This direct Cargo build does not require Node.js or built
+frontend assets. It runs without opening a window but retains native library
+dependencies; Linux hosts need the GTK/WebKit runtime libraries.
 
 ## Supported Log Formats
 
@@ -232,6 +240,10 @@ Visit the [CMTrace Open Wiki](https://github.com/adamgell/CMTraceOpen/wiki) for 
 ## Contributing
 
 CMTrace Open welcomes contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build commands, architecture overview, and coding guidelines.
+
+## Questions and Feedback
+
+Questions, feedback, feature ideas, and general discussion all belong in GitHub Issues. [Open a feedback or question issue](https://github.com/adamgell/cmtraceopen/issues/new?template=feedback.yml).
 
 ## Disclaimer
 

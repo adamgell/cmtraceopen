@@ -569,6 +569,7 @@ describe("SCCM product-path IPC boundary", () => {
     const discovery = {
       supported: true,
       configmgrVersion: null,
+      siteVersion: "5.00.9141.1000",
       roles: [],
       sources: [],
       issues: [],
@@ -606,6 +607,28 @@ describe("SCCM product-path IPC boundary", () => {
     expect(invoke).toHaveBeenNthCalledWith(3, "reveal_in_file_manager", {
       path: capture.bundleRoot,
     });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["non-string", 9141],
+  ])("rejects a %s discovery siteVersion", async (_label, siteVersion) => {
+    const discovery: Record<string, unknown> = {
+      supported: true,
+      configmgrVersion: null,
+      roles: [],
+      sources: [],
+      issues: [],
+      advancedSources: [],
+    };
+    if (siteVersion !== undefined) {
+      discovery.siteVersion = siteVersion;
+    }
+    vi.mocked(invoke).mockResolvedValueOnce(discovery);
+
+    await expect(discoverSccmEnvironment()).rejects.toThrow(
+      "Command 'discover_sccm_environment' returned an invalid response.",
+    );
   });
 
   it("keeps advanced authorization closed and capability-only after authorize", async () => {
