@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -54,7 +55,6 @@ def clean_review_gate_states() -> dict[str, str]:
     return {
         "ci": "passed",
         "coderabbit": "passed",
-        "charter_review": "passed",
         "contract_conformance": "passed",
     }
 
@@ -69,6 +69,73 @@ def clean_integration_gate_states(
         "review": "passed",
         "native_lab": native_lab,
         "mergeability": "mergeable",
+    }
+
+
+def blocked_payloads() -> dict[str, dict[str, object]]:
+    """One valid blocked payload per role, each with exactly its contract keys."""
+    blockers = ["approved contract absent"]
+    return {
+        "coder": {
+            "role": "coder",
+            "phase": "blocked",
+            "summary": "Missing contract",
+            "implementation_proposals": [],
+            "proposed_red_checks": [],
+            "proposed_green_checks": [],
+            "proposed_verification_checks": [],
+            "blockers": blockers,
+        },
+        "ui-design": {
+            "role": "ui-design",
+            "phase": "blocked",
+            "summary": "Missing contract",
+            "edit_proposals": [],
+            "proposed_browser_checks": [],
+            "blockers": blockers,
+        },
+        "tech-writer": {
+            "role": "tech-writer",
+            "phase": "blocked",
+            "summary": "Missing contract",
+            "edit_proposals": [],
+            "evidence_sources": [],
+            "proposed_documentation_checks": [],
+            "blockers": blockers,
+        },
+        "reducer-adversary": {
+            "role": "reducer-adversary",
+            "phase": "blocked",
+            "adversarial_contracts": [],
+            "fixture_proposals": [],
+            "failure_scenarios": [],
+            "blockers": blockers,
+        },
+        "code-review": {
+            "role": "code-review",
+            "phase": "blocked",
+            "head_sha": "a" * 40,
+            "base_sha": "b" * 40,
+            "findings": [],
+            "gate_states": {},
+            "coverage": [],
+            "blockers": blockers,
+        },
+        "reducer-contract": {
+            "role": "reducer-contract",
+            "phase": "blocked",
+            "decisions": [],
+            "evidence": [],
+            "tests": [],
+            "blockers": blockers,
+        },
+        "reducer-integration": {
+            "role": "reducer-integration",
+            "phase": "blocked",
+            "heads": {},
+            "gate_states": {},
+            "blockers": blockers,
+        },
     }
 
 
@@ -298,11 +365,12 @@ class AgentOutputValidationTests(unittest.TestCase):
         validator.validate_output("code-review", report)
 
         missing = clean_review_gate_states()
-        missing.pop("charter_review")
+        missing.pop("contract_conformance")
         invalid_gate_states = (
             {"CI": "failed"},
             missing,
             {**clean_review_gate_states(), "focused": "passed"},
+            {**clean_review_gate_states(), "charter_review": "passed"},
             {**clean_review_gate_states(), "ci": "failed"},
         )
         for gate_states in invalid_gate_states:
@@ -464,25 +532,146 @@ class AgentOutputValidationTests(unittest.TestCase):
 
     def test_future_role_does_not_fall_through_to_integration(self) -> None:
         role = "future-role"
-        validator.ROLES.add(role)
-        validator.TEXT_LIST_KEYS[role] = ("blockers",)
-        try:
-            with self.assertRaisesRegex(
-                ValueError,
-                f"no validation contract for role: {role}",
-            ):
-                validator.validate_output(
-                    role,
-                    {
-                        "role": role,
-                        "phase": "future-report",
-                        "blockers": [],
-                    },
-                )
-        finally:
-            validator.TEXT_LIST_KEYS.pop(role)
-            validator.ROLES.remove(role)
+        with tempfile.TemporaryDirectory() as agents_dir:
+            Path(agents_dir, f"{role}.md").write_text(
+                "---\n"
+                f"name: {role}\n"
+                "output:\n"
+                "  type: object\n"
+                "  additionalProperties: false\n"
+                "  required: [role, phase, blockers]\n"
+                "  properties:\n"
+                "    role: { type: string, const: future-role }\n"
+                "    phase: { type: string }\n"
+                "    blockers: { type: array }\n"
+                "---\n",
+                encoding="utf-8",
+            )
+            original_agents_dir = validator.AGENTS_DIR
+            validator.AGENTS_DIR = Path(agents_dir)
+            validator.ROLES.add(role)
+            validator.TEXT_LIST_KEYS[role] = ("blockers",)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"no validation contract for role: {role}",
+                ):
+                    validator.validate_output(
+                        role,
+                        {
+                            "role": role,
+                            "phase": "future-report",
+                            "blockers": [],
+                        },
+                    )
+            finally:
+                validator.TEXT_LIST_KEYS.pop(role)
+                validator.ROLES.remove(role)
+                validator.AGENTS_DIR = original_agents_dir
 
+    def test_output_keys_must_match_the_role_contract(self) -> None:
+        for role, payload in blocked_payloads().items():
+            with self.subTest(role=role, case="exact"):
+                validator.validate_output(role, payload)
+            with self.subTest(role=role, case="unexpected"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"output keys must match its contract \(missing: \[\], "
+                    r"unexpected: \['commands_run'\]\)",
+                ):
+                    validator.validate_output(
+                        role,
+                        {**payload, "commands_run": ["cargo test"]},
+                    )
+            for key in payload:
+                if key == "role":
+                    continue
+                with self.subTest(role=role, case=f"missing {key}"):
+                    missing = {k: v for k, v in payload.items() if k != key}
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"output keys must match its contract \(missing: \['{key}'\]",
+                    ):
+                        validator.validate_output(role, missing)
+
+    def test_every_role_has_a_readable_output_contract(self) -> None:
+        for role in sorted(validator.ROLES):
+            with self.subTest(role=role):
+                keys = validator.output_contract_keys(role)
+                self.assertIn("role", keys)
+                self.assertIn("phase", keys)
+                self.assertIn("blockers", keys)
+
+    def _write_contract(
+        self, agents_dir: str, role: str, required: str, properties: str
+    ) -> None:
+        Path(agents_dir, f"{role}.md").write_text(
+            "---\n"
+            f"name: {role}\n"
+            "output:\n"
+            "  type: object\n"
+            "  additionalProperties: false\n"
+            f"  required: [{required}]\n"
+            "  properties:\n"
+            f"{properties}"
+            "---\n",
+            encoding="utf-8",
+        )
+
+    def test_optional_property_is_accepted_present_or_absent(self) -> None:
+        role = "optional-role"
+        with tempfile.TemporaryDirectory() as agents_dir:
+            self._write_contract(
+                agents_dir,
+                role,
+                "role, phase, blockers",
+                "    role: { type: string, const: optional-role }\n"
+                "    phase: { type: string }\n"
+                "    blockers: { type: array }\n"
+                "    note: { type: string }\n",
+            )
+            original_agents_dir = validator.AGENTS_DIR
+            validator.AGENTS_DIR = Path(agents_dir)
+            try:
+                self.assertEqual(
+                    validator.output_contract_keys(role),
+                    frozenset({"role", "phase", "blockers", "note"}),
+                )
+                payload = {"role": role, "phase": "p", "blockers": []}
+                validator._validate_contract_keys(role, payload)
+                validator._validate_contract_keys(role, {**payload, "note": "x"})
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"output keys must match its contract \(missing: \[\], "
+                    r"unexpected: \['extra'\]\)",
+                ):
+                    validator._validate_contract_keys(
+                        role, {**payload, "extra": "y"}
+                    )
+            finally:
+                validator.AGENTS_DIR = original_agents_dir
+
+    def test_required_not_subset_of_properties_fails_loudly(self) -> None:
+        role = "broken-role"
+        with tempfile.TemporaryDirectory() as agents_dir:
+            self._write_contract(
+                agents_dir,
+                role,
+                "role, phase, blockers, missing_property",
+                "    role: { type: string, const: broken-role }\n"
+                "    phase: { type: string }\n"
+                "    blockers: { type: array }\n",
+            )
+            original_agents_dir = validator.AGENTS_DIR
+            validator.AGENTS_DIR = Path(agents_dir)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"required keys are not a subset of properties",
+                ):
+                    validator.output_contract_keys(role)
+            finally:
+                validator.AGENTS_DIR = original_agents_dir
 
     def test_accepts_explicit_blocked_payload_and_rejects_mixed_blocked_payload(self) -> None:
         blocked = {
