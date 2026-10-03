@@ -1,0 +1,22 @@
+{
+  "fixtureId": "push-task-delivered",
+  "evidence": "One operator-initiated machine policy notification: the server sends push task 13 to one client, the client BgbAgent receives it with the same PushID, TaskID and TaskGUID, and the task status report closes it with 0 failed clients.",
+  "files": [
+    {
+      "name": "BgbServer.log",
+      "side": "server",
+      "rotation": "current",
+      "lines": 5,
+      "framedRecords": 5,
+      "unframedLines": []
+    },
+    {
+      "name": "CcmNotificationAgent.log",
+      "side": "client",
+      "rotation": "current",
+      "lines": 1,
+      "framedRecords": 1,
+      "unframedLines": []
+    }
+  ]
+}
