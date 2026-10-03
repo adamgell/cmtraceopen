@@ -1,0 +1,61 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "event-only-partial-bundle",
+  "workload": "device/windows/updates",
+  "description": "Only update-client events were collected. The update chain is conclusive; the policy chain is unknown rather than absent.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-setting-reports",
+      "family": "mdmDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "payloadKind": null,
+      "captureState": "accessDenied",
+      "encoding": null,
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "policy-registry",
+      "family": "registry",
+      "sourceKind": "registry",
+      "payloadKind": null,
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 4797,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

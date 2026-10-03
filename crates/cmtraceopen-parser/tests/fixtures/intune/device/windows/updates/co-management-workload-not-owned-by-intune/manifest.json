@@ -1,0 +1,61 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "co-management-workload-not-owned-by-intune",
+  "workload": "device/windows/updates",
+  "description": "The device is Intune-enrolled but Configuration Manager owns the update workload. Delivered Intune update policy is inert.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-facts",
+      "family": "suppliedFact",
+      "sourceKind": "suppliedFact",
+      "payloadKind": "deviceFacts",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device.json",
+      "sanitizedSourcePath": "SYNTHETIC://suppliedFact/device.json",
+      "relativePath": "evidence/device-facts/current/device.json",
+      "bytesCopied": 933,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-setting-reports",
+      "family": "mdmDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "payloadKind": "settingReports",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "reports.json",
+      "sanitizedSourcePath": "SYNTHETIC://mdmDiagnostics/reports.json",
+      "relativePath": "evidence/mdm-setting-reports/current/reports.json",
+      "bytesCopied": 1166,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 1570,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

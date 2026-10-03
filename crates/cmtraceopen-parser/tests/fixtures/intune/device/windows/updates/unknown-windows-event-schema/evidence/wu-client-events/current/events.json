@@ -1,0 +1,130 @@
+{"_comment": "SYNTHETIC FIXTURE: unmapped ids and an unmodeled provider",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-27",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 201,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 27,
+            "recordId": 201
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 27,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 201,
+      "activityId": null,
+      "namedData": [],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-9999",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 202,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 9999,
+            "recordId": 202
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 9999,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 202,
+      "activityId": null,
+      "namedData": [],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "other-12",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 203,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-Some-Future-Provider/Operational",
+            "provider": "Microsoft-Windows-Some-Future-Provider",
+            "eventId": 12,
+            "recordId": 203
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-Some-Future-Provider/Operational",
+      "provider": "Microsoft-Windows-Some-Future-Provider",
+      "eventId": 12,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 203,
+      "activityId": null,
+      "namedData": [],
+      "message": null
+    }
+  ]
+}

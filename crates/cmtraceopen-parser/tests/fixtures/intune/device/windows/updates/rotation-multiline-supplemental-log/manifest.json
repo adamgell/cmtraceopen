@@ -1,0 +1,116 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "rotation-multiline-supplemental-log",
+  "workload": "device/windows/updates",
+  "description": "Supplemental evidence arrives across a rotation boundary and includes a wrapped multi-line record. Every corroborating line keeps its own citation.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-facts",
+      "family": "suppliedFact",
+      "sourceKind": "suppliedFact",
+      "payloadKind": "deviceFacts",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device.json",
+      "sanitizedSourcePath": "SYNTHETIC://suppliedFact/device.json",
+      "relativePath": "evidence/device-facts/current/device.json",
+      "bytesCopied": 928,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 3388,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "reporting-events-current",
+      "family": "windowsUpdateAgent",
+      "sourceKind": "plainTextLog",
+      "payloadKind": "supplementalLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "ReportingEvents.log",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateAgent/ReportingEvents.log",
+      "relativePath": "evidence/reporting-events/current/ReportingEvents.log",
+      "bytesCopied": 264,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "supplementalKind": "reportingEvents"
+    },
+    {
+      "artifactId": "reporting-events-archive",
+      "family": "windowsUpdateAgent",
+      "sourceKind": "plainTextLog",
+      "payloadKind": "supplementalLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "ReportingEvents.log",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateAgent/ReportingEvents.log",
+      "relativePath": "evidence/reporting-events/archive-1/ReportingEvents.log",
+      "bytesCopied": 278,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "archive-1",
+        "fragmentComplete": false
+      },
+      "supplementalKind": "reportingEvents"
+    },
+    {
+      "artifactId": "cbs-log",
+      "family": "servicing",
+      "sourceKind": "plainTextLog",
+      "payloadKind": "supplementalLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CBS.log",
+      "sanitizedSourcePath": "SYNTHETIC://servicing/CBS.log",
+      "relativePath": "evidence/cbs-log/current/CBS.log",
+      "bytesCopied": 202,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "supplementalKind": "cbs"
+    },
+    {
+      "artifactId": "windows-update-log",
+      "family": "windowsUpdateAgent",
+      "sourceKind": "plainTextLog",
+      "payloadKind": "supplementalLog",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "WindowsUpdate.log",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateAgent/WindowsUpdate.log",
+      "relativePath": "evidence/windows-update-log/current/WindowsUpdate.log",
+      "bytesCopied": 155,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "supplementalKind": "windowsUpdateLog"
+    }
+  ]
+}
