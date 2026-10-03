@@ -106,6 +106,13 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # Default full-feature checks/tests already cover the exporter. Also build
+      # and exercise the actual CLI with the release feature selection. The
+      # process-level tests cover exports and errors without relying on --help.
+      - name: Build and smoke the headless event-log exporter
+        working-directory: src-tauri
+        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
+
       - name: Rust check (lite)
         working-directory: src-tauri
         run: cargo check --no-default-features
@@ -216,7 +223,7 @@ jobs:
           TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts
 
       - name: CI bundle output contract tests
-        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs
+        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs scripts/event-log-export-workflow.test.mjs
 
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
