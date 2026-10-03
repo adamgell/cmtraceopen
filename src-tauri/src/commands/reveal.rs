@@ -15,6 +15,9 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
         // On Windows, use explorer /select to highlight the file
         if path.is_file() {
             let path_str = path.to_string_lossy();
+            // Deliberately unbounded: this hands a folder to Explorer and
+            // returns. There is no child to wait on, and a deadline would only
+            // risk killing a window the user is using.
             std::process::Command::new("explorer")
                 .arg(format!("/select,{}", path_str))
                 .spawn()
