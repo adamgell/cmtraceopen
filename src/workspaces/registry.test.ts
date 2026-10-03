@@ -229,7 +229,7 @@ describe("workspace definition contract", () => {
     expect(hasSidebar(espDefinition)).toBe(false);
   });
 
-  it("supports generic live-acquisition metadata and lazy chrome slots", () => {
+  it("supports lazy toolbar, status, and dock slots", () => {
     expect(espDefinition.toolbarAction).toBe(TestWorkspace);
     expect(espDefinition.statusBarContent).toBe(TestWorkspace);
     expect(espDefinition.dock).toBe(TestWorkspace);
