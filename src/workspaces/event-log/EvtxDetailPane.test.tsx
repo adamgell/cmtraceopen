@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 const { EvtxDetailPane } = await import("./EvtxDetailPane");
 const { useEvtxStore } = await import("./evtx-store");
 const { useMarkerStore } = await import("../../stores/marker-store");
+const { useUiStore } = await import("../../stores/ui-store");
 
 const RECORD: EvtxRecord = {
   id: 1,
@@ -85,6 +86,7 @@ describe("EvtxDetailPane error codes", () => {
 
   beforeEach(() => {
     invoke.mockReset();
+    useUiStore.setState({ logDetailsFontSize: 14 });
     useEvtxStore.getState().reset();
     useEvtxStore.setState({
       records: [{ ...RECORD, message: "Update failed with 0x80070005" }],
@@ -117,6 +119,19 @@ describe("EvtxDetailPane error codes", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Access is denied\./)).toBeInTheDocument();
     expect(screen.getByText(/Win32/)).toBeInTheDocument();
+  });
+
+  it("uses pixel line height for the error code list", async () => {
+    invoke.mockImplementation((command: string) =>
+      command === "resolve_error_codes_in_text"
+        ? Promise.resolve([mention({})])
+        : Promise.resolve(null),
+    );
+
+    render(<EvtxDetailPane />);
+
+    await screen.findByText("Error codes in this event");
+    expect(screen.getByRole("list")).toHaveStyle({ lineHeight: "22px" });
   });
 
   it("shows Win32 and HRESULT forms separately while deduplicating repeated literals", async () => {

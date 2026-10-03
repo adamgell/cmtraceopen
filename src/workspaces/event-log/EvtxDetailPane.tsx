@@ -238,7 +238,7 @@ export function EvtxDetailPane() {
               margin: 0,
               paddingLeft: "18px",
               fontSize: `${monoFontSize}px`,
-              lineHeight: detailLineHeight,
+              lineHeight: `${detailLineHeight}px`,
             }}
           >
             {errorCodes.map((mention) => (
