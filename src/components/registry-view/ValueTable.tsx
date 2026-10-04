@@ -7,10 +7,15 @@ export function ValueTable() {
   const registryData = useRegistryStore((s) => s.registryData);
   const selectedKeyPath = useRegistryStore((s) => s.selectedKeyPath);
 
-  const selectedKey = useMemo(() => {
-    if (!registryData || !selectedKeyPath) return null;
-    return registryData.keys.find((k) => k.path === selectedKeyPath) ?? null;
+  const selectedKeys = useMemo(() => {
+    if (!registryData || !selectedKeyPath) return [];
+    const identity = selectedKeyPath.toLowerCase();
+    // The tree merges case-equivalent paths, but the parser retains each source
+    // section. Keep every section's values, including repeated value names.
+    return registryData.keys.filter((key) => key.path.toLowerCase() === identity);
   }, [registryData, selectedKeyPath]);
+
+  const values = useMemo(() => selectedKeys.flatMap((key) => key.values), [selectedKeys]);
 
   if (!selectedKeyPath) {
     return (
@@ -29,7 +34,7 @@ export function ValueTable() {
     );
   }
 
-  if (!selectedKey || selectedKey.values.length === 0) {
+  if (values.length === 0) {
     return (
       <div style={{ padding: "12px", fontSize: "12px" }}>
         <div
@@ -44,7 +49,7 @@ export function ValueTable() {
           {selectedKeyPath}
         </div>
         <div style={{ color: tokens.colorNeutralForeground3 }}>
-          {selectedKey?.isDelete
+          {selectedKeys.some((key) => key.isDelete)
             ? "This key is marked for deletion."
             : "This key has no values."}
         </div>
@@ -86,7 +91,7 @@ export function ValueTable() {
       </div>
 
       {/* Value rows */}
-      {selectedKey.values.map((value, idx) => (
+      {values.map((value, idx) => (
         <div
           key={`${value.name}-${idx}`}
           style={{
