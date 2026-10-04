@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
 import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
@@ -26,7 +25,11 @@ export async function openSessionDialog(): Promise<string | null> {
 export async function restoreSession(sessionPath: string): Promise<string | null> {
   let content: string;
   try {
-    content = await readTextFile(sessionPath);
+    // This function also supports callers without a fresh picker grant. The
+    // current menu uses openSessionDialog; persisted recent-session paths do
+    // not yet have a UI consumer. Rust bounds the file read and rejects linked
+    // session entries; JSON parsing and session-shape validation remain here.
+    content = await invoke<string>("read_session_file", { path: sessionPath });
   } catch (error) {
     console.error("[session] failed to read session file", { sessionPath, error });
     return null;

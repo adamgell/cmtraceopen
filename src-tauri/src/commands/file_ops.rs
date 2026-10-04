@@ -850,6 +850,235 @@ pub struct FileHashResult {
     pub size_bytes: u64,
 }
 
+/// The extension the session save dialog writes (`session-save.ts`).
+const SESSION_EXTENSION: &str = "cmtrace";
+
+/// A session holds tab metadata and filter state, not log content, so this is
+/// generous rather than tight. It exists so a mistaken or hostile path cannot
+/// pull an arbitrary large file into the frontend in one call.
+const MAX_SESSION_BYTES: u64 = 16 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "session_file_tests.rs"]
+mod session_file_tests;
+
+/// Read a saved session file.
+///
+/// This also supports restore without a fresh picker grant. The current menu
+/// opens a picker; the stored recent-session paths have no UI consumer yet.
+/// Only a final, single-link regular `.cmtrace` entry is read. Parent directory
+/// aliases remain supported. The name and link count do not prove provenance
+/// or JSON shape: the frontend still parses and validates the returned text.
+/// Windows rejects all final reparse points, including cloud placeholders;
+/// such files need an ordinary non-reparse copy before they can be restored.
+///
+/// Asynchronous so the read does not run on the main thread, which is where
+/// Tauri runs a non-async command. A `.cmtrace` that is a FIFO with no writer
+/// would otherwise block it indefinitely, and so would a slow filesystem.
+#[tauri::command]
+pub async fn read_session_file(path: String) -> Result<String, crate::error::AppError> {
+    tokio::task::spawn_blocking(move || read_session_file_blocking(&path))
+        .await
+        .map_err(|error| {
+            crate::error::AppError::InvalidInput(format!("session read task failed: {error}"))
+        })?
+}
+
+fn read_session_file_blocking(path: &str) -> Result<String, crate::error::AppError> {
+    use std::io::Read as _;
+
+    let requested = Path::new(path);
+
+    let is_session_extension = requested
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(SESSION_EXTENSION));
+    if !is_session_extension {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "not a session file: {}",
+            requested.display()
+        )));
+    }
+
+    #[cfg(windows)]
+    validate_session_windows_path(requested)?;
+
+    // Early refusal only: the name can be replaced before open. Never use this
+    // metadata as authority for the object whose contents will cross IPC.
+    let metadata = std::fs::symlink_metadata(requested).map_err(crate::error::AppError::Io)?;
+    validate_session_metadata(&metadata, requested)?;
+
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::AfterPrecheck, requested);
+    let file = open_session_file_no_follow(requested).map_err(crate::error::AppError::Io)?;
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::AfterOpen, requested);
+
+    #[cfg(windows)]
+    validate_session_windows_handle(&file)?;
+    let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
+    validate_session_metadata(&metadata, requested)?;
+
+    // Read from the validated handle, never by resolving the path again. Growth
+    // after either size check is still bounded to one byte beyond the limit.
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::BeforeRead, requested);
+    let mut text = String::new();
+    let read = std::io::Read::take(file, MAX_SESSION_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(crate::error::AppError::Io)?;
+    if read as u64 > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file grew past the {MAX_SESSION_BYTES} byte limit while it was being read: {}",
+            requested.display()
+        )));
+    }
+
+    Ok(text)
+}
+
+fn validate_session_metadata(
+    metadata: &std::fs::Metadata,
+    requested: &Path,
+) -> Result<(), crate::error::AppError> {
+    let mut linked = metadata.file_type().is_symlink();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        linked |= metadata.nlink() != 1;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        linked |= metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0;
+    }
+    if linked || !metadata.is_file() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session entry must be a regular file without links or reparse points: {}",
+            requested.display()
+        )));
+    }
+    if metadata.len() > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file is {} bytes, over the {MAX_SESSION_BYTES} byte limit: {}",
+            metadata.len(),
+            requested.display()
+        )));
+    }
+    Ok(())
+}
+
+fn open_session_file_no_follow(requested: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // NOFOLLOW protects the final entry; directory aliases are intentional.
+        // NONBLOCK prevents a substituted FIFO from waiting for a writer. It
+        // has no effect on the regular file accepted by the handle check.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(requested)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(requested)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = requested;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "session entry no-follow opening is unavailable on this platform",
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn validate_session_windows_handle(file: &std::fs::File) -> Result<(), crate::error::AppError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, GetFileType, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_TYPE_DISK,
+    };
+
+    let handle = HANDLE(file.as_raw_handle());
+    // SAFETY: file owns the handle throughout both read-only queries.
+    if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+        return Err(crate::error::AppError::InvalidInput(
+            "session entry must be a disk file".to_owned(),
+        ));
+    }
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: information is a writable initialized structure, and file is live.
+    unsafe { GetFileInformationByHandle(handle, &mut information) }
+        .map_err(|error| crate::error::AppError::Io(std::io::Error::other(error.to_string())))?;
+    if information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT).0
+        != 0
+        || information.nNumberOfLinks != 1
+    {
+        return Err(crate::error::AppError::InvalidInput(
+            "session entry must be a regular file without links or reparse points".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_session_windows_path(requested: &Path) -> Result<(), crate::error::AppError> {
+    use std::path::{Component, Prefix};
+
+    let unsafe_name = |name: &std::ffi::OsStr| {
+        let name = name.to_string_lossy();
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(' ');
+        let upper = stem.to_ascii_uppercase();
+        name.contains(':')
+            || matches!(
+                upper.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            )
+            || ["COM", "LPT"].iter().any(|prefix| {
+                upper.strip_prefix(*prefix).is_some_and(|suffix| {
+                    matches!(
+                        suffix,
+                        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                    )
+                })
+            })
+    };
+    for component in requested.components() {
+        let rejected = match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(_) | Prefix::VerbatimDisk(_) => false,
+                Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                    server.to_string_lossy().contains(':')
+                        || share.to_string_lossy().contains(':')
+                        || share.eq_ignore_ascii_case("pipe")
+                }
+                _ => true,
+            },
+            Component::Normal(name) => unsafe_name(name),
+            _ => false,
+        };
+        if rejected {
+            return Err(crate::error::AppError::InvalidInput(
+                "session path must not name an alternate stream or device".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn compute_file_hash(path: String) -> Result<FileHashResult, crate::error::AppError> {
     use sha2::{Digest, Sha256};
