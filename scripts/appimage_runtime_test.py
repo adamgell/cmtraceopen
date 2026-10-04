@@ -67,54 +67,51 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(role("table",[]),"table")
         self.assertEqual(role("table cell",[]),"table cell")
 
-    def test_exit_tracking_rejects_helpers_orphaned_before_shutdown_poll(self):
-        try:
-            from appimage_runtime import processes
-        except ImportError:
-            self.fail("launch process tracker is not implemented")
-        initial={100:(1,10,"S"),200:(100,20,"S")}
-        tracker=processes.LaunchTracker(100,initial)
-        during={**initial,300:(100,30,"S"),301:(300,31,"S")}
-        self.assertEqual(tracker.active(during),{300,301})
-        # The launcher is gone, and both an observed helper and a newly created
-        # helper have been adopted by our subreaper before the next snapshot.
-        orphaned={**initial,301:(100,31,"S"),302:(100,32,"S")}
-        self.assertEqual(tracker.active(orphaned),{301,302})
-        self.assertEqual(tracker.active(initial),set())
-
-    def test_exit_tracking_binds_pid_identity_and_excludes_existing_gui_services(self):
-        try:
-            from appimage_runtime import processes
-        except ImportError:
-            self.fail("launch process tracker is not implemented")
-        initial={100:(1,10,"S"),200:(100,20,"S")}
-        tracker=processes.LaunchTracker(100,initial)
-        during={**initial,201:(200,21,"S"),300:(100,30,"S")}
-        self.assertEqual(tracker.active(during),{300})
-        # Reusing the old PID for an unrelated process does not make it ours.
-        reused={**initial,300:(1,99,"S")}
-        self.assertEqual(tracker.active(reused),set())
-        self.assertEqual(tracker.active({**initial,301:(100,31,"Z")}),set())
-
-    def test_exit_acceptance_waits_for_adopted_helper_and_live_mount(self):
-        from appimage_runtime import processes, ui
+    def test_launch_supervisor_waits_for_kernel_no_children_after_launcher_exit(self):
+        from appimage_runtime import processes
         from unittest.mock import patch
         from types import SimpleNamespace
-        initial={100:(1,10,"S"),200:(100,20,"S")}
-        during={**initial,300:(100,30,"S"),301:(300,31,"S")}
-        orphaned={**initial,301:(100,31,"S")}
-        for current,mounts in [(orphaned,""),(initial,"53 1 0:1 / /tmp/live ro - fuse.AppImage image ro")]:
+        supervise=getattr(processes,"supervise",None)
+        self.assertTrue(callable(supervise),"kernel-backed launch supervision is not implemented")
+        child=SimpleNamespace(pid=300,returncode=None)
+        # Helpers can be adopted/forked after launcher exit. Only ECHILD,
+        # not a /proc observation or launcher exit, proves the family is gone.
+        with patch.object(processes,"become_subreaper"), patch.object(processes.subprocess,"Popen",return_value=child), patch.object(processes.os,"waitpid",side_effect=[(300,0),(301,0),(302,0),ChildProcessError]) as wait:
+            self.assertEqual(supervise(["owned-candidate"]),0)
+            self.assertEqual(wait.call_count,4)
+            self.assertTrue(all(call.args == (-1,0) for call in wait.call_args_list))
+
+    def test_launch_supervisor_requires_launcher_success(self):
+        from appimage_runtime import processes
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        supervise=getattr(processes,"supervise",None)
+        self.assertTrue(callable(supervise),"kernel-backed launch supervision is not implemented")
+        for events in [[(300,256),ChildProcessError],[ChildProcessError]]:
+            with patch.object(processes,"become_subreaper"), patch.object(processes.subprocess,"Popen",return_value=SimpleNamespace(pid=300,returncode=None)), patch.object(processes.os,"waitpid",side_effect=events):
+                self.assertEqual(supervise(["owned-candidate"]),1)
+
+    def test_exit_acceptance_requires_supervisor_completion_and_mount_disappearance(self):
+        from appimage_runtime import ui
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        for returncode,mounts in [(None,""),(0,"53 1 0:1 / /tmp/live ro - fuse.AppImage image ro")]:
             controller=ui.Controller(Path("/tmp/owned"),"ordinary",None)
-            controller.app=SimpleNamespace(pid=300,returncode=0,poll=lambda:0)
+            controller.app=SimpleNamespace(pid=300,returncode=returncode,poll=lambda:returncode)
             controller.window="42"
             controller.proofs=[dict(mount_id=53)]
-            controller.pids={300}  # Keeps the regression meaningful against the old implementation.
-            controller.tracker=processes.LaunchTracker(100,initial)
             def must_wait(predicate,*args,**kwargs):
-                self.assertFalse(predicate(),"exit accepted with a live helper or FUSE mount")
+                self.assertFalse(predicate(),"exit accepted before family completion or FUSE unmount")
                 raise ValueError("ui-assertion")
-            with patch.object(ui,"command"), patch.object(ui,"key"), patch.object(ui,"poll",side_effect=must_wait), patch.object(ui,"status",side_effect=FileNotFoundError), patch.object(ui,"process_table",return_value={pid:row[0] for pid,row in current.items()}), patch.object(processes,"snapshot",side_effect=[during,current]), patch.object(Path,"read_text",return_value=mounts):
+            with patch.object(ui,"command"), patch.object(ui,"key"), patch.object(ui,"poll",side_effect=must_wait), patch.object(Path,"read_text",return_value=mounts):
                 with self.assertRaises(ValueError): controller.exit_app()
+
+    def test_cleanup_does_not_trust_an_empty_proc_sample_while_children_exist(self):
+        from appimage_runtime import host
+        from unittest.mock import patch
+        with patch.object(Path,"iterdir",return_value=[]), patch.object(host.time,"sleep"), patch.object(host.os,"waitpid",side_effect=[(0,0),ChildProcessError]) as wait:
+            host.kill_owned(1234)
+            self.assertEqual(wait.call_count,2)
 
     def test_collection_rejects_missing_preflight_and_pass_without_screenshots(self):
         from appimage_runtime.host import collect

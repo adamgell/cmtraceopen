@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-from . import contract
+from . import contract, processes
 from .session import blocked, namespaces, status
 
 ACCOUNT = "cmtrace-runtime-probe"
@@ -68,8 +68,18 @@ def kill_owned(uid):
                 finally:
                     if fd is not None:
                         os.close(fd)
-            if not found:
-                return
+            # An empty /proc sample is not a lifetime proof: a helper may fork
+            # and exit during enumeration. As the host subreaper, require the
+            # kernel to report ECHILD as well before deleting evidence/account.
+            while True:
+                try:
+                    reaped, _ = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    if not found:
+                        return
+                    break
+                if reaped == 0:
+                    break
             time.sleep(0.1)
     raise ValueError("harness-error")
 
@@ -173,6 +183,7 @@ def main(artifact_dir, output, harness_sha):
                 path.mkdir(mode=0o700)
                 os.chown(path, uid, gid)
         (root / "context.json").write_text(json.dumps(dict(uid=uid, gid=gid, namespaces=namespaces())))
+        processes.become_subreaper()
         process = subprocess.Popen(contract.namespace_command(uid, gid, root), cwd=root,
                                    env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

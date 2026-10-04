@@ -1,57 +1,39 @@
-"""Per-controller child adoption and stable process identities; no namespace changes."""
+"""Kernel-backed child-family supervision; no namespaces or host policy changes."""
 
 import ctypes
 import os
-from pathlib import Path
+import subprocess
 import sys
-
-from .contract import descendant_pids
 
 
 def become_subreaper():
     if sys.platform != "linux":
         raise ValueError("isolation-unavailable")
-    # PR_SET_CHILD_SUBREAPER affects this process only. Orphaned app helpers
-    # remain observable children even if they fork between shutdown snapshots.
+    # PR_SET_CHILD_SUBREAPER affects this process only. Orphaned descendants
+    # are adopted here instead of disappearing into the host's PID 1.
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "subreaper unavailable")
 
 
-def snapshot():
-    result = {}
-    for path in Path("/proc").iterdir():
-        if path.name.isdecimal():
-            try:
-                fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
-                # /proc/PID/stat fields 4, 22 and 3: parent, start time, state.
-                result[int(path.name)] = (int(fields[1]), int(fields[19]), fields[0])
-            except (OSError, IndexError, ValueError):
-                pass
-    return result
+def supervise(command):
+    become_subreaper()
+    launcher = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    exit_code = None
+    while True:
+        try:
+            pid, status = os.waitpid(-1, 0)
+        except ChildProcessError:
+            break  # ECHILD: no child can remain alive to create a later helper.
+        if pid == launcher.pid:
+            exit_code = os.waitstatus_to_exitcode(status)
+            launcher.returncode = exit_code
+    return 0 if exit_code == 0 else 1
 
 
-class LaunchTracker:
-    def __init__(self, owner, initial):
-        self.owner = owner
-        children = descendant_pids({pid: row[0] for pid, row in initial.items()}, owner) - {owner}
-        self.baseline = {pid: initial[pid][1] for pid in children}
-        self.identities = set()
-
-    def active(self, current):
-        parents = {pid: row[0] for pid, row in current.items()}
-        excluded = {self.owner}
-        for pid, started in self.baseline.items():
-            if pid in current and current[pid][1] == started:
-                excluded.update(descendant_pids(parents, pid))
-        children = descendant_pids(parents, self.owner) - excluded
-        self.identities.update((pid, current[pid][1]) for pid in children)
-        return {pid for pid, started in self.identities if pid in current and current[pid][1] == started and current[pid][2] != "Z"}
-
-    def reap(self, current, launcher):
-        for pid, started in self.identities:
-            if pid != launcher and pid in current and current[pid] == (self.owner, started, "Z"):
-                try:
-                    os.waitpid(pid, os.WNOHANG)
-                except ChildProcessError:
-                    pass
+if __name__ == "__main__":
+    try:
+        sys.exit(supervise(sys.argv[1:]))
+    except Exception:
+        sys.exit(1)

@@ -54,7 +54,7 @@ UI acceptance uses the actual `Log entries` listbox and option rows:
 6. Fully exit normally, reopen, open the fixture using the native file chooser, and assert all four records again.
 7. Fully exit normally again.
 
-A per-controller Linux child subreaper adopts orphaned app helpers, including helpers forked between shutdown observations. Exit checks bind PIDs to process start times, exclude pre-existing GUI services, and require the launch's FUSE mount to disappear before reopening. This changes only process-local child adoption, not a namespace or host policy.
+Each launch has a dedicated Linux child subreaper whose only child family is the AppImage. It waits for kernel `waitpid` to report `ECHILD`, so late or orphaned helpers cannot escape a process-list snapshot. GUI services remain outside this family. Normal exit additionally requires launcher success and disappearance of the launch's FUSE mount. The host supervisor also adopts orphaned descendants and requires kernel confirmation of no remaining children during final cleanup. These are process-local child-adoption settings, not namespace or host-policy changes.
 
 Fresh home/config/cache/data directories isolate the two cases. Namespace, bubblewrap, FUSE, GUI or accessibility failures are **blocked**. Once accessibility is available, failed functional assertions are **failed**. Both cases must pass for the job to succeed; a blocked case never becomes an application pass.
 

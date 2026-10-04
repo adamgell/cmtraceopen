@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 
-from . import contract, processes
+from . import contract
 from .session import status
 
 TOKENS = ["JAMMY_OPEN_ALPHA", "JAMMY_FIND_BETA", "JAMMY_FILTER_GAMMA"]
@@ -66,7 +66,6 @@ class Controller:
         self.out = self.area / "out"
         self.result = dict(case=case, status="blocked", reason="harness-error", checks={}, counts=[])
         self.proofs = []
-        self.tracker = None
         self.app, self.application, self.window = None, None, None
         self.fixture = self.area / "data/runtime-fixture.log"
 
@@ -164,8 +163,8 @@ class Controller:
 
     def launch(self, with_file):
         self.application = None
-        self.tracker = processes.LaunchTracker(os.getpid(), processes.snapshot())
-        self.app = subprocess.Popen([str(self.root / "candidate.AppImage")] + ([str(self.fixture)] if with_file else []),
+        self.app = subprocess.Popen(["/usr/bin/python3", "-m", "appimage_runtime.processes",
+                                     str(self.root / "candidate.AppImage")] + ([str(self.fixture)] if with_file else []),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         pid, proof = poll(self.live_fuse, reason="fuse-unavailable", blocked=True)
         self.proofs.append(proof)
@@ -195,18 +194,13 @@ class Controller:
 
     def exit_app(self):
         command(["xdotool", "windowactivate", "--sync", self.window])
-        # Observe before close; the subreaper also adopts helpers forked and
-        # orphaned between snapshots, so a surviving helper cannot disappear.
-        self.tracker.active(processes.snapshot())
         # IceWM sends the normal WM_DELETE_WINDOW request; no kill is accepted as exit evidence.
         key("alt+F4")
         def gone():
-            self.app.poll()  # Reap the launcher through Popen to retain its exit code.
-            current = processes.snapshot()
-            active = self.tracker.active(current)
-            self.tracker.reap(current, self.app.pid)
+            # The dedicated supervisor succeeds only after waitpid reaches ECHILD.
+            self.app.poll()
             mount_ids = {int(line.split()[0]) for line in Path("/proc/self/mountinfo").read_text().splitlines()}
-            return self.app.returncode == 0 and not active and self.proofs[-1]["mount_id"] not in mount_ids
+            return self.app.returncode == 0 and self.proofs[-1]["mount_id"] not in mount_ids
         poll(gone, 20)
         self.application = None
 
@@ -270,7 +264,6 @@ def main(root, case):
         pyatspi.setTimeout(1500, 5000)
         command(["dbus-send", "--session", "--type=method_call", "--dest=org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties.Set", "string:org.a11y.Status", "string:IsEnabled", "variant:boolean:true"])
         subprocess.Popen(["icewm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        processes.become_subreaper()
         controller = Controller(root, case, pyatspi)
         controller.execute()
     except Exception as error:
