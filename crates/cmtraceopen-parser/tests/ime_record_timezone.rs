@@ -14,7 +14,14 @@ fn in_timezone(test_name: &str, zone: &str, test: impl FnOnce()) {
         return;
     }
     let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            test_name,
+            "--nocapture",
+            "--test-threads=1",
+            "--format=pretty",
+            "--color=never",
+        ])
         .env("TZ", zone)
         .env("CMTRACE_IME_TEST_ZONE", zone)
         .output()
@@ -25,6 +32,23 @@ fn in_timezone(test_name: &str, zone: &str, test: impl FnOnce()) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let expected_pass = format!("test {test_name} ... ok");
+    assert!(
+        stdout.lines().any(|line| line == expected_pass)
+            && stdout
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")),
+        "{test_name} did not run exactly one intended test in {zone}:\n{stdout}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "did not run exactly one intended test")]
+fn timezone_child_rejects_nonmatching_test_name() {
+    in_timezone("stale_ime_timezone_test_name", "UTC", || {
+        panic!("a nonexistent test cannot run");
+    });
 }
 
 fn record(date: &str, time: &str) -> String {
