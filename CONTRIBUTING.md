@@ -79,6 +79,9 @@ fail the Linux build. Signing happens before this read-only inspection.
 The workflows install hash-pinned pure-Python inspection libraries from
 `scripts/appimage-abi-requirements.txt` into an isolated environment; auditwheel
 is used only for static dependency reading, never repair or artifact execution.
+Conflicting providers in the launcher's `LD_LIBRARY_PATH` and ELF search paths
+are rejected conservatively because auditwheel's search precedence differs from
+glibc's. Symlink aliases to the same provider are accepted.
 
 The `provenance/appimage-abi.json` CI artifact records the source/build commits,
 runner image, package origins, lockfile hashes, resolved bundling-tool hashes and

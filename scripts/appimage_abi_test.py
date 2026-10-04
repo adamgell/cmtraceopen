@@ -11,9 +11,12 @@ from unittest.mock import patch
 from appimage_abi import elf_files, jammy_origins, read_elf, resolve_tree, select_artifact, squashfs_offset, validate_closure, validate_imports, validate_launchers
 
 
-def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62):
+def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62, runpath=None):
     """Owned ELF64 bytes: no compiler, executable code, or downloaded fixture."""
     strings = b"\0libc.so.6\0memcpy\0" + version.encode() + b"\0"
+    runpath_offset = len(strings)
+    if runpath is not None:
+        strings += runpath.encode() + b"\0"
     sections = [
         (".dynstr", 3, strings, 0, 0, 0),
         (".dynsym", 11, bytes(24) + struct.pack("<IBBHQQ", 11, 0x22 if weak else 0x12, 0, 0, 0, 0), 1, 1, 24),
@@ -32,7 +35,10 @@ def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62):
     for name, kind, data, link, info, entsize in sections:
         offset = len(body)
         if name == ".dynamic":
-            data = b"".join(struct.pack("<QQ", tag, value) for tag, value in [(1, 1), (4, addresses[".hash"]), (5, addresses[".dynstr"]), (10, len(strings)), (6, addresses[".dynsym"]), (11, 24), (7, addresses[".rela.dyn"]), (8, 24), (9, 24), (0x6ffffff0, addresses[".gnu.version"]), (0x6ffffffe, addresses[".gnu.version_r"]), (0x6fffffff, 1), (0, 0)])
+            tags = [(1, 1), (4, addresses[".hash"]), (5, addresses[".dynstr"]), (10, len(strings)), (6, addresses[".dynsym"]), (11, 24), (7, addresses[".rela.dyn"]), (8, 24), (9, 24), (0x6ffffff0, addresses[".gnu.version"]), (0x6ffffffe, addresses[".gnu.version_r"]), (0x6fffffff, 1)]
+            if runpath is not None:
+                tags.append((29, runpath_offset))  # DT_RUNPATH
+            data = b"".join(struct.pack("<QQ", tag, value) for tag, value in tags + [(0, 0)])
         addresses[name] = offset
         body.extend(data)
         headers.append(struct.pack("<IIQQQQIIQQ", names.index(name.encode()), kind, 0, offset, offset, len(data), link, info, 1, entsize))
@@ -209,6 +215,30 @@ class ClosureTests(unittest.TestCase):
             paths["env"].insert(0, str(bad_dir))
             with self.assertRaisesRegex(Exception, "Magic number"):
                 resolve_tree(main, paths)
+
+    def test_runpath_cannot_hide_a_conflicting_launcher_environment_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worker = root / "helpers/worker"
+            private = worker.parent / "private"
+            environment = root / "usr/lib"
+            private.mkdir(parents=True)
+            environment.mkdir(parents=True)
+            worker.write_bytes(fixture_elf(runpath="$ORIGIN/private"))
+            provider = private / "libc.so.6"
+            data = fixture_elf()
+            dynamic_offset = struct.unpack_from("<Q", data, 72)[0]
+            struct.pack_into("<Q", data, dynamic_offset, 21)  # no dependencies
+            provider.write_bytes(data)
+            paths = dict(conf=[], env=[str(environment)], interp=[])
+            self.assertEqual(resolve_tree(worker, paths)["libs"]["libc.so.6"]["realpath"], provider)
+            competing = environment / "libc.so.6"
+            competing.write_bytes(data)
+            with self.assertRaisesRegex(ValueError, "conflicting.*LD_LIBRARY_PATH"):
+                resolve_tree(worker, paths)
+            competing.unlink()
+            competing.symlink_to(provider)
+            self.assertEqual(resolve_tree(worker, paths)["libs"]["libc.so.6"]["realpath"], provider)
 
 
 class BuildContextTests(unittest.TestCase):

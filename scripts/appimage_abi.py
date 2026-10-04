@@ -88,7 +88,7 @@ def validate_closure(info, tree, read):
 
 def resolve_tree(path, ldpaths):
     # This is auditwheel's Python ELF reader, not the native `ldd` command.
-    from auditwheel.lddtree import ldd
+    from auditwheel.lddtree import find_lib, ldd
     diagnostics = io.StringIO()
     logger = logging.getLogger("auditwheel")
     handler = logging.StreamHandler(diagnostics)
@@ -104,6 +104,14 @@ def resolve_tree(path, ldpaths):
         logger.setLevel(previous_level)
     if diagnostics.getvalue():
         raise ValueError(f"incomplete dependency scan (resolver warning) for {path}: {diagnostics.getvalue().strip()}")
+    # auditwheel searches RUNPATH before LD_LIBRARY_PATH, unlike glibc.
+    # Reject conflicting selections instead of certifying a provider
+    # the launcher may not load. This also conservatively rejects
+    # RPATH conflicts; same-realpath symlink aliases remain valid.
+    for name, library in tree.libraries.items():
+        candidate, _ = find_lib(tree.platform, name, ldpaths.get("env", []))
+        if candidate is not None and (library.realpath is None or candidate.resolve() != library.realpath.resolve()):
+            raise ValueError(f"conflicting provider in LD_LIBRARY_PATH for {name}: {candidate} versus {library.realpath}")
     return dict(needed=tree.needed, libs={name: dict(realpath=library.realpath, needed=library.needed) for name, library in tree.libraries.items()})
 
 
