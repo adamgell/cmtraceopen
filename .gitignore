@@ -70,3 +70,8 @@ loginventory/
 # example scripts; a dated .cmtlog beside them is a run's output, and it
 # carries the executing account and the machine's real policy identifiers.
 *_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].cmtlog
+
+# Finder/shell duplicate copies: "name.ext copy.old", "name copy.ts", "name copy 2.ts".
+* copy.*
+* copy [0-9].*
+* copy [0-9][0-9].*

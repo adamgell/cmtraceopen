@@ -11,7 +11,7 @@ A **free, open-source web reimagining of Microsoft's CMTrace.exe** — a log vie
 
 > Drop in a log file and start reading. Errors highlight automatically.
 
-CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all live in `cmtraceopen-web/cmtraceopen/src/` — this design system mirrors them. **The codebase is the source of truth.** When this system disagrees with the codebase, the codebase wins; update the system to match.
+CMTrace Open is **engineering-led**. Tokens, themes, components, and metrics all live in this repository's `src/` — this design system mirrors them. **The codebase is the source of truth.** When this system disagrees with the codebase, the codebase wins; update the system to match.
 
 ---
 
