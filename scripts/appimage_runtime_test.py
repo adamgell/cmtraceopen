@@ -91,6 +91,14 @@ class ContractTests(unittest.TestCase):
             with patch.object(processes,"become_subreaper"), patch.object(processes.subprocess,"Popen",return_value=SimpleNamespace(pid=300,returncode=None)), patch.object(processes.os,"waitpid",side_effect=events):
                 self.assertEqual(supervise(["owned-candidate"]),1)
 
+    def test_launch_status_cannot_be_overwritten_by_a_reused_helper_pid(self):
+        from appimage_runtime import processes
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        for statuses,expected in [([(300,256),(300,0),ChildProcessError],1), ([(300,0),(300,256),ChildProcessError],0)]:
+            with patch.object(processes,"become_subreaper"), patch.object(processes.subprocess,"Popen",return_value=SimpleNamespace(pid=300,returncode=None)), patch.object(processes.os,"waitpid",side_effect=statuses):
+                self.assertEqual(processes.supervise(["owned-candidate"]),expected)
+
     def test_exit_acceptance_requires_supervisor_completion_and_mount_disappearance(self):
         from appimage_runtime import ui
         from unittest.mock import patch

@@ -26,7 +26,7 @@ def supervise(command):
             pid, status = os.waitpid(-1, 0)
         except ChildProcessError:
             break  # ECHILD: no child can remain alive to create a later helper.
-        if pid == launcher.pid:
+        if pid == launcher.pid and exit_code is None:
             exit_code = os.waitstatus_to_exitcode(status)
             launcher.returncode = exit_code
     return 0 if exit_code == 0 else 1
