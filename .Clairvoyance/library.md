@@ -9,7 +9,7 @@ If no route matches, report the missing topic to Main. Main may create the docum
 - IF starting agent-driven development in OMP → read [[.omp/skills/cmtraceopen-dev/SKILL.md]], [[soul.md]], and [[memory.md]]
 - IF assigning a staff agent → read exactly one matching charter under [[.Clairvoyance/staff/]]
 - IF checking live lane state → read the Git-common `omp/lanes.json`; refresh GitHub and exact SHAs before trusting it
-- IF full repo path/subject catalog → read [[library.md]] (repo root)
+- IF routing a task to its document (the repo-root router; it is a route list, not a catalog) → read [[library.md]]
 - IF agent conventions / no-compat / phased edits → read [[AGENTS.md]]
 - IF build commands / module map / architecture → read [[CLAUDE.md]]
 - IF product features / install / Full vs Lite → read [[README.md]]
@@ -34,7 +34,7 @@ Adam's current direct instruction is highest authority. Root `AGENTS.md` contain
 
 || Path | Subject | Description |
 ||------|---------|-------------|
-|| `library.md` (repo root) | Full catalog | Path/subject index for entire cmtraceopen tree |
+|| `library.md` (repo root) | Task routing | Maps tasks to relevant documents |
 || `CLAUDE.md` | Architecture | Frontend/backend maps, commands, testing |
 || `AGENTS.md` | Agent rules | Simplicity and growth rules |
 || `soul.md` | Agent soul | CMTrace Open specialist identity and rules |

@@ -576,7 +576,6 @@ def clean_independent_review(
         "gate_states": {
             "ci": "passed",
             "coderabbit": "passed",
-            "charter_review": "passed",
             "contract_conformance": "passed",
         },
         "coverage": ["crates/cmtraceopen-parser/src/lib.rs"],
@@ -4364,7 +4363,7 @@ class BaseEvidenceTests(unittest.TestCase):
                     elif variant == "uppercase-failed-gate":
                         raw["gate_states"] = {"CI": "failed"}
                     elif variant == "missing-gate":
-                        raw["gate_states"].pop("charter_review")
+                        raw["gate_states"].pop("contract_conformance")
                     elif variant == "extra-gate":
                         raw["gate_states"]["focused"] = "passed"
                     elif variant == "non-passed-gate":

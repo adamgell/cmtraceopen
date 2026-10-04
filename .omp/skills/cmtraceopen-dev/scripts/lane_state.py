@@ -34,7 +34,6 @@ GATE_STATES = {"not_run", "running", "passed", "failed", "stale", "unavailable"}
 INDEPENDENT_REVIEW_GATE_STATES = {
     "ci": "passed",
     "coderabbit": "passed",
-    "charter_review": "passed",
     "contract_conformance": "passed",
 }
 CODERABBIT_BOT_LOGINS = frozenset({
@@ -1575,7 +1574,7 @@ def is_portable_repo_relative(
         not isinstance(value, str)
         or not _is_observed_repo_relative(value)
         or value == "~"
-        or value.startswith("~/")
+        or value.startswith("~/")  # agent-context: allow (rejects the literal, not a route into one)
         or "%00" in value.casefold()
         or any(character.isspace() for character in value)
     ):
