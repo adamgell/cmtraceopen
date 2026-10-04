@@ -65,3 +65,8 @@ loginventory/
 # and fixture directories, which are named "logs" by contract.
 !crates/cmtraceopen-parser/src/intune/portal/macos/company_portal/logs/
 !crates/cmtraceopen-parser/tests/fixtures/intune/portal/macos/logs/
+
+# Timestamped script-run captures. The CmtLog examples directory holds the
+# example scripts; a dated .cmtlog beside them is a run's output, and it
+# carries the executing account and the machine's real policy identifiers.
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].cmtlog

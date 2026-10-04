@@ -2753,3 +2753,163 @@ mod real_database_tests {
         assert!(with_events > 0);
     }
 }
+
+/// The packaged databases and the manifest describing them must agree.
+///
+/// Nothing reads the manifest at runtime, so without this it is a claim no code
+/// checks: a re-run walker could drop a provider family, or a database could be
+/// replaced, and the app would enrich fewer providers while the manifest still
+/// advertised the coverage. #539 tracks provider-database coverage and fidelity,
+/// and this is what makes either of them measurable rather than asserted.
+#[cfg(test)]
+mod packaged_manifest_tests {
+    use super::ProviderDb;
+    use serde::Deserialize;
+    use sha2::{Digest, Sha256};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Manifest {
+        schema_version: u32,
+        status: String,
+        provider_families: Vec<String>,
+        source_windows_builds: Vec<u32>,
+        databases: Vec<ManifestDatabase>,
+        family_providers: BTreeMap<String, Vec<String>>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ManifestDatabase {
+        file: String,
+        source_windows_build: u32,
+        sha256: String,
+        provider_count: u64,
+        providers: Vec<String>,
+    }
+
+    fn packaged_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/provider-db")
+    }
+
+    /// Formatted byte-by-byte for the reason `compute_file_hash` records: sha2 0.11
+    /// returns a hybrid-array `Array`, which has no `LowerHex` implementation.
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+
+        let mut hex = String::new();
+        for byte in Sha256::digest(bytes) {
+            let _ = write!(&mut hex, "{byte:02x}");
+        }
+        hex
+    }
+
+    #[test]
+    fn every_packaged_database_matches_the_manifest_that_describes_it() {
+        let manifest_path = packaged_dir().join("provider-manifest.json");
+        let text = std::fs::read_to_string(&manifest_path)
+            .expect("the manifest ships beside the databases it describes");
+        let manifest: Manifest =
+            serde_json::from_str(&text).expect("the provider manifest is valid JSON");
+        assert_eq!(
+            manifest.schema_version, 1,
+            "unsupported manifest schema version"
+        );
+        assert!(
+            !manifest.databases.is_empty(),
+            "the manifest lists no databases"
+        );
+
+        let mut declared_names: BTreeSet<String> = BTreeSet::new();
+
+        for database in &manifest.databases {
+            let path = packaged_dir().join(&database.file);
+
+            let bytes = std::fs::read(&path).unwrap_or_else(|error| {
+                panic!("{} is declared but unreadable: {error}", database.file)
+            });
+            assert_eq!(
+                sha256_hex(&bytes),
+                database.sha256,
+                "{} does not match its recorded digest, so the manifest describes a different file",
+                database.file
+            );
+
+            // Opened through the loader rather than with a query of our own: the
+            // resource has to be readable by the code that ships with it.
+            let db = ProviderDb::open(&path)
+                .unwrap_or_else(|error| panic!("{} did not open: {error}", database.file));
+
+            assert_eq!(
+                db.info().provider_count,
+                database.provider_count,
+                "{} holds a different number of rows than the manifest declares",
+                database.file
+            );
+            assert_eq!(
+                db.info().source_os_build,
+                Some(database.source_windows_build),
+                "{} holds rows whose build is not the one it is declared for",
+                database.file
+            );
+
+            let names = db
+                .provider_names()
+                .unwrap_or_else(|error| panic!("{} provider names: {error}", database.file));
+            assert_eq!(
+                names,
+                database.providers.iter().cloned().collect::<BTreeSet<_>>(),
+                "{} provides a different set of providers than the manifest lists",
+                database.file
+            );
+            declared_names.extend(names);
+        }
+
+        assert_eq!(
+            manifest
+                .source_windows_builds
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            manifest
+                .databases
+                .iter()
+                .map(|database| database.source_windows_build)
+                .collect::<BTreeSet<_>>(),
+            "the builds the manifest names are not the builds its databases came from"
+        );
+
+        assert_eq!(
+            manifest
+                .family_providers
+                .values()
+                .flatten()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            declared_names,
+            "the family mapping and the databases disagree about which providers are covered"
+        );
+        assert_eq!(
+            manifest
+                .family_providers
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            manifest
+                .provider_families
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            "a declared family has no providers, or a family has providers without being declared"
+        );
+
+        if manifest.status == "available" {
+            assert!(
+                !declared_names.is_empty(),
+                "status is available with no providers to enrich from"
+            );
+        }
+    }
+}

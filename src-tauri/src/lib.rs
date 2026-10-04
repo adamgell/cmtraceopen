@@ -5,12 +5,16 @@ mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod elevation;
+#[cfg(any(feature = "collector", feature = "esp-diagnostics"))]
+mod env_expand;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "esp-diagnostics")]
 pub mod esp;
 #[cfg(feature = "event-log")]
 pub mod event_log;
+pub mod fs_identity;
+
 pub mod graph_api;
 pub mod intune;
 #[cfg(debug_assertions)]
@@ -382,6 +386,7 @@ pub fn run() {
             commands::filter::apply_filter,
             commands::error_lookup::lookup_error_code,
             commands::error_lookup::search_error_codes,
+            commands::error_lookup::resolve_error_codes_in_text,
             #[cfg(feature = "intune-diagnostics")]
             commands::intune::analyze_intune_logs,
             #[cfg(feature = "deployment")]
