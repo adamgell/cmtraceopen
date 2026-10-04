@@ -61,24 +61,50 @@ export function tauriInvocation(args, inheritedEnv = process.env, platform = pro
   return { args: [...args.slice(0, command + 1), "--config", profile, ...args.slice(command + 1)], env };
 }
 
-export async function runTauri(args, cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js")) {
+export async function runTauri(args, cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js"), inspector = ["/usr/bin/python3", fileURLToPath(new URL("./appimage_abi.py", import.meta.url))]) {
   const invocation = tauriInvocation(args);
-  const child = spawn(process.execPath, [cli, ...invocation.args], { env: invocation.env, stdio: "inherit" });
-  const forwardInterrupt = () => child.kill("SIGINT");
-  const forwardTermination = () => child.kill("SIGTERM");
+  // The pinned action also asks for --version; only build/bundle is gated.
+  const command = args.find((arg) => arg !== "--verbose" && !/^-v+$/.test(arg));
+  const verifyRoot = ["build", "bundle"].includes(command) ? process.env.CMTRACE_APPIMAGE_VERIFY_ROOT : undefined;
+  if (verifyRoot && !invocation.args.includes(profile)) {
+    throw new Error("AppImage verification context requires a Linux AppImage build");
+  }
+  let child;
+  let cancelled;
+  const forward = (signal) => { cancelled = signal; child?.kill(signal); };
+  const forwardInterrupt = () => forward("SIGINT");
+  const forwardTermination = () => forward("SIGTERM");
   process.on("SIGINT", forwardInterrupt);
   process.on("SIGTERM", forwardTermination);
-  try {
-    const [code, signal] = await new Promise((resolve, reject) => {
+  async function run(executable, argv) {
+    if (cancelled) return [1, cancelled];
+    child = spawn(executable, argv, { env: invocation.env, stdio: "inherit" });
+    return await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code, signal) => resolve([code, signal]));
+      child.once("close", (code, signal) => { child = undefined; resolve([code, signal]); });
     });
+  }
+  try {
+    if (verifyRoot) {
+      let result = await run(inspector[0], [...inspector.slice(1), "preflight", verifyRoot]);
+      if (result[0] === 0 && !cancelled) result = await run(process.execPath, [cli, ...invocation.args]);
+      if (result[0] === 0 && !cancelled) result = await run(inspector[0], [...inspector.slice(1), "verify", verifyRoot]);
+      // tauri-action's exec helper can treat a null signal exit as success.
+      // Always provide a positive failure, including a child that handles a
+      // forwarded cancellation by exiting zero. Never upload after cancellation.
+      process.exitCode = cancelled || result[1] ? 1 : (result[0] ?? 1);
+      return;
+    }
+    const [code, signal] = await run(process.execPath, [cli, ...invocation.args]);
     process.exitCode = code ?? 1;
     if (signal) {
       process.removeListener("SIGINT", forwardInterrupt);
       process.removeListener("SIGTERM", forwardTermination);
       process.kill(process.pid, signal);
     }
+  } catch (error) {
+    process.exitCode = 1;
+    throw error;
   } finally {
     process.removeListener("SIGINT", forwardInterrupt);
     process.removeListener("SIGTERM", forwardTermination);

@@ -116,6 +116,57 @@ test("the real child-process boundary preserves argv, cwd, stdio and exit status
   }
 });
 
+test("opt-in publication guard awaits preflight, build and final inspection in order", async (t) => {
+  const { directory, cli, driver } = await fixture(t);
+  const inspector = join(directory, "owned-inspector.mjs");
+  await writeFile(inspector, 'console.log(process.argv[2]); if (process.argv[2] === "verify") process.exit(Number(process.env.FIXTURE_VERIFY_EXIT ?? 0));\n');
+  await writeFile(cli, 'console.log("BUILD"); process.exit(Number(process.env.FIXTURE_BUILD_EXIT ?? 0));\n');
+  await writeFile(driver, `import { runTauri } from ${JSON.stringify(wrapper.href)}; await runTauri(process.argv.slice(2), ${JSON.stringify(cli)}, [process.execPath, ${JSON.stringify(inspector)}]);\n`);
+  for (const [build, verify, expected, output] of [[0, 0, 0, "preflight\nBUILD\nverify\n"], [0, 37, 37, "preflight\nBUILD\nverify\n"], [23, 0, 23, "preflight\nBUILD\n"]]) {
+    const result = spawnSync(process.execPath, [driver, "build", "--target=x86_64-unknown-linux-gnu"], {
+      cwd: directory, encoding: "utf8", timeout: 5_000,
+      env: { ...process.env, CMTRACE_APPIMAGE_VERIFY_ROOT: "fixture-root", FIXTURE_BUILD_EXIT: String(build), FIXTURE_VERIFY_EXIT: String(verify) },
+    });
+    assert.equal(result.status, expected, result.stderr);
+    assert.equal(result.stdout, output);
+  }
+});
+
+test("guard preflight failure prevents the build and action metadata commands remain ungated", async (t) => {
+  const { directory, cli, driver } = await fixture(t);
+  const inspector = join(directory, "inspector.mjs");
+  await writeFile(inspector, 'console.log("PREFLIGHT"); process.exit(41);\n');
+  await writeFile(cli, 'console.log("CLI");\n');
+  await writeFile(driver, `import { runTauri } from ${JSON.stringify(wrapper.href)}; await runTauri(process.argv.slice(2), ${JSON.stringify(cli)}, [process.execPath, ${JSON.stringify(inspector)}]);\n`);
+  const env = { ...process.env, CMTRACE_APPIMAGE_VERIFY_ROOT: "fixture-root" };
+  const build = spawnSync(process.execPath, [driver, "build", "--target=x86_64-unknown-linux-gnu"], { env, encoding: "utf8", timeout: 5_000 });
+  assert.equal(build.status, 41, build.stderr);
+  assert.equal(build.stdout, "PREFLIGHT\n");
+  const info = spawnSync(process.execPath, [driver, "--version"], { env, encoding: "utf8", timeout: 5_000 });
+  assert.equal(info.status, 0, info.stderr);
+  assert.equal(info.stdout, "CLI\n");
+});
+
+test("guard cancellation fails numerically during either child, even if that child exits zero", { skip: process.platform === "win32" }, async (t) => {
+  const { directory, cli, driver } = await fixture(t);
+  const inspector = join(directory, "inspector.mjs");
+  const waitForCancellation = 'process.on("SIGTERM", () => process.exit(0)); console.log("READY"); setInterval(() => {}, 1000);';
+  await writeFile(driver, `import { runTauri } from ${JSON.stringify(wrapper.href)}; await runTauri(process.argv.slice(2), ${JSON.stringify(cli)}, [process.execPath, ${JSON.stringify(inspector)}]);\n`);
+  for (const phase of ["preflight", "build", "verify"]) {
+    await writeFile(cli, phase === "build" ? waitForCancellation : 'console.log("BUILD");');
+    await writeFile(inspector, `if (process.argv[2] === ${JSON.stringify(phase)}) { ${waitForCancellation} }`);
+    const child = spawn(process.execPath, [driver, "build", "--target=x86_64-unknown-linux-gnu"], { env: { ...process.env, CMTRACE_APPIMAGE_VERIFY_ROOT: "fixture-root" }, stdio: ["ignore", "pipe", "pipe"] });
+    const closed = once(child, "close");
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+    let output = "";
+    child.stdout.on("data", (data) => { output += data; if (output.includes("READY")) child.kill("SIGTERM"); });
+    const [code, signal] = await closed;
+    clearTimeout(timer);
+    assert.equal(code, 1, phase);
+    assert.equal(signal, null, phase);
+  }
+});
+
 test("termination is forwarded to the CLI child and preserved by the wrapper", { skip: process.platform === "win32" }, async (t) => {
   const { cli, driver } = await fixture(t);
   await writeFile(cli, 'console.log("READY"); setInterval(() => {}, 1000);\n');

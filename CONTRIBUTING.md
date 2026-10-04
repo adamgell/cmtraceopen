@@ -67,6 +67,23 @@ AppImage through those entry points, explicitly opt into
 format selection; a raw invocation with that profile always prepares AppRun on
 Linux x86_64. Launcher permissions do not establish Linux library compatibility.
 
+The Linux application packaging jobs use Ubuntu 22.04 with current Jammy
+packages. Their compiled caches include the OS baseline. An opt-in workflow
+context makes the npm wrapper inspect the completed AppImage before returning
+success to the pinned Tauri action, including its release uploader. Inspection
+reads the archive and ELF metadata without running the AppImage: root-owned
+0755 launchers, the pinned launcher hash, every nested ELF's strong GLIBC imports
+through 2.35, and versioned dependency resolution against bundled libraries and
+official Jammy providers. Missing tools, incomplete inspection and cancellation
+fail the Linux build. Signing happens before this read-only inspection.
+
+The `provenance/appimage-abi.json` CI artifact records the source/build commits,
+runner image, package origins, lockfile hashes, resolved bundling-tool hashes and
+artifact hash. Some Tauri tools come from mutable upstream URLs; recording their
+hashes does not make those inputs reproducible. Static inspection does not prove
+FUSE mounting, WebKit rendering or log workflows. Those require separate runtime
+validation of the same artifact on Ubuntu 22.04 and newer systems.
+
 ### Rust Commands
 
 Run from `src-tauri/`:

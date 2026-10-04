@@ -211,7 +211,13 @@ jobs:
         run: npm ci
 
       - name: AppImage launcher preparation tests
-        run: node --test scripts/prepare-appimage.test.mjs scripts/tauri.test.mjs
+        run: node --test scripts/prepare-appimage.test.mjs scripts/tauri.test.mjs scripts/appimage-workflow.test.mjs
+
+      - name: AppImage archive inspector tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pyelftools
+          /usr/bin/python3 -B -m unittest discover -s scripts -p appimage_abi_test.py
 
       - name: TypeScript check
         run: npx tsc --noEmit
@@ -400,7 +406,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: Linux-x64
     runs-on: ${{ matrix.os }}
@@ -416,7 +422,9 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libc6 libstdc++6 \
+            squashfs-tools pax-utils python3-pyelftools python3-apt
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -439,8 +447,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+          # Compiled outputs and Cargo executables must never cross Linux baselines.
+          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-appimage-v1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-${{ matrix.target }}-cargo-appimage-v1-
 
       - name: Remove cached bundle outputs
         env:
@@ -465,6 +474,8 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CMTRACE_APPIMAGE_VERIFY_ROOT: ${{ runner.os == 'Linux' && 'src-tauri/target/x86_64-unknown-linux-gnu/release/bundle' || '' }}
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         with:
           projectPath: .
           args: --target ${{ matrix.target }}
@@ -492,5 +503,6 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/provenance/windows-build-provenance.json
+                src-tauri/target/${{ matrix.target }}/release/bundle/provenance/windows-build-provenance.json
+                src-tauri/target/${{ matrix.target }}/release/bundle/provenance/appimage-abi.json
           if-no-files-found: warn
