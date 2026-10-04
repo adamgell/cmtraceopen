@@ -55,6 +55,8 @@ pub fn macos_query_unified_log(
 pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "macos")]
     {
+        // Deliberately unbounded: this opens System Settings for the user and
+        // returns. Nothing is waited on, so there is no hang to bound.
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()
