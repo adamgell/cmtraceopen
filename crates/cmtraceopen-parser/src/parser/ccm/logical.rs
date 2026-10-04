@@ -391,11 +391,17 @@ fn parse_timestamp_fields(
     };
 
     // When no timezone offset is embedded in the log (the norm for IME logs),
-    // fall back to the machine's current local UTC offset so the display column
-    // shows the correct local time rather than treating local time as UTC.
+    // use the local offset at the record's date on native targets. A gap,
+    // repeated clock, or browser backend keeps the existing current-offset
+    // fallback; explicit source offsets win.
     let effective_tz = timezone_offset.or_else(|| {
-        let offset_secs = chrono::Local::now().offset().local_minus_utc();
-        offset_secs.checked_div(60)
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_milli_opt(hour, minute, second, millis))
+            .and_then(crate::parser::local_minus_utc_minutes_at)
+            .or_else(|| {
+                let offset_secs = chrono::Local::now().offset().local_minus_utc();
+                offset_secs.checked_div(60)
+            })
     });
 
     let (timestamp_millis, timestamp_display) =
@@ -872,9 +878,42 @@ mod tests {
         assert_eq!(result.unwrap(), "2024-01-01T10:00:00.000Z");
     }
 
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi", target_os = "linux"))
+    ))]
+    #[test]
+    fn test_browser_zoneless_epochs_keep_current_offset() {
+        for (month, day, hour, minute) in [
+            (1, 15, 12, 34),
+            (7, 15, 12, 34),
+            (3, 29, 1, 30),
+            (3, 29, 1, 45),
+            (10, 25, 1, 30),
+        ] {
+            let date = format!("{month}-{day}-2026");
+            let time = format!("{hour:02}:{minute:02}:00.123");
+            let wall = chrono::NaiveDate::from_ymd_opt(2026, month, day)
+                .unwrap()
+                .and_hms_milli_opt(hour, minute, 0, 123)
+                .unwrap();
+            let before = Local::now().offset().local_minus_utc() / 60;
+            let (epoch, _, source_offset, _, _) = parse_timestamp_fields(Some(&date), Some(&time));
+            let after = Local::now().offset().local_minus_utc() / 60;
+            assert!([before, after].into_iter().any(|offset| {
+                epoch == Some(wall.and_utc().timestamp_millis() - i64::from(offset) * 60_000)
+            }));
+            assert_eq!(source_offset, None);
+        }
+    }
+
     /// IME logs typically omit the timezone offset from the time field.
     /// Verify that the local-time fallback is applied so the stored UTC millis
-    /// differ from a naive UTC interpretation by the machine's current offset.
+    /// differ from a naive UTC interpretation by the offset at the record date.
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi", target_os = "linux"))
+    )))]
     #[test]
     fn test_no_timezone_in_time_field_uses_local_fallback() {
         // A record whose time= field has no +/- suffix (typical IME format)
@@ -893,8 +932,15 @@ mod tests {
             .and_utc()
             .timestamp_millis();
 
-        // Compute what the timestamp should be with the local-timezone fallback.
-        let local_offset_mins = chrono::Local::now().offset().local_minus_utc() / 60;
+        // Unresolvable local clocks retain the existing current-offset fallback.
+        let local_offset_mins = chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
+            .unwrap()
+            .and_hms_opt(0, 22, 30)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .single()
+            .map(|value| value.offset().local_minus_utc() / 60)
+            .unwrap_or_else(|| chrono::Local::now().offset().local_minus_utc() / 60);
         let expected = crate::parser::ccm::naive_to_utc_millis(
             chrono::NaiveDate::from_ymd_opt(2026, 3, 27)
                 .unwrap()
