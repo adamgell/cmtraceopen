@@ -4,14 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Pending release acceptance
+## [1.6.1]
 
-- **AppImage runtime acceptance**: This draft includes the launcher and build changes from #786. Runtime compatibility on Ubuntu 22.04 and 24.04 still requires acceptance of the exact final signed AppImage before publication. The supporting runtime harness (#787) is separate infrastructure and must be bound to those final bytes.
-- **Held for later work**: Saved-session backend reads and narrower filesystem grants (#747), the remaining privacy changes (#645, #667, #737, #761), CSP/elevation/DNS changes (#748, #755, #731), and other unmerged features or policy changes are not part of this 1.6.1 draft. Existing release entries describe only their already merged portions.
-
-**1.6.1 draft**
-
-Draft release notes. No release date is assigned. This draft combines every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` with the frozen #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`. Final signed-artifact runtime acceptance remains pending.
+Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` and the #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`.
 
 ### Changed
 
@@ -109,7 +104,7 @@ Draft release notes. No release date is assigned. This draft combines every comm
 ### Platform and release notes
 
 - Expected desktop artifacts remain Windows x64 and ARM64 Full/Lite portable EXEs, NSIS installers and MSIs; macOS Apple silicon DMG and app updater archive; and Linux x64 AppImage, DEB and RPM. The exporter adds Windows x64, macOS arm64 and Linux x64 CLI assets; there is no Windows ARM64 exporter asset in the configured matrix.
-- Ubuntu 22.04 and 24.04 AppImage runtime compatibility remains pending acceptance of the final signed release artifact. The #786 launcher/build changes are included in this draft; a successful build or static ABI check alone is not a runtime compatibility claim. Final 1.6.1 artifacts must be built from the approved release commit and checked before publication.
+- Linux desktop packages use an Ubuntu 22.04 build baseline. Static ABI checks alone do not establish runtime compatibility. Release acceptance requires testing the exact signed AppImage on Ubuntu 22.04 and 24.04.
 - The signed desktop updater requires all eight target entries in `latest.json`. Package-manager catalogs remain on their existing artifacts until verified 1.6.1 hashes are available.
 
 ## [1.6.0] - 2026-09-14
