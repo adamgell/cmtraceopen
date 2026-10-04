@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Spinner, tokens } from "@fluentui/react-components";
 import {
   ArrowDownloadRegular,
@@ -12,6 +12,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import {
   exportEspSession,
+  getEspDiagnosticsCapability,
   getEspDiagnosticsSession,
   getEspElevationState,
   startEspDiagnosticsSession,
@@ -45,6 +46,7 @@ import {
 import { LiveActivity } from "./LiveActivity";
 import { MsiexecStatus } from "./MsiexecStatus";
 import type {
+  EspAcquisitionCapability,
   EspElevationState,
   EspSessionState,
   EspUpdateReason,
@@ -189,6 +191,8 @@ export function EspDiagnosticsWorkspace() {
   const error = useEspDiagnosticsStore((state) => state.error);
   const graphError = useEspDiagnosticsStore((state) => state.graphError);
   const elevationProbe = useEspDiagnosticsStore((state) => state.elevationProbe);
+  const [acquisitionCapability, setAcquisitionCapability] =
+    useState<EspAcquisitionCapability | null>(null);
   const setElevationProbe = useEspDiagnosticsStore(
     (state) => state.setElevationProbe,
   );
@@ -222,7 +226,11 @@ export function EspDiagnosticsWorkspace() {
     ],
     [showActions],
   );
-  const liveSupported = supportsEspLiveAcquisition(currentPlatform);
+  // Read the capability the backend computes; the platform comparison is only
+  // the fallback for a probe that has not answered yet.
+  const liveSupported =
+    acquisitionCapability?.liveAcquisitionSupported ??
+    supportsEspLiveAcquisition(currentPlatform);
   const isBusy = ["analyzing", "starting", "stopping"].includes(phase);
   // Elevation is a constant property of the running process. The standalone
   // probe and the (collected-later) snapshot both derive from the same process
@@ -271,6 +279,24 @@ export function EspDiagnosticsWorkspace() {
       disposed = true;
     };
   }, [currentPlatform, setElevationProbe]);
+
+  // The backend owns whether live acquisition is possible on the build it is
+  // running on, and it owns the explanation. Declared after the elevation probe
+  // so a mount issues its commands in a fixed order.
+  useEffect(() => {
+    let disposed = false;
+    setAcquisitionCapability(null);
+    void getEspDiagnosticsCapability()
+      .then((capability) => {
+        if (!disposed) setAcquisitionCapability(capability);
+      })
+      .catch(() => {
+        if (!disposed) setAcquisitionCapability(null);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [currentPlatform]);
 
   const importCapturedEvidence = useCallback(async () => {
     const path = normalizeSelection(
@@ -613,8 +639,11 @@ export function EspDiagnosticsWorkspace() {
                 CMTrace evidence folders, manifest.json, CAB, and ZIP are
                 supported.
                 {liveSupported
-                  ? " Windows live acquisition is read-only."
-                  : " Live acquisition requires Windows."}
+                  ? " Live acquisition is read-only."
+                  : ` ${
+                      acquisitionCapability?.liveAcquisitionDetail ??
+                      "Live acquisition requires Windows."
+                    }`}
               </div>
             </div>
           </section>
