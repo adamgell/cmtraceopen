@@ -16,6 +16,18 @@ function valueOf(body: string, key: string): string | undefined {
 }
 
 describe("parsePayloadData brace scanning", () => {
+  it.each([
+    ['"Rules" = (', '  "a', '"', ");"],
+    ['"Nested" = {', '  "Filter" = "a', '";', "};"],
+  ])("keeps the setting after an escaped physical newline in %s", (open, value, quote, close) => {
+    // Transform the existing Rules/Nested fixtures: put a backslash before a
+    // physical newline and the closing quote at the beginning of the next line.
+    const body = [open, value + "\\", quote, close, '"After" = 2;'].join("\n");
+
+    expect(keys(body)).toContain("After");
+    expect(valueOf(body, "After")).toBe("2");
+  });
+
   // Transform the existing Rules array fixture to exercise the same scanner's
   // parenthesis mode, including an escaped quote before the delimiter.
   it.each(["a)b", "a(b", String.raw`a\" ) b`])(

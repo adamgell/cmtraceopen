@@ -367,6 +367,9 @@ function collectBalancedBlock(
         depth--;
       }
     }
+    // A trailing backslash escapes the newline, not the first character of
+    // the next line. Match the whole-string scanner's handling of separators.
+    scan("\n");
     block += line + "\n";
     if (depth === 0) {
       // Whole lines, always, so the caller never re-reads the line it just
