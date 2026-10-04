@@ -54,6 +54,8 @@ UI acceptance uses the actual `Log entries` listbox and option rows:
 6. Fully exit normally, reopen, open the fixture using the native file chooser, and assert all four records again.
 7. Fully exit normally again.
 
+A per-controller Linux child subreaper adopts orphaned app helpers, including helpers forked between shutdown observations. Exit checks bind PIDs to process start times, exclude pre-existing GUI services, and require the launch's FUSE mount to disappear before reopening. This changes only process-local child adoption, not a namespace or host policy.
+
 Fresh home/config/cache/data directories isolate the two cases. Namespace, bubblewrap, FUSE, GUI or accessibility failures are **blocked**. Once accessibility is available, failed functional assertions are **failed**. Both cases must pass for the job to succeed; a blocked case never becomes an application pass.
 
 Application/helper output is discarded. Cleanup terminates only the newly allocated account's processes, using pidfds to avoid PID reuse races, and removes that account and owned temporary files. Evidence is read after cleanup of child processes, rejecting symlinks, hardlinks, special files, wrong owners and oversized files. Only an allowlisted JSON summary and four decoded/re-encoded PNGs can upload, capped at 10 MiB of screenshots per VM with seven-day retention. No raw logs, environment dump, arbitrary accessibility text, or artifact payload is uploaded.
