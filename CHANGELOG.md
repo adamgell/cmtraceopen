@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
 - **Intended for 1.6.1, not yet included**: Ubuntu 22.04 AppImage preparation and verification (#786) is awaiting runtime acceptance and integration. The supporting runtime harness (#787) is separate infrastructure. Move this entry into the release only after the product change actually merges and its evidence is accepted.
 - **Held for later work**: Saved-session backend reads and narrower filesystem grants (#747), the remaining privacy changes (#645, #667, #737, #761), CSP/elevation/DNS changes (#748, #755, #731), and other unmerged features or policy changes are not part of this 1.6.1 draft. Existing release entries describe only their already merged portions.
 
-## [1.6.1] - Unreleased
+**1.6.1 draft**
 
 Draft release notes. No release date is assigned. This draft covers every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67`; the intended AppImage addition remains pending above.
 
@@ -129,16 +129,12 @@ Draft release notes. No release date is assigned. This draft covers every commit
 
 ### Changed
 
-- **Backend module map expanded**: `CLAUDE.md` now describes additional backend modules, distinguishes parser-crate re-exports from native modules, and identifies both Graph integration and active DsRegCmd connectivity checks as network users alongside the updater. The parser architecture description separates pure-crate ownership and policy from the WASM compilation gate.
-
-- **The second Intune workspace is named for what it does**: it was labelled "New Intune Workspace", a development name shown beside "Intune Diagnostics" with nothing to tell a reader which to use. It is now "Intune Analysis", and its name comes from the workspace definition rather than five separate copies, so a rename is one edit ([#701](https://github.com/adamgell/cmtraceopen/issues/701)).
-
 - **Device Inventory framing (#511)**: Logical-record framing for Device Inventory is lossless and bounded so oversized or partial continuations cannot starve the open/tail paths or drop producer evidence.
 - **Intune inventory rotation detection (#509)**: Narrow rotation-failure detection so generic `Failed …` lines are not misclassified as Device Inventory rotation failures, and align open-path continuation bounds with the tail path.
 - **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
 - **SCCM intake authority (#508 and related)**: Remove fixture identity allowlists from production intake; bind client/server analysis to sealed intake, topology, chronology, and coverage-gap contracts rather than synthetic identity shortcuts.
 - **Agent / contributor docs (#448)**: Expand agent-facing repository guidance for multi-lane SCCM and Intune work.
-- **The redaction contract binds at the crate boundary (#550)**: ADR-004 revision 1 settles it — an audit found the previously agreed boundary covered almost none of the places data actually leaves the app, which meant a masked screen sat one button away from writing clear text to a file of the operator's choosing. Hiding now happens where the app's core hands out an analysis: the hidden form is the only one that can be passed on, the version holding the real values is reachable only from a clearly named function inside the app's own code, and the check follows through nested data rather than relying on each place that writes a file to remember it. `docs/architecture/decisions/ADR-004-redaction-scope-revision-1.md` carries the eight rulings and the questions still open.
+- **Redaction contract decision (#550)**: ADR-004 revision 1 defines crate-boundary redaction ownership and requires hidden analysis projections at publication boundaries, including nested data. The decision records eight rulings and remaining questions in `docs/architecture/decisions/ADR-004-redaction-scope-revision-1.md`; the document itself makes no production behavior changes and does not establish that every export surface implements the contract.
 - **Reducer Framework v1 governance (#519)**: Establish the architecture, ADRs (evidence strength/confidence, identity correlation, chronology terminal precedence, redaction scope), and contract/adversary/integration charters that govern how evidence-folding reducer modules—including the Microsoft Store lane and Autopilot parser above—are designed and reviewed. The framework's own extraction is part of it: the citation predicate is asked rather than restated in two lanes (#548), and the shared extraction is thinned to mapping, test support and invariant docs (#543).
 - **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions. The review loop retargets from Copilot to CodeRabbit (#537) and the code-review charter and operator skills land with it (#538).
 - **Win32 and Store redaction grammar (#357 / #533)**: Extend the shared Intune redaction grammar so the Win32 deployment and Microsoft Store lanes mask every identity shape they can emit, including SIDs, tenant domains, and device names.
