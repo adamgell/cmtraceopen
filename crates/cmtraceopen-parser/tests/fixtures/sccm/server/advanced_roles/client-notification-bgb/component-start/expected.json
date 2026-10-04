@@ -1,0 +1,14 @@
+{
+  "fixtureId": "component-start",
+  "evidence": "SMS_EXECUTIVE starts the notification server component, which opens its TCP and HTTP listeners. Startup framing only; no client notification.",
+  "files": [
+    {
+      "name": "BgbServer.lo_",
+      "side": "server",
+      "rotation": "lo_",
+      "lines": 20,
+      "framedRecords": 20,
+      "unframedLines": []
+    }
+  ]
+}

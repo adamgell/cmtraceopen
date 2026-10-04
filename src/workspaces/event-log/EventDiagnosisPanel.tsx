@@ -158,12 +158,15 @@ function CoverageGapRow({
   );
 }
 
-const OUTCOME_LABELS: Record<DiagnosisOverview["outcome"], string> = {
+// Every outcome needs its own label. `insufficientEvidence` is a coverage gap,
+// not a clean result: reporting it as "No issues detected" presents an incomplete
+// conclusion as health, which the evidence contract forbids.
+export const OUTCOME_LABELS: Record<DiagnosisOverview["outcome"], string> = {
   confirmedFailure: "Issues detected",
   contradictoryEvidence: "Conflicting evidence",
   symptomsOnly: "Potential issues detected",
-  insufficientEvidence: "No issues detected",
-  noFindings: "No issues detected",
+  insufficientEvidence: "Insufficient evidence",
+  noFindings: "No issues found",
 };
 
 function OverviewRow({ overview }: { overview: DiagnosisOverview }) {
