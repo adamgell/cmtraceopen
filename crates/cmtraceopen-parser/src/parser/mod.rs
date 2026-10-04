@@ -66,20 +66,15 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
     }
 }
 
-/// The offset in force at a zoneless wall clock, in `Local::now().offset()
-/// .local_minus_utc()`'s convention: minutes to add to the wall clock to reach
-/// UTC, so a zone west of Greenwich is negative.
+/// The local offset at a zoneless wall clock, in minutes to add to UTC to
+/// obtain local time (negative west of Greenwich).
 ///
-/// Resolved for the instant the clock reads, not for the instant this runs: a
-/// log written on the other side of a DST transition is an hour out in the
-/// display column and in the epoch together when the offset is taken from
-/// `Local::now()`. Uses the same resolution as [`local_wall_clock_millis`], so a
-/// clock the zone cannot place (a gap, or a repeated hour) yields `None` here
-/// too, and the caller decides what to render instead.
+/// Only a single local mapping supplies an offset. Gaps and repeated clocks
+/// return `None`, leaving fallback policy to the caller. In particular, the
+/// gap-clamped epoch from [`local_wall_clock_millis`] cannot supply an offset.
 pub(crate) fn local_minus_utc_minutes_at(naive: NaiveDateTime) -> Option<i32> {
-    let local = local_wall_clock_millis(naive)?;
-    let wall_as_utc = naive.and_utc().timestamp_millis();
-    i32::try_from((wall_as_utc - local) / 60_000).ok()
+    let local = naive.and_local_timezone(Local).single()?;
+    Some(local.offset().local_minus_utc() / 60)
 }
 
 /// The first instant the local zone can represent at or after `naive`, for a
@@ -147,6 +142,8 @@ pub fn parse_content(
         parse_errors: parsed_chunk.parse_errors,
         file_path: path_obj.to_string_lossy().to_string(),
         file_size,
+        // No file was read here, so there is no modified time to report.
+        modified_unix_ms: None,
         byte_offset: file_size,
     };
 
@@ -618,6 +615,35 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_local_offset_rejects_gap_and_fold() {
+        const CHILD: &str = "CMTRACE_LOCAL_OFFSET_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "parser::tests::test_local_offset_rejects_gap_and_fold",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("TZ", "Europe/London")
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        for clock in [
+            "2026-03-29 01:30:00",
+            "2026-03-29 01:45:00",
+            "2026-10-25 01:30:00",
+        ] {
+            let naive = NaiveDateTime::parse_from_str(clock, "%Y-%m-%d %H:%M:%S").unwrap();
+            assert_eq!(local_minus_utc_minutes_at(naive), None, "{clock}");
+        }
     }
 
     #[test]

@@ -1006,10 +1006,10 @@ class ProvenanceTests(unittest.TestCase):
             text=True,
             timeout=10,
         ).stdout.splitlines()
-        self.assertEqual(
-            [ORIGINAL_IMPORT_COMMIT, *DOWNSTREAM_SCRIPT_COMMITS],
-            script_history,
-        )
+        # Preserve the pinned import history while permitting later maintained
+        # derivative commits (including the commit containing this test).
+        pinned_history = [ORIGINAL_IMPORT_COMMIT, *DOWNSTREAM_SCRIPT_COMMITS]
+        self.assertEqual(pinned_history, script_history[:len(pinned_history)])
         script_digest = hashlib.sha256(SCRIPT_PATH.read_bytes()).hexdigest()
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         license_text = LICENSE_PATH.read_text(encoding="utf-8")

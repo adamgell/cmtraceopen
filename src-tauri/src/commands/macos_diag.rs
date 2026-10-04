@@ -55,6 +55,9 @@ pub fn macos_query_unified_log(
 pub fn macos_open_system_settings() -> Result<(), crate::error::AppError> {
     #[cfg(target_os = "macos")]
     {
+        // Deliberately non-waiting: `spawn` returns a child handle without
+        // waiting for the launcher to exit, and the handle is discarded.
+        // `open` omits `-W` so System Settings can remain open independently.
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             .spawn()

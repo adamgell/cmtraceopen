@@ -58,6 +58,7 @@ const parsedFile: ParseResult = {
   parseErrors: 0,
   filePath: "C:\\logs\\a.log",
   fileSize: 0,
+  modifiedUnixMs: null,
   byteOffset: 0,
 };
 

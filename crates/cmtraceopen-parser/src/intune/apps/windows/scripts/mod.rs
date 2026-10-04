@@ -2,7 +2,7 @@
 //!
 //! This is a **semantic analyzer over supplied IME evidence**, not a log
 //! format. Raw records are framed by the shared CCM parser first
-//! ([`crate::intune::ime_parser`]); only then are signals classified and
+//! ([`crate::parser::ccm::logical`]); only then are signals classified and
 //! reduced. The module performs no I/O of any kind.
 //!
 //! Platform scripts have a deliberately separate public lifecycle from

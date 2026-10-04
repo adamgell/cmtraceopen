@@ -536,6 +536,7 @@ def clean_coderabbit_review(
         "state": "APPROVED",
         "body": "Approved",
         "submittedAt": NOW,
+        "updatedAt": NOW,
         "author": {"login": "coderabbitai"},
         "commit": {"oid": head_sha},
     }
@@ -555,6 +556,7 @@ def clean_coderabbit_review(
             "unresolved_coderabbit_thread_count": 0,
             "latest_coderabbit_review": latest_review,
             "latest_coderabbit_review_state": "APPROVED",
+            "effective_coderabbit_reviews": [latest_review],
             "approved_at_head": True,
         },
         "unresolved_threads": [],
@@ -576,7 +578,6 @@ def clean_independent_review(
         "gate_states": {
             "ci": "passed",
             "coderabbit": "passed",
-            "charter_review": "passed",
             "contract_conformance": "passed",
         },
         "coverage": ["crates/cmtraceopen-parser/src/lib.rs"],
@@ -4364,7 +4365,7 @@ class BaseEvidenceTests(unittest.TestCase):
                     elif variant == "uppercase-failed-gate":
                         raw["gate_states"] = {"CI": "failed"}
                     elif variant == "missing-gate":
-                        raw["gate_states"].pop("charter_review")
+                        raw["gate_states"].pop("contract_conformance")
                     elif variant == "extra-gate":
                         raw["gate_states"]["focused"] = "passed"
                     elif variant == "non-passed-gate":

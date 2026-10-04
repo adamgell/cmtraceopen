@@ -28,7 +28,7 @@ use crate::intune::evidence::{
     IntuneEvidenceRef, IntuneFindingConfidence, IntuneNamedValue, IntuneObservationContext,
     IntuneParseState, IntuneProvenance, IntuneSensitivity, IntuneTimestamp, IntuneTimestampKind,
 };
-use crate::intune::ime_parser::{parse_ime_content, ImeLine};
+use crate::parser::ccm::logical::{parse_ime_content, ImeLine};
 
 use super::findings::derive_findings;
 use super::models::{
