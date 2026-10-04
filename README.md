@@ -154,7 +154,7 @@ Triage Entra join, hybrid join, PRT, MDM, and Windows Hello for Business issues.
 - Registry-backed Windows Hello for Business policy correlation
 - Export as JSON or summary for case handoff
 
-See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a detailed walkthrough.
+See the [DSRegCmd workspace guide](https://github.com/adamgell/CMTraceOpen/wiki/DSRegCmd-Workspace) for a detailed walkthrough.
 
 ## Quick Start
 
@@ -187,6 +187,10 @@ Visit the [CMTrace Open Wiki](https://github.com/adamgell/CMTraceOpen/wiki) for 
 ## Contributing
 
 CMTrace Open welcomes contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build commands, architecture overview, and coding guidelines.
+
+## Questions and Feedback
+
+Questions, feedback, feature ideas, and general discussion all belong in GitHub Issues. [Open a feedback or question issue](https://github.com/adamgell/cmtraceopen/issues/new?template=feedback.yml).
 
 ## Disclaimer
 

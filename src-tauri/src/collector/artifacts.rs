@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use rayon::prelude::*;
 
-use crate::collector::env_expand::expand_env_vars;
 use crate::collector::types::*;
+use crate::env_expand::expand_env_vars;
 
 /// Shared context passed into each artifact collector.
 pub struct CollectorContext {
