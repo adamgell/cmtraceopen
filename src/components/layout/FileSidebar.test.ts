@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatDisplayDateTime } from "../../lib/date-time-format";
 import {
   formatBytes,
   formatCount,
@@ -57,6 +58,7 @@ describe("formatModified", () => {
     // `!unixMs` also rejects 0. The backend yields Some(0) for a file whose mtime
     // is 1970-01-01, so this must not read as "unavailable".
     const result = formatModified(0);
+    expect(result).toBe(formatDisplayDateTime(0));
     expect(result).not.toBe("Modified time unavailable");
   });
 });
