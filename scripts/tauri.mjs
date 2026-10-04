@@ -13,7 +13,7 @@ export function tauriInvocation(args, inheritedEnv = process.env, platform = pro
   delete env[selectionKey];
   let command = 0;
   while (args[command] === "--verbose" || /^-v+$/.test(args[command] ?? "")) command++;
-  if (!["build", "bundle"].includes(args[command])) return { args: [...args], env };
+  if (!["build", "bundle"].includes(args[command])) return { args: [...args], env, profiled: false };
 
   let bundles = null;
   let target;
@@ -48,7 +48,7 @@ export function tauriInvocation(args, inheritedEnv = process.env, platform = pro
       if (option === "target") target = value;
     }
   }
-  if (skip) return { args: [...args], env };
+  if (skip) return { args: [...args], env, profiled: false };
   env[selectionKey] = JSON.stringify(bundles);
   // Unknown/custom target strings remain conservative; Tauri validates them and
   // the hook's authoritative TAURI_ENV_PLATFORM/ARCH gate still applies.
@@ -56,9 +56,9 @@ export function tauriInvocation(args, inheritedEnv = process.env, platform = pro
     ? (!/^[\w]+-[\w]+-[\w-]+$/.test(target) || (target.startsWith("x86_64-") && target.includes("-linux-")))
     : platform === "linux" && arch === "x64";
   if (!linuxX64 || (bundles !== null && bundles.every((format) => nonAppImageFormats.has(format)))) {
-    return { args: [...args], env };
+    return { args: [...args], env, profiled: false };
   }
-  return { args: [...args.slice(0, command + 1), "--config", profile, ...args.slice(command + 1)], env };
+  return { args: [...args.slice(0, command + 1), "--config", profile, ...args.slice(command + 1)], env, profiled: true };
 }
 
 export async function runTauri(args, cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js"), inspector = [fileURLToPath(new URL("../.appimage-abi-venv/bin/python", import.meta.url)), fileURLToPath(new URL("./appimage_abi.py", import.meta.url))]) {
@@ -66,7 +66,7 @@ export async function runTauri(args, cli = createRequire(import.meta.url).resolv
   // The pinned action also asks for --version; only build/bundle is gated.
   const command = args.find((arg) => arg !== "--verbose" && !/^-v+$/.test(arg));
   const verifyRoot = ["build", "bundle"].includes(command) ? process.env.CMTRACE_APPIMAGE_VERIFY_ROOT : undefined;
-  if (verifyRoot && !invocation.args.includes(profile)) {
+  if (verifyRoot && !invocation.profiled) {
     throw new Error("AppImage verification context requires a Linux AppImage build");
   }
   let child;

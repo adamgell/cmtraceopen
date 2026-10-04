@@ -147,6 +147,20 @@ test("guard preflight failure prevents the build and action metadata commands re
   assert.equal(info.stdout, "CLI\n");
 });
 
+test("a caller-supplied profile cannot opt a non-AppImage build into the publication guard", async (t) => {
+  const { cli, driver } = await fixture(t);
+  await writeFile(cli, 'console.log("CLI");\n');
+  await writeFile(driver, `import { runTauri } from ${JSON.stringify(wrapper.href)}; await runTauri(process.argv.slice(2), ${JSON.stringify(cli)}, [process.execPath, ${JSON.stringify(cli)}]);\n`);
+  for (const selection of [["--bundles", "deb"], ["--no-bundle"], ["--target", "aarch64-apple-darwin"]]) {
+    const result = spawnSync(process.execPath, [driver, "build", "--config", profile, ...selection], {
+      env: { ...process.env, CMTRACE_APPIMAGE_VERIFY_ROOT: "fixture-root" }, encoding: "utf8", timeout: 5_000,
+    });
+    assert.notEqual(result.status, 0, JSON.stringify(selection));
+    assert.match(result.stderr, /requires a Linux AppImage build/);
+    assert.equal(result.stdout, "", "reject before starting the inspector or build");
+  }
+});
+
 test("guard cancellation fails numerically during either child, even if that child exits zero", { skip: process.platform === "win32" }, async (t) => {
   const { directory, cli, driver } = await fixture(t);
   const inspector = join(directory, "inspector.mjs");
