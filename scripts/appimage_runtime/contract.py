@@ -1,6 +1,9 @@
 """Fixed candidate and fail-closed observations for the manual runtime harness."""
 
+import io
+import os
 import re
+import stat
 from pathlib import PurePosixPath
 
 SOURCE = "0a1bb21add1e7d331d4f4e2a00be8c317240bebf"
@@ -16,6 +19,50 @@ REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
                      "fuse-unavailable", "accessibility-unavailable", "gui-unavailable",
                      "application-exited", "ui-assertion", "timeout", "cancelled",
                      "evidence-invalid", "artifact-mismatch", "harness-error"))
+
+
+def namespace_command(uid, gid, root):
+    if uid <= 0 or gid <= 0 or not root.is_absolute():
+        raise ValueError("isolation-unavailable")
+    return ["/usr/bin/unshare", "--net", "--", "/usr/bin/setpriv",
+            f"--reuid={uid}", f"--regid={gid}", "--clear-groups",
+            "--inh-caps=-all", "--ambient-caps=-all", "/usr/bin/env", "-i",
+            "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C.UTF-8",
+            "PYTHONDONTWRITEBYTECODE=1", f"HOME={root / 'home'}",
+            "/usr/bin/python3", "-m", "appimage_runtime.session", str(root)]
+
+
+def read_owned_file(path, uid, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_nlink != 1 or info.st_size > limit:
+            raise ValueError("evidence-invalid")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            result = stream.read(limit + 1)
+        if len(result) > limit:
+            raise ValueError("evidence-invalid")
+        return result
+    finally:
+        os.close(fd)
+
+
+def sanitize_png(data):
+    from PIL import Image
+    try:
+        if len(data) > 10 * 1024 * 1024:
+            raise ValueError("evidence-invalid")
+        with Image.open(io.BytesIO(data)) as original:
+            if original.format != "PNG" or not (0 < original.width <= 1280 and 0 < original.height <= 900):
+                raise ValueError("evidence-invalid")
+            original.load()
+            clean = Image.new("RGB", original.size)
+            clean.paste(original.convert("RGB"))
+            output = io.BytesIO()
+            clean.save(output, format="PNG")
+            return output.getvalue()
+    except Exception as error:
+        raise ValueError("evidence-invalid") from error
 
 
 def validate_binding(report, digest):
@@ -97,3 +144,45 @@ def sanitize_case(data):
     if data["status"] != "passed" and data["reason"] == "ok":
         raise ValueError("evidence-invalid")
     return {"case": data["case"], "status": data["status"], "reason": data["reason"], "checks": dict(checks), "counts": list(counts)}
+
+
+def validate_payload(payload):
+    if set(payload) != {"AppRun", "AppRun.wrapped", "usr/bin/cmtrace-open"}:
+        raise ValueError("fuse-unavailable")
+    for item in payload.values():
+        if item != dict(mode=stat.S_IFREG | 0o755, uid=0, gid=0):
+            raise ValueError("fuse-unavailable")
+
+
+def sanitize_fuse(proofs, passed):
+    if not isinstance(proofs, list) or len(proofs) > 2 or (passed and len(proofs) != 2):
+        raise ValueError("evidence-invalid")
+    result = []
+    for item in proofs:
+        if set(item) != {"pid", "mount_id", "filesystem", "payload_root_0755"}:
+            raise ValueError("evidence-invalid")
+        if any(type(item[k]) is not int or not 0 < item[k] < 2**31 for k in ("pid", "mount_id")):
+            raise ValueError("evidence-invalid")
+        if not re.fullmatch(r"fuse(?:\.[A-Za-z0-9_-]{1,100})?", item["filesystem"]) or item["payload_root_0755"] is not True:
+            raise ValueError("evidence-invalid")
+        result.append(dict(item))
+    return result
+
+
+def accessible_role(role, attributes):
+    for attribute in attributes:
+        if attribute in ("xml-roles:listbox", "xml-roles:option"):
+            return attribute.split(":", 1)[1]
+    return {"list box": "listbox", "list item": "option"}.get(role, role)
+
+
+def fuse_metadata(mountinfo, executable):
+    mount = fuse_mount(mountinfo, executable)
+    for line in mountinfo.splitlines():
+        before, _, after = line.partition(" - ")
+        fields = before.split()
+        decoded = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4])
+        filesystem = after.split()[0]
+        if decoded == mount and (filesystem == "fuse" or filesystem.startswith("fuse.")):
+            return dict(mount_id=int(fields[0]), filesystem=filesystem)
+    raise ValueError("fuse-unavailable")

@@ -1,0 +1,99 @@
+name: AppImage runtime acceptance (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_harness_sha:
+        description: Exact reviewed harness commit; coordinator must confirm integration before dispatch
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: appimage-runtime-11311507149
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    if: github.ref == 'refs/heads/main' && github.repository == 'adamgell/cmtraceopen'
+    name: Runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      REVIEWED_HARNESS_SHA: ${{ inputs.reviewed_harness_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify dispatch and reviewed harness
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-evidence"
+          printf '%s\n' '{"artifact_id":11311507149,"status":"blocked","reason":"harness-error","stage":"setup"}' > "$RUNNER_TEMP/runtime-evidence/summary.json"
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          [[ "$REVIEWED_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$REVIEWED_HARNESS_SHA^{commit}" || git fetch --no-tags origin "$REVIEWED_HARNESS_SHA"
+          git diff --exit-code "$REVIEWED_HARNESS_SHA" HEAD -- \
+            .github/workflows/cmtrace-appimage-runtime.yml scripts/appimage_runtime
+
+      - name: Download fixed candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: '11311507149'
+          run-id: '37222916777'
+          repository: adamgell/cmtraceopen
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/runtime-candidate
+
+      - name: Install Ubuntu runtime and observation tools
+        shell: bash
+        env:
+          RUNTIME_OS: ${{ matrix.os }}
+        run: |
+          case "$RUNTIME_OS" in
+            ubuntu-22.04) distro_libraries=(libfuse2 libgtk-3-0) ;;
+            ubuntu-24.04) distro_libraries=(libfuse2t64 libgtk-3-0t64) ;;
+            *) exit 1 ;;
+          esac
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            python3-apt python3-pyatspi libatk-adaptor at-spi2-core python3-pil bubblewrap xvfb xauth icewm \
+            dbus-x11 xdotool imagemagick iproute2 util-linux fuse3 \
+            libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libayatana-appindicator3-1 \
+            libc6 libcom-err2 libdrm2 libegl1 libexpat1 libfontconfig1 libfreetype6 \
+            libfribidi0 libgbm1 libgcc-s1 libgl1 libglvnd0 libglx0 libgmp10 \
+            libgpg-error0 libharfbuzz0b libstdc++6 libuuid1 libx11-6 libx11-xcb1 \
+            libxcb1 zlib1g "${distro_libraries[@]}"
+
+      - name: Run isolated fixture acceptance
+        working-directory: scripts
+        shell: bash
+        run: |
+          sudo env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin PYTHONDONTWRITEBYTECODE=1 \
+            /usr/bin/python3 -m appimage_runtime.host \
+            "$RUNNER_TEMP/runtime-candidate" "$RUNNER_TEMP/runtime-evidence" "$REVIEWED_HARNESS_SHA"
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: appimage-runtime-${{ matrix.os }}-11311507149
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/runtime-evidence/summary.json
+            ${{ runner.temp }}/runtime-evidence/ordinary-initial.png
+            ${{ runner.temp }}/runtime-evidence/ordinary-final.png
+            ${{ runner.temp }}/runtime-evidence/catalog-renderer-subset-initial.png
+            ${{ runner.temp }}/runtime-evidence/catalog-renderer-subset-final.png

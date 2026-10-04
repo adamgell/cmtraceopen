@@ -1,6 +1,8 @@
 import copy
 import json
 import tempfile
+import os
+import io
 import unittest
 from pathlib import Path
 
@@ -16,6 +18,89 @@ class ContractTests(unittest.TestCase):
         function = getattr(contract, name, None)
         self.assertTrue(callable(function), name + " is not implemented")
         return function
+
+    def test_namespace_command_drops_privileges_without_disabling_fuse_helpers(self):
+        command=self.api("namespace_command")(1234,1235,Path("/tmp/owned"))
+        self.assertEqual(command[:4],["/usr/bin/unshare","--net","--","/usr/bin/setpriv"])
+        self.assertIn("--reuid=1234",command)
+        self.assertIn("--regid=1235",command)
+        for item in ["--clear-groups","--inh-caps=-all","--ambient-caps=-all","-i","PATH=/usr/bin:/bin:/usr/sbin:/sbin","/usr/bin/python3"]:
+            self.assertIn(item,command)
+        self.assertEqual(command[-3:],["-m","appimage_runtime.session","/tmp/owned"])
+        for item in command:
+            self.assertFalse(item.startswith(("--mount","--pid","--user","--no-new-privs","--bounding-set","--net=")),item)
+        for uid,gid in [(0,1235),(1234,0),(-1,1235)]:
+            with self.assertRaises(ValueError): self.api("namespace_command")(uid,gid,Path("/tmp/owned"))
+
+    def test_evidence_reader_rejects_symlinks_hardlinks_oversize_and_wrong_owner(self):
+        read=self.api("read_owned_file")
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); file=root/"result.json"; file.write_bytes(b"{}")
+            self.assertEqual(read(file,os.getuid(),10),b"{}")
+            with self.assertRaises(ValueError): read(file,os.getuid()+1,10)
+            with self.assertRaises(ValueError): read(file,os.getuid(),1)
+            link=root/"link"; link.symlink_to(file)
+            with self.assertRaises((ValueError,OSError)): read(link,os.getuid(),10)
+            os.link(file,root/"hardlink")
+            with self.assertRaises(ValueError): read(file,os.getuid(),10)
+            with self.assertRaises(ValueError): read(root,os.getuid(),10)
+
+    def test_screenshot_is_decoded_reencoded_and_metadata_removed(self):
+        from PIL import Image, PngImagePlugin
+        clean=self.api("sanitize_png")
+        original=io.BytesIO(); meta=PngImagePlugin.PngInfo(); meta.add_text("private","must not upload")
+        Image.new("RGB",(20,20),"white").save(original,format="PNG",pnginfo=meta)
+        output=clean(original.getvalue())
+        image=Image.open(io.BytesIO(output))
+        self.assertEqual(image.size,(20,20))
+        self.assertNotIn("private",image.info)
+        self.assertNotIn(b"must not upload",output)
+        bad=io.BytesIO(); Image.new("RGB",(1300,901)).save(bad,format="PNG")
+        for data in [b"not a screenshot",bad.getvalue()]:
+            with self.assertRaises(ValueError): clean(data)
+
+    def test_accessibility_roles_accept_listbox_options_not_tables(self):
+        role=self.api("accessible_role")
+        self.assertEqual(role("list box",[]),"listbox")
+        self.assertEqual(role("list item",[]),"option")
+        self.assertEqual(role("unknown",["xml-roles:option"]),"option")
+        self.assertEqual(role("table",[]),"table")
+        self.assertEqual(role("table cell",[]),"table cell")
+
+    def test_collection_rejects_missing_preflight_and_pass_without_screenshots(self):
+        from appimage_runtime.host import collect
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); output=root/"sanitized"; output.mkdir()
+            (root/"proof").mkdir()
+            for case in contract.CASES:
+                area=root/case/"out"; area.mkdir(parents=True)
+                (area/"result.json").write_text(json.dumps(dict(case=case,status="passed",reason="ok",checks=dict.fromkeys(contract.CHECKS,True),counts=[3,1,3,4,4])))
+            preflight,cases=collect(root,os.getuid(),output)
+            self.assertEqual(preflight,{})
+            self.assertTrue(all(case["reason"]=="evidence-invalid" for case in cases))
+            (root/"proof/preflight.json").write_text(json.dumps(dict(identity=True,offline=True,bubblewrap=True,fuse_device=True)))
+            proof=dict(pid=1234,mount_id=53,filesystem="fuse.CMTrace",payload_root_0755=True)
+            for case in contract.CASES:
+                (root/case/"out/fuse.json").write_text(json.dumps([proof,proof]))
+            preflight,cases=collect(root,os.getuid(),output)
+            self.assertTrue(preflight["offline"])
+            self.assertTrue(all(case["reason"]=="evidence-invalid" for case in cases))
+
+    def test_payload_proof_requires_root_owned_executable_regular_files(self):
+        validate=self.api("validate_payload")
+        import stat
+        valid={name:dict(mode=stat.S_IFREG | 0o755,uid=0,gid=0) for name in ("AppRun","AppRun.wrapped","usr/bin/cmtrace-open")}
+        validate(valid)
+        for key,value in [("mode",stat.S_IFLNK | 0o755),("mode",stat.S_IFREG | 0o644),("uid",1234),("gid",1234)]:
+            bad=copy.deepcopy(valid); bad["AppRun"][key]=value
+            with self.assertRaises(ValueError): validate(bad)
+
+    def test_fuse_evidence_rejects_paths_and_requires_two_launches_for_pass(self):
+        validate=self.api("sanitize_fuse")
+        proof=dict(pid=1234,mount_id=53,filesystem="fuse.CMTrace",payload_root_0755=True)
+        self.assertEqual(validate([proof,dict(proof,pid=1235)],True),[proof,dict(proof,pid=1235)])
+        for bad in [[proof],[dict(proof,filesystem="squashfs")],[dict(proof,path="private")],[dict(proof,payload_root_0755=False)]]:
+            with self.assertRaises(ValueError): validate(bad,True)
 
     def test_exact_artifact_and_source_binding(self):
         validate = self.api("validate_binding")
@@ -47,6 +132,11 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError): validate(status,1234,1235,host,current,[dict(ifname="eth0",flags=[])],[])
         with self.assertRaises(ValueError): validate(status,1234,1235,host,current,[dict(ifname="lo",flags=["UP"])],[])
         with self.assertRaises(ValueError): validate(status,1234,1235,host,current,links,[dict(dst="default")])
+
+    def test_fuse_metadata_skips_unrelated_mounts(self):
+        metadata=self.api("fuse_metadata")
+        mounts="25 1 0:1 / / rw - ext4 /dev/sda rw\n53 25 0:49 / /tmp/.mount_CMTrace ro,nosuid - fuse.CMTrace AppImage ro"
+        self.assertEqual(metadata(mounts,"/tmp/.mount_CMTrace/usr/bin/cmtrace-open"),dict(mount_id=53,filesystem="fuse.CMTrace"))
 
     def test_live_fuse_mount_must_contain_actual_application_executable(self):
         find=self.api("fuse_mount")
