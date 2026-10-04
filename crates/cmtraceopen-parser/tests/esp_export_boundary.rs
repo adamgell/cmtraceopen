@@ -20,7 +20,7 @@
 //! every free-text field, and the fixture plants them unlabelled in narrative
 //! so guard 1 above proves it.
 
-use cmtraceopen_parser::esp::*;
+use cmtraceopen_parser::intune::enrollment::windows::esp::*;
 use regex::Regex;
 use serde_json::Value;
 

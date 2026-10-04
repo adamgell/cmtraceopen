@@ -194,8 +194,7 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
         "analyze_esp_evidence"
         | "start_esp_diagnostics_session"
         | "get_esp_diagnostics_session"
-        | "stop_esp_diagnostics_session"
-        | "restart_esp_as_administrator" => err_json(
+        | "stop_esp_diagnostics_session" => err_json(
             "ESP native commands require the Tauri runtime and are unavailable through the debug IPC bridge",
         ),
 

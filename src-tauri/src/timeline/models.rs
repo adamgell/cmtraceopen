@@ -146,7 +146,7 @@ pub enum TimelineEntry {
     #[serde(rename = "imeEvent", rename_all = "camelCase")]
     ImeEvent {
         source_idx: u16,
-        event: Box<crate::intune::models::IntuneEvent>,
+        event: Box<crate::intune::apps::windows::ime::models::IntuneEvent>,
     },
 }
 

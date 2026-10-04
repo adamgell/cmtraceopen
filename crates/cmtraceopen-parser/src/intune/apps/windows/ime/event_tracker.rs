@@ -4,7 +4,7 @@
 //! view of Win32 app deployments and owns that behavior alone. This module keeps
 //! its event/timeline surface and public API unchanged; the identifier grammar
 //! it shares with the transaction analyzer (the GUID shape) is owned by
-//! [`super::guid_registry`], so the two cannot drift apart.
+//! [`crate::intune::common::identity`], so the two cannot drift apart.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -12,9 +12,10 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::guid_registry::{self, guid_re, GuidRegistry, GUID_PATTERN};
-use super::ime_parser::ImeLine;
+use super::guid_registry::GuidRegistry;
 use super::models::{IntuneEvent, IntuneEventType, IntuneStatus};
+use crate::intune::common::identity::{self, guid_re, GUID_PATTERN};
+use crate::parser::ccm::logical::ImeLine;
 
 fn win32_app_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -501,11 +502,11 @@ pub fn extract_events(
             continue;
         };
 
-        let identity_context = guid_registry::explicit_app_identity_context(&line.message);
+        let identity_context = identity::explicit_app_identity_context(&line.message);
         let guid = match &identity_context.identity {
-            guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
-            guid_registry::ExplicitAppIdentity::Invalid => None,
-            guid_registry::ExplicitAppIdentity::Absent => extract_guid(&line.message),
+            identity::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
+            identity::ExplicitAppIdentity::Invalid => None,
+            identity::ExplicitAppIdentity::Absent => extract_guid(&line.message),
         };
         let status = determine_status(&line.message, source_kind);
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
@@ -547,21 +548,19 @@ pub fn extract_events(
 fn enrich_event_name_for_identity(
     current_name: String,
     guid: Option<&str>,
-    identity_context: &guid_registry::ExplicitAppIdentityContext,
+    identity_context: &identity::ExplicitAppIdentityContext,
     registry: &GuidRegistry,
 ) -> String {
     let Some(guid) = guid else {
         return current_name;
     };
     let enriched = match &identity_context.identity {
-        guid_registry::ExplicitAppIdentity::Valid(_) => identity_context
+        identity::ExplicitAppIdentity::Valid(_) => identity_context
             .local_name
             .as_deref()
-            .and_then(|name| guid_registry::enrich_event_name_with_name(&current_name, name)),
-        guid_registry::ExplicitAppIdentity::Absent => {
-            registry.enrich_event_name(&current_name, guid)
-        }
-        guid_registry::ExplicitAppIdentity::Invalid => None,
+            .and_then(|name| identity::enrich_event_name_with_name(&current_name, name)),
+        identity::ExplicitAppIdentity::Absent => registry.enrich_event_name(&current_name, guid),
+        identity::ExplicitAppIdentity::Invalid => None,
     };
     enriched.unwrap_or(current_name)
 }
@@ -612,11 +611,11 @@ fn extract_appworkload_event(
         return None;
     };
 
-    let identity_context = guid_registry::explicit_app_identity_context(msg);
+    let identity_context = identity::explicit_app_identity_context(msg);
     let guid = match &identity_context.identity {
-        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
-        guid_registry::ExplicitAppIdentity::Invalid => None,
-        guid_registry::ExplicitAppIdentity::Absent => {
+        identity::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
+        identity::ExplicitAppIdentity::Invalid => None,
+        identity::ExplicitAppIdentity::Absent => {
             // Preserve the established AppWorkload heuristics only when the
             // line does not claim an explicit JSON identity field.
             extract_guid(msg)
@@ -2163,7 +2162,7 @@ mod tests {
         let mut registry = GuidRegistry::new();
         registry.ingest_lines(&[line(&message, "01-15-2024 10:00:04.000", 1)]);
         assert_eq!(registry.resolve(app_guid), Some("Contoso"));
-        guid_registry::reset_named_guid_fallback_extraction_count();
+        identity::reset_named_guid_fallback_extraction_count();
         let events = extract_events(
             &[line(&message, "01-15-2024 10:00:05.000", 2)],
             "C:/Logs/AppWorkload.log",
@@ -2174,7 +2173,7 @@ mod tests {
         assert_eq!(events[0].event_type, IntuneEventType::ContentDownload);
         assert_eq!(events[0].guid.as_deref(), Some(app_guid));
         assert!(events[0].name.contains("Contoso"));
-        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
+        assert_eq!(identity::named_guid_fallback_extraction_count(), 0);
     }
 
     #[test]
@@ -2424,7 +2423,7 @@ mod tests {
             "C:/Logs/AppWorkload.log",
             &explicit_registry,
         );
-        guid_registry::reset_named_guid_fallback_extraction_count();
+        identity::reset_named_guid_fallback_extraction_count();
         let fallback_events = extract_events(
             &[line(&fallback, "01-15-2024 10:00:05.000", 4)],
             "C:/Logs/IntuneManagementExtension.log",
@@ -2436,6 +2435,6 @@ mod tests {
         assert_eq!(fallback_events.len(), 1);
         assert_eq!(fallback_events[0].guid.as_deref(), Some(app_guid));
         assert!(fallback_events[0].name.contains("Fallback Name"));
-        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
+        assert_eq!(identity::named_guid_fallback_extraction_count(), 0);
     }
 }

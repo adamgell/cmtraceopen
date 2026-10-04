@@ -105,7 +105,7 @@ impl EspSessionCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::esp::models::{
+    use crate::intune::enrollment::windows::esp::models::{
         EspClassifiedString, EspElevationState, EspIdentityEvidence, EspPhase, EspScenario,
         EspSensitivity, ESP_DIAGNOSTICS_SCHEMA_VERSION,
     };

@@ -24,12 +24,12 @@ use regex::Regex;
 // failed / stalled) belong to `download_stats`. This module composes those
 // primitives instead of keeping parallel copies that can drift (issue #357's
 // one-behavior-owner requirement).
-use crate::intune::download_stats::{
+use crate::intune::apps::windows::ime::download_stats::{
     download_complete_re, download_failed_re, download_re as download_vocabulary_re,
     download_stall_re, is_download_start, is_state_transition_template,
 };
+use crate::intune::common::identity::GUID_PATTERN;
 use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
-use crate::intune::guid_registry::GUID_PATTERN;
 
 use super::models::{Win32ExecutionContext, Win32Intent, Win32Signal, Win32SourceKind};
 
@@ -895,7 +895,7 @@ mod tests {
         // phrase table itself lives with the vocabulary's owner
         // (download_stats::test_vocabulary) so the two test suites cannot
         // drift apart.
-        use crate::intune::download_stats::test_vocabulary::{
+        use crate::intune::apps::windows::ime::download_stats::test_vocabulary::{
             PRE_CONSOLIDATION_COMPLETE, PRE_CONSOLIDATION_FAILED, PRE_CONSOLIDATION_START,
         };
         for phrase in PRE_CONSOLIDATION_FAILED {
@@ -936,7 +936,9 @@ mod tests {
         // Every phrasing the shared negation gate suppresses must classify as
         // a failure here too, or the suppressed line mints no signal at all
         // and the download disappears from the transaction.
-        for phrase in crate::intune::download_stats::test_vocabulary::NEGATED_START_FAILED {
+        for phrase in
+            crate::intune::apps::windows::ime::download_stats::test_vocabulary::NEGATED_START_FAILED
+        {
             assert_eq!(
                 workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
                 Win32Signal::DownloadFailed,

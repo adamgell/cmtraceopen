@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Canonical Intune parser ownership (#356)**: IME analysis now lives under `intune::apps::windows::ime`, ESP under `intune::enrollment::windows::esp`, and shared logical CCM framing under `parser::ccm::logical`. The former public paths and ESP-only administrator-restart command are removed. Captured ESP bundles require a manifest; a missing manifest is reported as missing coverage without discovering undeclared evidence.
+
 ### Added
 
 - **Event detail resolves the error codes in an event's text (#665)**: A grid full of `0x8007…` and HRESULTs from MDM, AppX, Windows Update or ConfigMgr events was readable only by opening the Error Lookup dialog and retyping the code. The detail pane now lists the codes it finds in the message and event data with their name and category, and marks a code the database cannot explain as not in the database rather than staying silent. Results stay associated with the selected event text, so a pending or failed lookup cannot show the previous event's codes. Detection stays in the parser crate, so the frontend never grows a second idea of what a code looks like ([#665](https://github.com/adamgell/cmtraceopen/issues/665)).

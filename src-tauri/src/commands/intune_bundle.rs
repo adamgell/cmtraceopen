@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
-use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
+use crate::intune::apps::windows::ime::models::{
+    EvidenceBundleArtifactCounts, EvidenceBundleMetadata,
+};
 
 use super::intune::{ResolvedIntuneInput, IME_LOG_PATTERNS};
 

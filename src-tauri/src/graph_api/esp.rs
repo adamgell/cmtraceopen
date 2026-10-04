@@ -6,7 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspClassifiedString, EspCorrelationConfidence, EspEvidenceRef, EspGraphAppRecord,
     EspGraphAssignment, EspGraphAssignmentIntent, EspGraphAutopilotEvent,
     EspGraphAutopilotIdentity, EspGraphDeploymentProfile, EspGraphEnrollmentConfiguration,
@@ -2378,7 +2378,7 @@ fn device_identifier_matches(identifier: &str, device: &EspGraphManagedDevice) -
 #[cfg(test)]
 mod tests {
     use super::graph_status;
-    use cmtraceopen_parser::esp::EspNormalizedStatus;
+    use cmtraceopen_parser::intune::enrollment::windows::esp::EspNormalizedStatus;
 
     #[test]
     fn graph_script_status_covers_every_documented_run_state() {
@@ -2423,7 +2423,9 @@ mod overlay_tests {
     //! skipped with `referencedAppIds` rather than fetched or errored.
 
     use super::*;
-    use cmtraceopen_parser::esp::{EspIdentityEvidence, GraphSectionStatus};
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
+        EspIdentityEvidence, GraphSectionStatus,
+    };
 
     // Deterministic lowercase GUIDs so `normalize_graph_guid` is an identity and
     // the paths built by production code match the fake's routing exactly.

@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     extract_guid, normalize_timestamp, EspArtifactCoverage, EspArtifactStatus,
     EspDeploymentLogObservation, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
     EspImeObservation, EspObservationContext, EspObservationValue, EspParseState,
@@ -1062,7 +1062,9 @@ mod tests {
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use cmtraceopen_parser::esp::{correlate_installer_processes, EspEvidenceRecord};
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
+        correlate_installer_processes, EspEvidenceRecord,
+    };
 
     use super::*;
     use crate::esp::process::{

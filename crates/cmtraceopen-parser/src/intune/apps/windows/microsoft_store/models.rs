@@ -341,7 +341,7 @@ pub struct StoreInstallerOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StoreArtifactPayload {
-    /// Raw CCM-framed IME log text. Framed by [`crate::intune::ime_parser`].
+    /// Raw CCM-framed IME log text. Framed by [`crate::parser::ccm::logical`].
     ImeText {
         text: String,
     },
