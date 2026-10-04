@@ -121,6 +121,13 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # Default full-feature checks/tests already cover the exporter. Also build
+      # and exercise the actual CLI with the release feature selection. The
+      # process-level tests cover exports and errors without relying on --help.
+      - name: Build and smoke the headless event-log exporter
+        working-directory: src-tauri
+        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
+
       - name: Rust check (lite)
         working-directory: src-tauri
         run: cargo check --no-default-features
@@ -227,6 +234,9 @@ jobs:
 
       - name: TypeScript check
         run: npx tsc --noEmit
+
+      - name: Exporter workflow contract tests
+        run: node --test scripts/event-log-export-workflow.test.mjs
 
       - name: Frontend tests
         run: npm run test

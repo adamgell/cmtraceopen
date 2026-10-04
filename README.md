@@ -163,6 +163,59 @@ See the [DSRegCmd workspace guide](https://github.com/adamgell/CMTraceOpen/wiki/
 3. **Open a log** — drag and drop a file, use File > Open, or use a source preset
 4. **Explore** — use Find (Ctrl+F), Filter, or switch to the Intune/DSRegCmd workspace
 
+## Command-line export
+
+`event-log-export` is a headless exporter for `.evtx` files. It runs without the
+GUI, which is what makes it useful on a machine where you would rather not launch
+the app — pulling a channel from a customer's host, or scripting an export.
+
+The release workflow builds separate Windows x64, macOS arm64 and Linux x64
+assets, named for their version and target (for example
+`event-log-export-1.6.0-x86_64-pc-windows-msvc.exe`). CI also builds and smoke-tests
+the exporter with the same feature selection.
+
+```text
+usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>]
+       [--format csv|tsv|json|xml|html|rawXml] [--output <path|->]
+       [--channel <name>]... [--level <level>]... [--event-id <id>]...
+       [--search <text>]
+```
+
+```bash
+# Print one channel as CSV
+event-log-export --source System.evtx --channel System --format csv --output -
+
+# Critical and Error events, as JSON, to a file
+event-log-export --source Application.evtx --level Critical --level Error \
+  --format json --output application-errors.json
+
+# Export the sources and filters named by a manifest rather than on the command line
+event-log-export --manifest export.json --format json --output -
+```
+
+`--output -` writes to stdout. The filters combine across flags: an event is
+exported only when it satisfies every flag you supply, while several values for
+one flag are alternatives to each other — `--level Critical --level Error` keeps
+events at either level. `--manifest` cannot be combined with `--source` or with
+the filter arguments.
+
+Build it from a checkout with:
+
+```bash
+cd src-tauri
+cargo build --locked --release --no-default-features --features event-log --bin event-log-export
+```
+
+The `event-log` feature is required and is already included by the default
+`full` feature. The command above selects only `event-log`; the binary is written
+to `src-tauri/target/release/` (`event-log-export.exe` on Windows).
+
+The exporter shares the app's Rust library, so source builds still need the
+[platform prerequisites](CONTRIBUTING.md#prerequisites), including GTK/WebKit development
+libraries on Linux. This direct Cargo build does not require Node.js or built
+frontend assets. It runs without opening a window but retains native library
+dependencies; Linux hosts need the GTK/WebKit runtime libraries.
+
 ## Supported Log Formats
 
 | Format | Examples |
