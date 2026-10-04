@@ -174,7 +174,7 @@ assets, named for their version and target (for example
 `event-log-export-1.6.0-x86_64-pc-windows-msvc.exe`). CI also builds and smoke-tests
 the exporter with the same feature selection.
 
-```
+```text
 usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>]
        [--format csv|tsv|json|xml|html|rawXml] [--output <path|->]
        [--channel <name>]... [--level <level>]... [--event-id <id>]...
