@@ -151,6 +151,45 @@ class ContractTests(unittest.TestCase):
         for bad in [[proof],[dict(proof,filesystem="squashfs")],[dict(proof,path="private")],[dict(proof,payload_root_0755=False)]]:
             with self.assertRaises(ValueError): validate(bad,True)
 
+    def test_cleanup_selects_only_owned_fuse_mounts_below_private_root(self):
+        select=self.api("owned_fuse_mounts")
+        lines="25 1 0:1 / / rw - ext4 /dev/sda rw\n53 25 0:49 / /tmp/task/ordinary/tmp/app ro - fuse.AppImage image ro,user_id=1234,group_id=1235\n54 25 0:50 / /tmp/unrelated ro - fuse.AppImage image ro,user_id=1234,group_id=1235"
+        self.assertEqual(select(lines,1234,Path("/tmp/task")),["/tmp/task/ordinary/tmp/app"])
+        for bad in [lines.replace("user_id=1234","user_id=999"),lines.replace("fuse.AppImage","squashfs")]:
+            with self.assertRaises(ValueError): select(bad,1234,Path("/tmp/task"))
+        self.assertEqual(select("25 1 0:1 / / rw - ext4 /dev/sda rw",1234,Path("/tmp/task")),[])
+
+    def test_cleanup_unmount_drops_to_task_identity_and_uses_normal_fuse_helper(self):
+        command=self.api("unmount_command")(1234,1235,"/tmp/task/ordinary/tmp/app")
+        self.assertEqual(command[:4],["/usr/bin/setpriv","--reuid=1234","--regid=1235","--clear-groups"])
+        self.assertEqual(command[-4:],["/usr/bin/fusermount3","-u","--","/tmp/task/ordinary/tmp/app"])
+        self.assertIn("--inh-caps=-all",command)
+        self.assertIn("--ambient-caps=-all",command)
+        self.assertIn("-i",command)
+        self.assertNotIn("--force",command)
+        self.assertNotIn("-z",command)
+
+    def test_process_cleanup_refuses_root_or_invalid_uid_before_proc_scan(self):
+        from appimage_runtime.host import kill_owned
+        from unittest.mock import patch
+        with patch.object(Path,"iterdir") as scan:
+            for uid in (0,-1):
+                with self.assertRaises(ValueError): kill_owned(uid)
+            scan.assert_not_called()
+
+    def test_cleanup_requires_mount_disappearance_before_returning(self):
+        from appimage_runtime import host
+        from unittest.mock import patch
+        cleanup=getattr(host,"cleanup_fuse",None)
+        self.assertTrue(callable(cleanup),"bounded FUSE cleanup is not implemented")
+        mount="53 25 0:49 / /tmp/task/ordinary/tmp/app ro - fuse.AppImage image ro,user_id=1234,group_id=1235"
+        with patch.object(Path,"read_text",side_effect=[mount,""]), patch.object(host.subprocess,"run") as run:
+            cleanup(Path("/tmp/task"),1234,1235)
+            self.assertEqual(run.call_count,1)
+            self.assertIn("/tmp/task/ordinary/tmp/app",run.call_args.args[0])
+        with patch.object(Path,"read_text",return_value=mount), patch.object(host.subprocess,"run"):
+            with self.assertRaises(ValueError): cleanup(Path("/tmp/task"),1234,1235)
+
     def test_exact_artifact_and_source_binding(self):
         validate = self.api("validate_binding")
         report = dict(build=dict(source_commit="0a1bb21add1e7d331d4f4e2a00be8c317240bebf", built_commit="9433d28d28db986c0a2204b22cf20a7643d7f3df", built_tree="5481bee5fc7f503b075ed6501bc9556db65de76e", image=dict(GITHUB_RUN_ID="37222916777", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="fe80fa10c11b0dbd16198579169a08e4f2ed5ab5e72da876c3ec0197153b9873"))

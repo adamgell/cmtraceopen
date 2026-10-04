@@ -47,6 +47,8 @@ def packages():
 
 def kill_owned(uid):
     """Bind signals to pidfds, and never target a process of another account."""
+    if uid <= 0:
+        raise ValueError("harness-error")
     for sig, seconds in ((signal.SIGTERM, 3), (signal.SIGKILL, 5)):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
@@ -70,6 +72,21 @@ def kill_owned(uid):
                 return
             time.sleep(0.1)
     raise ValueError("harness-error")
+
+
+def cleanup_fuse(root, uid, gid):
+    # The root was newly created for this run. Only this account's FUSE mounts
+    # beneath it may be detached, including mounts made before UI proof existed.
+    deadline = time.monotonic() + 20
+    mounts = contract.owned_fuse_mounts(Path("/proc/self/mountinfo").read_text(), uid, root)
+    for mount in mounts:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("harness-error")
+        subprocess.run(contract.unmount_command(uid, gid, mount), check=True,
+                       timeout=min(5, remaining), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if contract.owned_fuse_mounts(Path("/proc/self/mountinfo").read_text(), uid, root):
+        raise ValueError("harness-error")
 
 
 def collect(root, uid, output):
@@ -179,6 +196,7 @@ def main(artifact_dir, output, harness_sha):
         try:
             if uid is not None:
                 kill_owned(uid)
+                cleanup_fuse(root, uid, gid)
             if created:
                 run(["userdel", ACCOUNT])
                 try:

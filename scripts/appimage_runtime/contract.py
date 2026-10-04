@@ -186,3 +186,27 @@ def fuse_metadata(mountinfo, executable):
         if decoded == mount and (filesystem == "fuse" or filesystem.startswith("fuse.")):
             return dict(mount_id=int(fields[0]), filesystem=filesystem)
     raise ValueError("fuse-unavailable")
+
+
+def owned_fuse_mounts(mountinfo, uid, root):
+    if uid <= 0 or not root.is_absolute():
+        raise ValueError("harness-error")
+    mounts = []
+    for line in mountinfo.splitlines():
+        before, _, after = line.partition(" - ")
+        mount = PurePosixPath(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), before.split()[4]))
+        if not mount.is_relative_to(root):
+            continue
+        fields = after.split()
+        if not (fields[0] == "fuse" or fields[0].startswith("fuse.")) or f"user_id={uid}" not in fields[2].split(","):
+            raise ValueError("harness-error")
+        mounts.append(str(mount))
+    return sorted(mounts, key=lambda path: len(PurePosixPath(path).parts), reverse=True)
+
+
+def unmount_command(uid, gid, mount):
+    if uid <= 0 or gid <= 0 or not PurePosixPath(mount).is_absolute():
+        raise ValueError("harness-error")
+    return ["/usr/bin/setpriv", f"--reuid={uid}", f"--regid={gid}", "--clear-groups",
+            "--inh-caps=-all", "--ambient-caps=-all", "/usr/bin/env", "-i",
+            "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "/usr/bin/fusermount3", "-u", "--", mount]

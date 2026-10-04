@@ -33,7 +33,7 @@ The supervisor hashes a root-owned copy before execution and checks its producer
 
 Official Ubuntu packages provide Python, AT-SPI, Xvfb, IceWM, D-Bus, bubblewrap and FUSE. Installed package versions and trusted Ubuntu archive origins are recorded before execution. All GUI processes run under a newly allocated temporary account, with no supplementary groups, sudo access, Docker socket access, or inherited credentials. A privileged transient `unshare --net` creates an offline network namespace; `setpriv` then drops UID/GID and inheritable/ambient capabilities. The child verifies zero effective/permitted/inheritable/ambient capabilities, a down loopback-only interface, no IPv4/IPv6 routes, and unchanged outer mount/PID/user namespaces. It probes official bubblewrap before launching the app.
 
-No persistent namespace, host network rule, sysctl, AppArmor policy, device permission, or global mount is changed. Normal FUSE helpers remain usable: the harness does not set `no-new-privs` or drop the capability bounding set. Bubblewrap may create its own nested sandbox. This arrangement is a credential and network boundary on disposable VMs; it is not a claim of full filesystem isolation from a hostile executable.
+No persistent namespace, host network rule, sysctl, AppArmor policy, device permission, or unrelated mount is changed. Normal FUSE helpers remain usable: the harness does not set `no-new-privs` or drop the capability bounding set. Bubblewrap may create its own nested sandbox. This arrangement is a credential and network boundary on disposable VMs; it is not a claim of full filesystem isolation from a hostile executable.
 
 Both cases launch the actual AppImage runtime under Xvfb:
 
@@ -58,7 +58,7 @@ A per-controller Linux child subreaper adopts orphaned app helpers, including he
 
 Fresh home/config/cache/data directories isolate the two cases. Namespace, bubblewrap, FUSE, GUI or accessibility failures are **blocked**. Once accessibility is available, failed functional assertions are **failed**. Both cases must pass for the job to succeed; a blocked case never becomes an application pass.
 
-Application/helper output is discarded. Cleanup terminates only the newly allocated account's processes, using pidfds to avoid PID reuse races, and removes that account and owned temporary files. Evidence is read after cleanup of child processes, rejecting symlinks, hardlinks, special files, wrong owners and oversized files. Only an allowlisted JSON summary and four decoded/re-encoded PNGs can upload, capped at 10 MiB of screenshots per VM with seven-day retention. No raw logs, environment dump, arbitrary accessibility text, or artifact payload is uploaded.
+Application/helper output is discarded. Cleanup terminates only the newly allocated account's processes, using pidfds to avoid PID reuse races, then unmounts any remaining task-owned FUSE mounts under the newly created private temp root using the normal FUSE helper as the task account. This bounded cleanup verifies mount disappearance before deleting the account and files. It preserves a failed or blocked outcome and never substitutes for normal-exit acceptance. Evidence is read after cleanup of child processes, rejecting symlinks, hardlinks, special files, wrong owners and oversized files. Only an allowlisted JSON summary and four decoded/re-encoded PNGs can upload, capped at 10 MiB of screenshots per VM with seven-day retention. No raw logs, environment dump, arbitrary accessibility text, or artifact payload is uploaded.
 
 ## Harmless checks before dispatch
 
