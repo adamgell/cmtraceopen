@@ -50,7 +50,7 @@ Debian/RPM-only and executable-only builds do not access that launcher or its ca
 
 ```bash
 npm run app:build:release -- --bundles deb
-npm run tauri -- bundle --bundles appimage
+npm run tauri -- bundle --bundles rpm
 npm run tauri -- build --config src-tauri/tauri.lite.conf.json --bundles deb -- --no-default-features
 ```
 
