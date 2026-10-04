@@ -4,14 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Pending integration
+### Pending release acceptance
 
-- **Intended for 1.6.1, not yet included**: Ubuntu 22.04 AppImage preparation and verification (#786) is awaiting runtime acceptance and integration. The supporting runtime harness (#787) is separate infrastructure. Move this entry into the release only after the product change actually merges and its evidence is accepted.
+- **AppImage runtime acceptance**: This draft includes the launcher and build changes from #786. Runtime compatibility on Ubuntu 22.04 and 24.04 still requires acceptance of the exact final signed AppImage before publication. The supporting runtime harness (#787) is separate infrastructure and must be bound to those final bytes.
 - **Held for later work**: Saved-session backend reads and narrower filesystem grants (#747), the remaining privacy changes (#645, #667, #737, #761), CSP/elevation/DNS changes (#748, #755, #731), and other unmerged features or policy changes are not part of this 1.6.1 draft. Existing release entries describe only their already merged portions.
 
 **1.6.1 draft**
 
-Draft release notes. No release date is assigned. This draft covers every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67`; the intended AppImage addition remains pending above.
+Draft release notes. No release date is assigned. This draft combines every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` with the frozen #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`. Final signed-artifact runtime acceptance remains pending.
 
 ### Changed
 
@@ -34,12 +34,7 @@ Draft release notes. No release date is assigned. This draft covers every commit
 
 ### Fixed
 
-- **DsRegCmd evidence and findings (#590, #642)**: Move bundle loading and analysis off the Tauri main thread. Distinguish failed SCP queries from missing configuration, avoid inventing PRT/certificate timing without capture time, match Win32 and AADSTS codes as complete codes, and remove unsupported replication/migration conclusions. Sort Top Findings by severity; handle malformed endpoints, registry values and event timestamps conservatively; log malformed evidence by its bundle-relative name.
-- **JAMF and Intune workspace behavior (#631, #725)**: Keep the JAMF workspace active when opening its own log and give it a clear label. Rename the generic Intune analysis workspace to identify its purpose.
-- **SCCM client and site versions (#772)**: Read client version from `SMS\Mobile Client` and site-server version from `SMS\Setup`, show them separately, and use the site version for server-scoped capture authorization. Missing versions remain coverage gaps.
-- **Event, timeline, marker and registry interactions (#583)**: Reject stale source transitions, preserve lossless event-record IDs and source identity, serialize marker persistence, retain dirty markers after I/O errors, and keep source failures visible. Improve registry keyboard/focus behavior, dialog ownership and focus restoration, and native Always on Top state/listener handling.
-- **Windows file-association ownership (#583)**: Verify the selected handler, scope prompts to the installed edition, and clean up stable/nightly and Full/Lite runtime registrations during uninstall without treating an ordinary NSIS uninstall as a different channel.
-- **Evidence collection and shared text matching (#583, #632, #644)**: Make collection bundle timestamps and identifiers culture-independent. Consolidate caseless matching and group Autopilot distinct values using that shared normalization; retain the existing workload-specific masking rules.
+- **Linux AppImage launcher permissions**: The npm build commands prepare Tauri's x86_64 AppRun launcher with mode 0755 before AppImage bundling and signing. Debian/RPM-only and executable-only builds leave the launcher cache and network untouched. This addresses the launcher permission denial reported by [AppImage catalog #8206](https://github.com/AppImage/appimage.github.io/pull/8206); Linux library compatibility remains a separate requirement.
 
 - **Moved environment-variable expansion out of the pure parser crate**: `collector::env_expand` read the host process environment, which is engine-side work under the crate's own boundary rule. It now lives in the shared native `src-tauri/src/env_expand.rs` module, so collector and ESP diagnostics can each use it without enabling the other feature. CI checks the ESP-only and collector-only builds to protect that boundary.
 - **DsRegCmd capture freshness uses an explicit evaluation instant (item 3 of #738)**: Both public analysis entry points now require `evaluated_at: DateTime<Utc>`, supplied once at the application boundary and passed through to the capture-confidence rules. Fixed-time public API regressions cover repeatability and the existing confidence thresholds. This removes the DsRegCmd freshness clock read; other parser clock and local-time behavior is outside this change. **`cmtraceopen-parser` goes to 0.3.0**, and the native dependency requirement moves to `0.3`, because the required argument breaks the previous 0.2.0 source API.
@@ -77,7 +72,16 @@ Draft release notes. No release date is assigned. This draft covers every commit
 - **ESP export no longer publishes a short identifier in narrative (#752)**: Every classified value carried the six-byte floor that exists to keep junk firmware serials ("0", "N/A") from mangling readable narrative, so a value read from a field that declares an identity was held to a bar meant for arbitrary content. A tenant domain four bytes long was masked in its typed field and left verbatim in the narrative naming the same value — one export contradicting itself about one value. The floor is now stated per field: a serial keeps the existing bar, while a tenant id, tenant domain or user principal name is scrubbed from four bytes, which is short because the identity is short. Values below four bytes still escape, and that remainder is unchanged and stated in the constant's documentation.
 - **Registry keys differing only in case no longer split the tree**: The registry tree keyed its nodes on the raw path, so `HKLM\SOFTWARE` and `hklm\SOFTWARE` — the same key on Windows — built two independent subtrees. Keys are now matched case-insensitively while the tree still displays the casing the file used: a key that merges into an existing subtree takes that subtree's casing for its own path, so a node always prefix-matches the parent it hangs from, and collapsing a subtree moves the selection back to it instead of leaving the selection on a row that just disappeared. Selecting or searching a merged key displays values from every case-equivalent source section, retaining repeated value records ([#708](https://github.com/adamgell/cmtraceopen/issues/708)).
 
+- **DsRegCmd evidence and findings (#590, #642)**: Move bundle loading and analysis off the Tauri main thread. Distinguish failed SCP queries from missing configuration, avoid inventing PRT/certificate timing without capture time, match Win32 and AADSTS codes as complete codes, and remove unsupported replication/migration conclusions. Sort Top Findings by severity; handle malformed endpoints, registry values and event timestamps conservatively; log malformed evidence by its bundle-relative name.
+- **JAMF and Intune workspace behavior (#631, #725)**: Keep the JAMF workspace active when opening its own log and give it a clear label. Rename the generic Intune analysis workspace to identify its purpose.
+- **SCCM client and site versions (#772)**: Read client version from `SMS\Mobile Client` and site-server version from `SMS\Setup`, show them separately, and use the site version for server-scoped capture authorization. Missing versions remain coverage gaps.
+- **Event, timeline, marker and registry interactions (#583)**: Reject stale source transitions, preserve lossless event-record IDs and source identity, serialize marker persistence, retain dirty markers after I/O errors, and keep source failures visible. Improve registry keyboard/focus behavior, dialog ownership and focus restoration, and native Always on Top state/listener handling.
+- **Windows file-association ownership (#583)**: Verify the selected handler, scope prompts to the installed edition, and clean up stable/nightly and Full/Lite runtime registrations during uninstall without treating an ordinary NSIS uninstall as a different channel.
+- **Evidence collection and shared text matching (#583, #632, #644)**: Make collection bundle timestamps and identifiers culture-independent. Consolidate caseless matching and group Autopilot distinct values using that shared normalization; retain the existing workload-specific masking rules.
+
 ### Build & CI
+
+- **AppImage build baseline and evidence (#786)**: Build the Linux desktop packages on Ubuntu 22.04 and inspect the AppImage launcher modes, strong GLIBC imports and static versioned dependency closure. Record the final image hash and source/build inputs in an ABI report. Release builds archive the signed AppImage and report after the draft upload so runtime acceptance can use the same bytes; these static checks do not establish runtime compatibility. Native check jobs and the separate Linux exporter retain their existing runner baselines.
 
 - **Source and regression gates (#589, #626, #637, #704, #705, #749)**: Pin the build toolchain to Rust 1.98.1 while retaining Rust 1.88 MSRV checks; enforce formatting, changed-range whitespace and parser WASM compilation. Explicitly requested EVTX fixtures now fail when absent. Add provider-database manifest, filtered Quick Stats, and timezone/DST regression coverage.
 - **Review and package automation (#623, #660, #784)**: Publish Scoop updates as pull requests, constrain incompatible dependency proposals, and preserve CodeRabbit approval across later discussion-only reviews. The Windows dependency family stays pinned; these changes do not relax merge or release approval policy.
@@ -105,7 +109,7 @@ Draft release notes. No release date is assigned. This draft covers every commit
 ### Platform and release notes
 
 - Expected desktop artifacts remain Windows x64 and ARM64 Full/Lite portable EXEs, NSIS installers and MSIs; macOS Apple silicon DMG and app updater archive; and Linux x64 AppImage, DEB and RPM. The exporter adds Windows x64, macOS arm64 and Linux x64 CLI assets; there is no Windows ARM64 exporter asset in the configured matrix.
-- Ubuntu 22.04 AppImage compatibility is pending runtime acceptance and integration of #786. A successful build or static ABI check alone is not a runtime compatibility claim. Final 1.6.1 artifacts must be built from the approved release commit and checked before publication.
+- Ubuntu 22.04 and 24.04 AppImage runtime compatibility remains pending acceptance of the final signed release artifact. The #786 launcher/build changes are included in this draft; a successful build or static ABI check alone is not a runtime compatibility claim. Final 1.6.1 artifacts must be built from the approved release commit and checked before publication.
 - The signed desktop updater requires all eight target entries in `latest.json`. Package-manager catalogs remain on their existing artifacts until verified 1.6.1 hashes are available.
 
 ## [1.6.0] - 2026-09-14

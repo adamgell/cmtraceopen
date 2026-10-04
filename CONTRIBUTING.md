@@ -41,6 +41,55 @@ npm run app:build:exe-only      # Executable only, no bundler
 npm run frontend:build          # tsc + vite build
 ```
 
+On Linux x86_64, the npm build commands prepare Tauri's AppRun launcher before
+AppImage bundling and signing. The first AppImage build downloads a pinned,
+SHA-256-verified launcher; later builds repair the cached launcher's permissions.
+If `bundle.useLocalToolsDir` is enabled, preparation uses Cargo metadata's target
+directory and its `.tauri` cache, matching the bundler.
+Debian/RPM-only and executable-only builds do not access that launcher or its cache:
+
+```bash
+npm run app:build:release -- --bundles deb
+npm run tauri -- bundle --bundles appimage
+npm run tauri -- build --config src-tauri/tauri.lite.conf.json --bundles deb -- --no-default-features
+```
+
+The wrapper preserves CLI arguments and config precedence. It adds the AppImage
+profile before user config overrides; an explicit user `beforeBundleCommand`
+therefore replaces the preparation hook. Config-only `bundle.targets` overrides
+also select which bundles need preparation. Flags after `--` belong to Cargo;
+`app:build:lite` already includes that delimiter, so use the generic command above
+to select its bundle formats.
+
+Direct `npx tauri` or `cargo tauri` calls bypass the npm wrapper. To prepare an
+AppImage through those entry points, explicitly opt into
+`--config src-tauri/tauri.appimage.conf.json`. Use the npm commands for automatic
+format selection; a raw invocation with that profile always prepares AppRun on
+Linux x86_64. Launcher permissions do not establish Linux library compatibility.
+
+The Linux application packaging jobs use Ubuntu 22.04 with current Jammy
+packages. Their compiled caches include the OS baseline. An opt-in workflow
+context makes the npm wrapper inspect the completed AppImage before returning
+success to the pinned Tauri action, including its release uploader. Inspection
+reads the archive and ELF metadata without running the AppImage: root-owned
+0755 launchers, the pinned launcher hash, every nested ELF's strong GLIBC imports
+through 2.35, and versioned dependency resolution against bundled libraries and
+official Jammy providers. Missing tools, incomplete inspection and cancellation
+fail the Linux build. Signing happens before this read-only inspection.
+The workflows install hash-pinned pure-Python inspection libraries from
+`scripts/appimage-abi-requirements.txt` into an isolated environment; auditwheel
+is used only for static dependency reading, never repair or artifact execution.
+Conflicting providers in the launcher's `LD_LIBRARY_PATH` and ELF search paths
+are rejected conservatively because auditwheel's search precedence differs from
+glibc's. Symlink aliases to the same provider are accepted.
+
+The `provenance/appimage-abi.json` CI artifact records the source/build commits,
+runner image, package origins, lockfile hashes, resolved bundling-tool hashes and
+artifact hash. Some Tauri tools come from mutable upstream URLs; recording their
+hashes does not make those inputs reproducible. Static inspection does not prove
+FUSE mounting, WebKit rendering or log workflows. Those require separate runtime
+validation of the same artifact on Ubuntu 22.04 and newer systems.
+
 ### Rust Commands
 
 Run from `src-tauri/`:
