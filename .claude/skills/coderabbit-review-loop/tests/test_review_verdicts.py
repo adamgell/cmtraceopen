@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import importlib.util
 from itertools import permutations
 import unittest
 from unittest.mock import patch
 
-from test_review_state import graphql_response, review_state, review_thread
+from test_review_state import REPO_ROOT, graphql_response, review_state, review_thread
 
 
 HEAD = "a" * 40
@@ -194,6 +196,99 @@ class ReviewVerdictTests(unittest.TestCase):
         with patch.object(review_state, "run_json", side_effect=[first, second]), \
                 self.assertRaisesRegex(SystemExit, "review state changed during pagination"):
             review_state.fetch("base-owner", "base-repo", 42)
+
+
+class LaneReviewContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        path = REPO_ROOT / ".omp/skills/cmtraceopen-dev/scripts/lane_state.py"
+        spec = importlib.util.spec_from_file_location("approval_lane_state", path)
+        assert spec is not None and spec.loader is not None
+        cls.lane_state = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.lane_state)
+
+    def snapshot(self, reviews: list[dict]) -> dict:
+        response = graphql_response(reviews)
+        response["data"]["repository"]["pullRequest"]["isDraft"] = True
+        with patch.object(review_state, "run_json", return_value=response):
+            return review_state.fetch("base-owner", "base-repo", 42)
+
+    def validate(self, raw: dict) -> None:
+        self.lane_state._validate_coderabbit_raw_verdict(raw, {
+            "prNumber": 42,
+            "prUrl": "https://github.com/base-owner/base-repo/pull/42",
+            "headSha": HEAD,
+            "currentBaseSha": OLD_HEAD,
+        }, "integration")
+
+    def test_lane_accepts_real_helper_approval_and_later_discussion(self) -> None:
+        for events in ([review("APPROVED", 12)],
+                       [review("APPROVED", 12), review("COMMENTED", 15)]):
+            with self.subTest(events=events):
+                self.validate(self.snapshot(events))
+
+    def test_lane_recomputes_verdict_instead_of_trusting_approval_summary(self) -> None:
+        for blocker in (
+            review("CHANGES_REQUESTED", 14),
+            review("DISMISSED", 10, updated_minute=14),
+            review("CHANGES_REQUESTED", 12),
+            review("APPROVED", 14, head=OLD_HEAD),
+            {**review("CHANGES_REQUESTED", 14), "state": "FUTURE_STATE"},
+            {**review("CHANGES_REQUESTED", 14), "submittedAt": None},
+        ):
+            raw = self.snapshot([review("APPROVED", 12), review("COMMENTED", 15)])
+            raw["reviews"].insert(1, blocker)
+            raw["summary"]["review_count"] += 1
+            raw["summary"]["coderabbit_review_count"] += 1
+            with self.subTest(blocker=blocker), self.assertRaises(ValueError):
+                self.validate(raw)
+
+    def test_lane_preserves_schema_counts_and_latest_event_integrity(self) -> None:
+        original = self.snapshot([review("APPROVED", 12), review("COMMENTED", 15)])
+        for variant in ("extra-field", "missing-updated", "empty-verdict", "wrong-count",
+                        "wrong-latest", "wrong-state", "duplicate-review"):
+            raw = deepcopy(original)
+            if variant == "extra-field":
+                raw["summary"]["unexpected"] = True
+            elif variant == "missing-updated":
+                del raw["reviews"][0]["updatedAt"]
+            elif variant == "empty-verdict":
+                raw["summary"]["effective_coderabbit_reviews"] = []
+            elif variant == "wrong-count":
+                raw["summary"]["coderabbit_review_count"] = 1
+            elif variant == "wrong-latest":
+                raw["summary"]["latest_coderabbit_review"] = raw["reviews"][0]
+                raw["summary"]["latest_coderabbit_review_state"] = "APPROVED"
+            elif variant == "wrong-state":
+                raw["summary"]["latest_coderabbit_review_state"] = "APPROVED"
+            else:
+                raw["reviews"].append(deepcopy(raw["reviews"][0]))
+                raw["summary"]["review_count"] += 1
+                raw["summary"]["coderabbit_review_count"] += 1
+            with self.subTest(variant=variant), self.assertRaises(ValueError):
+                self.validate(raw)
+
+    def test_lane_preserves_draft_base_head_and_latest_cycle_head_gates(self) -> None:
+        original = self.snapshot([review("APPROVED", 12), review("COMMENTED", 15)])
+        for field, value in (("is_draft", False), ("head_sha", "c" * 40),
+                             ("base_sha", "c" * 40)):
+            raw = deepcopy(original)
+            raw["pull_request"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.validate(raw)
+        raw = self.snapshot([review("APPROVED", 12), review("COMMENTED", 15, head=OLD_HEAD)])
+        with self.assertRaises(ValueError):
+            self.validate(raw)
+
+    def test_lane_does_not_trust_forged_zero_actionable_thread_count(self) -> None:
+        raw = self.snapshot([review("APPROVED", 12), review("COMMENTED", 15)])
+        raw["unresolved_threads"] = [review_thread({
+            "id": "finding", "author": {"login": "coderabbitai"},
+            "body": "Regression", "createdAt": "2026-10-03T01:16:00Z",
+        })]
+        raw["summary"]["unresolved_thread_count"] = 1
+        with self.assertRaises(ValueError):
+            self.validate(raw)
 
 
 if __name__ == "__main__":

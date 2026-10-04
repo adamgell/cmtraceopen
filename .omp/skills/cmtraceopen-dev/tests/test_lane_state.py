@@ -536,6 +536,7 @@ def clean_coderabbit_review(
         "state": "APPROVED",
         "body": "Approved",
         "submittedAt": NOW,
+        "updatedAt": NOW,
         "author": {"login": "coderabbitai"},
         "commit": {"oid": head_sha},
     }
@@ -555,6 +556,7 @@ def clean_coderabbit_review(
             "unresolved_coderabbit_thread_count": 0,
             "latest_coderabbit_review": latest_review,
             "latest_coderabbit_review_state": "APPROVED",
+            "effective_coderabbit_reviews": [latest_review],
             "approved_at_head": True,
         },
         "unresolved_threads": [],
