@@ -69,10 +69,24 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
 /// The local offset at a zoneless wall clock, in minutes to add to UTC to
 /// obtain local time (negative west of Greenwich).
 ///
-/// Only a single local mapping supplies an offset. Gaps and repeated clocks
-/// return `None`, leaving fallback policy to the caller. In particular, the
-/// gap-clamped epoch from [`local_wall_clock_millis`] cannot supply an offset.
+/// Native single mappings supply an offset; gaps and repeated clocks return
+/// `None`. The browser backend also returns `None` because it cannot report
+/// uniqueness, preserving the caller's existing fallback for every local clock.
+/// The gap-clamped epoch from [`local_wall_clock_millis`] cannot supply an offset.
 pub(crate) fn local_minus_utc_minutes_at(naive: NaiveDateTime) -> Option<i32> {
+    // This crate enables Chrono's default `wasmbind` feature. Match its browser
+    // backend, which reports Single even for gaps and folds. Other WASM targets
+    // use their native/UTC backend and retain its existing mapping behavior.
+    if cfg!(all(
+        target_arch = "wasm32",
+        not(any(
+            target_os = "emscripten",
+            target_os = "wasi",
+            target_os = "linux"
+        ))
+    )) {
+        return None;
+    }
     let local = naive.and_local_timezone(Local).single()?;
     Some(local.offset().local_minus_utc() / 60)
 }
@@ -615,6 +629,24 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi", target_os = "linux"))
+    ))]
+    #[test]
+    fn test_browser_offset_defers_every_clock_to_existing_fallback() {
+        for clock in [
+            "2026-01-15 12:34:56",
+            "2026-07-15 12:34:56",
+            "2026-03-29 01:30:00",
+            "2026-03-29 01:45:00",
+            "2026-10-25 01:30:00",
+        ] {
+            let naive = NaiveDateTime::parse_from_str(clock, "%Y-%m-%d %H:%M:%S").unwrap();
+            assert_eq!(local_minus_utc_minutes_at(naive), None, "{clock}");
+        }
     }
 
     #[cfg(unix)]
