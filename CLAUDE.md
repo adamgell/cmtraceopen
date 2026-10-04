@@ -114,11 +114,11 @@ compatibility; it does not by itself prove compliance with that policy.
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `workspaces/` | The analysis surfaces, one directory each: `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
-| `components/panels/` | Docked analysis panels shared across workspaces |
-| `components/registry-view/` | Rendered registry-source views |
-| `components/timeline/` | Shared timeline rendering |
-| `components/common/` | Cross-workspace primitives |
+| `workspaces/` | The analysis surfaces, one directory each (see `workspaces/registry.ts`): `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
+| `components/panels/` | Quick-stats panel and its subviews |
+| `components/registry-view/` | Registry key tree, value table, viewer |
+| `components/timeline/` | Swim-lane canvas, ruler, brush overlay, incident panels |
+| `components/common/` | Shared sidebar primitives |
 | `stores/` | 6 Zustand stores: `log`, `filter`, `marker`, `registry`, `timeline`, `ui` |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
