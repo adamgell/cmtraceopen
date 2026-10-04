@@ -117,6 +117,12 @@ jobs:
         working-directory: src-tauri
         run: cargo check --no-default-features
 
+      - name: Rust check (ESP without collector)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features esp-diagnostics
+
+      - name: Rust check (collector without ESP)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features collector
+
       - name: Rust tests (lite)
         working-directory: src-tauri
         run: cargo test --no-default-features
@@ -312,6 +318,20 @@ jobs:
             -PassThru
           if ($result.Result -ne "Passed") {
             throw "Installer cleanup tests ended with result $($result.Result)."
+          }
+
+      - name: Test evidence collector scripts
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./scripts/collection/tests/Invoke-CmtraceEvidenceCollection.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Evidence collector tests ended with result $($result.Result)."
           }
 
       - name: Setup Rust

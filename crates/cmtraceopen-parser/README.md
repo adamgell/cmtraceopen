@@ -137,7 +137,7 @@ The crate also carries the pure-analysis layers the app builds on top of parsing
 | `intune` | IME event extraction and timeline reduction |
 | `esp` | Autopilot Enrollment Status Page evidence normalization, reduction, and redaction |
 | `dsregcmd` | `dsregcmd /status` output parsing and diagnostic rules |
-| `collector` | Diagnostic-collection profile models and environment-variable expansion |
+| `collector` | Diagnostic-collection profile models and embedded profile catalog |
 
 ## Versioning
 
