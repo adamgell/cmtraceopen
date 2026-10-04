@@ -1,6 +1,6 @@
 //! Reduction of supplied Autopilot evidence into an immutable snapshot.
 //!
-//! The shape follows the ESP sibling in `crate::esp`: typed observations that
+//! The shape follows the ESP sibling in `crate::intune::enrollment::windows::esp`: typed observations that
 //! each carry an [`IntuneObservationContext`], then a single pass that folds
 //! them into a snapshot, then `derive_findings` over that snapshot. Nothing
 //! here performs I/O, and nothing mutates the snapshot after it is returned.

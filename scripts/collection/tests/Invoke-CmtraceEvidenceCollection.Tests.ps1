@@ -1,7 +1,10 @@
 BeforeAll {
-    $collectorPath = Join-Path $PSScriptRoot '..' 'Invoke-CmtraceEvidenceCollection.ps1'
-    $stagedProfilePath = Join-Path $PSScriptRoot '..' 'intune-evidence-profile.json'
-    $referenceProfilePath = Join-Path $PSScriptRoot '..' '..' '..' 'references' 'collection' 'intune-evidence-profile.json'
+    # Join-Path takes a single child path in Windows PowerShell 5.1, which is the shell the ESP
+    # job runs this file under. Passing several positional segments works in pwsh 7 and throws
+    # there, so every call below joins exactly once.
+    $collectorPath = Join-Path $PSScriptRoot '../Invoke-CmtraceEvidenceCollection.ps1'
+    $stagedProfilePath = Join-Path $PSScriptRoot '../intune-evidence-profile.json'
+    $referenceProfilePath = Join-Path $PSScriptRoot '../../../references/collection/intune-evidence-profile.json'
     $stagedProfileText = Get-Content -LiteralPath $stagedProfilePath -Raw
     $referenceProfileText = Get-Content -LiteralPath $referenceProfilePath -Raw
     $stagedProfile = $stagedProfileText | ConvertFrom-Json
@@ -99,7 +102,7 @@ Describe 'New-CollectorBundleId' {
     It 'uses the invariant Gregorian calendar under a non-Gregorian culture' {
         $originalCulture = [System.Globalization.CultureInfo]::CurrentCulture
         $originalUiCulture = [System.Globalization.CultureInfo]::CurrentUICulture
-        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56)
+        $testDate = [datetime]::new(2026, 5, 21, 12, 34, 56, [DateTimeKind]::Utc)
         Mock Get-Date {
             param([string]$Format)
             if ([string]::IsNullOrEmpty($Format)) {
@@ -121,7 +124,18 @@ Describe 'New-CollectorBundleId' {
             [System.Globalization.CultureInfo]::CurrentUICulture = $originalUiCulture
         }
 
-        $bundleId | Should -Match '^CMTRACE-20260521-123456-DEVICE-01-[0-9a-f]{32}$'
+        # The clock is mocked above, so the Gregorian instant is known and can be asserted
+        # literally. Pinning only the shape would pass under fa-IR even if the calendar
+        # changed: a Hijri date formats as 14050231-123456, which is still eight ASCII
+        # digits and still matches the pattern below.
+        $bundleId | Should -Match '^CMTRACE-[0-9]{8}-[0-9]{6}-DEVICE-01-[0-9a-f]{32}$'
+        $timestamp = ($bundleId -split '-')[1..2] -join '-'
+        $timestamp | Should -BeExactly '20260521-123456'
+        foreach ($ch in $timestamp.ToCharArray()) {
+            if ($ch -ne '-') {
+                [int]$ch | Should -BeLessThan 128 -Because "'$ch' must be an ASCII digit under any culture"
+            }
+        }
     }
 }
 

@@ -12,7 +12,6 @@ pub mod collector;
 pub mod diagnosis;
 pub mod dsregcmd;
 pub mod error_db;
-pub mod esp;
 pub mod event_payload;
 pub mod event_query;
 pub mod eventmap;

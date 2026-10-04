@@ -4,13 +4,13 @@
 //! archive extraction. It never falls back to equivalent registry, event-log,
 //! process, discovery, or system facts from the analyst machine.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDeliveryOptimizationEventKind,
     EspDeliveryOptimizationEvidence, EspDeliveryOptimizationObservation, EspDiagnosticsReducer,
     EspDiagnosticsSnapshot, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef, EspJoinMode,
@@ -42,8 +42,6 @@ use super::system::{delivery_optimization_from_rows, SystemRow};
 
 pub const MAX_BUNDLE_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_MANIFEST_ARTIFACTS: usize = 512;
-pub const MAX_LEGACY_BUNDLE_DEPTH: usize = 3;
-pub const MAX_LEGACY_BUNDLE_ENTRIES: usize = 256;
 pub const MAX_JSON_SCALAR_RECORDS: usize = 4096;
 pub const MAX_JSON_NODES: usize = 16_384;
 pub const MAX_JSON_DEPTH: usize = 32;
@@ -54,15 +52,6 @@ pub const MAX_BUNDLE_TOTAL_INPUT_BYTES: u64 = MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYT
 pub const MAX_BUNDLE_TOTAL_RECORDS: usize = 131_072;
 
 const SUPPORTED_MANIFEST_EXTENSIONS: &[&str] = &["evtx", "json", "log", "reg", "txt", "xml"];
-const LEGACY_JSON_BASENAMES: &[&str] = &[
-    "autopilotconfigurationfile.json",
-    "autopilotddsztdfile.json",
-    "delivery-optimization-perf-snap.json",
-    "delivery-optimization-status.json",
-    "esp-hardware-facts.json",
-    "esp-os-facts.json",
-    "esp-tpm-facts.json",
-];
 
 #[derive(Debug, Clone, Serialize, Error, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -359,11 +348,6 @@ pub fn analyze_captured_evidence_at(
                 Vec::new()
             }
         },
-        Err(failure) if failure.kind == DiscoveryPathFailureKind::Missing => {
-            let (artifacts, legacy_coverage) = resolve_legacy_artifacts(&root, observed_at_utc);
-            coverage.extend(legacy_coverage);
-            artifacts
-        }
         Err(failure) => {
             coverage.push(artifact_coverage(
                 "bundle.manifest",
@@ -771,152 +755,6 @@ fn manifest_gap_coverage(manifest: &Value, observed_at_utc: &str) -> Vec<EspArti
             artifact_coverage(artifact_id, family, status, detail, observed_at_utc)
         })
         .collect()
-}
-
-fn resolve_legacy_artifacts(
-    root: &Path,
-    observed_at_utc: &str,
-) -> (Vec<BundleArtifact>, Vec<EspArtifactCoverage>) {
-    let mut artifacts = Vec::new();
-    let mut coverage = Vec::new();
-    let mut pending = VecDeque::from([(root.to_path_buf(), 0_usize)]);
-    let mut inspected = 0_usize;
-    let mut limit_reached = false;
-
-    'walk: while let Some((directory, depth)) = pending.pop_front() {
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) => {
-                coverage.push(artifact_coverage(
-                    format!(
-                        "bundle.legacy-directory:{}",
-                        portable_relative(root, &directory)
-                    ),
-                    "legacy-discovery",
-                    if error.kind() == std::io::ErrorKind::PermissionDenied {
-                        EspArtifactStatus::PermissionDenied
-                    } else {
-                        EspArtifactStatus::ParseFailed
-                    },
-                    Some(error.to_string()),
-                    observed_at_utc,
-                ));
-                continue;
-            }
-        };
-        let remaining = MAX_LEGACY_BUNDLE_ENTRIES.saturating_sub(inspected);
-        if remaining == 0 {
-            limit_reached = true;
-            break 'walk;
-        }
-        let mut selected_entries = BTreeMap::new();
-        let mut successful_entries = 0_usize;
-        let mut entry_errors = 0_usize;
-        for (index, entry) in entries.enumerate() {
-            match entry {
-                Ok(entry) => {
-                    successful_entries = successful_entries.saturating_add(1);
-                    let exact_name = entry.file_name().to_string_lossy().into_owned();
-                    selected_entries.insert((exact_name.to_ascii_lowercase(), exact_name), entry);
-                    if selected_entries.len() > remaining {
-                        selected_entries.pop_last();
-                    }
-                }
-                Err(error) => {
-                    if entry_errors < remaining {
-                        coverage.push(artifact_coverage(
-                            format!(
-                                "bundle.legacy-directory:{}:entry-{index}",
-                                portable_relative(root, &directory)
-                            ),
-                            "legacy-discovery",
-                            EspArtifactStatus::ParseFailed,
-                            Some(error.to_string()),
-                            observed_at_utc,
-                        ));
-                    }
-                    entry_errors = entry_errors.saturating_add(1);
-                }
-            }
-        }
-        let retained_errors = entry_errors.min(remaining);
-        let retained_successes = remaining.saturating_sub(retained_errors);
-        while selected_entries.len() > retained_successes {
-            selected_entries.pop_last();
-        }
-        let entries = selected_entries.into_values().collect::<Vec<_>>();
-        inspected = inspected.saturating_add(retained_errors + entries.len());
-        limit_reached = successful_entries.saturating_add(entry_errors) > remaining;
-        for entry in entries {
-            let entry_depth = depth.saturating_add(1);
-            let path = entry.path();
-            let relative = portable_relative(root, &path);
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    coverage.push(artifact_coverage(
-                        format!("bundle.legacy:{relative}"),
-                        "legacy-discovery",
-                        EspArtifactStatus::ParseFailed,
-                        Some(error.to_string()),
-                        observed_at_utc,
-                    ));
-                    continue;
-                }
-            };
-            if metadata.file_type().is_symlink() {
-                coverage.push(artifact_coverage(
-                    format!("bundle.legacy:{relative}"),
-                    "legacy-discovery",
-                    EspArtifactStatus::Unsupported,
-                    Some(
-                        "legacy fallback does not follow symbolic links or reparse points"
-                            .to_string(),
-                    ),
-                    observed_at_utc,
-                ));
-                continue;
-            }
-            if metadata.is_dir() {
-                if entry_depth < MAX_LEGACY_BUNDLE_DEPTH {
-                    pending.push_back((path, entry_depth));
-                }
-                continue;
-            }
-            if !metadata.is_file()
-                || entry_depth > MAX_LEGACY_BUNDLE_DEPTH
-                || !legacy_allowed_path(&path)
-            {
-                continue;
-            }
-            let family = infer_family(&path);
-            artifacts.push(BundleArtifact {
-                artifact_id: format!("legacy:{relative}"),
-                family,
-                category: "legacy".to_string(),
-                relative_path: relative,
-                parse_hints: Vec::new(),
-                status: Some("collected".to_string()),
-                observed_at_utc: observed_at_utc.to_string(),
-            });
-        }
-        if limit_reached {
-            break 'walk;
-        }
-    }
-    if limit_reached {
-        coverage.push(artifact_coverage(
-            "bundle.legacy-limit",
-            "legacy-discovery",
-            EspArtifactStatus::ParseFailed,
-            Some(format!(
-                "legacy fallback stopped after {MAX_LEGACY_BUNDLE_ENTRIES} directory entries"
-            )),
-            observed_at_utc,
-        ));
-    }
-    artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    (artifacts, coverage)
 }
 
 fn parse_artifact(path: &Path, relative: &Path, artifact: &BundleArtifact) -> ArtifactParseOutcome {
@@ -2084,30 +1922,6 @@ fn supported_manifest_artifact(path: &Path, artifact: &BundleArtifact) -> bool {
     artifact.family.eq_ignore_ascii_case("intune-ime") && is_log_rotation_name(&name)
 }
 
-fn legacy_allowed_path(path: &Path) -> bool {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match extension.as_str() {
-        "log" | "reg" | "evtx" => true,
-        "json" => {
-            LEGACY_JSON_BASENAMES.contains(&name.as_str())
-                || name.starts_with("autopilot")
-                || portable_path(path).contains("/autopilot/")
-        }
-        "txt" => name == "dsregcmd-status.txt",
-        "xml" => name.contains("mdmdiag") || name.contains("event"),
-        _ => is_log_rotation_name(&name),
-    }
-}
-
 fn is_log_rotation_name(name: &str) -> bool {
     let Some((_, suffix)) = name.rsplit_once(".log.") else {
         return false;
@@ -2233,12 +2047,6 @@ fn read_bounded_reader(file: File, path: &Path, maximum: u64) -> Result<Vec<u8>,
         ));
     }
     Ok(bytes)
-}
-
-fn portable_relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .map(portable_path)
-        .unwrap_or_else(|_| portable_path(path))
 }
 
 fn portable_path(path: &Path) -> String {

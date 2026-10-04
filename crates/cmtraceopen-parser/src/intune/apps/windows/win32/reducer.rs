@@ -19,7 +19,7 @@ use crate::intune::evidence::{
     IntuneEvidenceRef, IntuneObservationContext, IntuneParseState, IntuneProvenance,
     IntuneSensitivity, IntuneTimestamp, IntuneTimestampKind,
 };
-use crate::intune::ime_parser::{parse_ime_content_bounded, ImeLine};
+use crate::parser::ccm::logical::{parse_ime_content_bounded, ImeLine};
 
 use super::models::{
     Win32Analysis, Win32AppMetadata, Win32Confidence, Win32Coverage, Win32ExecutionContext,

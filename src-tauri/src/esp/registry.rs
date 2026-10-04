@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspEvidenceProvenance, EspEvidenceRef, EspNodeCacheEntry, EspObservationContext,
     EspObservationValue, EspParseState, EspRegistryObservation, EspRegistryProvenance, EspScope,
     EspSensitivity, EspSourceAccessState, EspSourceKind,

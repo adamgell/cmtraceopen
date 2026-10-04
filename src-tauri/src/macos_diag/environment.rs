@@ -3,10 +3,17 @@ use super::models::MacosLogFileEntry;
 // detect_full_disk_access has an arm on every target, so this one cannot be
 // macOS-gated alongside the rest.
 use super::models::FdaStatus;
+
 #[cfg(target_os = "macos")]
 use super::models::{MacosDiagDirectoryStatus, MacosDiagToolAvailability};
+// Every use is inside a `target_os = "macos"` item, so the import is gated the
+// same way: unconditional, it dangles on the other targets and fails
+// `-D unused-imports` there.
+#[cfg(target_os = "macos")]
+use crate::process_util::{
+    run_complete_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
+};
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -77,11 +84,11 @@ pub fn scan_log_directory(dir: &str) -> Vec<MacosLogFileEntry> {
         };
 
         let size_bytes = metadata.len();
-        let modified_unix_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64);
+        // The same reading the Windows-side listing uses, so one place decides what
+        // an unreadable or pre-epoch modification time means. The inline chain this
+        // replaces cast `u128` milliseconds to `u64` unchecked; the shared helper
+        // converts with a checked one.
+        let modified_unix_ms = crate::commands::file_ops::metadata_modified_unix_ms(&metadata);
 
         entries.push(MacosLogFileEntry {
             path: path.to_string_lossy().to_string(),
@@ -149,9 +156,13 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
 
     // --- macOS version via sw_vers ---
     let (macos_version, macos_build) = {
-        let output = Command::new("sw_vers")
-            .output()
-            .map_err(crate::error::AppError::Io)?;
+        let output = run_complete_command(
+            &mut Command::new("sw_vers"),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        )
+        .map_err(crate::error::AppError::Io)?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_sw_vers_output(&stdout)
     };
@@ -160,19 +171,28 @@ pub fn scan_environment_impl() -> Result<MacosDiagEnvironment, crate::error::App
     let full_disk_access = detect_full_disk_access();
 
     // --- Tool availability ---
-    let tool_available = |name: &str| -> bool {
-        Command::new("which")
-            .arg(name)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    let tool_available = |name: &str| -> Result<bool, crate::error::AppError> {
+        run_complete_command(
+            Command::new("which").arg(name),
+            TOOL_DEADLINE,
+            TOOL_OUTPUT_BYTES,
+            TOOL_ERROR_BYTES,
+        )
+        .map(|o| o.status.success())
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                Err(crate::error::AppError::Io(error))
+            } else {
+                Ok(false)
+            }
+        })
     };
 
     let tools = MacosDiagToolAvailability {
-        profiles: tool_available("profiles"),
-        mdatp: tool_available("mdatp"),
-        pkgutil: tool_available("pkgutil"),
-        log_command: tool_available("log"),
+        profiles: tool_available("profiles")?,
+        mdatp: tool_available("mdatp")?,
+        pkgutil: tool_available("pkgutil")?,
+        log_command: tool_available("log")?,
     };
 
     // --- Directory presence ---

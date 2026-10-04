@@ -1,6 +1,6 @@
 //! Findings derived from an immutable Autopilot snapshot.
 //!
-//! Shaped exactly like `crate::esp::rules`: one public entry point, one private
+//! Shaped exactly like `crate::intune::enrollment::windows::esp::rules`: one public entry point, one private
 //! `push_*` per rule, and a shared constructor that **refuses to build a finding
 //! citing neither evidence nor a coverage gap**. That refusal is the enforcement
 //! point for the conservative-findings rule; a rule that finds nothing simply

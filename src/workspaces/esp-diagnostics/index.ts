@@ -99,7 +99,6 @@ export const espDiagnosticsWorkspace: WorkspaceDefinition = {
   ),
   capabilities: {
     sidebar: false,
-    liveAcquisition: true,
     tabStrip: false,
     findBar: false,
     detailsPane: false,

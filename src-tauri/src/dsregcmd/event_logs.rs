@@ -1,4 +1,4 @@
-use crate::intune::models::EventLogAnalysis;
+use crate::intune::apps::windows::ime::models::EventLogAnalysis;
 
 #[cfg(target_os = "windows")]
 const DSREGCMD_EVENT_CHANNELS: &[&str] = &[
@@ -14,12 +14,12 @@ const MAX_ENTRIES_PER_CHANNEL: usize = 200;
 
 #[cfg(target_os = "windows")]
 pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
-    use crate::intune::eventlog_win32;
-    use crate::intune::evtx_parser;
-    use crate::intune::models::{
+    use crate::intune::apps::windows::ime::models::{
         EventLogAnalysisSource, EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata,
         EventLogLiveQueryStatus,
     };
+    use crate::intune::eventlog_win32;
+    use crate::intune::evtx_parser;
 
     let mut all_entries = Vec::new();
     let mut channel_results = Vec::new();
@@ -51,10 +51,10 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
                 };
 
                 channel_results.push(EventLogLiveQueryChannelResult {
-                    channel: crate::intune::models::EventLogChannel::from_channel_string(
+                    channel: crate::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(
                         channel_path,
                     ),
-                    channel_display: crate::intune::models::EventLogChannel::from_channel_string(
+                    channel_display: crate::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(
                         channel_path,
                     )
                     .display_name()
@@ -74,10 +74,10 @@ pub fn collect_dsregcmd_event_logs() -> Option<EventLogAnalysis> {
                 );
 
                 channel_results.push(EventLogLiveQueryChannelResult {
-                    channel: crate::intune::models::EventLogChannel::from_channel_string(
+                    channel: crate::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(
                         channel_path,
                     ),
-                    channel_display: crate::intune::models::EventLogChannel::from_channel_string(
+                    channel_display: crate::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(
                         channel_path,
                     )
                     .display_name()

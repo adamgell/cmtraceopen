@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::intune::ime_parser::parse_ime_content;
+use crate::parser::ccm::logical::parse_ime_content;
 
 use super::models::{
     ScriptAnalysis, ScriptArtifact, ScriptClassifiedString, ScriptConfidence, ScriptCoverage,
