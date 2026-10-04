@@ -7,8 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run frontend:dev",
-    "beforeBuildCommand": "npm run frontend:build",
-    "beforeBundleCommand": "node scripts/prepare-appimage.mjs"
+    "beforeBuildCommand": "npm run frontend:build"
   },
   "app": {
     "windows": [

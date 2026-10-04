@@ -210,8 +210,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: AppImage launcher permission tests
-        run: node --test scripts/prepare-appimage.test.mjs
+      - name: AppImage launcher preparation tests
+        run: node --test scripts/prepare-appimage.test.mjs scripts/tauri.test.mjs
 
       - name: TypeScript check
         run: npx tsc --noEmit
