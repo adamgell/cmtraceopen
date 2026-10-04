@@ -12,12 +12,12 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // On Windows, use explorer /select to highlight the file
+        // On Windows, use explorer /select to highlight the file.
+        // Deliberately non-waiting: `spawn` returns a child handle without
+        // waiting for Explorer to exit. The handle is discarded so the file
+        // manager can remain open independently of this call.
         if path.is_file() {
             let path_str = path.to_string_lossy();
-            // Deliberately unbounded: this hands a folder to Explorer and
-            // returns. There is no child to wait on, and a deadline would only
-            // risk killing a window the user is using.
             std::process::Command::new("explorer")
                 .arg(format!("/select,{}", path_str))
                 .spawn()
@@ -32,6 +32,9 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
+        // Deliberately non-waiting: `spawn` returns a child handle without
+        // waiting for the launcher to exit, and the handle is discarded.
+        // `open` omits `-W` so Finder can remain open independently.
         if path.is_file() {
             std::process::Command::new("open")
                 .arg("-R")
@@ -48,6 +51,9 @@ pub async fn reveal_in_file_manager(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
+        // Deliberately non-waiting: `spawn` returns a child handle without
+        // waiting for xdg-open to exit. The handle is discarded so this call
+        // does not wait for the interactive file manager.
         std::process::Command::new("xdg-open")
             .arg(dir)
             .spawn()
