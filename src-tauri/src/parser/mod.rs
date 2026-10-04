@@ -86,18 +86,20 @@ pub fn parse_file_identified(
         }
     }
 
-    let (content, identity, file_size) = read_file_content_identified(path)?;
-    let (result, selection) = cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    let (content, identity, file_size, modified_unix_ms) = read_file_content_identified(path)?;
+    let (mut result, selection) =
+        cmtraceopen_parser::parser::parse_content(&content, path, file_size);
+    result.modified_unix_ms = modified_unix_ms;
     Ok((result, selection, identity))
 }
 
 /// Read file content, handling BOM and encoding fallback.
 pub fn read_file_content(path: &str) -> Result<String, String> {
-    read_file_content_identified(path).map(|(content, _, _)| content)
+    read_file_content_identified(path).map(|(content, _, _, _)| content)
 }
 
-/// Read file content together with its identity and the raw byte count consumed,
-/// all three taken from one handle.
+/// Read file content, identity, consumed byte count, and modification time
+/// from one opened handle.
 ///
 /// Tail reading needs the identity of the generation whose bytes produced
 /// `byte_offset`. Taking it from a later `metadata(path)` call would describe
@@ -105,7 +107,15 @@ pub fn read_file_content(path: &str) -> Result<String, String> {
 /// exists to notice.
 pub fn read_file_content_identified(
     path: &str,
-) -> Result<(String, Option<crate::fs_identity::FileIdentity>, u64), String> {
+) -> Result<
+    (
+        String,
+        Option<crate::fs_identity::FileIdentity>,
+        u64,
+        Option<u64>,
+    ),
+    String,
+> {
     let file =
         std::fs::File::open(path).map_err(|e| format!("Failed to read file {}: {}", path, e))?;
     let metadata = file
@@ -121,11 +131,20 @@ fn read_opened_file_content(
     mut file: std::fs::File,
     metadata: std::fs::Metadata,
     path: &str,
-) -> Result<(String, Option<crate::fs_identity::FileIdentity>, u64), String> {
+) -> Result<
+    (
+        String,
+        Option<crate::fs_identity::FileIdentity>,
+        u64,
+        Option<u64>,
+    ),
+    String,
+> {
     use std::io::Read;
 
     let identity = crate::fs_identity::file_identity(&file, &metadata);
     let file_size = metadata.len();
+    let modified_unix_ms = crate::commands::file_ops::metadata_modified_unix_ms(&metadata);
 
     let mut bytes = Vec::with_capacity(file_size.min(8 * 1024 * 1024) as usize);
     file.read_to_end(&mut bytes)
@@ -136,7 +155,12 @@ fn read_opened_file_content(
     // (which excludes the BOM and changes with UTF-16/Windows-1252 decoding).
     let bytes_read = bytes.len() as u64;
     let encoding = detect_encoding(&bytes);
-    Ok((decode_bytes(&bytes, encoding)?, identity, bytes_read))
+    Ok((
+        decode_bytes(&bytes, encoding)?,
+        identity,
+        bytes_read,
+        modified_unix_ms,
+    ))
 }
 
 #[cfg(test)]
@@ -200,7 +224,7 @@ mod handoff_tests {
 
             // Deterministic interleaving: metadata precedes the append; the
             // production read helper runs afterwards on the original handle.
-            let (content, identity, consumed) =
+            let (content, identity, consumed, _) =
                 read_opened_file_content(file, metadata, path.to_str().unwrap()).unwrap();
             let (parsed, selection) = parse_content(&content, path.to_str().unwrap(), consumed);
             assert_eq!(parsed.entries.len(), 2);
@@ -232,6 +256,45 @@ mod handoff_tests {
     }
 
     #[test]
+    fn modified_time_belongs_to_the_opened_file_after_path_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("basic.log");
+        std::fs::write(&path, CORPUS).unwrap();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_times(
+            std::fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            ),
+        )
+        .unwrap();
+        let metadata = file.metadata().unwrap();
+        let expected_identity = crate::fs_identity::file_identity(&file, &metadata);
+        std::fs::rename(&path, temp.path().join("old.log")).unwrap();
+        std::fs::write(&path, CORPUS.repeat(2)).unwrap();
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            ))
+            .unwrap();
+
+        let (content, identity, consumed, modified_unix_ms) =
+            read_opened_file_content(file, metadata, path.to_str().unwrap()).unwrap();
+
+        assert_eq!(content, CORPUS);
+        assert_eq!(identity, expected_identity);
+        assert_eq!(consumed, CORPUS.len() as u64);
+        assert_eq!(modified_unix_ms, Some(1_700_000_000_000));
+    }
+
+    #[test]
     fn unchanged_public_read_preserves_raw_size_and_identity() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("basic.log");
@@ -256,7 +319,8 @@ mod handoff_tests {
         assert!(!had_errors);
         assert_ne!(bytes.len(), expected.len());
         std::fs::write(&path, &bytes).unwrap();
-        let (content, _, consumed) = read_file_content_identified(path.to_str().unwrap()).unwrap();
+        let (content, _, consumed, _) =
+            read_file_content_identified(path.to_str().unwrap()).unwrap();
         assert_eq!(content, expected);
         assert_eq!(consumed, bytes.len() as u64);
     }
@@ -275,7 +339,7 @@ mod handoff_tests {
             .unwrap()
             .set_len(first.len() as u64)
             .unwrap();
-        let (content, _, consumed) =
+        let (content, _, consumed, _) =
             read_opened_file_content(file, metadata, path.to_str().unwrap()).unwrap();
         assert_eq!(content, first);
         assert_eq!(consumed, first.len() as u64);

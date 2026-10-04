@@ -14,7 +14,6 @@ use crate::process_util::{
     run_complete_command, TOOL_DEADLINE, TOOL_ERROR_BYTES, TOOL_OUTPUT_BYTES,
 };
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (cross-platform, always compiled, fully testable)
@@ -85,11 +84,11 @@ pub fn scan_log_directory(dir: &str) -> Vec<MacosLogFileEntry> {
         };
 
         let size_bytes = metadata.len();
-        let modified_unix_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64);
+        // The same reading the Windows-side listing uses, so one place decides what
+        // an unreadable or pre-epoch modification time means. The inline chain this
+        // replaces cast `u128` milliseconds to `u64` unchecked; the shared helper
+        // converts with a checked one.
+        let modified_unix_ms = crate::commands::file_ops::metadata_modified_unix_ms(&metadata);
 
         entries.push(MacosLogFileEntry {
             path: path.to_string_lossy().to_string(),

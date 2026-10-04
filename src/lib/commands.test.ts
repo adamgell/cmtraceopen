@@ -184,7 +184,7 @@ describe("event export session IPC response validation", () => {
 });
 
 describe("parse and folder IPC response validation", () => {
-  it("preserves valid parser and folder responses", async () => {
+  it.each([null, 0, 1_700_000_000_000])("preserves modified time %s in valid parser and folder responses", async (modifiedUnixMs) => {
     const parseResult = {
       entries: [
         {
@@ -217,6 +217,7 @@ describe("parse and folder IPC response validation", () => {
       parseErrors: 0,
       filePath: "C:\\Logs\\App.log",
       fileSize: 0,
+      modifiedUnixMs,
       byteOffset: 0,
     };
     const folderListing = {
@@ -244,6 +245,13 @@ describe("parse and folder IPC response validation", () => {
       completedOffset: 0,
     });
     await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
+
+    for (const invalidTime of [undefined, "unknown", NaN, Infinity]) {
+      vi.mocked(invoke).mockResolvedValueOnce({ ...parseResult, modifiedUnixMs: invalidTime });
+      await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
+        "Command 'open_log_file' returned an invalid response.",
+      );
+    }
   });
 
   it("rejects malformed parser and folder responses", async () => {
