@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 const script = new URL("./prepare-appimage.mjs", import.meta.url);
@@ -21,13 +21,13 @@ test("only the AppImage profile installs the preparation hook and CI runs these 
   assert.ok(workflow.includes("scripts/prepare-appimage.test.mjs"));
 });
 
-async function runHook(t, { selection, config, cache, platform = "linux", arch = "x86_64", preloadSource = 'globalThis.fetch = async () => { throw new Error("UNEXPECTED_NETWORK"); };\n' } = {}) {
+async function runHook(t, { selection, config, cache, platform = "linux", arch = "x86_64", additionalEnv = {}, preloadSource = 'globalThis.fetch = async () => { throw new Error("UNEXPECTED_NETWORK"); };\n' } = {}) {
   const { spawnSync } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
   const directory = await fixture(t);
   const preload = join(directory, "offline.mjs");
   await writeFile(preload, preloadSource);
-  const env = { ...process.env, TAURI_ENV_PLATFORM: platform, TAURI_ENV_ARCH: arch, XDG_CACHE_HOME: cache ?? join(directory, "cold-cache") };
+  const env = { ...process.env, ...additionalEnv, TAURI_ENV_PLATFORM: platform, TAURI_ENV_ARCH: arch, XDG_CACHE_HOME: cache ?? join(directory, "cold-cache") };
   delete env.CMTRACE_TAURI_BUNDLE_TARGETS;
   delete env.TAURI_CONFIG;
   if (selection !== undefined) env.CMTRACE_TAURI_BUNDLE_TARGETS = selection;
@@ -173,6 +173,84 @@ test("cache selection follows Tauri's Linux XDG cache rules", async () => {
   assert.equal(launcherCacheDirectory({ XDG_CACHE_HOME: "/custom/cache" }, "/home/user"), "/custom/cache/tauri");
   assert.equal(launcherCacheDirectory({ XDG_CACHE_HOME: "relative" }, "/home/user"), "/home/user/.cache/tauri");
   assert.equal(launcherCacheDirectory({}, "/home/user"), "/home/user/.cache/tauri");
+});
+
+test("local tool cache selection follows Cargo metadata and config override precedence", async (t) => {
+  const { selectedLauncherCacheDirectory } = await import(script);
+  const directory = await fixture(t);
+  const target = join(directory, "custom cargo target");
+  const env = { XDG_CACHE_HOME: join(directory, "global-cache") };
+  await writeFile(join(directory, "tauri.conf.json"), '{"bundle":{"useLocalToolsDir":true}}');
+  const metadata = async (tauriDirectory, inheritedEnv) => {
+    assert.equal(tauriDirectory, directory);
+    assert.deepEqual(inheritedEnv, env);
+    return target;
+  };
+  assert.equal(await selectedLauncherCacheDirectory(env, directory, metadata), join(target, ".tauri"));
+  await writeFile(join(directory, "tauri.linux.conf.json"), '{"bundle":{"useLocalToolsDir":false}}');
+  assert.equal(await selectedLauncherCacheDirectory(env, directory, () => assert.fail("global cache must not run Cargo metadata")), join(env.XDG_CACHE_HOME, "tauri"));
+  assert.equal(await selectedLauncherCacheDirectory({ ...env, TAURI_CONFIG: '{"bundle":{"useLocalToolsDir":true}}' }, directory, async () => target), join(target, ".tauri"));
+  for (const override of [{ bundle: { useLocalToolsDir: null } }, { bundle: null }]) {
+    assert.equal(await selectedLauncherCacheDirectory({ ...env, TAURI_CONFIG: JSON.stringify(override) }, directory, () => assert.fail("removed setting must default to global cache")), join(env.XDG_CACHE_HOME, "tauri"));
+  }
+});
+
+test("Cargo metadata uses Tauri's command, cwd and environment without running a native tool in this test", async (t) => {
+  const { readCargoTargetDirectory } = await import(script);
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { realpath } = await import("node:fs/promises");
+  const directory = await fixture(t);
+  const ownedFixture = join(directory, "metadata-fixture.mjs");
+  await writeFile(ownedFixture, 'import assert from "node:assert/strict"; assert.deepEqual(process.argv.slice(2), ["metadata", "--no-deps", "--format-version", "1"]); assert.equal(process.cwd(), process.env.EXPECTED_CWD); console.log(JSON.stringify({target_directory: process.env.CARGO_TARGET_DIR}));\n');
+  const env = { ...process.env, CARGO_TARGET_DIR: join(directory, "target override"), EXPECTED_CWD: await realpath(directory) };
+  const runFixture = (command, args, options) => {
+    assert.equal(command, "cargo");
+    return promisify(execFile)(process.execPath, [ownedFixture, ...args], options);
+  };
+  assert.equal(await readCargoTargetDirectory(directory, env, runFixture), env.CARGO_TARGET_DIR);
+  for (const stdout of ['{}', '{"target_directory":"relative"}', 'invalid json']) {
+    await assert.rejects(readCargoTargetDirectory(directory, env, async () => ({ stdout })));
+  }
+  await assert.rejects(readCargoTargetDirectory(directory, env, async () => { throw new Error("metadata failed"); }), /metadata failed/);
+});
+
+test("a warm local launcher is repaired without touching a cold global cache or downloading", async (t) => {
+  const { selectedLauncherCacheDirectory, prepareAppImageLauncher } = await import(script);
+  const { mkdir } = await import("node:fs/promises");
+  const directory = await fixture(t);
+  const target = join(directory, "cargo-target");
+  const globalCache = join(directory, "absent-global-cache");
+  const localCache = join(target, ".tauri");
+  await writeFile(join(directory, "tauri.conf.json"), '{"bundle":{"useLocalToolsDir":true}}');
+  await mkdir(localCache, { recursive: true });
+  const launcher = join(localCache, "AppRun-x86_64");
+  await writeFile(launcher, "local cached launcher", { mode: 0o770 });
+  const selected = await selectedLauncherCacheDirectory({ XDG_CACHE_HOME: globalCache }, directory, async () => target);
+  await prepareAppImageLauncher(selected, () => assert.fail("warm local cache must not download"));
+  assert.equal((await stat(launcher)).mode & 0o777, 0o755);
+  assert.equal(await readFile(launcher, "utf8"), "local cached launcher");
+  await assert.rejects(stat(globalCache), { code: "ENOENT" });
+});
+
+test("the hook uses the selected local cache through an owned Cargo metadata process fixture", async (t) => {
+  const { mkdir } = await import("node:fs/promises");
+  const directory = await fixture(t);
+  const localCache = join(directory, "cargo-target", ".tauri");
+  const globalCache = join(directory, "cold-global-cache");
+  await mkdir(localCache, { recursive: true });
+  const launcher = join(localCache, "AppRun-x86_64");
+  await writeFile(launcher, "local launcher", { mode: 0o770 });
+  const cargo = join(directory, "cargo");
+  await writeFile(cargo, `#!${process.execPath}\nrequire("node:assert/strict").deepEqual(process.argv.slice(2), ["metadata", "--no-deps", "--format-version", "1"]); console.log(JSON.stringify({target_directory: process.env.CARGO_TARGET_DIR}));\n`, { mode: 0o755 });
+  const result = await runHook(t, {
+    selection: '["appimage"]', config: '{"bundle":{"useLocalToolsDir":true}}', cache: globalCache,
+    additionalEnv: { PATH: `${directory}${delimiter}${process.env.PATH}`, CARGO_TARGET_DIR: join(directory, "cargo-target") },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await stat(launcher)).mode & 0o777, 0o755);
+  assert.equal(await readFile(launcher, "utf8"), "local launcher");
+  await assert.rejects(stat(globalCache), { code: "ENOENT" });
 });
 
 test("the configured hook repairs a cached Linux launcher and leaves macOS targets alone", async (t) => {

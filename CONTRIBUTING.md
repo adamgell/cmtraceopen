@@ -44,6 +44,8 @@ npm run frontend:build          # tsc + vite build
 On Linux x86_64, the npm build commands prepare Tauri's AppRun launcher before
 AppImage bundling and signing. The first AppImage build downloads a pinned,
 SHA-256-verified launcher; later builds repair the cached launcher's permissions.
+If `bundle.useLocalToolsDir` is enabled, preparation uses Cargo metadata's target
+directory and its `.tauri` cache, matching the bundler.
 Debian/RPM-only and executable-only builds do not access that launcher or its cache:
 
 ```bash
