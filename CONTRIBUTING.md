@@ -76,6 +76,9 @@ reads the archive and ELF metadata without running the AppImage: root-owned
 through 2.35, and versioned dependency resolution against bundled libraries and
 official Jammy providers. Missing tools, incomplete inspection and cancellation
 fail the Linux build. Signing happens before this read-only inspection.
+The workflows install hash-pinned pure-Python inspection libraries from
+`scripts/appimage-abi-requirements.txt` into an isolated environment; auditwheel
+is used only for static dependency reading, never repair or artifact execution.
 
 The `provenance/appimage-abi.json` CI artifact records the source/build commits,
 runner image, package origins, lockfile hashes, resolved bundling-tool hashes and

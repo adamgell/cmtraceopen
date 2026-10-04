@@ -6,6 +6,7 @@ import tempfile
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from appimage_abi import elf_files, jammy_origins, read_elf, resolve_tree, select_artifact, squashfs_offset, validate_closure, validate_imports, validate_launchers
 
@@ -18,6 +19,8 @@ def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62):
         (".dynsym", 11, bytes(24) + struct.pack("<IBBHQQ", 11, 0x22 if weak else 0x12, 0, 0, 0, 0), 1, 1, 24),
         (".gnu.version", 0x6fffffff, struct.pack("<HH", 0, 2), 2, 0, 2),
         (".gnu.version_r", 0x6ffffffe, struct.pack("<HHIII", 1, 1, 1, 16, 0) + struct.pack("<IHHII", 0, 0, 2, 18, 0), 1, 1, 0),
+        (".hash", 5, struct.pack("<IIIII", 1, 2, 1, 0, 0), 2, 0, 4),
+        (".rela.dyn", 4, struct.pack("<QQq", 0, (1 << 32) | 1, 0), 2, 0, 24),
         (".dynamic", 6, struct.pack("<QQQQ", 1, 1, 0, 0), 1, 0, 16),
     ]
     names = b"\0" + b"".join(s[0].encode() + b"\0" for s in sections) + b".shstrtab\0"
@@ -29,7 +32,7 @@ def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62):
     for name, kind, data, link, info, entsize in sections:
         offset = len(body)
         if name == ".dynamic":
-            data = b"".join(struct.pack("<QQ", tag, value) for tag, value in [(1, 1), (5, addresses[".dynstr"]), (10, len(strings)), (6, addresses[".dynsym"]), (11, 24), (0x6ffffff0, addresses[".gnu.version"]), (0x6ffffffe, addresses[".gnu.version_r"]), (0x6fffffff, 1), (0, 0)])
+            data = b"".join(struct.pack("<QQ", tag, value) for tag, value in [(1, 1), (4, addresses[".hash"]), (5, addresses[".dynstr"]), (10, len(strings)), (6, addresses[".dynsym"]), (11, 24), (7, addresses[".rela.dyn"]), (8, 24), (9, 24), (0x6ffffff0, addresses[".gnu.version"]), (0x6ffffffe, addresses[".gnu.version_r"]), (0x6fffffff, 1), (0, 0)])
         addresses[name] = offset
         body.extend(data)
         headers.append(struct.pack("<IIQQQQIIQQ", names.index(name.encode()), kind, 0, offset, offset, len(data), link, info, 1, entsize))
@@ -37,7 +40,7 @@ def fixture_elf(*, version="GLIBC_2.35", weak=False, machine=62):
             dynamic = (offset, len(data))
     shoff = len(body)
     body.extend(b"".join(headers))
-    body[:64] = struct.pack("<16sHHIQQQIHHHHHH", b"\x7fELF\x02\x01\x01" + bytes(9), 3, machine, 1, 0, 64, shoff, 0, 64, 56, 2, 64, len(headers), 6)
+    body[:64] = struct.pack("<16sHHIQQQIHHHHHH", b"\x7fELF\x02\x01\x01" + bytes(9), 3, machine, 1, 0, 64, shoff, 0, 64, 56, 2, 64, len(headers), len(headers) - 1)
     body[64:120] = struct.pack("<IIQQQQQQ", 2, 4, dynamic[0], dynamic[0], 0, dynamic[1], dynamic[1], 8)
     body[120:176] = struct.pack("<IIQQQQQQ", 1, 4, 0, 0, 0, len(body), len(body), 1)
     return body
@@ -82,7 +85,7 @@ class ElfInspectionTests(unittest.TestCase):
                 read_elf(self.path)
 
     def test_sections_cannot_redirect_inspection_away_from_loader_bytes(self):
-        for section in [3, 5]:  # .gnu.version and .dynamic
+        for section in [3, 7]:  # .gnu.version and .dynamic
             data = fixture_elf()
             table = struct.unpack_from("<Q", data, 40)[0]
             header = table + section * 64
@@ -91,6 +94,19 @@ class ElfInspectionTests(unittest.TestCase):
             data.extend(data[offset:offset + size])
             self.path.write_bytes(data)
             with self.subTest(section=section), self.assertRaisesRegex(ValueError, "loader"):
+                read_elf(self.path)
+
+    def test_loader_hash_and_relocations_prevent_truncating_import_tables(self):
+        for truncate_hash in [False, True]:
+            data = fixture_elf()
+            table = struct.unpack_from("<Q", data, 40)[0]
+            struct.pack_into("<Q", data, table + 2 * 64 + 32, 24)
+            struct.pack_into("<Q", data, table + 3 * 64 + 32, 2)
+            if truncate_hash:
+                hash_offset = struct.unpack_from("<Q", data, table + 5 * 64 + 24)[0]
+                struct.pack_into("<I", data, hash_offset + 4, 1)
+            self.path.write_bytes(data)
+            with self.subTest(truncate_hash=truncate_hash), self.assertRaisesRegex(ValueError, "symbol|relocation"):
                 read_elf(self.path)
 
     def test_every_nested_elf_is_discovered_even_without_a_library_suffix(self):
@@ -154,8 +170,32 @@ class ClosureTests(unittest.TestCase):
         def fallback(*args, **kwargs):
             print("lddtree: warning: AppDir/usr/lib/libc.so.6: Magic number does not match", file=sys.stderr)
             return self.tree
-        with self.assertRaisesRegex(ValueError, "resolver warning"):
-            resolve_tree({"ParseELF": fallback}, "plugin.so", {})
+        with patch("auditwheel.lddtree.ldd", side_effect=fallback), self.assertRaisesRegex(ValueError, "resolver warning"):
+            resolve_tree("plugin.so", {})
+
+    def test_pinned_resolver_reads_owned_elf_bytes_without_executing_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            main = root / "plugin.so"
+            main.write_bytes(fixture_elf())
+            library_dir = root / "libraries"
+            library_dir.mkdir()
+            provider = library_dir / "libc.so.6"
+            data = fixture_elf()
+            dynamic_offset = struct.unpack_from("<Q", data, 64 + 8)[0]
+            struct.pack_into("<Q", data, dynamic_offset, 21)  # DT_DEBUG, no DT_NEEDED
+            provider.write_bytes(data)
+            paths = dict(conf=[], env=[str(library_dir)], interp=[])
+            tree = resolve_tree(main, paths)
+            self.assertEqual(tree["needed"], ("libc.so.6",))
+            self.assertEqual(tree["libs"]["libc.so.6"]["realpath"], provider)
+            validate_closure(read_elf(main), tree, read_elf)
+            bad_dir = root / "earlier"
+            bad_dir.mkdir()
+            (bad_dir / "libc.so.6").write_bytes(b"corrupt former ELF")
+            paths["env"].insert(0, str(bad_dir))
+            with self.assertRaisesRegex(Exception, "Magic number"):
+                resolve_tree(main, paths)
 
 
 class BuildContextTests(unittest.TestCase):

@@ -27,7 +27,9 @@ test("both producers require the archive guard inside the pinned action build co
     // A release dispatch checks out the tag; github.sha is the workflow ref.
     // Its source identity must come from the checked-out commit.
     else assert.ok(!action.includes("SOURCE_COMMIT:"), name);
-    assert.ok(text.includes("squashfs-tools pax-utils python3-pyelftools python3-apt"), name);
+    assert.ok(text.includes("squashfs-tools python3-venv python3-apt"), name);
+    assert.ok(text.includes("--system-site-packages .appimage-abi-venv"), name);
+    assert.ok(text.includes("--require-hashes --only-binary=:all: -r scripts/appimage-abi-requirements.txt"), name);
     assert.ok(text.indexOf("run: node scripts/ci-bundle-outputs.mjs clean") < text.indexOf("uses: tauri-apps/tauri-action@"), name);
     assert.ok(text.includes("provenance/appimage-abi.json"), name);
   }
@@ -36,5 +38,5 @@ test("both producers require the archive guard inside the pinned action build co
 test("CI runs the archive policy and wrapper regressions", () => {
   const text = workflow("cmtrace-ci");
   assert.ok(text.includes("scripts/appimage-workflow.test.mjs"));
-  assert.ok(text.includes("/usr/bin/python3 -B -m unittest discover -s scripts -p appimage_abi_test.py"));
+  assert.ok(text.includes(".appimage-abi-venv/bin/python -B -m unittest discover -s scripts -p appimage_abi_test.py"));
 });

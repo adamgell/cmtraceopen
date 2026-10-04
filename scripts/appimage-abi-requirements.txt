@@ -1,0 +1,5 @@
+# Pure-Python static ELF inspection only; never auditwheel repair or native ldd.
+# Wheels and hashes from the corresponding PyPI releases, pinned for Jammy 3.10.
+auditwheel==6.8.2 --hash=sha256:05fd2dd4b743217cd5f66066adc95b03a079424b1f0a878ad1e40fe2cdea4704
+pyelftools==0.33 --hash=sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036
+packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c

@@ -172,7 +172,13 @@ jobs:
             librsvg2-dev \
             patchelf \
             libc6 libstdc++6 \
-            squashfs-tools pax-utils python3-pyelftools python3-apt
+            squashfs-tools python3-venv python3-apt
+
+      - name: Install pinned AppImage inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .appimage-abi-venv
+          .appimage-abi-venv/bin/python -m pip install --ignore-installed --require-hashes --only-binary=:all: -r scripts/appimage-abi-requirements.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

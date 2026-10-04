@@ -61,7 +61,7 @@ export function tauriInvocation(args, inheritedEnv = process.env, platform = pro
   return { args: [...args.slice(0, command + 1), "--config", profile, ...args.slice(command + 1)], env };
 }
 
-export async function runTauri(args, cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js"), inspector = ["/usr/bin/python3", fileURLToPath(new URL("./appimage_abi.py", import.meta.url))]) {
+export async function runTauri(args, cli = createRequire(import.meta.url).resolve("@tauri-apps/cli/tauri.js"), inspector = [fileURLToPath(new URL("../.appimage-abi-venv/bin/python", import.meta.url)), fileURLToPath(new URL("./appimage_abi.py", import.meta.url))]) {
   const invocation = tauriInvocation(args);
   // The pinned action also asks for --version; only build/bundle is gated.
   const command = args.find((arg) => arg !== "--verbose" && !/^-v+$/.test(arg));

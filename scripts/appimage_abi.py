@@ -6,8 +6,8 @@ import hashlib
 import contextlib
 import io
 import json
+import logging
 import platform
-import runpy
 import shutil
 import subprocess
 import sys
@@ -17,7 +17,7 @@ from pathlib import Path
 LAUNCHER_SHA256 = "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f"
 BUNDLE_ROOT = "src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
 # The search order is encoded in the checksum-pinned AppRun.wrapped. It is
-# supplied to pax-utils, which resolves RPATH/RUNPATH and transitive DT_NEEDED.
+# supplied to auditwheel's static resolver for RPATH/RUNPATH and DT_NEEDED.
 LAUNCHER_LIBRARY_DIRS = ["usr/lib", "usr/lib/i386-linux-gnu", "usr/lib/x86_64-linux-gnu", "usr/lib32", "usr/lib64", "lib", "lib/i386-linux-gnu", "lib/x86_64-linux-gnu", "lib32", "lib64"]
 
 
@@ -86,13 +86,25 @@ def validate_closure(info, tree, read):
     return providers
 
 
-def resolve_tree(resolver, path, ldpaths):
+def resolve_tree(path, ldpaths):
+    # This is auditwheel's Python ELF reader, not the native `ldd` command.
+    from auditwheel.lddtree import ldd
     diagnostics = io.StringIO()
-    with contextlib.redirect_stderr(diagnostics), contextlib.redirect_stdout(diagnostics):
-        tree = resolver["ParseELF"](str(path), ldpaths=ldpaths)
+    logger = logging.getLogger("auditwheel")
+    handler = logging.StreamHandler(diagnostics)
+    handler.setLevel(logging.WARNING)
+    previous_level = logger.level
+    logger.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        with contextlib.redirect_stderr(diagnostics), contextlib.redirect_stdout(diagnostics):
+            tree = ldd(Path(path), ldpaths=ldpaths)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
     if diagnostics.getvalue():
         raise ValueError(f"incomplete dependency scan (resolver warning) for {path}: {diagnostics.getvalue().strip()}")
-    return tree
+    return dict(needed=tree.needed, libs={name: dict(realpath=library.realpath, needed=library.needed) for name, library in tree.libraries.items()})
 
 
 def sha256(path):
@@ -145,6 +157,8 @@ def read_elf(path):
                 ("DT_VERSYM", ".gnu.version", None),
                 ("DT_VERNEED", ".gnu.version_r", "DT_VERNEEDNUM"),
                 ("DT_VERDEF", ".gnu.version_d", "DT_VERDEFNUM"),
+                ("DT_HASH", ".hash", None),
+                ("DT_GNU_HASH", ".gnu.hash", None),
             ]:
                 section = elf.get_section_by_name(section_name)
                 if tag in tags and (section is None or section["sh_addr"] != tags[tag]):
@@ -177,8 +191,24 @@ def read_elf(path):
             if (verneed or verdef) and versym is None:
                 raise ValueError("missing symbol version indices")
             if dynsym:
+                hashes = [elf.get_section_by_name(name) for name in (".hash", ".gnu.hash") if elf.get_section_by_name(name) is not None]
+                if not hashes or any(table.get_number_of_symbols() != dynsym.num_symbols() for table in hashes):
+                    raise ValueError("incomplete dynamic symbols: loader hash count differs")
                 if versym and versym.num_symbols() != dynsym.num_symbols():
                     raise ValueError("incomplete symbol version indices")
+                for address_tag, size_tag in [("DT_RELA", "DT_RELASZ"), ("DT_REL", "DT_RELSZ"), ("DT_JMPREL", "DT_PLTRELSZ")]:
+                    if address_tag not in tags:
+                        if tags.get(size_tag, 0):
+                            raise ValueError("missing loader relocation address")
+                        continue
+                    matches = [section for section in sections if section["sh_type"] in ("SHT_RELA", "SHT_REL") and section["sh_addr"] == tags[address_tag] and section["sh_size"] == tags.get(size_tag)]
+                    if len(matches) != 1 or list(elf.address_offsets(tags[address_tag], matches[0]["sh_size"])) != [matches[0]["sh_offset"]]:
+                        raise ValueError("incomplete loader relocation metadata")
+                    relocation_table = matches[0]
+                    if relocation_table["sh_link"] != elf.get_section_index(".dynsym"):
+                        raise ValueError("relocations reference a different symbol table")
+                    if any(relocation["r_info_sym"] >= dynsym.num_symbols() for relocation in relocation_table.iter_relocations()):
+                        raise ValueError("loader relocation references missing dynamic symbol")
                 for index, symbol in enumerate(dynsym.iter_symbols()):
                     vindex = versym.get_symbol(index)["ndx"] if versym else 0
                     vindex = (vindex & 0x7fff) if isinstance(vindex, int) else 0
@@ -270,20 +300,22 @@ def build_context():
         raise ValueError("AppImage producer must run on Ubuntu 22.04")
     import apt
     import elftools
+    from importlib.metadata import version as package_version
     cache = apt.Cache()
-    packages = {name: package_record(cache, name) for name in ["libc6", "libstdc++6", "libwebkit2gtk-4.1-0", "libjavascriptcoregtk-4.1-0", "libgtk-3-0", "squashfs-tools", "pax-utils", "python3-pyelftools"]}
-    for tool in ["unsquashfs", "lddtree"]:
+    packages = {name: package_record(cache, name) for name in ["libc6", "libstdc++6", "libwebkit2gtk-4.1-0", "libjavascriptcoregtk-4.1-0", "libgtk-3-0", "squashfs-tools", "python3-apt"]}
+    for tool in ["unsquashfs"]:
         if not shutil.which(tool):
             raise ValueError(f"missing archive inspection tool: {tool}")
     context = dict(
         os=os_release, packages=packages, pyelftools=elftools.__version__,
+        inspection_tools={name: package_version(name) for name in ["auditwheel", "pyelftools", "packaging"]},
         built_commit=command("git", "rev-parse", "HEAD"),
         built_tree=command("git", "rev-parse", "HEAD^{tree}"),
         source_commit=os.environ.get("SOURCE_COMMIT") or command("git", "rev-parse", "HEAD"),
         workflow_commit=os.environ.get("GITHUB_SHA"),
         image={name: os.environ.get(name) for name in ["ImageOS", "ImageVersion", "RUNNER_ARCH", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"]},
         toolchain={name: command(name, "--version") for name in ["node", "cargo", "rustc"]},
-        inputs={name: sha256(name) for name in ["Cargo.lock", "package-lock.json", "src-tauri/tauri.conf.json", "src-tauri/tauri.appimage.conf.json"]},
+        inputs={name: sha256(name) for name in ["Cargo.lock", "package-lock.json", "src-tauri/tauri.conf.json", "src-tauri/tauri.appimage.conf.json", "scripts/appimage-abi-requirements.txt"]},
         version=json.loads(Path("package.json").read_text())["version"],
     )
     if not re.fullmatch(r"[0-9a-f]{40}", context["source_commit"] or ""):
@@ -314,9 +346,10 @@ def tool_hashes():
 
 def inspect_artifact(artifact, cache):
     digest = sha256(artifact)
-    # Only the installed Ubuntu parser is loaded; never import AppDir code.
-    resolver = runpy.run_path("/usr/bin/lddtree", run_name="appimage_lddtree")
-    host_paths = resolver["LoadLdpaths"]()
+    # Only hash-pinned inspection libraries are loaded; never import AppDir code.
+    from auditwheel.lddtree import load_ld_paths
+    from auditwheel.libc import Libc
+    host_paths = load_ld_paths(Libc.GLIBC)
     host_paths["env"] = []
     result = dict(artifact=artifact.name, sha256=digest, bytes=artifact.stat().st_size, elf=[], system_providers={})
     with tempfile.TemporaryDirectory(prefix="cmtrace-appimage-abi-") as temporary:
@@ -355,7 +388,7 @@ def inspect_artifact(artifact, cache):
             ldpaths = dict(host_paths)
             # Runtime and wrapped launcher load before AppRun sets LD_LIBRARY_PATH.
             ldpaths["env"] = [] if path in (artifact, appdir / "AppRun.wrapped") else [str(appdir / name) for name in LAUNCHER_LIBRARY_DIRS]
-            tree = resolve_tree(resolver, path, ldpaths)
+            tree = resolve_tree(path, ldpaths)
             providers = validate_closure(info, tree, read)
             for name, provider in providers.items():
                 provider_path = Path(provider["path"])
