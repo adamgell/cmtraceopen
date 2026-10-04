@@ -163,7 +163,7 @@ def sanitize_fuse(proofs, passed):
             raise ValueError("evidence-invalid")
         if any(type(item[k]) is not int or not 0 < item[k] < 2**31 for k in ("pid", "mount_id")):
             raise ValueError("evidence-invalid")
-        if not re.fullmatch(r"fuse(?:\.[A-Za-z0-9_-]{1,100})?", item["filesystem"]) or item["payload_root_0755"] is not True:
+        if not re.fullmatch(r"fuse(?:\.[A-Za-z0-9_.-]{1,100})?", item["filesystem"]) or item["payload_root_0755"] is not True:
             raise ValueError("evidence-invalid")
         result.append(dict(item))
     return result

@@ -153,6 +153,8 @@ class ContractTests(unittest.TestCase):
         validate=self.api("sanitize_fuse")
         proof=dict(pid=1234,mount_id=53,filesystem="fuse.CMTrace",payload_root_0755=True)
         self.assertEqual(validate([proof,dict(proof,pid=1235)],True),[proof,dict(proof,pid=1235)])
+        dotted=dict(proof,filesystem="fuse.candidate.AppImage")
+        self.assertEqual(validate([dotted,dotted],True),[dotted,dotted])
         for bad in [[proof],[dict(proof,filesystem="squashfs")],[dict(proof,path="private")],[dict(proof,payload_root_0755=False)]]:
             with self.assertRaises(ValueError): validate(bad,True)
 
