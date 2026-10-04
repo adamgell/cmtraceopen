@@ -639,7 +639,7 @@ export function EspDiagnosticsWorkspace() {
                 CMTrace evidence folders, manifest.json, CAB, and ZIP are
                 supported.
                 {liveSupported
-                  ? " Windows live acquisition is read-only."
+                  ? " Live acquisition is read-only."
                   : ` ${
                       acquisitionCapability?.liveAcquisitionDetail ??
                       "Live acquisition requires Windows."

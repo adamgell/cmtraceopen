@@ -609,7 +609,7 @@ describe("live acquisition capability", () => {
     mockCapability(supported);
     render(<EspDiagnosticsWorkspace />);
 
-    expect(await screen.findByText(/Windows live acquisition is read-only/)).toBeInTheDocument();
+    expect(await screen.findByText(/Live acquisition is read-only/)).toBeInTheDocument();
     expect(startButton()).toBeEnabled();
     expect(screen.queryByText(/Live acquisition requires Windows/)).not.toBeInTheDocument();
   });
@@ -634,7 +634,7 @@ describe("live acquisition capability", () => {
 
       if (platform === "windows") {
         expect(startButton()).toBeEnabled();
-        expect(screen.getByText(/Windows live acquisition is read-only/)).toBeInTheDocument();
+        expect(screen.getByText(/Live acquisition is read-only/)).toBeInTheDocument();
       } else {
         expect(startButton()).toBeDisabled();
         expect(screen.getByText(/Live acquisition requires Windows/)).toBeInTheDocument();
