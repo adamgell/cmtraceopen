@@ -169,6 +169,17 @@ def read_elf(path):
                     raise ValueError(f"unsupported ELF metadata without {tag}: {section_name}")
                 if count_tag and ((count_tag in tags) != (tag in tags) or (section is not None and section["sh_info"] != tags.get(count_tag))):
                     raise ValueError(f"incomplete ELF version count: {section_name}")
+            # pyelftools follows section links for names and version indices.
+            # Bind every such link to the same tables the loader addresses.
+            for name, linked_name in [
+                (".dynamic", ".dynstr"), (".dynsym", ".dynstr"),
+                (".gnu.version_r", ".dynstr"), (".gnu.version_d", ".dynstr"),
+                (".gnu.version", ".dynsym"), (".hash", ".dynsym"),
+                (".gnu.hash", ".dynsym"),
+            ]:
+                section = elf.get_section_by_name(name)
+                if section is not None and section["sh_link"] != elf.get_section_index(linked_name):
+                    raise ValueError(f"section link differs from loader metadata: {name}")
             required = {}
             verneed = elf.get_section_by_name(".gnu.version_r")
             if verneed:

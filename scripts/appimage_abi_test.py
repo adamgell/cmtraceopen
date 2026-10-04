@@ -109,6 +109,19 @@ class ElfInspectionTests(unittest.TestCase):
             with self.subTest(truncate_hash=truncate_hash), self.assertRaisesRegex(ValueError, "symbol|relocation"):
                 read_elf(self.path)
 
+    def test_version_names_must_use_the_loaders_string_table(self):
+        data = fixture_elf(version="GLIBC_2.38")
+        table = struct.unpack_from("<Q", data, 40)[0]
+        count = struct.unpack_from("<H", data, 60)[0]
+        decoy = b"\0libc.so.6\0memcpy\0GLIBC_2.35\0"
+        data.extend(struct.pack("<IIQQQQIIQQ", 0, 3, 0, 0, len(data) + 64, len(decoy), 0, 0, 1, 0))
+        data.extend(decoy)
+        struct.pack_into("<H", data, 60, count + 1)
+        struct.pack_into("<I", data, table + 4 * 64 + 40, count)
+        self.path.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, "link"):
+            read_elf(self.path)
+
     def test_every_nested_elf_is_discovered_even_without_a_library_suffix(self):
         nested = self.root / "usr/lib/webkit/helpers/worker"
         nested.parent.mkdir(parents=True)
