@@ -15,7 +15,49 @@ const MAX_REDACTION_INPUT_BYTES: usize = 256 * 1024;
 /// unlabelled in narrative, so scrubbing it would mangle readable evidence
 /// without protecting anything. The floor stays below the seven characters of
 /// a Dell service tag, so real serials are still covered.
+///
+/// This is the floor for a value whose content is arbitrary. A field that
+/// declares an identity is held to [`MIN_SCRUBBED_IDENTIFIER_BYTES`] instead.
 const MIN_SCRUBBED_LITERAL_BYTES: usize = 6;
+
+/// Shortest *identifier* scrubbed out of free text.
+///
+/// A field holding a tenant id, a tenant domain, or a user principal name
+/// holds a value whose shape *is* the identity: a short one is short because
+/// the identity is short, not because it might be prose. Applying the
+/// arbitrary-content floor to those left the typed field masked while the
+/// narrative naming the same value kept it verbatim - one export contradicting
+/// itself about one value.
+///
+/// The bar is four bytes because a short one is real rather than hypothetical:
+/// an on-premises NetBIOS domain is routinely that short, and a live capture
+/// published a four-byte one in status text while its typed field was masked.
+/// Values shorter than this still escape, and that remainder is stated rather
+/// than hidden: nothing here can tell a two-byte domain from an ordinary word.
+const MIN_SCRUBBED_IDENTIFIER_BYTES: usize = 4;
+
+/// Which floor a classified value is held to.
+///
+/// The walker states this per field rather than deriving it from the value,
+/// because the distinction is about what the field *means*, not what the value
+/// looks like. Ordering is deliberate: `Literal` sorts above `Identifier`, so
+/// folding two occurrences of one value takes the lower floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ScrubFloor {
+    /// A value whose shape is the identity.
+    Identifier,
+    /// Arbitrary content that can be junk, such as a firmware serial.
+    Literal,
+}
+
+impl ScrubFloor {
+    fn floor(self) -> usize {
+        match self {
+            ScrubFloor::Identifier => MIN_SCRUBBED_IDENTIFIER_BYTES,
+            ScrubFloor::Literal => MIN_SCRUBBED_LITERAL_BYTES,
+        }
+    }
+}
 const SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant(?:[_-]?id)?|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm(?:[_-]?id)?|serial(?:[_-]?number)?|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
 const JSON_CONTAINER_SECRET_LABEL_PATTERN: &str = r#"(?:authorization|password|passwd|pwd|client[_-]?secret|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|bearer[_-]?token|token|tenant[_-]?id|(?:aad|azure[_-]?ad)[_-]?tenant[_-]?id|entdm[_-]?id|serial[_-]?number|device[_-]?serial(?:[_-]?number)?|hardware[_-]?hash|device[_-]?hardware[_-]?data)"#;
 const QUOTED_OR_BARE_VALUE_PATTERN: &str =
@@ -626,7 +668,7 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
     // The masking half of the walker whose collecting half ran above: a
     // classified field cannot be masked here without its literal value also
     // being scrubbed out of every free-text field.
-    for_each_masked_classified_mut(&mut safe, |classified| {
+    for_each_masked_classified_mut(&mut safe, |classified, _floor| {
         classified.value = REDACTED.to_string();
     });
 
@@ -761,19 +803,20 @@ pub fn redacted_export_projection(snapshot: &EspDiagnosticsSnapshot) -> EspDiagn
 /// rather than masked, so it keeps a stable identity across the export.
 fn for_each_masked_classified_mut(
     snapshot: &mut EspDiagnosticsSnapshot,
-    mut visit: impl FnMut(&mut EspClassifiedString),
+    mut visit: impl FnMut(&mut EspClassifiedString, ScrubFloor),
 ) {
-    let mut visit_optional = move |value: &mut Option<EspClassifiedString>| {
+    let mut visit_optional = move |value: &mut Option<EspClassifiedString>, floor: ScrubFloor| {
         if let Some(value) = value {
-            visit(value);
+            visit(value, floor);
         }
     };
 
     // Every visited struct is destructured field by field, never with `..`, so
     // a field added to any of them stops compiling here until someone decides
     // whether it is classified (and therefore masked) or deliberately not.
-    // Classified fields are routed through `visit_optional`; the `_` bindings
-    // name the fields that stay untouched by this walker.
+    // Classified fields are routed through `visit_optional`, which also states
+    // the floor the field's value is held to when it is scrubbed out of free
+    // text; the `_` bindings name the fields that stay untouched by this walker.
     let EspIdentityEvidence {
         device_name: _,
         managed_device_id: _,
@@ -785,11 +828,12 @@ fn for_each_masked_classified_mut(
         serial_number,
         evidence: _,
     } = &mut snapshot.identity;
-    visit_optional(entdm_id);
-    visit_optional(tenant_id);
-    visit_optional(tenant_domain);
-    visit_optional(user_principal_name);
-    visit_optional(serial_number);
+    visit_optional(entdm_id, ScrubFloor::Identifier);
+    visit_optional(tenant_id, ScrubFloor::Identifier);
+    visit_optional(tenant_domain, ScrubFloor::Identifier);
+    visit_optional(user_principal_name, ScrubFloor::Identifier);
+    // A serial is the arbitrary-content case the higher floor exists for.
+    visit_optional(serial_number, ScrubFloor::Literal);
 
     if let Some(profile) = &mut snapshot.profile {
         let EspProfileEvidence {
@@ -806,8 +850,8 @@ fn for_each_masked_classified_mut(
             device_preparation: _,
             evidence: _,
         } = profile;
-        visit_optional(tenant_domain);
-        visit_optional(tenant_id);
+        visit_optional(tenant_domain, ScrubFloor::Identifier);
+        visit_optional(tenant_id, ScrubFloor::Identifier);
     }
 
     for enrollment in &mut snapshot.enrollments {
@@ -820,9 +864,9 @@ fn for_each_masked_classified_mut(
             settings: _,
             evidence: _,
         } = enrollment;
-        visit_optional(tenant_id);
-        visit_optional(user_principal_name);
-        visit_optional(entdm_id);
+        visit_optional(tenant_id, ScrubFloor::Identifier);
+        visit_optional(user_principal_name, ScrubFloor::Identifier);
+        visit_optional(entdm_id, ScrubFloor::Identifier);
     }
 
     if let Some(hardware) = &mut snapshot.hardware {
@@ -835,7 +879,7 @@ fn for_each_masked_classified_mut(
             tpm_version: _,
             evidence: _,
         } = hardware;
-        visit_optional(serial_number);
+        visit_optional(serial_number, ScrubFloor::Literal);
     }
 
     if let Some(graph) = &mut snapshot.graph {
@@ -855,9 +899,9 @@ fn for_each_masked_classified_mut(
                     tenant_id,
                     evidence: _,
                 } = device;
-                visit_optional(serial_number);
-                visit_optional(user_principal_name);
-                visit_optional(tenant_id);
+                visit_optional(serial_number, ScrubFloor::Literal);
+                visit_optional(user_principal_name, ScrubFloor::Identifier);
+                visit_optional(tenant_id, ScrubFloor::Identifier);
             }
         }
         if let Some(identity) = &mut graph.autopilot_identity.data {
@@ -869,7 +913,7 @@ fn for_each_masked_classified_mut(
                 group_tag: _,
                 evidence: _,
             } = identity;
-            visit_optional(serial_number);
+            visit_optional(serial_number, ScrubFloor::Literal);
         }
     }
 }
@@ -925,6 +969,10 @@ struct ExportRedaction {
 /// the value itself, read from the typed field it is about to mask; scrubbing
 /// that exact string out of every free-text field closes the gap by
 /// construction rather than by pattern.
+///
+/// Each value carries the floor of the field it was read from, and a value
+/// read from two fields takes the lower of the two: an identifier matters more
+/// than the convenience of leaving a short one readable.
 #[derive(Default)]
 struct ClassifiedLiterals {
     /// ASCII-lowercased, deduplicated, and ordered longest first.
@@ -932,11 +980,13 @@ struct ClassifiedLiterals {
 }
 
 impl ClassifiedLiterals {
-    fn new(values: BTreeSet<String>) -> Self {
+    /// Values arrive already trimmed and ASCII-lowercased, keyed by that
+    /// normalized form.
+    fn new(values: BTreeMap<String, ScrubFloor>) -> Self {
         let mut values: Vec<String> = values
             .into_iter()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| value.len() >= MIN_SCRUBBED_LITERAL_BYTES)
+            .filter(|(value, floor)| value.len() >= floor.floor())
+            .map(|(value, _)| value)
             .collect();
         values.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
         values.dedup();
@@ -1076,11 +1126,17 @@ fn collect_export_redaction(snapshot: &mut EspDiagnosticsSnapshot) -> ExportReda
 /// Read the literal value out of every classified field the export masks.
 ///
 /// Takes `&mut` only to share one field list with the masking pass in
-/// [`for_each_masked_classified_mut`]; it changes nothing.
+/// [`for_each_masked_classified_mut`]; it changes nothing. Normalization
+/// happens here so one value read from two fields is one key, and the floor is
+/// folded to the lower of the two.
 fn collect_classified_literals(snapshot: &mut EspDiagnosticsSnapshot) -> ClassifiedLiterals {
-    let mut values = BTreeSet::new();
-    for_each_masked_classified_mut(snapshot, |classified| {
-        values.insert(classified.value.clone());
+    let mut values: BTreeMap<String, ScrubFloor> = BTreeMap::new();
+    for_each_masked_classified_mut(snapshot, |classified, floor| {
+        let value = classified.value.trim().to_ascii_lowercase();
+        values
+            .entry(value)
+            .and_modify(|existing| *existing = (*existing).min(floor))
+            .or_insert(floor);
     });
     ClassifiedLiterals::new(values)
 }
