@@ -260,6 +260,9 @@ jobs:
           .github/scripts/source-quality-workflow.test.mjs
           .github/scripts/changed-range.test.mjs
 
+      - name: QA tracker citation tests
+        run: node --test scripts/ci-qa-citations.test.mjs
+
       - name: npm security audit
         run: npm audit --audit-level=high
         continue-on-error: true
