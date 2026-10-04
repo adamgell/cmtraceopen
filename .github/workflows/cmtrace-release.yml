@@ -40,7 +40,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: Linux-x64
     runs-on: ${{ matrix.os }}
@@ -170,7 +170,15 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libc6 libstdc++6 \
+            squashfs-tools python3-venv python3-apt
+
+      - name: Install pinned AppImage inspection tools
+        if: runner.os == 'Linux'
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .appimage-abi-venv
+          .appimage-abi-venv/bin/python -m pip install --ignore-installed --require-hashes --only-binary=:all: -r scripts/appimage-abi-requirements.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -199,10 +207,17 @@ jobs:
       - name: Generate npm SBOM
         run: npm sbom --sbom-format cyclonedx > sbom-npm.cdx.json
 
+      - name: Remove cached bundle outputs
+        if: runner.os == 'Linux'
+        env:
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+        run: node scripts/ci-bundle-outputs.mjs clean
+
       - name: Build and create release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CMTRACE_APPIMAGE_VERIFY_ROOT: ${{ runner.os == 'Linux' && 'src-tauri/target/x86_64-unknown-linux-gnu/release/bundle' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -225,6 +240,16 @@ jobs:
           # published once per workflow by publish-updater-manifest, which
           # derives it from the release's own signature assets.
           uploadUpdaterJson: false
+
+      - name: Upload AppImage inspection evidence
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: appimage-abi-${{ matrix.label }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/provenance/appimage-abi.json
+          if-no-files-found: error
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
