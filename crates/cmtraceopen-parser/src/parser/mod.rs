@@ -131,6 +131,8 @@ pub fn parse_content(
         parse_errors: parsed_chunk.parse_errors,
         file_path: path_obj.to_string_lossy().to_string(),
         file_size,
+        // No file was read here, so there is no modified time to report.
+        modified_unix_ms: None,
         byte_offset: file_size,
     };
 

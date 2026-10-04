@@ -315,6 +315,13 @@ pub struct ParseResult {
     pub parse_errors: u32,
     pub file_path: String,
     pub file_size: u64,
+    /// When the source file was last modified, as epoch milliseconds.
+    ///
+    /// Supplied by the native adapter from file metadata. Pure entry points
+    /// leave it `None` because they do not read a file. `None` means unavailable;
+    /// zero is a real epoch timestamp.
+    #[serde(default)]
+    pub modified_unix_ms: Option<u64>,
     /// Byte offset where parsing ended — used as the starting point for tailing
     pub byte_offset: u64,
 }

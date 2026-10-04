@@ -819,7 +819,15 @@ fn format_from_arg(value: &str) -> Result<ExportFormat, String> {
     }
 }
 
-fn parse_args<I, S>(args: I) -> Result<Cli, String>
+/// What the argument list asked for.
+enum ParsedArgs {
+    /// Run the export with these options.
+    Export(Box<Cli>),
+    /// Print the usage and exit successfully.
+    Help,
+}
+
+fn parse_args<I, S>(args: I) -> Result<ParsedArgs, String>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -886,14 +894,11 @@ where
                 filter_supplied = true;
                 cli.filter.search = Some(value("--search", &mut args)?);
             }
-            "--help" | "-h" => {
-                return Err(
-                    "usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>] \
-                     [--format csv|tsv|json|xml|html|rawXml] [--output <path|-] \
-                     [--channel <name>]... [--level <level>]... [--event-id <id>]... [--search <text>]"
-                        .to_owned(),
-                )
-            }
+            // A help request is the caller discovering the interface, not a
+            // usage error: returning it as one made `--help` print to stderr and
+            // exit 1, so a script checking the usage fails. The caller prints the
+            // usage and the run reports nothing.
+            "--help" | "-h" => return Ok(ParsedArgs::Help),
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -903,8 +908,12 @@ where
     if manifest_supplied && (!cli.sources.is_empty() || filter_supplied) {
         return Err("--manifest cannot be combined with --source or filter arguments".to_owned());
     }
-    Ok(cli)
+    Ok(ParsedArgs::Export(Box::new(cli)))
 }
+
+const USAGE: &str = "usage: event-log-export --source <file.evtx>... [--manifest <manifest.json>] \
+                     [--format csv|tsv|json|xml|html|rawXml] [--output <path|->] \
+                     [--channel <name>]... [--level <level>]... [--event-id <id>]... [--search <text>]";
 
 const MAX_EVENT_ID: u32 = u32::MAX;
 const MAX_EVENT_ID_FILTER_SELECTORS: usize = 65_536;
@@ -1403,7 +1412,13 @@ where
         &mut dyn FnMut(Vec<EvtxRecord>) -> Result<(), String>,
     ) -> Result<Coverage, String>,
 {
-    let parsed = parse_args(args)?;
+    let parsed = match parse_args(args)? {
+        ParsedArgs::Help => {
+            writeln!(stdout, "{USAGE}").map_err(|error| error.to_string())?;
+            return Ok(String::new());
+        }
+        ParsedArgs::Export(cli) => *cli,
+    };
     let manifest_path = parsed.manifest.clone();
     let mut cli = load_cli(parsed)?;
     let mut protected_sources = cli.sources.clone();
@@ -1558,7 +1573,10 @@ fn run() -> Result<(), String> {
     let mut stdout = std::io::stdout().lock();
     let arguments = utf8_arguments(std::env::args_os())?;
     let report = run_with_args(arguments, &mut stdout)?;
-    eprintln!("{report}");
+    // `--help` answers on stdout; a report is the export's own summary.
+    if !report.is_empty() {
+        eprintln!("{report}");
+    }
     Ok(())
 }
 
@@ -1570,6 +1588,16 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    impl super::ParsedArgs {
+        /// The options, for a test that is not exercising a help request.
+        fn expect_export(self) -> Cli {
+            match self {
+                super::ParsedArgs::Export(cli) => *cli,
+                super::ParsedArgs::Help => panic!("these arguments are not a help request"),
+            }
+        }
+    }
+
     #[cfg(unix)]
     use super::utf8_arguments;
     use super::{
@@ -1667,7 +1695,8 @@ mod tests {
             "--search",
             "token",
         ])
-        .expect("valid CLI");
+        .expect("valid CLI")
+        .expect_export();
         assert_eq!(cli.sources, vec!["Application.evtx"]);
         assert_eq!(cli.format, app_lib::event_log::export::ExportFormat::Csv);
         assert_eq!(cli.output.as_deref(), Some("events.csv"));
@@ -3097,5 +3126,30 @@ mod tests {
             std::fs::read(&destination).expect("destination"),
             b"existing destination"
         );
+    }
+    #[test]
+    fn help_prints_the_usage_to_stdout_and_is_not_an_error() {
+        for argument in ["--help", "-h"] {
+            let mut out: Vec<u8> = Vec::new();
+            let report = run_with_args(
+                ["event-log-export".to_owned(), argument.to_owned()],
+                &mut out,
+            )
+            .unwrap_or_else(|error| panic!("{argument} must not be a usage error: {error}"));
+
+            assert!(
+                report.is_empty(),
+                "{argument}: nothing should reach stderr, got {report:?}"
+            );
+            let printed = String::from_utf8(out).expect("the usage is utf-8");
+            assert!(
+                printed.starts_with("usage: event-log-export"),
+                "{argument}: got {printed:?}"
+            );
+            assert!(
+                printed.contains("--source <file.evtx>"),
+                "{argument}: got {printed:?}"
+            );
+        }
     }
 }

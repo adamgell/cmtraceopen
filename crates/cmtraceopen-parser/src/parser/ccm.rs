@@ -7,6 +7,8 @@
 //! The regex patterns are derived directly from the scanf format strings
 //! extracted from the CMTrace.exe binary (see REVERSE_ENGINEERING.md).
 
+pub mod logical;
+
 use chrono::{FixedOffset, TimeZone};
 use regex::Regex;
 
@@ -270,7 +272,7 @@ pub fn parse_content(
 ) -> (Vec<LogEntry>, u32) {
     match specialization {
         Some(ParserSpecialization::Ime) => {
-            crate::intune::ime_parser::parse_ime_entries(content, file_path)
+            crate::parser::ccm::logical::parse_ime_entries(content, file_path)
         }
         None
         | Some(ParserSpecialization::IntuneDeviceInventoryHarvester)

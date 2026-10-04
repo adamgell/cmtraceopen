@@ -1,14 +1,14 @@
 //! Redaction projection for the Company Portal Windows log evidence document.
 //!
 //! The rule table itself lives in `esp::redaction` and is reused verbatim
-//! through [`crate::esp::redact_text`]. It is evidence-agnostic — UPN/email,
+//! through [`crate::intune::enrollment::windows::esp::redact_text`]. It is evidence-agnostic — UPN/email,
 //! user-profile paths, SIDs, secret-labelled values (`token`, `authorization`,
 //! `tenantId`, `serialNumber`, `hardwareHash`, …), Azure storage credentials,
 //! and IPv4/IPv6/MAC identifiers — and duplicating it here would let two rule
 //! tables drift apart. This module only decides *which fields* of a Company
 //! Portal document are free text.
 
-use crate::esp::redact_text;
+use crate::intune::enrollment::windows::esp::redact_text;
 
 use super::models::CompanyPortalLogDocument;
 

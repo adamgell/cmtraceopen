@@ -96,6 +96,111 @@ describe("RegistryViewer", () => {
     expect(screen.getByText("0x2")).toBeInTheDocument();
   });
 
+  it.each(["click", "searchNext", "searchPrevious"] as const)(
+    "shows values from a recased sibling after %s navigation",
+    (navigation) => {
+      useLogStore.setState({ openFilePath: null });
+      useRegistryStore.getState().setRegistryData({
+        ...fixture,
+        keys: [
+          { ...fixture.keys[0], path: "HKLM\\Software\\A" },
+          { ...fixture.keys[1], path: "hklm\\software\\B" },
+        ],
+      });
+      render(<RegistryViewer />);
+
+      if (navigation === "click") {
+        fireEvent.click(screen.getByText("B"));
+      } else {
+        act(() => {
+          useRegistryStore.getState().toggleExpanded("HKLM\\Software");
+          useRegistryStore.getState().setSearchQuery("UEFISecureBootEnabled");
+          useRegistryStore.getState()[navigation]();
+        });
+      }
+
+      expect(useRegistryStore.getState().selectedKeyPath).toBe("HKLM\\Software\\B");
+      expect(screen.getByText("B").closest('[role="treeitem"]')).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("UEFISecureBootEnabled")).toBeInTheDocument();
+      expect(screen.getByText("0x1")).toBeInTheDocument();
+      expect(screen.queryByText("AvailableUpdates")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["click", "searchNext", "searchPrevious"] as const)(
+    "preserves every source section's values on a merged key after %s navigation",
+    (navigation) => {
+      useLogStore.setState({ openFilePath: null });
+      const data = {
+        ...fixture,
+        keys: [
+          { ...fixture.keys[0], path: "HKLM\\Software\\A" },
+          { ...fixture.keys[1], path: "hklm\\software\\a" },
+        ],
+      };
+      useRegistryStore.getState().setRegistryData(data);
+      render(<RegistryViewer />);
+
+      if (navigation === "click") {
+        fireEvent.click(screen.getByText("A"));
+      } else {
+        act(() => {
+          useRegistryStore.getState().toggleExpanded("HKLM\\Software");
+          useRegistryStore.getState().setSearchQuery("UEFISecureBootEnabled");
+          useRegistryStore.getState()[navigation]();
+        });
+      }
+
+      expect(screen.queryByText("a")).not.toBeInTheDocument();
+      expect(screen.getByText("A").closest('[role="treeitem"]')).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByText("AvailableUpdates")).toBeInTheDocument();
+      expect(screen.getByText("UEFISecureBootEnabled")).toBeInTheDocument();
+      expect(screen.getByText("0x2")).toBeInTheDocument();
+      expect(screen.getByText("0x1")).toBeInTheDocument();
+      expect(useRegistryStore.getState().registryData).toBe(data);
+    },
+  );
+
+  it("retains repeated value names and deletion records across case-equivalent sections", () => {
+    useLogStore.setState({ openFilePath: null });
+    useRegistryStore.getState().setRegistryData({
+      ...fixture,
+      keys: [
+        { ...fixture.keys[0], path: "HKLM\\Software\\A" },
+        {
+          ...fixture.keys[1],
+          path: "hklm\\software\\a",
+          values: [{ ...fixture.keys[0].values[0], kind: "deleteMarker", data: "-" }],
+        },
+      ],
+    });
+    render(<RegistryViewer />);
+    fireEvent.click(screen.getByText("A"));
+
+    expect(screen.getAllByText("AvailableUpdates")).toHaveLength(2);
+    expect(screen.getByText("0x2")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("(deleted)")).toBeInTheDocument();
+  });
+
+  it("keeps synthetic parents empty and resolves recased key deletion sections", () => {
+    useLogStore.setState({ openFilePath: null });
+    useRegistryStore.getState().setRegistryData({
+      ...fixture,
+      keys: [
+        { ...fixture.keys[0], path: "HKLM\\Software\\A" },
+        { ...fixture.keys[1], path: "hklm\\software\\B", values: [], isDelete: true },
+      ],
+    });
+    render(<RegistryViewer />);
+    fireEvent.click(screen.getByText("Software"));
+    expect(screen.getByText("This key has no values.")).toBeInTheDocument();
+    expect(screen.queryByText("AvailableUpdates")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("B"));
+    expect(screen.getByText("This key is marked for deletion.")).toBeInTheDocument();
+  });
+
   it("exposes registry keys as a navigable tree", () => {
     render(<RegistryViewer />);
 

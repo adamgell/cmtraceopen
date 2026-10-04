@@ -15,17 +15,17 @@ use serde_json::Value;
 use std::sync::OnceLock;
 
 #[cfg(target_os = "windows")]
-use crate::intune::eventlog_win32;
-#[cfg(target_os = "windows")]
-use crate::intune::models::EventLogLiveQueryChannelResult;
+use crate::intune::apps::windows::ime::models::EventLogLiveQueryChannelResult;
 #[cfg(any(target_os = "windows", test))]
-use crate::intune::models::EventLogLiveQueryStatus;
-use crate::intune::models::{
+use crate::intune::apps::windows::ime::models::EventLogLiveQueryStatus;
+use crate::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogChannelSummary,
     EventLogCorrelationKind, EventLogCorrelationLink, EventLogEntry, EventLogLiveQueryMetadata,
     EventLogSeverity, EvidenceBundleMetadata, IntuneDiagnosticInsight, IntuneEvent,
     IntuneEventType, IntuneStatus, IntuneTimestampBounds,
 };
+#[cfg(target_os = "windows")]
+use crate::intune::eventlog_win32;
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 50_000;
@@ -91,17 +91,6 @@ pub struct ParsedEspEvtxBatch {
     pub parse_failure_count: usize,
     pub oversized_record_count: usize,
     pub retained_byte_budget_exhausted: bool,
-}
-
-/// Compatibility projection for callers that need only record-count bounds.
-/// Native acquisition uses `ParsedEspEvtxBatch` to retain the stronger byte,
-/// parse-failure, and oversized-record accounting.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedEspEventBatch {
-    pub records: Vec<ParsedEspEventRecord>,
-    pub inspected_records: usize,
-    pub rejected_records: usize,
-    pub inspection_limit_reached: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -341,26 +330,6 @@ where
         MAX_ESP_EVTX_BATCH_BYTES,
     )
     .map(|batch| batch.records)
-}
-
-pub fn parse_esp_evtx_file_bounded(
-    path: &Path,
-    inspection_limit: usize,
-) -> Result<ParsedEspEventBatch, String> {
-    parse_esp_evtx_file_bounded_with_limits(
-        path,
-        inspection_limit,
-        MAX_ESP_EVTX_RECORD_BYTES,
-        MAX_ESP_EVTX_BATCH_BYTES,
-    )
-    .map(|batch| ParsedEspEventBatch {
-        records: batch.records,
-        inspected_records: batch.inspected_records,
-        rejected_records: batch
-            .parse_failure_count
-            .saturating_add(batch.oversized_record_count),
-        inspection_limit_reached: batch.inspection_limit_reached,
-    })
 }
 
 pub fn parse_esp_evtx_file_bounded_with_limits(

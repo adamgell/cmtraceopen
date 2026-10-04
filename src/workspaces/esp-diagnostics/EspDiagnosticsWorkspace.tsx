@@ -209,7 +209,9 @@ export function EspDiagnosticsWorkspace() {
     [snapshot],
   );
   const showActions =
-    currentPlatform === "windows" && !isReplaySession && failedApps.length > 0;
+    supportsEspLiveAcquisition(currentPlatform) &&
+    !isReplaySession &&
+    failedApps.length > 0;
   const navSections = useMemo(
     () => [
       { id: "esp-action-center-heading", label: "Action center" },
@@ -256,7 +258,7 @@ export function EspDiagnosticsWorkspace() {
       : null;
 
   useEffect(() => {
-    if (currentPlatform !== "windows") {
+    if (!supportsEspLiveAcquisition(currentPlatform)) {
       setElevationProbe(null);
       return;
     }
@@ -283,6 +285,7 @@ export function EspDiagnosticsWorkspace() {
   // so a mount issues its commands in a fixed order.
   useEffect(() => {
     let disposed = false;
+    setAcquisitionCapability(null);
     void getEspDiagnosticsCapability()
       .then((capability) => {
         if (!disposed) setAcquisitionCapability(capability);

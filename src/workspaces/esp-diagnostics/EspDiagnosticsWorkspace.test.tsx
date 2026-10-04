@@ -21,6 +21,7 @@ import { GraphEnrichmentPanel } from "./GraphEnrichmentPanel";
 import { LiveActivity } from "./LiveActivity";
 import { createEspGraphCoordinator } from "./use-esp-session-updates";
 import type {
+  EspAcquisitionCapability,
   EspDiagnosticFinding,
   EspDiagnosticsSnapshot,
   EspGraphOverlay,
@@ -565,14 +566,31 @@ describe("ESP diagnostic cockpit frame", () => {
 });
 
 describe("live acquisition capability", () => {
+  const supported: EspAcquisitionCapability = {
+    offlineAnalysisSupported: true,
+    liveAcquisitionSupported: true,
+    liveAcquisitionDetail: null,
+  };
+  const unsupported: EspAcquisitionCapability = {
+    offlineAnalysisSupported: true,
+    liveAcquisitionSupported: false,
+    liveAcquisitionDetail: "Live ESP evidence acquisition is only supported on Windows",
+  };
+
+  function deferredCapability() {
+    let resolve!: (value: EspAcquisitionCapability) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<EspAcquisitionCapability>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
   function mockCapability(capability: unknown) {
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === "get_esp_elevation_state") {
-        return {
-          isElevated: true,
-          restartSupported: true,
-          restrictedSources: [],
-        };
+        return { isElevated: true, restartSupported: true, restrictedSources: [] };
       }
       if (command === "get_esp_diagnostics_capability") {
         if (capability instanceof Error) throw capability;
@@ -582,51 +600,135 @@ describe("live acquisition capability", () => {
     });
   }
 
+  function startButton() {
+    return screen.getByRole("button", { name: "Start live diagnostics" });
+  }
+
   it("takes the answer from the backend capability even when the platform disagrees", async () => {
     useUiStore.setState({ currentPlatform: "macos" });
-    mockCapability({
-      offlineAnalysisSupported: true,
-      liveAcquisitionSupported: true,
-      liveAcquisitionDetail: null,
-    });
-
+    mockCapability(supported);
     render(<EspDiagnosticsWorkspace />);
 
-    // The platform says no and the build says yes: the layer that probes owns it.
-    expect(
-      await screen.findByText(/Windows live acquisition is read-only/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Live acquisition requires Windows/),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/Windows live acquisition is read-only/)).toBeInTheDocument();
+    expect(startButton()).toBeEnabled();
+    expect(screen.queryByText(/Live acquisition requires Windows/)).not.toBeInTheDocument();
   });
 
-  it("shows the backend's own reason when live acquisition is unavailable", async () => {
-    mockCapability({
-      offlineAnalysisSupported: true,
-      liveAcquisitionSupported: false,
-      liveAcquisitionDetail:
-        "Live ESP evidence acquisition is only supported on Windows",
-    });
-
+  it("honors backend false on Windows and shows the backend's own reason", async () => {
+    mockCapability(unsupported);
     render(<EspDiagnosticsWorkspace />);
 
-    expect(
-      await screen.findByText(
-        /Live ESP evidence acquisition is only supported on Windows/,
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(unsupported.liveAcquisitionDetail!, { exact: false })).toBeInTheDocument();
+    expect(startButton()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import captured evidence" })).toBeEnabled();
   });
 
-  it("falls back to local wording only when the probe does not answer", async () => {
+  it.each(["windows", "macos", "linux"] as const)(
+    "keeps the %s fallback after a rejected probe without replacing a workspace error",
+    async (platform) => {
+      useUiStore.setState({ currentPlatform: platform });
+      useEspDiagnosticsStore.setState({ phase: "error", error: "Evidence import failed." });
+      mockCapability(new Error("probe unavailable"));
+      render(<EspDiagnosticsWorkspace />);
+      await act(async () => {});
+
+      if (platform === "windows") {
+        expect(startButton()).toBeEnabled();
+        expect(screen.getByText(/Windows live acquisition is read-only/)).toBeInTheDocument();
+      } else {
+        expect(startButton()).toBeDisabled();
+        expect(screen.getByText(/Live acquisition requires Windows/)).toBeInTheDocument();
+      }
+      expect(screen.getByRole("alert")).toHaveTextContent("Evidence import failed.");
+      expect(screen.queryByText(/probe unavailable/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("uses the platform fallback when the backend capability is malformed", async () => {
     useUiStore.setState({ currentPlatform: "macos" });
-    mockCapability(new Error("probe unavailable"));
+    mockCapability({ ...supported, liveAcquisitionSupported: "true" });
+    render(<EspDiagnosticsWorkspace />);
+    await act(async () => {});
 
+    expect(startButton()).toBeDisabled();
+    expect(screen.getByText(/Live acquisition requires Windows/)).toBeInTheDocument();
+  });
+
+  it.each([
+    { from: "windows", to: "macos", previous: supported, fallbackSupported: false },
+    { from: "macos", to: "windows", previous: unsupported, fallbackSupported: true },
+  ] as const)("discards the settled answer while the $to replacement probe is pending", async ({ from, to, previous, fallbackSupported }) => {
+    useUiStore.setState({ currentPlatform: from });
+    mockCapability(previous);
+    render(<EspDiagnosticsWorkspace />);
+    await act(async () => {});
+    expect(startButton().hasAttribute("disabled")).toBe(!previous.liveAcquisitionSupported);
+
+    const replacement = deferredCapability();
+    mockCapability(replacement.promise);
+    act(() => useUiStore.setState({ currentPlatform: to }));
+
+    expect(startButton().hasAttribute("disabled")).toBe(!fallbackSupported);
+    expect(screen.queryByText(unsupported.liveAcquisitionDetail!, { exact: false })).not.toBeInTheDocument();
+    await act(async () => replacement.reject(new Error("probe unavailable")));
+    expect(startButton().hasAttribute("disabled")).toBe(!fallbackSupported);
+  });
+
+  it.each(["success", "failure"] as const)("ignores stale probe %s after a platform change", async (outcome) => {
+    const previous = deferredCapability();
+    mockCapability(previous.promise);
     render(<EspDiagnosticsWorkspace />);
 
-    expect(
-      await screen.findByText(/Live acquisition requires Windows/),
-    ).toBeInTheDocument();
+    mockCapability(unsupported);
+    await act(async () => useUiStore.setState({ currentPlatform: "macos" }));
+    expect(startButton()).toBeDisabled();
+    await act(async () => {
+      if (outcome === "success") previous.resolve(supported);
+      else previous.reject(new Error("stale probe failure"));
+    });
+
+    expect(startButton()).toBeDisabled();
+    expect(screen.getByText(unsupported.liveAcquisitionDetail!, { exact: false })).toBeInTheDocument();
+  });
+
+  it.each(["success", "failure"] as const)("ignores probe %s from an unmounted workspace", async (outcome) => {
+    const previous = deferredCapability();
+    mockCapability(previous.promise);
+    const first = render(<EspDiagnosticsWorkspace />);
+    first.unmount();
+
+    mockCapability(unsupported);
+    render(<EspDiagnosticsWorkspace />);
+    await act(async () => {});
+    await act(async () => {
+      if (outcome === "success") previous.resolve(supported);
+      else previous.reject(new Error("unmounted probe failure"));
+    });
+
+    expect(startButton()).toBeDisabled();
+    expect(screen.getByText(unsupported.liveAcquisitionDetail!, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each(["windows", "macos"] as const)("preserves %s write-action and elevation gating when capability disagrees", async (platform) => {
+    useUiStore.setState({ currentPlatform: platform });
+    mockCapability(platform === "windows" ? unsupported : supported);
+    showSnapshot(makeSnapshot({
+      workloads: [makeWorkload("workload-vpn", "win32App", "failed", "Failed")],
+    }));
+    render(<EspDiagnosticsWorkspace />);
+    await act(async () => {});
+
+    const actions = screen.queryByRole("region", { name: "Force ESP past a failed app" });
+    if (platform === "windows") {
+      expect(startButton()).toBeDisabled();
+      expect(actions).toBeInTheDocument();
+      expect(screen.getByText("Elevated", { selector: "strong" })).toBeInTheDocument();
+    } else {
+      expect(startButton()).toBeEnabled();
+      expect(actions).not.toBeInTheDocument();
+      expect(useEspDiagnosticsStore.getState().elevationProbe).toBeNull();
+    }
   });
 });
 

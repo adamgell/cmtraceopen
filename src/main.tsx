@@ -7,6 +7,7 @@ import { getThemeById } from "./lib/themes";
 import { useUiStore } from "./stores/ui-store";
 import { initializeDateTimeFormatting, refreshDateTimeFormatting } from "./lib/date-time-format";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { AppErrorBoundary } from "./components/layout/AppErrorBoundary";
 
 const RootWrapper = import.meta.env.DEV ? React.Fragment : React.StrictMode;
 
@@ -17,6 +18,13 @@ function dismissSplash() {
     setTimeout(() => splash.remove(), 500);
   }
 }
+
+// The splash is dismissed from an effect below, so a throw during the first
+// render would leave it up indefinitely - indistinguishable from a slow start.
+// Clear it from a window-level failure too: this covers render throws before the
+// tree mounts, and async failures no React boundary can catch.
+window.addEventListener("error", dismissSplash, { once: true });
+window.addEventListener("unhandledrejection", dismissSplash, { once: true });
 
 function AppRoot() {
   useAppMenu();
@@ -103,7 +111,9 @@ document.head.appendChild(style);
 async function bootstrap() {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootWrapper>
-      <ThemedApp />
+      <AppErrorBoundary onError={dismissSplash}>
+        <ThemedApp />
+      </AppErrorBoundary>
     </RootWrapper>
   );
 }

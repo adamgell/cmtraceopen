@@ -8,7 +8,7 @@
 //! contract under two names. This module owns device registration and identity,
 //! profile discovery, retrieval and application, OOBE mode and deployment
 //! profile facts, diagnostics-page/export evidence, and the handoff into
-//! enrollment and ESP. `crate::esp` continues to own app and policy progress and
+//! enrollment and ESP. `crate::intune::enrollment::windows::esp` continues to own app and policy progress and
 //! blocking status *after* that handoff, and nothing here re-derives it.
 //!
 //! The only thing crossing the boundary is an explicit key. An
@@ -29,7 +29,7 @@
 //!
 //! # Shape
 //!
-//! Deliberately the same shape as `crate::esp`, so the two read side by side:
+//! Deliberately the same shape as `crate::intune::enrollment::windows::esp`, so the two read side by side:
 //!
 //! 1. [`sources`] declares the input contract and detects document schemas;
 //! 2. [`normalize`] classifies records against Microsoft's documented event

@@ -7,6 +7,11 @@ on:
     # Long-lived integration branches must be listed explicitly: a PR whose base
     # is absent here runs no jobs at all, silently, and still reports mergeable.
     branches: [main, codex/parser-family-skeleton]
+  # The merge queue tests a temporary merge commit and reports the same required
+  # checks that gate `main`. Without this trigger a queued pull request waits for
+  # checks that never start, so the queue stalls rather than merging.
+  merge_group:
+
   # A pull request opened by a workflow with GITHUB_TOKEN does not trigger
   # workflows, so the release publishers that open one kick the checks against
   # their branch explicitly. This is the documented event that still creates a
@@ -46,7 +51,7 @@ jobs:
       - name: Changed-range whitespace
         env:
           BEFORE_SHA: ${{ github.event.before }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           # The base-selection rule lives in .github/scripts/changed-range.sh so it
           # can be executed by a test rather than only read here. A root commit is
@@ -65,6 +70,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Linux Rust job failed while linking with `ld` terminated by signal 7
+      # (SIGBUS) on three runs in one day -- main merges and a PR, on a different
+      # test binary each time (issue #676). Disk exhaustion is a suspected cause,
+      # not a confirmed diagnosis; no failure-time disk measurement was captured.
+      # This job links several large test binaries after a cold build.
+      #
+      # None of what is removed here is used by this job: webkit2gtk and gtk come
+      # from the system-dependencies step below. `df` records the available disk
+      # space before the build, not at the time of any later failure.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
 
       - name: Install system dependencies
         run: |
@@ -101,9 +121,22 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # Default full-feature checks/tests already cover the exporter. Also build
+      # and exercise the actual CLI with the release feature selection. The
+      # process-level tests cover exports and errors without relying on --help.
+      - name: Build and smoke the headless event-log exporter
+        working-directory: src-tauri
+        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
+
       - name: Rust check (lite)
         working-directory: src-tauri
         run: cargo check --no-default-features
+
+      - name: Rust check (ESP without collector)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features esp-diagnostics
+
+      - name: Rust check (collector without ESP)
+        run: cargo check --locked -p cmtrace-open --lib --no-default-features --features collector
 
       - name: Rust tests (lite)
         working-directory: src-tauri
@@ -130,7 +163,7 @@ jobs:
         run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
 
       - name: Install cargo-deny and cargo-audit
-        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-deny,cargo-audit
 
@@ -202,11 +235,19 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Exporter workflow contract tests
+        run: node --test scripts/event-log-export-workflow.test.mjs
+
       - name: Frontend tests
         run: npm run test
 
+      - name: Date parsing timezone regressions
+        run: |
+          TZ=UTC npm run test -- src/lib/date-time-format.test.ts
+          TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts
+
       - name: CI bundle output contract tests
-        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs
+        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs scripts/intune-canonical-boundary.test.mjs
 
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
@@ -218,6 +259,9 @@ jobs:
           .github/scripts/installer-policy.test.mjs
           .github/scripts/source-quality-workflow.test.mjs
           .github/scripts/changed-range.test.mjs
+
+      - name: QA tracker citation tests
+        run: node --test scripts/ci-qa-citations.test.mjs
 
       - name: npm security audit
         run: npm audit --audit-level=high
@@ -295,6 +339,20 @@ jobs:
             -PassThru
           if ($result.Result -ne "Passed") {
             throw "Installer cleanup tests ended with result $($result.Result)."
+          }
+
+      - name: Test evidence collector scripts
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./scripts/collection/tests/Invoke-CmtraceEvidenceCollection.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Evidence collector tests ended with result $($result.Result)."
           }
 
       - name: Setup Rust

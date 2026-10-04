@@ -734,15 +734,6 @@ export interface EspGraphRequest {
   scriptReferences: EspGraphScriptReference[];
 }
 
-export interface EspRelaunchResult {
-  launched: boolean;
-  reason:
-    | "launched"
-    | "alreadyElevated"
-    | "elevationCancelled"
-    | "unsupportedPlatform";
-}
-
 // Prior Sidecar values captured before a flip, used to undo it. A null field
 // means the value did not exist and should be deleted on restore.
 export interface EspAppFlipBackup {

@@ -12,18 +12,18 @@ use serde::Serialize;
 use tauri::Manager;
 use tauri::{async_runtime, AppHandle, Emitter};
 
-use crate::intune::download_stats;
-use crate::intune::event_tracker;
-use crate::intune::evtx_parser;
-use crate::intune::guid_registry::GuidRegistry;
-use crate::intune::ime_parser;
-use crate::intune::models::{
+use crate::intune::apps::windows::ime::download_stats;
+use crate::intune::apps::windows::ime::event_tracker;
+use crate::intune::apps::windows::ime::guid_registry::GuidRegistry;
+use crate::intune::apps::windows::ime::models::{
     AppPolicyMetadata, DownloadStat, EventLogAnalysis, EvidenceBundleMetadata,
     IntuneAnalysisResult, IntuneDiagnosticsFileCoverage, IntuneDominantSource, IntuneEvent,
     IntuneEventType, IntuneStatus, IntuneSummary, IntuneTimestampBounds,
 };
-use crate::intune::policy_parser;
-use crate::intune::timeline;
+use crate::intune::apps::windows::ime::policy_parser;
+use crate::intune::apps::windows::ime::timeline;
+use crate::intune::evtx_parser;
+use cmtraceopen_parser::parser::ccm::logical;
 
 use super::intune_bundle;
 use super::intune_diagnostics;
@@ -309,7 +309,7 @@ fn analyze_intune_logs_blocking(
             guid_registry.insert(
                 normalized,
                 name.clone(),
-                crate::intune::guid_registry::GuidNameSource::GraphApi,
+                crate::intune::apps::windows::ime::guid_registry::GuidNameSource::GraphApi,
             );
             graph_enriched += 1;
         }
@@ -804,7 +804,7 @@ fn finalize_coverage(
     mut coverage: Vec<CoverageAccumulator>,
     events: &[IntuneEvent],
     downloads: &[DownloadStat],
-) -> crate::intune::models::IntuneDiagnosticsCoverage {
+) -> crate::intune::apps::windows::ime::models::IntuneDiagnosticsCoverage {
     let mut rotation_counts: HashMap<String, usize> = HashMap::new();
     for file in &coverage {
         if let Some(group) = &file.rotation_candidate {
@@ -836,7 +836,7 @@ fn finalize_coverage(
     let has_rotated_logs = files.iter().any(|file| file.rotation_group.is_some());
     let dominant_source = build_dominant_source(&files, events, downloads);
 
-    crate::intune::models::IntuneDiagnosticsCoverage {
+    crate::intune::apps::windows::ime::models::IntuneDiagnosticsCoverage {
         files,
         timestamp_bounds,
         has_rotated_logs,
@@ -874,7 +874,7 @@ fn analyze_intune_source_file(
     let content = fs::read_to_string(source_path)
         .map_err(|error| format!("Failed to read file '{}': {}", source_file, error))?;
 
-    let lines = ime_parser::parse_ime_content(&content);
+    let lines = logical::parse_ime_content(&content);
     let rotation = detect_rotation_metadata(source_path);
 
     let mut file_guid_registry = GuidRegistry::new();
@@ -1670,7 +1670,7 @@ mod tests {
     use crate::commands::intune_diagnostics::{
         build_diagnostics, build_diagnostics_confidence, build_repeated_failures,
     };
-    use crate::intune::models::{
+    use crate::intune::apps::windows::ime::models::{
         DownloadStat, IntuneDiagnosticSeverity, IntuneDiagnosticsConfidenceLevel,
         IntuneDiagnosticsFileCoverage, IntuneEvent, IntuneEventType, IntuneStatus, IntuneSummary,
     };
@@ -2278,7 +2278,7 @@ mod tests {
             failed_scripts: 0,
             log_time_span: None,
         };
-        let coverage = crate::intune::models::IntuneDiagnosticsCoverage {
+        let coverage = crate::intune::apps::windows::ime::models::IntuneDiagnosticsCoverage {
             files: vec![IntuneDiagnosticsFileCoverage {
                 file_path: "C:/Logs/IntuneManagementExtension.log".to_string(),
                 event_count: 2,
