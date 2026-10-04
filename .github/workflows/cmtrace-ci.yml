@@ -220,6 +220,9 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Exporter workflow contract tests
+        run: node --test scripts/event-log-export-workflow.test.mjs
+
       - name: Frontend tests
         run: npm run test
 
@@ -229,7 +232,7 @@ jobs:
           TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts
 
       - name: CI bundle output contract tests
-        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs scripts/event-log-export-workflow.test.mjs
+        run: node --test scripts/ci-bundle-outputs.test.mjs scripts/ci-windows-provenance.test.mjs scripts/release-local-action-checkout.test.mjs scripts/ci-toolchain.test.mjs scripts/agent-context.test.mjs
 
       # Release-workflow helpers. nightly-channel.test.mjs existed but was wired
       # into nothing, so it had never guarded a pull request.
