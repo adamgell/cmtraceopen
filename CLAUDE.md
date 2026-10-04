@@ -44,9 +44,20 @@ npx tsc --noEmit
 
 ### CI Checks (what PR gates enforce)
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+Six required status checks — the `Protect` ruleset over `main`:
+
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny check` and `cargo audit`.
+2. **TypeScript Check** — `npx tsc --noEmit`, `npm run test`, `TZ=UTC npm run test -- src/lib/date-time-format.test.ts`, `TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts`, CI bundle-output and release-script contract tests via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
+3. **E2E (Playwright)** — `npm run test:e2e`.
+4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
+
+Three more jobs run on every PR but are not required to merge:
+
+- **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint rather than a formality: the parser crate must stay wasm32-compatible.
+- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **ESP Diagnostics (Windows)** — the Windows-only diagnostics suite.
+
+Build the Lite edition locally with `npm run app:build:lite` (`--no-default-features`).
 
 ## Architecture
 
@@ -62,15 +73,39 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | Module | Purpose |
 |--------|---------|
 | `commands/` | Tauri IPC command handlers — the API surface between frontend and backend |
-| `parser/` | Log format auto-detection and parsing (CCM, simple, CBS, DISM, Panther, plain text) |
+| `parser/` | Native file-reading and binary-format shim; re-exports the pure parser crate's text parsing API |
 | `intune/` | IME diagnostics pipeline: event tracking, timeline, download stats, EVTX parsing |
 | `dsregcmd/` | Device registration analysis: output parsing, diagnostic rules, registry hives |
-| `error_db/` | Embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
-| `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
+| `error_db` (re-export) | Parser crate's embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
+| `models` (re-export) | Parser crate's shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
+| `event_log/` | Event Viewer: bounded channel queries, live tail, capture, archive, export |
+| `sccm/` | Client and server diagnostics, plus the private bundle store |
+| `secureboot/` | Secure Boot certificate detect/remediate scripts and the elevated runner |
+| `esp/` | Autopilot ESP/Bootstrapping analysis: process, registry, bundle, system facts |
+| `collector/` | Evidence collection: artifact staging and bundle assembly |
+| `timeline/` | Cross-source incident correlation and timeline building |
+| `elevation/` | Restart-as-administrator: one-time restore tickets, validated requests |
+| `jamf/` | Jamf Connect and macOS MDM policy log analysis |
+| `macos_diag/` | macOS diagnostics via native tools (`pkgutil`, `profiles`, `system_profiler`, `mdatp`) |
+| `graph_api.rs`, `graph_api/` | Microsoft Graph integration — opt-in, Windows-only WAM token path and Graph client/model helpers |
+| `constants.rs` | Default evidence bundle entry point directories |
+| `error.rs` | Typed application errors and source-operation context for IPC |
+| `ipc_bridge.rs` | Debug-only IPC bridge |
+| `process_util.rs` | Child-process helpers that suppress console windows on Windows |
+| `single_instance.rs` | Desktop second-launch argument handoff to the running window |
 | `menu.rs` | Native application menu |
+
+Network use also includes the updater and active DsRegCmd diagnostics:
+`dsregcmd/connectivity.rs` sends HTTPS HEAD requests to four Microsoft endpoints.
+
+The Parser Architecture section below describes the pure implementation in
+`crates/cmtraceopen-parser/`, re-exported by the native `src-tauri/src/parser/` shim.
+The pure crate's policy excludes OS I/O, registry, WMI, network, and Tauri APIs.
+`cargo check -p cmtraceopen-parser --target wasm32-unknown-unknown` checks target
+compatibility; it does not by itself prove compliance with that policy.
 
 ### Frontend Module Map (`src/`)
 
@@ -79,16 +114,18 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `workspaces/` | The analysis surfaces, one directory each (see `workspaces/registry.ts`): `log`, `intune`, `new-intune`, `event-log`, `sccm`, `esp-diagnostics`, `dsregcmd`, `sysmon`, `secureboot`, `timeline`, `deployment`, `dns-dhcp`, `macos-jamf`, `macos-diag`, plus the shared `registry`/`types` helpers |
+| `components/panels/` | Quick-stats panel and its subviews |
+| `components/registry-view/` | Registry key tree, value table, viewer |
+| `components/timeline/` | Swim-lane canvas, ruler, brush overlay, incident panels |
+| `components/common/` | Shared sidebar primitives |
+| `stores/` | 6 Zustand stores: `log`, `filter`, `marker`, `registry`, `timeline`, `ui` |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
 ### Parser Architecture
 
-The parser system in `src-tauri/src/parser/` uses a `ResolvedParser` that bundles:
+The parser system in `crates/cmtraceopen-parser/src/parser/` uses a `ResolvedParser` that bundles:
 - `ParserKind` — format variant (CCM, Simple, ReportingEvents, etc.)
 - `ParserImplementation` — actual parsing logic
 - `ParseQuality` — Structured / SemiStructured / Unstructured
@@ -108,7 +145,10 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 
 ## Testing
 
-- **Unit/integration tests**: `src-tauri/tests/` — parser regression tests with synthetic fixtures
+- **Parser regression tests**: `crates/cmtraceopen-parser/tests/` — fixture-backed parser tests
+- **Native integration tests**: `src-tauri/tests/` — application and platform integration coverage
+- **Frontend tests**: `npm test` — vitest suites under `src/` (`test:watch`, `test:coverage`)
+- **End-to-end**: `npm run test:e2e` — Playwright specs in `e2e/` (`test:e2e:ui`, `test:e2e:debug`). CI runs this as its own job
 - **Benchmarks**: `src-tauri/benches/intune_pipeline.rs` — Criterion benchmarks for the Intune pipeline (10K records)
 - Run a single test: `cargo test test_name` from `src-tauri/`
 - Run benchmarks: `cargo bench` from `src-tauri/`
@@ -125,7 +165,7 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 ### Pre-Work
 
 1. **Step 0 Rule**: Before ANY structural refactor on a file >300 LOC, first remove all dead props, unused exports, unused imports, and debug logs. Commit this cleanup separately before starting the real work.
-2. **Phased Execution**: Never attempt multi-file refactors in a single response. Break work into explicit phases. Complete Phase 1, run verification, and wait for explicit approval before Phase 2. Each phase must touch no more than 5 files.
+2. **Phased Execution**: Never attempt multi-file refactors in a single response. Break work into explicit phases. Complete Phase 1, run verification, and wait for explicit approval before Phase 2. Each phase must touch no more than 5 files. Exception: in an issue lane Adam has approved, the per-slice gates in `.claude/skills/cmtraceopen/references/execution-charter.md` are the phases. Verify each one and continue without waiting; stop only for that charter's hard stops.
 
 ### Code Quality
 

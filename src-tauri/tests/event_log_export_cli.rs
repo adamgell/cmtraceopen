@@ -1,6 +1,62 @@
 use std::fs;
 use std::process::Command;
 
+#[test]
+fn binary_help_exits_zero_with_usage_only_on_stdout() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    for argument in ["--help", "-h"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
+            .current_dir(directory.path())
+            .arg(argument)
+            .output()
+            .expect("run event-log-export");
+        assert_eq!(output.status.code(), Some(0), "{argument}: {output:?}");
+        assert!(output.stderr.is_empty(), "{argument}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).expect("stdout");
+        assert!(stdout.starts_with("usage: event-log-export"));
+        assert!(stdout.contains("--source <file.evtx>"));
+    }
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("temp entries")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn binary_usage_errors_exit_one_with_diagnostics_only_on_stderr() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let cases: &[(&[&str], &str)] = &[
+        (&[], "at least one --source or --manifest is required"),
+        (&["--nonsense"], "unknown argument \"--nonsense\""),
+        (&["--source"], "--source requires a value"),
+        (
+            &["--format", "bogus"],
+            "unknown format \"bogus\"; expected csv, tsv, json, xml, html, or rawXml",
+        ),
+    ];
+    for (arguments, diagnostic) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_event-log-export"))
+            .current_dir(directory.path())
+            .args(*arguments)
+            .output()
+            .expect("run event-log-export");
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).expect("stderr"),
+            format!("event-log-export: {diagnostic}\n")
+        );
+    }
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("temp entries")
+            .count(),
+        0
+    );
+}
+
 fn manifest(directory: &tempfile::TempDir, raw_xml: &str, message: &str) -> std::path::PathBuf {
     let path = directory.path().join("manifest.json");
     let payload = serde_json::json!({
