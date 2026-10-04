@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -647,6 +648,7 @@ def _validate_coderabbit_raw_verdict(
             "unresolved_coderabbit_thread_count",
             "latest_coderabbit_review",
             "latest_coderabbit_review_state",
+            "effective_coderabbit_reviews",
             "approved_at_head",
         },
         f"{label}.summary",
@@ -666,42 +668,69 @@ def _validate_coderabbit_raw_verdict(
     latest = summary["latest_coderabbit_review"]
     if not isinstance(latest, dict):
         _fail(f"{label} requires a latest CodeRabbit review")
-    _require_exact_keys(
-        latest,
-        {"id", "state", "body", "submittedAt", "author", "commit"},
-        f"{label}.summary.latest_coderabbit_review",
-    )
+    review_fields = {"id", "state", "body", "submittedAt", "updatedAt", "author", "commit"}
+    _require_exact_keys(latest, review_fields, f"{label}.summary.latest_coderabbit_review")
     author = latest["author"]
     commit = latest["commit"]
     if (
-        latest["state"] != "APPROVED"
-        or summary["latest_coderabbit_review_state"] != "APPROVED"
+        latest["state"] not in ("APPROVED", "COMMENTED")
+        or summary["latest_coderabbit_review_state"] != latest["state"]
         or not isinstance(author, dict)
         or not _is_coderabbit_login(author.get("login"))
         or not isinstance(commit, dict)
         or commit.get("oid") != artifact["headSha"]
         or not latest["submittedAt"]
     ):
-        _fail(f"{label} latest CodeRabbit review is not approved at head")
+        _fail(f"{label} latest CodeRabbit review is not a completed cycle at head")
 
     reviews = raw["reviews"]
     threads = raw["unresolved_threads"]
     if not isinstance(reviews, list) or summary["review_count"] != len(reviews):
         _fail(f"{label} review count is inconsistent")
-    coderabbit_reviews = [
-        review
-        for review in reviews
-        if isinstance(review, dict)
-        and isinstance(review.get("author"), dict)
-        and _is_coderabbit_login(review["author"].get("login"))
-        and review.get("submittedAt") is not None
-    ]
+    review_ids: set[str] = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            _fail(f"{label} review must be an object")
+        _require_exact_keys(review, review_fields, f"{label}.reviews")
+        review_id = review["id"]
+        if not isinstance(review_id, str) or not review_id or review_id in review_ids:
+            _fail(f"{label} review IDs must be nonempty and unique")
+        review_ids.add(review_id)
+        if review["author"] is not None and not isinstance(review["author"], dict):
+            _fail(f"{label} review author is invalid")
+
+    # Recompute from raw evidence with the producer's pure event-ordering logic.
+    # The module is bound to this checkout, never an artifact-supplied path.
+    helper_path = (
+        Path(__file__).resolve().parents[4]
+        / ".claude/skills/coderabbit-review-loop/scripts/review_state.py"
+    )
+    spec = importlib.util.spec_from_file_location("cmtraceopen_review_state", helper_path)
+    if spec is None or spec.loader is None:
+        _fail(f"cannot load review-state helper: {helper_path}")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    try:
+        coderabbit_reviews, effective = helper._coderabbit_review_events(reviews)
+    except SystemExit as error:
+        _fail(f"{label} invalid CodeRabbit review evidence: {error}")
     if (
         summary["coderabbit_review_count"] != len(coderabbit_reviews)
         or not coderabbit_reviews
-        or latest not in coderabbit_reviews
+        or latest != coderabbit_reviews[-1]
     ):
-        _fail(f"{label} CodeRabbit review count is inconsistent")
+        _fail(f"{label} CodeRabbit review count or latest event is inconsistent")
+    if (
+        summary["effective_coderabbit_reviews"] != effective
+        or not effective
+        or any(
+            review["state"] != "APPROVED"
+            or not isinstance(review.get("commit"), dict)
+            or review["commit"].get("oid") != artifact["headSha"]
+            for review in effective
+        )
+    ):
+        _fail(f"{label} effective CodeRabbit verdict is not approved at head")
     if not isinstance(threads, list) or summary["unresolved_thread_count"] != len(
         threads
     ):
