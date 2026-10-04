@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import { loadFilesAsLogSource, loadPathAsLogSource } from "./log-source";
 import { restoreSession } from "./session-restore";
 import { useFilterStore } from "../stores/filter-store";
+import { useUiStore } from "../stores/ui-store";
+import { useLogStore } from "../stores/log-store";
 
 // Keep restore off the real backend/file loaders — we only care that the saved
 // filter clauses end up in the filter store (issue #193).
@@ -86,6 +90,46 @@ describe("restoreSession filter restore (issue #193)", () => {
     const clauses = useFilterStore.getState().clauses;
     expect(clauses).toEqual([{ field: "Message", op: "Contains", value: "error" }]);
   });
+
+  it("restores directly from a stored session path without opening a picker", async () => {
+    useUiStore.setState({ recentSessions: ["/tmp/stored.cmtrace"] });
+    const path = useUiStore.getState().recentSessions[0];
+
+    await expect(restoreSession(path)).resolves.toBe(path);
+
+    expect(invoke).toHaveBeenCalledWith("read_session_file", { path });
+    expect(open).not.toHaveBeenCalled();
+    expect(readTextFile).not.toHaveBeenCalled();
+    expect(loadPathAsLogSource).toHaveBeenCalledWith("/tmp/app.log", {
+      fallbackToFolder: false,
+    });
+    expect(useUiStore.getState().recentSessions[0]).toBe(path);
+  });
+
+  it.each(["native refusal", "invalid JSON", "invalid session shape"])(
+    "leaves existing state intact after %s",
+    async (failure) => {
+      useLogStore.setState({ highlightText: "keep highlight", findQuery: "keep query" });
+      useUiStore.setState({ recentSessions: ["/tmp/previous.cmtrace"] });
+      if (failure === "native refusal") {
+        vi.mocked(invoke).mockRejectedValue(new Error("linked session entry"));
+      } else {
+        mockRestoreContent(failure === "invalid JSON" ? "ordinary non-JSON text" : "{}");
+      }
+      const beforeUi = useUiStore.getState();
+      const beforeLog = useLogStore.getState();
+      const beforeFilters = useFilterStore.getState();
+
+      await expect(restoreSession("/tmp/rejected.cmtrace")).resolves.toBeNull();
+
+      expect(useUiStore.getState()).toBe(beforeUi);
+      expect(useLogStore.getState()).toBe(beforeLog);
+      expect(useFilterStore.getState()).toBe(beforeFilters);
+      expect(loadPathAsLogSource).not.toHaveBeenCalled();
+      expect(loadFilesAsLogSource).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not aggregate after an individual restore is superseded", async () => {
     mockRestoreContent(sessionJson([], 2));

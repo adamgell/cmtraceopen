@@ -12,7 +12,7 @@ use super::bundle_ops::{
     unsafe_ancestor_reason,
 };
 use super::known_sources::KnownSourcePathKind;
-use crate::intune::models::EvidenceBundleMetadata;
+use crate::intune::apps::windows::ime::models::EvidenceBundleMetadata;
 use crate::models::log_entry::{
     AggregateParseResult, AggregateParsedFileResult, LogEntry, ParseResult, PathDiagnostic,
 };
@@ -160,7 +160,7 @@ pub fn open_log_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ParseResult, crate::error::AppError> {
-    let (result, parser_selection) = match parser::parse_file(&path) {
+    let (result, parser_selection, file_identity) = match parser::parse_file_identified(&path) {
         Ok(value) => value,
         Err(reason) => return Err(classify_open_failure(&path, reason)),
     };
@@ -179,6 +179,7 @@ pub fn open_log_file(
             parser_selection,
             initial_logical_record,
             byte_offset: result.byte_offset,
+            file_identity,
         },
     );
 
@@ -229,11 +230,17 @@ pub fn parse_files_batch(
     // Per-file failures are logged + emitted as progress inside the closure
     // (where `path` is in scope) so the UI's progress counter still advances
     // when files are skipped, and the warn log includes the offending path.
-    let results: Vec<Result<(ParseResult, crate::parser::ResolvedParser, String), crate::error::AppError>> = paths
+    type BatchParseOutcome = (
+        ParseResult,
+        crate::parser::ResolvedParser,
+        String,
+        Option<crate::fs_identity::FileIdentity>,
+    );
+    let results: Vec<Result<BatchParseOutcome, crate::error::AppError>> = paths
         .par_iter()
         .map(|path| {
             let file_start = std::time::Instant::now();
-            let parse_outcome = parser::parse_file(path);
+            let parse_outcome = parser::parse_file_identified(path);
             let file_ms = file_start.elapsed().as_millis() as u64;
 
             let done = completed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
@@ -243,7 +250,7 @@ pub fn parse_files_batch(
                 .unwrap_or_default();
 
             match parse_outcome {
-                Ok((result, parser_selection)) => {
+                Ok((result, parser_selection, file_identity)) => {
                     log::info!(
                         "  event=parse_file_done [{done}/{total}] path=\"{path}\" entries={} lines={} size={} ms={file_ms}",
                         result.entries.len(),
@@ -266,7 +273,7 @@ pub fn parse_files_batch(
                         },
                     );
 
-                    Ok((result, parser_selection, path.clone()))
+                    Ok((result, parser_selection, path.clone(), file_identity))
                 }
                 Err(error) => {
                     log::warn!(
@@ -312,7 +319,7 @@ pub fn parse_files_batch(
 
     for item in results {
         match item {
-            Ok((result, parser_selection, path)) => {
+            Ok((result, parser_selection, path, file_identity)) => {
                 let initial_logical_record =
                     InitialLogicalRecord::from_parse_result(&result, &parser_selection);
                 open_files.insert(
@@ -322,6 +329,7 @@ pub fn parse_files_batch(
                         parser_selection,
                         initial_logical_record,
                         byte_offset: result.byte_offset,
+                        file_identity,
                     },
                 );
                 parse_results.push(result);
@@ -378,21 +386,22 @@ fn open_log_folder_aggregate_impl(
     for entry in file_entries {
         // Skip files we can't read (permission denied, missing, etc.) so a
         // single inaccessible file doesn't abort the whole folder load.
-        let (result, parser_selection) = match parser::parse_file(&entry.path) {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!(
-                    "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
-                    entry.path
-                );
-                parse_child_errors.push(PathDiagnostic {
-                    path: entry.path.clone(),
-                    reason: error.to_string(),
-                });
-                parse_errors = parse_errors.saturating_add(1);
-                continue;
-            }
-        };
+        let (result, parser_selection, file_identity) =
+            match parser::parse_file_identified(&entry.path) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        "event=open_log_folder_aggregate_skip path=\"{}\" error=\"{error}\"",
+                        entry.path
+                    );
+                    parse_child_errors.push(PathDiagnostic {
+                        path: entry.path.clone(),
+                        reason: error.to_string(),
+                    });
+                    parse_errors = parse_errors.saturating_add(1);
+                    continue;
+                }
+            };
         let final_entry_line_number = result.entries.last().map(|entry| entry.line_number);
 
         total_lines = total_lines.saturating_add(result.total_lines);
@@ -412,6 +421,7 @@ fn open_log_folder_aggregate_impl(
             result.byte_offset,
             result.total_lines,
             final_entry_line_number,
+            file_identity,
         ));
     }
 
@@ -444,6 +454,7 @@ fn open_log_folder_aggregate_impl(
             byte_offset,
             file_total_lines,
             final_entry_line_number,
+            file_identity,
         ) in open_file_states
         {
             let initial_logical_record = if InitialLogicalRecord::supports_parser(&parser_selection)
@@ -467,6 +478,7 @@ fn open_log_folder_aggregate_impl(
                     parser_selection,
                     initial_logical_record,
                     byte_offset,
+                    file_identity,
                 },
             );
         }
@@ -846,14 +858,19 @@ const SESSION_EXTENSION: &str = "cmtrace";
 /// pull an arbitrary large file into the frontend in one call.
 const MAX_SESSION_BYTES: u64 = 16 * 1024 * 1024;
 
+#[cfg(test)]
+#[path = "session_file_tests.rs"]
+mod session_file_tests;
+
 /// Read a saved session file.
 ///
-/// Restoring a session is the one flow whose path the user does not choose at
-/// the moment they use it - it comes from the recent-sessions list - so the fs
-/// plugin's dialog-driven scope cannot cover it. This command is what replaces
-/// that, and it accepts only the extension the app's own save dialog writes:
-/// a narrower authority than `fs:read-all`, rather than the same authority
-/// wearing a command name. The frontend still validates the parsed shape.
+/// This also supports restore without a fresh picker grant. The current menu
+/// opens a picker; the stored recent-session paths have no UI consumer yet.
+/// Only a final, single-link regular `.cmtrace` entry is read. Parent directory
+/// aliases remain supported. The name and link count do not prove provenance
+/// or JSON shape: the frontend still parses and validates the returned text.
+/// Windows rejects all final reparse points, including cloud placeholders;
+/// such files need an ordinary non-reparse copy before they can be restored.
 ///
 /// Asynchronous so the read does not run on the main thread, which is where
 /// Tauri runs a non-async command. A `.cmtrace` that is a FIFO with no writer
@@ -882,27 +899,29 @@ fn read_session_file_blocking(path: &str) -> Result<String, crate::error::AppErr
         )));
     }
 
-    // Checked before opening rather than after: opening a FIFO with no writer
-    // waits for one, so the refusal has to happen on the metadata that `stat`
-    // returns without touching the file's contents.
-    let metadata = std::fs::metadata(requested).map_err(crate::error::AppError::Io)?;
-    if !metadata.is_file() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "not a regular file: {}",
-            requested.display()
-        )));
-    }
-    if metadata.len() > MAX_SESSION_BYTES {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "session file is {} bytes, over the {MAX_SESSION_BYTES} byte limit: {}",
-            metadata.len(),
-            requested.display()
-        )));
-    }
+    #[cfg(windows)]
+    validate_session_windows_path(requested)?;
 
-    // Bounded while reading, not only at the metadata check: a file that grows
-    // between the two would otherwise be read past the limit and returned.
-    let file = std::fs::File::open(requested).map_err(crate::error::AppError::Io)?;
+    // Early refusal only: the name can be replaced before open. Never use this
+    // metadata as authority for the object whose contents will cross IPC.
+    let metadata = std::fs::symlink_metadata(requested).map_err(crate::error::AppError::Io)?;
+    validate_session_metadata(&metadata, requested)?;
+
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::AfterPrecheck, requested);
+    let file = open_session_file_no_follow(requested).map_err(crate::error::AppError::Io)?;
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::AfterOpen, requested);
+
+    #[cfg(windows)]
+    validate_session_windows_handle(&file)?;
+    let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
+    validate_session_metadata(&metadata, requested)?;
+
+    // Read from the validated handle, never by resolving the path again. Growth
+    // after either size check is still bounded to one byte beyond the limit.
+    #[cfg(test)]
+    session_file_tests::at_stage(session_file_tests::Stage::BeforeRead, requested);
     let mut text = String::new();
     let read = std::io::Read::take(file, MAX_SESSION_BYTES + 1)
         .read_to_string(&mut text)
@@ -915,6 +934,149 @@ fn read_session_file_blocking(path: &str) -> Result<String, crate::error::AppErr
     }
 
     Ok(text)
+}
+
+fn validate_session_metadata(
+    metadata: &std::fs::Metadata,
+    requested: &Path,
+) -> Result<(), crate::error::AppError> {
+    let mut linked = metadata.file_type().is_symlink();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        linked |= metadata.nlink() != 1;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        linked |= metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0;
+    }
+    if linked || !metadata.is_file() {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session entry must be a regular file without links or reparse points: {}",
+            requested.display()
+        )));
+    }
+    if metadata.len() > MAX_SESSION_BYTES {
+        return Err(crate::error::AppError::InvalidInput(format!(
+            "session file is {} bytes, over the {MAX_SESSION_BYTES} byte limit: {}",
+            metadata.len(),
+            requested.display()
+        )));
+    }
+    Ok(())
+}
+
+fn open_session_file_no_follow(requested: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // NOFOLLOW protects the final entry; directory aliases are intentional.
+        // NONBLOCK prevents a substituted FIFO from waiting for a writer. It
+        // has no effect on the regular file accepted by the handle check.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(requested)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(requested)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = requested;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "session entry no-follow opening is unavailable on this platform",
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn validate_session_windows_handle(file: &std::fs::File) -> Result<(), crate::error::AppError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, GetFileType, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_TYPE_DISK,
+    };
+
+    let handle = HANDLE(file.as_raw_handle());
+    // SAFETY: file owns the handle throughout both read-only queries.
+    if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+        return Err(crate::error::AppError::InvalidInput(
+            "session entry must be a disk file".to_owned(),
+        ));
+    }
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: information is a writable initialized structure, and file is live.
+    unsafe { GetFileInformationByHandle(handle, &mut information) }
+        .map_err(|error| crate::error::AppError::Io(std::io::Error::other(error.to_string())))?;
+    if information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT).0
+        != 0
+        || information.nNumberOfLinks != 1
+    {
+        return Err(crate::error::AppError::InvalidInput(
+            "session entry must be a regular file without links or reparse points".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_session_windows_path(requested: &Path) -> Result<(), crate::error::AppError> {
+    use std::path::{Component, Prefix};
+
+    let unsafe_name = |name: &std::ffi::OsStr| {
+        let name = name.to_string_lossy();
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(' ');
+        let upper = stem.to_ascii_uppercase();
+        name.contains(':')
+            || matches!(
+                upper.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            )
+            || ["COM", "LPT"].iter().any(|prefix| {
+                upper.strip_prefix(*prefix).is_some_and(|suffix| {
+                    matches!(
+                        suffix,
+                        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                    )
+                })
+            })
+    };
+    for component in requested.components() {
+        let rejected = match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(_) | Prefix::VerbatimDisk(_) => false,
+                Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                    server.to_string_lossy().contains(':')
+                        || share.to_string_lossy().contains(':')
+                        || share.eq_ignore_ascii_case("pipe")
+                }
+                _ => true,
+            },
+            Component::Normal(name) => unsafe_name(name),
+            _ => false,
+        };
+        if rejected {
+            return Err(crate::error::AppError::InvalidInput(
+                "session path must not name an alternate stream or device".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -994,85 +1156,12 @@ fn index_aggregate_entries(
 mod tests {
     use super::{
         index_aggregate_entries, list_log_folder, merge_folder_diagnostics,
-        open_log_folder_aggregate_impl, read_session_file_blocking, PathDiagnostic,
-        MAX_FOLDER_LISTING_ERRORS,
+        open_log_folder_aggregate_impl, PathDiagnostic, MAX_FOLDER_LISTING_ERRORS,
     };
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    /// The refusal is the behaviour worth pinning: this command exists to be a
-    /// narrower authority than `fs:read-all`, so a path outside the extension
-    /// the app's own save dialog writes has to come back as an error rather
-    /// than as file content.
-    #[test]
-    fn read_session_file_accepts_only_the_session_extension() {
-        let dir = std::env::temp_dir().join(format!(
-            "cmtrace-session-read-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        let session = dir.join("saved.cmtrace");
-        fs::write(&session, "{\"tabs\":[]}").expect("write session");
-        let other = dir.join("id_rsa");
-        fs::write(&other, "private key material").expect("write other file");
-        // Created deliberately: without it this would pass for the wrong reason
-        // (a missing path rather than a directory), and the comment would be a
-        // claim the test does not make.
-        let directory = dir.join("folder.cmtrace");
-        fs::create_dir_all(&directory).expect("create directory named like a session");
-
-        assert_eq!(
-            read_session_file_blocking(&session.to_string_lossy()).expect("session reads"),
-            "{\"tabs\":[]}"
-        );
-        assert!(read_session_file_blocking(&other.to_string_lossy()).is_err());
-        assert!(read_session_file_blocking(&dir.join("absent").to_string_lossy()).is_err());
-        assert!(read_session_file_blocking(&directory.to_string_lossy()).is_err());
-
-        fs::remove_dir_all(&dir).expect("clean temp dir");
-    }
-
-    /// The refusal has to happen before the file is opened. Opening a FIFO with
-    /// no writer waits for one, which is how a `.cmtrace` named pipe could hold
-    /// the command thread; `metadata` answers for a FIFO without touching its
-    /// contents, so the check is made there and the wait never starts.
-    #[cfg(unix)]
-    #[test]
-    fn read_session_file_refuses_a_fifo_without_waiting_for_a_writer() {
-        let dir = std::env::temp_dir().join(format!(
-            "cmtrace-session-fifo-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        let fifo = dir.join("trap.cmtrace");
-        let created = std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .expect("mkfifo runs");
-        assert!(created.success(), "mkfifo created the fixture");
-
-        // Nothing ever opens the write end, so any implementation that opens
-        // first will block here rather than return.
-        let started = std::time::Instant::now();
-        let result = read_session_file_blocking(&fifo.to_string_lossy());
-        let waited = started.elapsed();
-
-        assert!(result.is_err(), "a fifo is not a session file");
-        assert!(
-            waited < std::time::Duration::from_secs(5),
-            "the refusal must not wait for a writer; it took {waited:?}"
-        );
-
-        fs::remove_dir_all(&dir).expect("clean temp dir");
-    }
 
     /// Proves the wiring, not just the classifier: an unreadable folder must
     /// reach the frontend as `AccessDenied` rather than as "folder does not

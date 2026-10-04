@@ -25,11 +25,10 @@ export async function openSessionDialog(): Promise<string | null> {
 export async function restoreSession(sessionPath: string): Promise<string | null> {
   let content: string;
   try {
-    // Read through Rust rather than the fs plugin: this path comes from the
-    // recent-sessions list rather than a dialog, so the plugin's scope never
-    // covers it - the read used to be refused after a restart for that reason.
-    // `read_session_file` accepts only the extension the save dialog writes and
-    // the shape below is still validated here.
+    // This function also supports callers without a fresh picker grant. The
+    // current menu uses openSessionDialog; persisted recent-session paths do
+    // not yet have a UI consumer. Rust bounds the file read and rejects linked
+    // session entries; JSON parsing and session-shape validation remain here.
     content = await invoke<string>("read_session_file", { path: sessionPath });
   } catch (error) {
     console.error("[session] failed to read session file", { sessionPath, error });

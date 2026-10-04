@@ -31,8 +31,10 @@ import type { FilterClause } from "../dialogs/FilterDialog";
 import type { LogEntry } from "../../types/log";
 import { useUiStore } from "../../stores/ui-store";
 import { useLogStore } from "../../stores/log-store";
+import { useRegistryStore } from "../../stores/registry-store";
 import { useFilterStore } from "../../stores/filter-store";
 import { switchToTab } from "../../lib/log-source";
+import { WorkspaceErrorBoundary } from "./WorkspaceErrorBoundary";
 import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
 import { useSysmonAnalysisProgress } from "../../workspaces/sysmon/use-sysmon-analysis-progress";
@@ -119,7 +121,8 @@ export function AppShell() {
     (s) => s.setShowFileAssociationPrompt
   );
 
-  const activeTabIndex = useUiStore((s) => s.activeTabIndex);
+  const activeTabId = useUiStore((s) => s.openTabs[s.activeTabIndex]?.id);
+  const activeTabKind = useUiStore((s) => s.openTabs[s.activeTabIndex]?.fileKind);
   const collectionProgress = useUiStore((s) => s.collectionProgress);
   const collectionResult = useUiStore((s) => s.collectionResult);
   const setCollectionResult = useUiStore((s) => s.setCollectionResult);
@@ -134,6 +137,16 @@ export function AppShell() {
   const setShowDiffConfigDialog = useUiStore((s) => s.setShowDiffConfigDialog);
   const createDiff = useLogStore((s) => s.createDiff);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
+  // createDiff replaces this snapshot even for the same sources; display-mode
+  // changes keep it. Leaving comparison mode clears it and retries the log view.
+  const comparisonEntries = useLogStore((s) => s.sourceOpenMode === "diff" ? s.diffState?.entriesA : undefined);
+  const openFilePath = useLogStore((s) => s.openFilePath);
+  const registryFilePath = useRegistryStore((s) => s.registryData?.filePath);
+  // Reset on source replacement/closure. Registry data can arrive after the
+  // selected path changes, so its loaded identity must also clear a caught error.
+  const workspaceBoundaryKey = activeView === "log"
+    ? JSON.stringify([activeView, openFilePath, activeTabKind === "registry" ? registryFilePath : null])
+    : activeView;
 
   useCollectionProgressListener();
   useParseProgressListener();
@@ -303,18 +316,19 @@ export function AppShell() {
   // Prompt standalone Windows users to associate .log files like CMTrace.exe
   useFileAssociationPrompt();
 
+  // Track tab identity: closing the first tab can replace it at the same index.
   // When the active tab changes, load the corresponding file using stored source context.
   // This avoids redundant folder re-parsing — switchToTab uses the tab's source context
   // to restore the folder sidebar and load only the selected file.
   useEffect(() => {
-    const tabs = useUiStore.getState().openTabs;
-    if (activeTabIndex < 0 || activeTabIndex >= tabs.length) return;
-    const tab = tabs[activeTabIndex];
+    const { openTabs, activeTabIndex } = useUiStore.getState();
+    const tab = openTabs[activeTabIndex];
+    if (!tab) return;
     useUiStore.getState().ensureLogViewVisible("tab-switch");
     switchToTab(tab.filePath, tab.sourceContext).catch((err) => {
       console.error("[tab-switch] failed to load", tab.filePath, err);
     });
-  }, [activeTabIndex]);
+  }, [activeTabId]);
 
   const handleApplyFilter = useCallback(
     async (clauses: FilterClause[]) => {
@@ -463,12 +477,17 @@ export function AppShell() {
           }}
         >
           <Suspense fallback={null}>
-            <WorkspaceComponent />
+            {/* Keyed on the workspace so switching away clears a caught error. */}
+            <WorkspaceErrorBoundary workspaceId={activeView} key={activeView}>
+              <WorkspaceComponent />
+            </WorkspaceErrorBoundary>
           </Suspense>
         </div>
         {WorkspaceDock ? (
           <Suspense fallback={null}>
-            <WorkspaceDock />
+            <WorkspaceErrorBoundary workspaceId={`${activeView}:dock`} key={`${activeView}:dock`}>
+              <WorkspaceDock />
+            </WorkspaceErrorBoundary>
           </Suspense>
         ) : null}
       </div>
@@ -551,7 +570,13 @@ export function AppShell() {
             backgroundColor: tokens.colorNeutralBackground1,
           }}
         >
-          {renderWorkspace()}
+          <WorkspaceErrorBoundary
+            workspaceId={activeView}
+            key={workspaceBoundaryKey}
+            resetKey={activeView === "log" ? comparisonEntries : undefined}
+          >
+            {renderWorkspace()}
+          </WorkspaceErrorBoundary>
         </div>
       </div>
 

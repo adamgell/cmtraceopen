@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error_db::lookup::lookup_error_code;
-use crate::intune::models::{
+use crate::intune::apps::windows::ime::models::{
     DownloadStat, EventLogAnalysis, IntuneDiagnosticCategory, IntuneDiagnosticInsight,
     IntuneDiagnosticSeverity, IntuneDiagnosticsConfidence, IntuneDiagnosticsConfidenceLevel,
     IntuneDiagnosticsCoverage, IntuneDiagnosticsFileCoverage, IntuneEvent, IntuneEventType,
     IntuneRemediationPriority, IntuneRepeatedFailureGroup, IntuneStatus, IntuneSummary,
     IntuneTimestampBounds,
 };
-use crate::intune::timeline;
+use crate::intune::apps::windows::ime::timeline;
 
 use super::intune::{update_timestamp_candidate, TimestampCandidate};
 

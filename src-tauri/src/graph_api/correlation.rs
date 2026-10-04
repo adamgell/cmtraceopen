@@ -1,6 +1,6 @@
 //! Deterministic local-to-Graph device correlation for ESP diagnostics.
 
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspCorrelationConfidence, EspEvidenceRef, EspGraphDeviceMatch, EspGraphManagedDevice,
     EspIdentityEvidence,
 };

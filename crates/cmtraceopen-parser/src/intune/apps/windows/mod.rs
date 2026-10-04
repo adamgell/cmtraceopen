@@ -8,3 +8,5 @@ pub mod microsoft_store;
 pub mod remediations;
 pub mod scripts;
 pub mod win32;
+
+pub mod ime;

@@ -203,6 +203,14 @@ export interface EspElevationState {
   restrictedSources: string[];
 }
 
+/** What the backend can do on the machine it is running on. */
+export interface EspAcquisitionCapability {
+  offlineAnalysisSupported: boolean;
+  liveAcquisitionSupported: boolean;
+  /** Why live acquisition is unavailable, in the backend's own words. */
+  liveAcquisitionDetail: string | null;
+}
+
 export interface EspIdentityEvidence {
   deviceName: string | null;
   managedDeviceId: string | null;
@@ -724,15 +732,6 @@ export interface EspGraphRequest {
   appIds: string[];
   policyReferences: EspGraphPolicyReference[];
   scriptReferences: EspGraphScriptReference[];
-}
-
-export interface EspRelaunchResult {
-  launched: boolean;
-  reason:
-    | "launched"
-    | "alreadyElevated"
-    | "elevationCancelled"
-    | "unsupportedPlatform";
 }
 
 // Prior Sidecar values captured before a flip, used to undo it. A null field
