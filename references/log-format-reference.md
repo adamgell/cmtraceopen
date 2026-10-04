@@ -28,6 +28,7 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Hex_Sequence_Counter> <Message>
 ### Parsing Notes
 
 - **Timestamp**: `yyyy-MM-dd HH:mm:ss` — 19 characters, always at position 0.
+- **Timezone**: the prefix is the servicing host's **local** clock and carries no offset. CBS also logs the same instant as UTC on lines of the form `<prefix>, Info CBS Universal Time is: <utc>` (`2025-06-15 20:31:22, Info CBS Universal Time is: 2025-06-15 17:31:22.446` on a UTC+3 host), which is the only in-file way to recover the offset. Never read the prefix as UTC: doing so put the rendered record and every epoch consumer (sorting, ranges, elapsed) an offset apart (#657). A wall clock the servicing host's zone cannot place keeps its text and reports no epoch instead of being given a guessed instant: inside a spring-forward gap it is clamped to the instant the zone jumped, and inside a fall-back hour, where the same clock happens twice, it gets no epoch at all.
 - **Level**: After the `, ` separator. Right-padded with spaces. Values: `Info`, `Error`, `Warning`, `Perf`.
 - **Component**: Variable-width, right-padded. Common: `CBS`, `CSI`, `DPX`, `DISM`, `DIA`, `TI`, `SQM`.
 - **Hex Counter**: CSI lines include `XXXXXXXX` hex counter (e.g., `00000001`); CBS/DPX lines do not.
@@ -65,6 +66,7 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Message> [<HRESULT>]
 ### Parsing Notes
 
 - **Identical format to CBS.log**. Same timestamp, level, component structure.
+- **Timezone**: like CBS.log, the prefix is the servicing host's **local** clock with no offset, and DISM writes no UTC counterpart. For offline servicing the zone belongs to whatever OS ran DISM (WinPE, a technician machine), not to the image being serviced. Do not read the prefix as UTC (#657).
 - Components: `DISM`, `DISM Package Manager`, `DISM OS Provider`, `DISM Image Session`.
 - HRESULT codes appear at end of error lines in `[HRESULT = 0xNNNNNNNN]` format.
 - DISM also writes to CBS.log simultaneously.
@@ -524,24 +526,32 @@ YYYY-MM-DD HH:MM:SS, Error                 DPX    Failed to extract package. Err
 **Encoding**: ANSI / UTF-8
 **Rotation**: None. Grows until SoftwareDistribution folder is cleared.
 
+The Windows Update client's own transaction report: one tab-delimited record per
+scan, download, install, and report step, with the agent's own verdict and result
+code. It is the fastest way to see what Windows Update did and why.
+
 ### Line Format
 
 ```
-{<GUID>}	YYYY-MM-DD HH:MM:SS:mmm[+-]HHMM	<EventID>	<Category>	<Level>	<Agent>	<hr=0xNNNNNNNN>	<Message>
+{<RecordGUID>}	<timestamp><offset>	<Version>	<EventId>	[<EventName>]	<Session>	{<UpdateGUID>}	<Attempt>	<ResultCode>	<Provider>	<Status>	<Operation>	<Message>	<AgentToken>
 ```
 
-### Sample
+### Sample Lines
 
 ```
-{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}	2026-03-09 14:22:31:234+0500	1	182	101	{00000000-0000-0000-0000-000000000000}	0	0	AutomaticUpdates	Success	Content Install	Installation Successful: Windows successfully installed the following update: Security Update (KB5034441)
+{11111111-1111-1111-1111-111111111111}	2024-01-15 08:00:00.123-0500	1	183	[AGENT_INSTALLING_SUCCEEDED]	101	{22222222-2222-2222-2222-222222222222}	1	0	Windows Update Agent	Success	Content Install	Installation Successful: Windows successfully installed the following update: Security Update (KB5034123)	AAAAAAAAAAAAAAAA.1.0.0.3.0
+{33333333-3333-3333-3333-333333333333}	2024-01-15 08:05:00:456-0500	1	162	[AGENT_DOWNLOAD_FAILED]	101	{44444444-4444-4444-4444-444444444444}	1	80240022	Windows Update Agent	Failure	Content Download	Download failed for KB5034441	BBBBBBBBBBBBBBBB.1.0.0.5.1
 ```
 
 ### Parsing Notes
 
 - **Tab-delimited** (critical — not space-delimited).
-- **Fields**: GUID, Timestamp (with timezone offset), numeric EventID, numeric Category, numeric Level, Update GUID, HRESULT, additional numeric, Agent name, Status, Operation type, Message text.
-- **Timestamp includes timezone offset**: `+HHMM` or `-HHMM`.
-- Quick scan file — fastest way to see WU scan/download/install history with result codes.
+- **Fields**: record GUID, timestamp, format version, numeric event id, bracketed event name, session, update GUID, attempt, result code, provider, status, operation, message, opaque agent token.
+- **The trailing group varies in length.** `Operation`, `Message`, and the agent token are each optional, so a record can end after `Status`, carry only an operation, or carry the full tail. Everything after the status is therefore read from the end: drop a trailing agent token when it matches its shape, then treat the first remaining field as the operation and the rest as the message.
+- **Timestamp carries the writing machine's offset** (`-0500`, `+0530`, or `Z`) and uses `.` or `:` before the millisecond group — both appear inside one file. The offset is recorded on the entry (`timezoneOffset`) and the epoch is computed with it. A record without an offset is a zoneless wall clock and is resolved like CBS/DISM, never promoted to UTC.
+- **Result code is hexadecimal without the `0x` prefix**: `240005` is `0x00240005` (`WU_S_REBOOT_REQUIRED`), `80240022` is `0x80240022` (`WU_E_*`). A code with the HRESULT severity bit set is a failure; `WU_S_*` codes are completed operations, including a restart the operator still owes.
+- **Status is the agent's verdict** (`Success`, `Failure`, `Warning`, `Unknown`) and decides severity ahead of anything the message text suggests.
+- `[(null)]` / `(null)` mean the field is absent, not a literal name.
 - Parse by splitting on `\t`.
 
 ---

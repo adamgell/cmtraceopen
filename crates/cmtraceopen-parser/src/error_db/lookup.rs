@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::collections::HashMap;
 
-use super::codes::{ErrorCode, ERROR_CODES};
+use super::codes::{error_code_outcome, ErrorCode, ErrorCodeOutcome, ERROR_CODES};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -53,6 +53,10 @@ pub struct ErrorCodeSpan {
     pub code_decimal: String,
     pub description: String,
     pub category: String,
+    /// Whether the code reports a failure, a completed operation, or a
+    /// completed operation that still requires action. Consumers that count
+    /// findings must not count a completed operation (#657).
+    pub outcome: ErrorCodeOutcome,
 }
 
 fn hex_code_re() -> &'static Regex {
@@ -60,10 +64,12 @@ fn hex_code_re() -> &'static Regex {
     CELL.get_or_init(|| Regex::new(r"0[xX][0-9A-Fa-f]{8}").unwrap())
 }
 
-/// Scan a message string for recognized error codes and return their spans.
-/// Only returns spans for codes that exist in the error database.
-/// Short-circuits if the message contains no "0x" or "0X" prefix (common case).
-pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
+/// Byte range and value of every `0x`-prefixed eight-digit code in `message`.
+///
+/// One scan, two consumers: `detect_error_code_spans` keeps the codes the
+/// database knows, and `detect_error_code_mentions` reports the rest as unknown
+/// rather than dropping them.
+fn code_mentions(message: &str) -> Vec<(usize, usize, u32)> {
     // Fast pre-check: skip the regex entirely if no hex prefix exists.
     // Most log lines have no error codes, so this avoids regex overhead.
     if !message.contains("0x") && !message.contains("0X") {
@@ -80,13 +86,28 @@ pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
             }
             let hex_str = &message[m.start()..m.end()];
             let code_val = u32::from_str_radix(&hex_str[2..], 16).ok()?;
+            Some((m.start(), m.end(), code_val))
+        })
+        .collect()
+}
+
+/// Convert byte offsets to UTF-16 code unit offsets for JavaScript interop.
+/// JS `String.slice()` uses UTF-16 indices, but `regex::Match` returns byte offsets.
+/// The match itself is all ASCII hex digits, so its UTF-16 length equals its byte length.
+fn utf16_offsets(message: &str, start: usize, end: usize) -> (usize, usize) {
+    let char_start = message[..start].encode_utf16().count();
+    (char_start, char_start + (end - start))
+}
+
+/// Scan a message string for recognized error codes and return their spans.
+/// Only returns spans for codes that exist in the error database.
+/// Short-circuits if the message contains no "0x" or "0X" prefix (common case).
+pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
+    code_mentions(message)
+        .into_iter()
+        .filter_map(|(start, end, code_val)| {
             let ec = find_error_code(code_val)?;
-            // Convert byte offsets to UTF-16 code unit offsets for JavaScript interop.
-            // JS String.slice() uses UTF-16 indices, but regex::Match returns byte offsets.
-            let utf16_start = message[..m.start()].encode_utf16().count();
-            // The match itself is all ASCII hex digits, so its UTF-16 length equals byte length.
-            let char_start = utf16_start;
-            let char_end = utf16_start + (m.end() - m.start());
+            let (char_start, char_end) = utf16_offsets(message, start, end);
             Some(ErrorCodeSpan {
                 start: char_start,
                 end: char_end,
@@ -94,7 +115,74 @@ pub fn detect_error_code_spans(message: &str) -> Vec<ErrorCodeSpan> {
                 code_decimal: format!("{}", ec.code as i32),
                 description: ec.description.to_string(),
                 category: ec.category.label().to_string(),
+                outcome: error_code_outcome(ec.code),
             })
+        })
+        .collect()
+}
+
+/// One `0x`-prefixed code found in a message, whether or not the database can
+/// explain it.
+///
+/// `outcome` is `None` for a code the database does not hold: the classifier only
+/// speaks for codes it knows, and reporting an unknown code as a failure would be
+/// a claim the evidence does not support.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorCodeMention {
+    pub start: usize,
+    pub end: usize,
+    pub code_hex: String,
+    pub code_decimal: String,
+    /// Empty when `known` is false.
+    pub description: String,
+    /// Empty when `known` is false.
+    pub category: String,
+    pub outcome: Option<ErrorCodeOutcome>,
+    pub known: bool,
+}
+
+/// Every `0x`-prefixed code in `message`, with whatever the database knows.
+///
+/// The difference from [`detect_error_code_spans`] is the unknown code: an
+/// operator reading one event needs to tell "no code here" from "a code we
+/// cannot explain", and the latter is evidence about the code rather than
+/// silence.
+/// Code values preserve the matched literal even when its meaning comes from
+/// an equivalent Win32 or HRESULT database entry.
+pub fn detect_error_code_mentions(message: &str) -> Vec<ErrorCodeMention> {
+    let mut byte_end = 0;
+    let mut utf16_end = 0;
+    code_mentions(message)
+        .into_iter()
+        .map(|(start, end, code_val)| {
+            // Count each gap once; rescanning the whole prefix makes dense input quadratic.
+            let char_start = utf16_end + message[byte_end..start].encode_utf16().count();
+            let char_end = char_start + (end - start); // The matched code is ASCII.
+            byte_end = end;
+            utf16_end = char_end;
+            match find_error_code(code_val) {
+                Some(ec) => ErrorCodeMention {
+                    start: char_start,
+                    end: char_end,
+                    code_hex: format!("0x{code_val:08X}"),
+                    code_decimal: format!("{}", code_val as i32),
+                    description: ec.description.to_string(),
+                    category: ec.category.label().to_string(),
+                    outcome: Some(error_code_outcome(ec.code)),
+                    known: true,
+                },
+                None => ErrorCodeMention {
+                    start: char_start,
+                    end: char_end,
+                    code_hex: format!("0x{code_val:08X}"),
+                    code_decimal: format!("{}", code_val as i32),
+                    description: String::new(),
+                    category: String::new(),
+                    outcome: None,
+                    known: false,
+                },
+            }
         })
         .collect()
 }
@@ -710,5 +798,121 @@ mod tests {
         assert_eq!(spans[0].start, 11);
         assert_eq!(spans[0].end, 21);
         assert_eq!(js_slice(msg, spans[0].start, spans[0].end), "0x80070005");
+    }
+    #[test]
+    fn mentions_report_a_known_code_with_its_meaning() {
+        let mentions = detect_error_code_mentions("Failed with 0x80070005 while copying");
+
+        assert_eq!(mentions.len(), 1);
+        assert!(mentions[0].known);
+        assert_eq!(mentions[0].code_hex, "0x80070005");
+        assert!(!mentions[0].description.is_empty());
+        assert!(mentions[0].outcome.is_some());
+    }
+
+    #[test]
+    fn mentions_preserve_literal_win32_code_when_borrowing_hresult_meaning() {
+        // Transform the known-code exemplar above to its Win32 form.
+        let message = "Failed with 0x00000005 while copying";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 1);
+        let mention = &mentions[0];
+        assert_eq!(mention.code_hex, "0x00000005");
+        assert_eq!(mention.code_decimal, "5");
+        assert_eq!(js_slice(message, mention.start, mention.end), "0x00000005");
+        assert!(mention.known);
+        assert!(mention.description.contains("Access is denied"));
+        assert_eq!(mention.category, "Windows");
+        assert_eq!(mention.outcome, Some(ErrorCodeOutcome::Failure));
+    }
+
+    #[test]
+    fn mentions_keep_win32_and_hresult_forms_distinct() {
+        // Transform the existing multiple-code span exemplar to equivalent forms.
+        let message = "Error 0x00000005 and then 0x80070005";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 2);
+        for (mention, (hex, decimal)) in mentions
+            .iter()
+            .zip([("0x00000005", "5"), ("0x80070005", "-2147024891")])
+        {
+            assert_eq!(mention.code_hex, hex);
+            assert_eq!(mention.code_decimal, decimal);
+            assert_eq!(js_slice(message, mention.start, mention.end), hex);
+            assert!(mention.known);
+            assert!(mention.description.contains("Access is denied"));
+            assert_eq!(mention.outcome, Some(ErrorCodeOutcome::Failure));
+        }
+    }
+
+    #[test]
+    fn legacy_lookup_and_spans_keep_canonical_hresult_values() {
+        let lookup = lookup_error_code("0x00000005");
+        assert!(lookup.found);
+        assert_eq!(lookup.code_hex, "0x80070005");
+        assert_eq!(lookup.code_decimal, "-2147024891");
+
+        let spans = detect_error_code_spans("Failed with 0x00000005 while copying");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].code_hex, "0x80070005");
+        assert_eq!(spans[0].code_decimal, "-2147024891");
+    }
+
+    #[test]
+    fn mentions_report_an_unknown_code_as_unknown_rather_than_dropping_it() {
+        // A code the database does not hold is still evidence: the operator needs
+        // to tell "no code here" from "a code we cannot explain".
+        let mentions = detect_error_code_mentions("Failed with 0xDEADBEEF while copying");
+
+        assert_eq!(mentions.len(), 1);
+        assert!(!mentions[0].known);
+        assert_eq!(mentions[0].code_hex, "0xDEADBEEF");
+        assert!(mentions[0].description.is_empty());
+        // The classifier only speaks for codes it knows.
+        assert!(mentions[0].outcome.is_none());
+        // And the known-only detection still drops it.
+        assert!(detect_error_code_spans("Failed with 0xDEADBEEF").is_empty());
+    }
+
+    #[test]
+    fn mentions_keep_utf16_offsets_across_unicode_gaps_and_skipped_tokens() {
+        // Combine the existing emoji, known-code and unknown-code exemplars.
+        let message = "🔥 error 0x00000005 Ñoño 0xDEADBEEF longer 0x800700050 🔥 0x80070005";
+        let mentions = detect_error_code_mentions(message);
+
+        assert_eq!(mentions.len(), 3);
+        for (mention, (start, end, hex)) in mentions.iter().zip([
+            (9, 19, "0x00000005"),
+            (25, 35, "0xDEADBEEF"),
+            (58, 68, "0x80070005"),
+        ]) {
+            assert_eq!((mention.start, mention.end), (start, end));
+            assert_eq!(mention.code_hex, hex);
+            assert_eq!(js_slice(message, mention.start, mention.end), hex);
+        }
+    }
+
+    #[test]
+    fn mentions_preserve_every_repeated_unknown_code_and_its_offsets() {
+        // A bounded repetition of the existing unknown-code exemplar.
+        let message = "0xDEADBEEF ".repeat(4096);
+        let mentions = detect_error_code_mentions(&message);
+
+        assert_eq!(mentions.len(), 4096);
+        assert_eq!((mentions[0].start, mentions[0].end), (0, 10));
+        let last = mentions.last().unwrap();
+        assert_eq!((last.start, last.end), (45045, 45055));
+        assert!(mentions.iter().all(|mention| {
+            mention.code_hex == "0xDEADBEEF" && !mention.known && mention.outcome.is_none()
+        }));
+    }
+
+    #[test]
+    fn mentions_report_nothing_for_text_without_a_code() {
+        let mentions = detect_error_code_mentions("Copied 42 files in 7 seconds");
+
+        assert!(mentions.is_empty(), "a bare decimal is not a code");
     }
 }

@@ -640,7 +640,8 @@ During ADE enrollment, `cloudconfigurationd` fetches the activation record from 
 | Format | File types | Recommended parser | Platform |
 |---|---|---|---|
 | CMTrace (.log) | All IME logs, Panther setup logs | Regex: `<![LOG[<message>]LOG]!><time="HH:MM:SS.mmm" date="MM-DD-YYYY" component="<comp>" context="" type="<1\|2\|3>" thread="<tid>" file="">` | Windows |
-| Plain text (.log) | CBS.log, DISM.log, ReportingEvents.log, MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs | Line-by-line timestamp parsing | Windows |
+| Plain text (.log) | CBS.log, DISM.log, MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs | Line-by-line timestamp parsing | Windows |
+| Tab-delimited update history | ReportingEvents.log | Split on tab; provider, status, and result code per record | Windows |
 | EVTX (binary) | All Windows Event Logs | `Get-WinEvent`, Event Viewer, EvtxECmd | Windows |
 | ETL (binary) | WU ETLs, DO ETLs, WaaSMedic, DiagnosticLogCSP collectors | `tracerpt.exe`, WPA, `Get-WinEvent`, PerfView | Windows |
 | HTML | MDMDiagHtmlReport, GPResult | Browser rendering or HTML parser | Windows |
