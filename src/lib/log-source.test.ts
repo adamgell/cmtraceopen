@@ -369,6 +369,19 @@ describe("switchToTab", () => {
     expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
   });
 
+  it("reports cached file metadata as unknown without replacing the source listing", async () => {
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    const listed = [{ ...folderEntries[0], path: fileB, modifiedUnixMs: 1_700_000_000_000 }];
+    useLogStore.setState({ activeSource: folderSource, sourceEntries: listed });
+
+    const result = await loadSelectedLogFile(fileB, folderSource);
+
+    expect(result?.modifiedUnixMs).toBeNull();
+    expect(result?.entries).toEqual(snapshotFor(fileB, "CIAgent line").entries);
+    expect(useLogStore.getState().sourceEntries).toEqual(listed);
+    expect(commands.openLogFile).not.toHaveBeenCalled();
+  });
+
   it("restores a cached migrated tab as a standalone file", async () => {
     setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
     useLogStore.setState({
@@ -1031,6 +1044,11 @@ describe("source loading progress ownership", () => {
         filePath: "C:/Windows/CCM/Logs/CIAgent.log",
         modifiedUnixMs: null,
       },
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/Epoch.log",
+        modifiedUnixMs: 0,
+      },
     ];
     commands.parseFilesBatch.mockResolvedValueOnce(rows);
 
@@ -1038,7 +1056,7 @@ describe("source loading progress ownership", () => {
 
     expect(
       useLogStore.getState().sourceEntries.map((entry) => entry.modifiedUnixMs),
-    ).toEqual([1_700_000_000_000, null]);
+    ).toEqual([1_700_000_000_000, null, 0]);
   });
 
   it("clears prior progress before starting a multi-file load", async () => {

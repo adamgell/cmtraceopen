@@ -246,8 +246,8 @@ export interface ParseResult {
   fileSize: number;
   /**
    * When the source file was last modified, in epoch milliseconds, or `null`
-   * when the platform could not report one. Absent is not zero: the sidebar
-   * renders both as unavailable, but only one of them is a real answer.
+   * when no file metadata is available or the platform cannot report one.
+   * Zero is a real epoch timestamp, not a missing value.
    */
   modifiedUnixMs: number | null;
   byteOffset: number;

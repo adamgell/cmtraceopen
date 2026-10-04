@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use evtx::EvtxParser;
-use quick_xml::encoding::Decoder;
 use quick_xml::events::{BytesDecl, BytesRef, BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
@@ -524,12 +523,12 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
         };
         match event {
             Event::Start(start) => {
-                if root_closed || !has_valid_xml_attributes(&start, reader.decoder()) {
+                if root_closed || !has_valid_xml_attributes(&start) {
                     return false;
                 }
                 declaration_allowed = false;
                 if depth == 0 {
-                    if root_seen || start.name().as_ref() != b"Event" {
+                    if root_seen || start.name().as_ref() != "Event" {
                         return false;
                     }
                     root_seen = true;
@@ -540,12 +539,12 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 };
             }
             Event::Empty(start) => {
-                if root_closed || !has_valid_xml_attributes(&start, reader.decoder()) {
+                if root_closed || !has_valid_xml_attributes(&start) {
                     return false;
                 }
                 declaration_allowed = false;
                 if depth == 0 {
-                    if root_seen || start.name().as_ref() != b"Event" {
+                    if root_seen || start.name().as_ref() != "Event" {
                         return false;
                     }
                     root_seen = true;
@@ -563,7 +562,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 }
             }
             Event::Text(text) => {
-                if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) {
+                if depth == 0 && !text.bytes().all(|byte| byte.is_ascii_whitespace()) {
                     return false;
                 }
                 declaration_allowed = false;
@@ -572,7 +571,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
                 if declaration_seen
                     || !declaration_allowed
                     || root_seen
-                    || !has_valid_xml_declaration(&declaration, reader.decoder())
+                    || !has_valid_xml_declaration(&declaration)
                 {
                     return false;
                 }
@@ -590,7 +589,7 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
             }
             Event::Comment(_) => declaration_allowed = false,
             Event::PI(instruction) => {
-                if instruction.target().eq_ignore_ascii_case(b"xml") {
+                if instruction.target().eq_ignore_ascii_case("xml") {
                     return false;
                 }
                 declaration_allowed = false;
@@ -600,11 +599,9 @@ fn has_valid_bounded_event_xml_structure(xml: &str) -> bool {
     }
 }
 
-fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> bool {
-    let Ok(content) = std::str::from_utf8(declaration.as_ref()) else {
-        return false;
-    };
-    let declaration = BytesStart::from_content(content, b"xml".len());
+fn has_valid_xml_declaration(declaration: &BytesDecl<'_>) -> bool {
+    let content: &str = declaration;
+    let declaration = BytesStart::from_content(content, "xml".len());
     let mut attributes = declaration.attributes();
     let mut stage = 0u8;
     let mut count = 0usize;
@@ -617,14 +614,13 @@ fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> b
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-        else {
+        let Ok(value) = attribute.normalized_value(XmlVersion::Implicit1_0) else {
             return false;
         };
         match attribute.key.as_ref() {
-            b"version" if stage == 0 && value == "1.0" => stage = 1,
-            b"encoding" if stage == 1 && is_valid_xml_encoding_name(&value) => stage = 2,
-            b"standalone" if matches!(stage, 1 | 2) && matches!(value.as_ref(), "yes" | "no") => {
+            "version" if stage == 0 && value == "1.0" => stage = 1,
+            "encoding" if stage == 1 && is_valid_xml_encoding_name(&value) => stage = 2,
+            "standalone" if matches!(stage, 1 | 2) && matches!(value.as_ref(), "yes" | "no") => {
                 stage = 3;
             }
             _ => return false,
@@ -651,14 +647,14 @@ fn is_valid_xml_reference(reference: &BytesRef<'_>) -> bool {
     match reference.resolve_char_ref() {
         Ok(Some(character)) => is_legal_xml_10_character(character),
         Ok(None) => {
-            let name: &[u8] = reference;
-            matches!(name, b"amp" | b"lt" | b"gt" | b"apos" | b"quot")
+            let name: &str = reference;
+            matches!(name, "amp" | "lt" | "gt" | "apos" | "quot")
         }
         Err(_) => false,
     }
 }
 
-fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
+fn has_valid_xml_attributes(start: &BytesStart<'_>) -> bool {
     let mut attributes = start.attributes();
     let mut count = 0usize;
     for attribute in attributes.with_checks(true) {
@@ -671,8 +667,7 @@ fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-        else {
+        let Ok(value) = attribute.normalized_value(XmlVersion::Implicit1_0) else {
             return false;
         };
         if !value.chars().all(is_legal_xml_10_character) {
@@ -689,27 +684,26 @@ fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
 
     loop {
         match reader.read_event().ok()? {
-            Event::Start(start) if start.name().as_ref() == b"EventData" => {
+            Event::Start(start) if start.name().as_ref() == "EventData" => {
                 in_event_data = true;
             }
-            Event::Empty(start) if start.name().as_ref() == b"EventData" => {
+            Event::Empty(start) if start.name().as_ref() == "EventData" => {
                 return Some(properties);
             }
-            Event::End(end) if in_event_data && end.name().as_ref() == b"EventData" => {
+            Event::End(end) if in_event_data && end.name().as_ref() == "EventData" => {
                 return Some(properties);
             }
-            Event::Start(start) if in_event_data && start.name().as_ref() == b"Data" => {
-                let name = xml_start_attribute(&start, "Name", reader.decoder())
+            Event::Start(start) if in_event_data && start.name().as_ref() == "Data" => {
+                let name = xml_start_attribute(&start, "Name")
                     .unwrap_or_else(|| format!("Data[{}]", properties.len()));
-                let value = reader.read_text(QName(b"Data")).ok()?;
-                let value = value.decode().ok()?;
+                let value = reader.read_text(QName("Data")).ok()?.into_inner();
                 properties.push(EventLogProperty {
                     name,
                     value: decode_esp_xml_text(value.trim()),
                 });
             }
-            Event::Empty(start) if in_event_data && start.name().as_ref() == b"Data" => {
-                let name = xml_start_attribute(&start, "Name", reader.decoder())
+            Event::Empty(start) if in_event_data && start.name().as_ref() == "Data" => {
+                let name = xml_start_attribute(&start, "Name")
                     .unwrap_or_else(|| format!("Data[{}]", properties.len()));
                 properties.push(EventLogProperty {
                     name,
@@ -732,56 +726,51 @@ struct EspSystemFields {
 
 fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
     let mut reader = Reader::from_str(xml);
-    let mut path = Vec::<Vec<u8>>::new();
+    let mut path = Vec::<String>::new();
     let mut fields = EspSystemFields::default();
     let mut direct_system_seen = false;
 
     loop {
         match reader.read_event().ok()? {
             Event::Start(start) => {
-                let name = start.name().as_ref().to_vec();
-                if is_direct_event_child(&path) && name.as_slice() == b"System" {
+                let name = start.name().as_ref().to_string();
+                if is_direct_event_child(&path) && name == "System" {
                     if direct_system_seen {
                         return None;
                     }
                     direct_system_seen = true;
                 }
                 if is_direct_system_path(&path) {
-                    match name.as_slice() {
-                        b"EventID" => {
+                    match name.as_str() {
+                        "EventID" => {
                             let value = reader
-                                .read_text(QName(b"EventID"))
+                                .read_text(QName("EventID"))
                                 .ok()?
-                                .decode()
-                                .ok()?
+                                .into_inner()
                                 .into_owned();
                             fields.event_id.get_or_insert(value);
                             continue;
                         }
-                        b"Channel" => {
+                        "Channel" => {
                             let value = reader
-                                .read_text(QName(b"Channel"))
+                                .read_text(QName("Channel"))
                                 .ok()?
-                                .decode()
-                                .ok()?
+                                .into_inner()
                                 .into_owned();
                             fields.channel.get_or_insert(value);
                             continue;
                         }
-                        b"EventRecordID" => {
+                        "EventRecordID" => {
                             let value = reader
-                                .read_text(QName(b"EventRecordID"))
+                                .read_text(QName("EventRecordID"))
                                 .ok()?
-                                .decode()
-                                .ok()?
+                                .into_inner()
                                 .into_owned();
                             fields.record_id.get_or_insert(value);
                             continue;
                         }
-                        b"TimeCreated" => {
-                            if let Some(value) =
-                                xml_start_attribute(&start, "SystemTime", reader.decoder())
-                            {
+                        "TimeCreated" => {
+                            if let Some(value) = xml_start_attribute(&start, "SystemTime") {
                                 fields.source_timestamp.get_or_insert(value);
                             }
                         }
@@ -791,7 +780,7 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
                 path.push(name);
             }
             Event::Empty(start) => {
-                if is_direct_event_child(&path) && start.name().as_ref() == b"System" {
+                if is_direct_event_child(&path) && start.name().as_ref() == "System" {
                     if direct_system_seen {
                         return None;
                     }
@@ -799,19 +788,17 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
                 }
                 if is_direct_system_path(&path) {
                     match start.name().as_ref() {
-                        b"EventID" => {
+                        "EventID" => {
                             fields.event_id.get_or_insert_with(String::new);
                         }
-                        b"Channel" => {
+                        "Channel" => {
                             fields.channel.get_or_insert_with(String::new);
                         }
-                        b"EventRecordID" => {
+                        "EventRecordID" => {
                             fields.record_id.get_or_insert_with(String::new);
                         }
-                        b"TimeCreated" => {
-                            if let Some(value) =
-                                xml_start_attribute(&start, "SystemTime", reader.decoder())
-                            {
+                        "TimeCreated" => {
+                            if let Some(value) = xml_start_attribute(&start, "SystemTime") {
                                 fields.source_timestamp.get_or_insert(value);
                             }
                         }
@@ -828,25 +815,25 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
     }
 }
 
-fn is_direct_system_path(path: &[Vec<u8>]) -> bool {
-    path.len() == 2 && path[0].as_slice() == b"Event" && path[1].as_slice() == b"System"
+fn is_direct_system_path(path: &[String]) -> bool {
+    path.len() == 2 && path[0] == "Event" && path[1] == "System"
 }
 
-fn is_direct_event_child(path: &[Vec<u8>]) -> bool {
-    path.len() == 1 && path[0].as_slice() == b"Event"
+fn is_direct_event_child(path: &[String]) -> bool {
+    path.len() == 1 && path[0] == "Event"
 }
 
 fn xml_element_text(xml: &str, element: &str) -> Option<String> {
     let mut reader = Reader::from_str(xml);
     loop {
         match reader.read_event().ok()? {
-            Event::Start(start) if start.name().as_ref() == element.as_bytes() => {
+            Event::Start(start) if start.name().as_ref() == element => {
                 return reader
-                    .read_text(QName(element.as_bytes()))
+                    .read_text(QName(element))
                     .ok()
-                    .and_then(|value| value.decode().ok().map(|text| text.into_owned()));
+                    .map(|value| value.into_inner().into_owned());
             }
-            Event::Empty(start) if start.name().as_ref() == element.as_bytes() => {
+            Event::Empty(start) if start.name().as_ref() == element => {
                 return Some(String::new());
             }
             Event::Eof => return None,
@@ -855,19 +842,11 @@ fn xml_element_text(xml: &str, element: &str) -> Option<String> {
     }
 }
 
-fn xml_start_attribute(
-    start: &BytesStart<'_>,
-    attribute_name: &str,
-    decoder: Decoder,
-) -> Option<String> {
+fn xml_start_attribute(start: &BytesStart<'_>, attribute_name: &str) -> Option<String> {
     start.attributes().find_map(|attribute| {
         let attribute = attribute.ok()?;
-        (attribute.key.as_ref() == attribute_name.as_bytes())
-            .then(|| {
-                attribute
-                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-                    .ok()
-            })
+        (attribute.key.as_ref() == attribute_name)
+            .then(|| attribute.normalized_value(XmlVersion::Implicit1_0).ok())
             .flatten()
             .map(|value| value.into_owned())
     })

@@ -582,14 +582,9 @@ export async function getKnownSourceMetadataById(
 }
 
 /**
- * A synthetic parse result for a cached tab switch.
- *
- * One builder for both cached paths, so a field cannot be added to one of them and forgotten in the
- * other -- which is exactly how the modified time came to be missing on one path only. The tab
- * snapshot retains no file metadata, so no modified time is claimed here; `null` says the platform
- * has none to report, which is what the sidebar renders as unavailable.
- *
- * The cast is for the two fields the snapshot stores as nullable while the result type does not.
+ * Cached snapshots retain no file metadata, so their parse results report no
+ * modified time. The existing sidebar listing retains its own metadata.
+ * The cast covers the snapshot's nullable format and parser selection.
  */
 function cachedParseResult(
   filePath: string,
@@ -987,10 +982,7 @@ export async function loadFilesAsLogSource(paths: string[]): Promise<boolean> {
     const commonDir = getCommonDirectory(paths);
     const source: LogSource = { kind: "folder", path: commonDir };
 
-    // Build sidebar entries from the file list. The modified time comes from
-    // the parse result: the backend has it from the same metadata as the size,
-    // and writing a placeholder here is what made every multi-file open read
-    // "Modified time unavailable".
+    // Preserve each parsed file's metadata, including null for an unavailable time.
     const folderEntries: FolderEntry[] = results.map((r) => ({
       path: r.filePath,
       name: r.filePath.split(/[\\/]/).pop() ?? r.filePath,

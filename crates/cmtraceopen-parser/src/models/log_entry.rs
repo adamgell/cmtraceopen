@@ -317,11 +317,9 @@ pub struct ParseResult {
     pub file_size: u64,
     /// When the source file was last modified, as epoch milliseconds.
     ///
-    /// Supplied by the adapter from the same metadata as `file_size`; the pure
-    /// entry points have no file to read and leave it `None`. `None` means the
-    /// platform could not report a time, which is not the same fact as a time of
-    /// zero: a consumer that shows it has to say "unavailable" rather than
-    /// invent an instant.
+    /// Supplied by the native adapter from file metadata. Pure entry points
+    /// leave it `None` because they do not read a file. `None` means unavailable;
+    /// zero is a real epoch timestamp.
     #[serde(default)]
     pub modified_unix_ms: Option<u64>,
     /// Byte offset where parsing ended — used as the starting point for tailing

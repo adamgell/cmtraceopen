@@ -243,3 +243,28 @@ fn parse_file_reports_the_sources_modified_time() {
     );
     assert_eq!(result.modified_unix_ms, expected);
 }
+
+#[test]
+fn parse_file_preserves_epoch_zero_modified_time() {
+    let fixture = TempLogFixture::new("epoch-time.log", fixture_content());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&fixture.path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
+        .unwrap();
+
+    let (result, _) = app_lib::parser::parse_file(fixture.path.to_str().unwrap()).unwrap();
+
+    assert_eq!(result.modified_unix_ms, Some(0));
+}
+
+#[test]
+fn pure_parser_does_not_invent_a_modified_time() {
+    let (result, _) = cmtraceopen_parser::parser::parse_content(
+        fixture_content(),
+        "not-read.log",
+        fixture_content().len() as u64,
+    );
+    assert_eq!(result.modified_unix_ms, None);
+}

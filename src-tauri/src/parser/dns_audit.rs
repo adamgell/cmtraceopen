@@ -47,14 +47,19 @@ pub fn is_dns_evtx(path: &Path) -> bool {
 /// dispatches each event by EventID to schema-group extractors that
 /// produce structured `LogEntry` values.
 pub fn parse_evtx(path: &str) -> Result<ParseResult, String> {
-    let path_obj = Path::new(path);
-    let metadata = std::fs::metadata(path).ok();
+    let file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open EVTX file {}: {}", path, e))?;
+    parse_opened_evtx(file, path)
+}
+
+fn parse_opened_evtx(file: std::fs::File, path: &str) -> Result<ParseResult, String> {
+    let metadata = file.metadata().ok();
     let file_size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
     let modified_unix_ms = metadata
         .as_ref()
         .and_then(crate::commands::file_ops::metadata_modified_unix_ms);
 
-    let mut parser = EvtxParser::from_path(path_obj)
+    let mut parser = EvtxParser::from_read_seek(file)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path, e))?;
 
     let mut entries: Vec<LogEntry> = Vec::new();
@@ -489,6 +494,47 @@ fn extract_generic(event_id: u32, data: &Value) -> EventFields {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modified_time_belongs_to_the_opened_evtx_after_path_replacement() {
+        // Reuse the empty file header from event_log::parser's minimal_evtx fixture.
+        let mut bytes = vec![0u8; 4096];
+        bytes[..8].copy_from_slice(b"ElfFile\0");
+        bytes[32..36].copy_from_slice(&128u32.to_le_bytes());
+        bytes[36..38].copy_from_slice(&1u16.to_le_bytes());
+        bytes[38..40].copy_from_slice(&3u16.to_le_bytes());
+        bytes[40..42].copy_from_slice(&4096u16.to_le_bytes());
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dns.evtx");
+        std::fs::write(&path, &bytes).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.set_times(
+            std::fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            ),
+        )
+        .unwrap();
+        std::fs::rename(&path, temp.path().join("old.evtx")).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000),
+            ))
+            .unwrap();
+
+        let result = super::parse_opened_evtx(file, path.to_str().unwrap()).unwrap();
+
+        assert!(result.entries.is_empty());
+        assert_eq!(result.file_size, bytes.len() as u64);
+        assert_eq!(result.modified_unix_ms, Some(1_700_000_000_000));
+    }
 
     const DNS_CREATE_RECORD: &str = r##"{
       "Event": {
