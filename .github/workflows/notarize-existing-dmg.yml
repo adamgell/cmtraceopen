@@ -20,9 +20,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     environment: codesigning
-    # Temporary one-off draft access; helper issues no GitHub mutation requests.
     permissions:
-      contents: write
+      contents: read
       actions: read
       attestations: read
     env:

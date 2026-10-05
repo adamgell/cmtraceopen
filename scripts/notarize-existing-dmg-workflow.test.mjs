@@ -12,8 +12,8 @@ function assertApprovedPermissions(text) {
     '    permissions:',
   ], 'only empty workflow defaults and one explicit job permission block are allowed');
   const jobPermissions = text.match(/^    permissions:\n([\s\S]*?)(?=^ {0,4}[^\s#])/m)?.[1];
-  assert.equal(jobPermissions, '      contents: write\n      actions: read\n      attestations: read\n',
-    'only the one-off draft-access contents permission may grant write access');
+  assert.equal(jobPermissions, '      contents: read\n      actions: read\n      attestations: read\n',
+    'the job must grant exactly the three approved read scopes');
 }
 
 test('permission guard rejects changed defaults, overrides and extra scopes', async (t) => {
@@ -30,7 +30,7 @@ test('permission guard rejects changed defaults, overrides and extra scopes', as
     ['extra scope after a job-indented comment', '      attestations: read', '      attestations: read\n    # Comment\n      packages: write'],
     ['job override', '    env:', '    permissions: write-all\n    env:'],
     ['broad job permissions',
-      '    permissions:\n      contents: write\n      actions: read\n      attestations: read',
+      '    permissions:\n      contents: read\n      actions: read\n      attestations: read',
       '    permissions: write-all\n    # contents: read\n    # actions: read\n    # attestations: read'],
   ];
   for (const [name, before, after] of changes) {
