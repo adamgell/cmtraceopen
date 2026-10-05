@@ -58,7 +58,7 @@ class DiagnosticsTests(unittest.TestCase):
                             states=("showing", "focused", "editable"), text=ui.TOKENS[1]) | overrides))
 
     def bar(self, count=None, text=None):
-        controls = [Node(name, "push button") for name in
+        controls = [Node(name, "toggle button" if name in ("Match case", "Use regular expression") else "push button") for name in
                     ("Match case", "Use regular expression", "Previous match", "Next match", "Close find bar")]
         return Node(role="section", text=text, children=[self.entry(), *controls] + ([count] if count else []))
 
@@ -66,6 +66,21 @@ class DiagnosticsTests(unittest.TestCase):
         for bar in (self.bar(Node(role="section", text="1 of 1")),
                     self.bar(text="\ufffc 1 of 1 \ufffc\ufffc\ufffc\ufffc\ufffc")):
             self.assertTrue(self.controller(bar).match_count())
+
+    def test_find_modes_require_actual_toggle_roles_and_navigation_requires_buttons(self):
+        bar = self.bar(text="1 of 1")
+        for control in bar.children[1:3]: control.role = "toggle button"
+        self.assertTrue(self.controller(bar).match_count())
+        for index, role in ((1, "push button"), (2, "push button"), (3, "toggle button"), (4, "toggle button"), (5, "toggle button")):
+            bad = copy.deepcopy(bar); bad.children[index].role = role
+            self.assertFalse(self.controller(bad).match_count())
+
+    def test_find_count_rejects_known_failure_status_and_conflicting_nonempty_text(self):
+        for status in ("No results", "Invalid regex", "1 of 1 unexpected"):
+            self.assertFalse(self.controller(self.bar(Node(name="1 of 1", text=status))).match_count())
+        for status in ("No results", "Invalid regex"):
+            bar = self.bar(Node(name="1 of 1")); bar.children.append(Node(text=status))
+            self.assertFalse(self.controller(bar).match_count())
 
     def test_find_count_rejects_global_decoy_when_local_count_is_wrong(self):
         controller = self.controller(self.bar(text="0 of 1"), Node(text="1 of 1"))

@@ -243,17 +243,19 @@ class Controller:
             return []
         scoped = list(self.walk_paths(common))
         buttons, inputs = [], 0
+        expected = {"Match case": {"toggle button"}, "Use regular expression": {"toggle button"},
+                    "Previous match": {"push button", "button"}, "Next match": {"push button", "button"},
+                    "Close find bar": {"push button", "button"}}
         for node, _ in scoped:
             role = self.role(node)
-            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button"):
+            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
                 return []
             if role == "entry":
                 inputs += 1
-            if role in ("push button", "button"):
-                if not self.showing(node):
+            if role in ("push button", "button", "toggle button"):
+                if not self.showing(node) or role not in expected.get(node.name, set()):
                     return []
                 buttons.append(node.name)
-        expected = ["Match case", "Use regular expression", "Previous match", "Next match", "Close find bar"]
         return scoped if inputs == 1 and sorted(buttons) == sorted(expected) else []
 
     def match_count(self):
@@ -262,7 +264,7 @@ class Controller:
         scoped = self.find_scope()
         names, texts, conflict = False, False, False
         for node, parents in scoped:
-            if any(self.role(parent) in ("entry", "push button", "button") for parent in parents):
+            if any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents):
                 continue
             # WebKit ignores ordinary spans/StaticText objects and exposes their
             # Text on a containing section. Embedded controls use U+FFFC; only
@@ -273,8 +275,11 @@ class Controller:
                 name_match = re.fullmatch(r"1\s+of\s+1", name) is not None
                 text_match = re.fullmatch(r"1\s+of\s+1", text) is not None
                 conflict |= (re.fullmatch(r"\d+\s+of\s+\d+", name) is not None and not name_match
-                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match)
-                names |= name_match
+                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match
+                             or name in ("No results", "Invalid regex") or text in ("No results", "Invalid regex")
+                             or name_match and bool(text) and not text_match)
+                # A name cannot override this object's nonempty Text value.
+                names |= name_match and not text
                 texts |= text_match
         self.observe(find_scope_valid=bool(scoped), match_name=names, match_text=texts, match_conflict=conflict)
         return selected and query and bool(scoped) and (names or texts) and not conflict
