@@ -80,7 +80,7 @@ def sanitize(data):
     if (sig is not None and type(sig) is not int) or sig != expected_signal:
         raise ValueError("evidence-invalid")
     if timed_out:
-        valid = category == "timeout" and rc is not None
+        valid = category == "timeout"
     elif rc is None:
         valid = category == "spawn-error"
     elif rc == 0:
@@ -135,13 +135,23 @@ def probe(seconds=15):
                 captured.extend(chunk[:available])
                 result["stderr_truncated"] |= len(chunk) > available
         result["returncode"] = process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        result["timed_out"] = True
     finally:
         process.stderr.close()
-        if process.poll() is None:
+        reaped = process.poll()
+        if reaped is None:
             process.kill()
-            process.wait(timeout=3)
+            try:
+                result["returncode"] = process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                # No exit was observed. Keep the failure record; the host still
+                # requires cleanup of all owned children before collecting it.
+                result["timed_out"] = True
+        elif result["returncode"] is None:
+            result["returncode"] = reaped
     rc = result["returncode"]
-    result["signal"] = -rc if rc < 0 else None
+    result["signal"] = -rc if rc is not None and rc < 0 else None
     result["error_class"] = ("timeout" if result["timed_out"] else "signal" if rc < 0
                              else "ok" if rc == 0 else classify_error(captured))
     return sanitize(result)

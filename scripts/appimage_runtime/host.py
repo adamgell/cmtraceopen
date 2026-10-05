@@ -123,9 +123,14 @@ def collect(root, uid, output):
             if (area / "fuse.json").exists():
                 proofs = json.loads(contract.read_owned_file(area / "fuse.json", uid, 4096))
             data["fuse_observations"] = contract.sanitize_fuse(proofs, passed)
-            if (area / "final.png").exists() != (data["diagnostics"]["final_image"] != "absent"):
+            claimed_final = data["diagnostics"]["final_image"] != "absent"
+            if claimed_final and not (area / "final.png").exists():
                 raise ValueError("evidence-invalid")
             for phase in ("initial", "final"):
+                # Failed capture cleanup can leave stale or partial bytes. An
+                # unclaimed final image is never read or uploaded.
+                if phase == "final" and not claimed_final:
+                    continue
                 path = area / f"{phase}.png"
                 if not path.exists():
                     if passed:

@@ -301,6 +301,66 @@ class DiagnosticsTests(unittest.TestCase):
             controller.capture_failure()
         self.assertEqual(controller.result["diagnostics"]["final_image"], "absent")
 
+    def test_collection_preserves_failure_when_unclaimed_image_cleanup_fails(self):
+        from PIL import Image
+        from appimage_runtime import host, sandbox
+        for failure in ("stale", "partial", "symlink"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); output = root / "sanitized"; output.mkdir()
+                (root / "proof").mkdir()
+                (root / "proof/preflight.json").write_text(json.dumps(dict(identity=True, offline=True, bubblewrap=True, fuse_device=True)))
+                proof = dict(returncode=0, signal=None, timed_out=False, stderr_truncated=False,
+                             error_class="ok", policy=sandbox.unknown_policy())
+                (root / "proof/sandbox.json").write_text(json.dumps(proof))
+                for case in contract.CASES:
+                    controller = self.controller()
+                    controller.out = root / case / "out"; controller.out.mkdir(parents=True)
+                    controller.result.update(case=case, status="failed", reason="ui-assertion",
+                                             checks=dict(open=True), counts=[3])
+                    controller.result["diagnostics"].update(stage="exit", observations=dict(beta_selected=True))
+                    final = controller.out / "final.png"
+                    if failure == "stale": Image.new("RGB", (20, 20)).save(final)
+                    if failure == "symlink":
+                        (root / "private-not-an-image").write_bytes(b"must not be read")
+                        final.symlink_to(root / "private-not-an-image")
+                    def partial_capture(phase):
+                        self.assertEqual(phase, "final")
+                        final.write_bytes(b"incomplete PNG: never upload")
+                        raise OSError("capture failed")
+                    unlink_effect = [None, PermissionError()] if failure == "partial" else PermissionError()
+                    with patch.object(Path, "unlink", side_effect=unlink_effect), patch.object(controller, "screenshot", side_effect=partial_capture):
+                        controller.capture_failure()
+                    self.assertEqual(controller.result["diagnostics"]["final_image"], "absent")
+                    (controller.out / "result.json").write_text(json.dumps(controller.result))
+                read_owned = contract.read_owned_file
+                def read_claimed(path, uid, limit):
+                    self.assertNotEqual(path.name, "final.png", "unclaimed image must not be read")
+                    return read_owned(path, uid, limit)
+                with patch.object(contract, "read_owned_file", side_effect=read_claimed):
+                    _, cases, _ = host.collect(root, os.getuid(), output)
+                for data in cases:
+                    self.assertEqual((data["status"], data["reason"], data["diagnostics"]["stage"]),
+                                     ("failed", "ui-assertion", "exit"))
+                    self.assertEqual(data["checks"], dict(open=True))
+                    self.assertEqual(data["diagnostics"]["observations"], dict(beta_selected=True))
+                self.assertEqual(list(output.iterdir()), [])
+
+    def test_collection_rejects_missing_or_invalid_claimed_final_image(self):
+        from appimage_runtime import host
+        for image in (None, b"invalid PNG"):
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); output = root / "sanitized"; output.mkdir()
+                for case in contract.CASES:
+                    area = root / case / "out"; area.mkdir(parents=True)
+                    data = session.blocked(case, "ui-assertion")
+                    data.update(status="failed")
+                    data["diagnostics"].update(stage="exit", final_image="failure")
+                    (area / "result.json").write_text(json.dumps(data))
+                    if image is not None: (area / "final.png").write_bytes(image)
+                _, cases, _ = host.collect(root, os.getuid(), output)
+                self.assertTrue(all(data["reason"] == "evidence-invalid" for data in cases))
+                self.assertEqual(list(output.iterdir()), [])
+
     def test_collection_retains_bounded_failure_image_and_requires_sandbox_proof(self):
         from PIL import Image
         from appimage_runtime import host, sandbox
@@ -446,3 +506,60 @@ class SandboxDiagnosticsTests(unittest.TestCase):
                        dict(policy=dict(valid["policy"], bwrap_file_caps="yes"))):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 sandbox.sanitize(valid | change)
+
+    def test_probe_retains_timeout_when_bounded_reap_waits_expire(self):
+        sandbox = self.sandbox()
+        for outcome in ("unreaped", "second-wait", "poll-race"):
+            with self.subTest(outcome=outcome):
+                read_fd, write_fd = os.pipe()
+                pipe = os.fdopen(read_fd, "rb", buffering=0)
+                waits, kills, state = [], [], dict(returncode=None)
+                def wait(timeout):
+                    waits.append(timeout)
+                    if outcome == "poll-race" or outcome == "second-wait" and len(waits) == 2:
+                        state["returncode"] = -9
+                    if len(waits) == 1 or outcome == "unreaped":
+                        raise subprocess.TimeoutExpired("offline fixture", timeout)
+                    return state["returncode"]
+                process = SimpleNamespace(stderr=pipe, poll=lambda: state["returncode"],
+                                          wait=wait, kill=lambda: kills.append(True))
+                try:
+                    with patch.object(sandbox, "read_policy", return_value=sandbox.unknown_policy()), patch.object(sandbox.subprocess, "Popen", return_value=process):
+                        try:
+                            result = sandbox.probe(seconds=0)
+                        except subprocess.TimeoutExpired:
+                            self.fail("bounded reap timeout discarded the probe diagnostics")
+                    self.assertEqual(result["error_class"], "timeout")
+                    self.assertTrue(result["timed_out"])
+                    self.assertEqual(result["returncode"], None if outcome == "unreaped" else -9)
+                    self.assertEqual(result["signal"], None if outcome == "unreaped" else 9)
+                    self.assertEqual(waits, [3] if outcome == "poll-race" else [3, 3])
+                    self.assertEqual(len(kills), 1 if outcome == "poll-race" else 2)
+                    self.assertTrue(pipe.closed)
+                    self.assertEqual(sandbox.sanitize(result), result)
+                finally:
+                    pipe.close(); os.close(write_fd)
+
+    def test_unknown_timeout_exit_is_retained_but_cannot_pass_preflight(self):
+        sandbox = self.sandbox()
+        proof = dict(returncode=None, signal=None, timed_out=True, stderr_truncated=False,
+                     error_class="timeout", policy=sandbox.unknown_policy())
+        try:
+            self.assertEqual(sandbox.sanitize(proof), proof)
+        except ValueError:
+            self.fail("unobserved exit after a reap timeout must remain a valid diagnostic")
+        for change in (dict(error_class="ok"), dict(timed_out=False), dict(signal=9)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                sandbox.sanitize(proof | change)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "proof").mkdir()
+            (root / "context.json").write_text(json.dumps(dict(uid=1234, gid=1235, namespaces={})))
+            for case in contract.CASES: (root / case / "out").mkdir(parents=True)
+            with patch.object(session, "query", return_value="[]"), patch.object(session, "status", return_value={}), patch.object(session, "namespaces", return_value={}), patch.object(contract, "validate_identity"), patch.object(session.subprocess, "run", return_value=SimpleNamespace(returncode=1)), patch.object(session.os, "access", return_value=False), patch.object(sandbox, "probe", return_value=proof), patch.object(session.os, "stat") as fuse_stat, patch.object(session.subprocess, "Popen") as spawn:
+                self.assertEqual(session.main(root), 1)
+                fuse_stat.assert_not_called(); spawn.assert_not_called()
+            self.assertEqual(json.loads((root / "proof/sandbox.json").read_text()), proof)
+            for case in contract.CASES:
+                result = json.loads((root / case / "out/result.json").read_text())
+                self.assertEqual((result["status"], result["reason"], result["diagnostics"]["stage"]),
+                                 ("blocked", "bubblewrap-unavailable", "preflight"))
