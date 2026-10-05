@@ -367,6 +367,18 @@ jobs:
             throw "Evidence collector tests ended with result $($result.Result)."
           }
 
+      - name: Test Windows release signature guard
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./scripts/verify-windows-release-signatures.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Signature guard tests ended with result $($result.Result)."
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
 
