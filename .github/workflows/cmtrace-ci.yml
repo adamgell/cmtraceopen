@@ -122,11 +122,12 @@ jobs:
         run: cargo test
 
       # Default full-feature checks/tests already cover the exporter. Also build
-      # and exercise the actual CLI with the release feature selection. The
-      # process-level tests cover exports and errors without relying on --help.
+      # and exercise the actual CLI with the release feature selection. Include
+      # library tests so Windows helpers gated by cfg(test) compile without Intune.
+      # The process-level tests cover exports and errors without relying on --help.
       - name: Build and smoke the headless event-log exporter
         working-directory: src-tauri
-        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
+        run: cargo test --locked --no-default-features --features event-log --lib --test event_log_export_cli
 
       - name: Rust check (lite)
         working-directory: src-tauri
@@ -423,6 +424,11 @@ jobs:
 
       - name: Clippy Windows ESP paths
         run: cargo clippy --locked -p cmtrace-open --all-targets --all-features -- -D warnings
+
+      # The release exporter enables only event-log. Full-feature builds hide
+      # accidental dependencies on other workloads in Windows-only code.
+      - name: Build and smoke the headless event-log exporter
+        run: cargo test --locked -p cmtrace-open --no-default-features --features event-log --lib --test event_log_export_cli
   build:
     name: Build (${{ matrix.label }})
     needs: [check, frontend, windows-esp]
