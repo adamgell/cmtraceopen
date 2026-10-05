@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -223,6 +224,31 @@ class DiagnosticsTests(unittest.TestCase):
         good["diagnostics"].update(stage="complete", final_image="acceptance")
         contract.sanitize_case(good)
 
+    def test_synthetic_timeout_evidence_and_cleanup_errors_do_not_claim_preflight(self):
+        for reason in ("timeout", "evidence-invalid", "harness-error"):
+            data = session.blocked("ordinary", reason)
+            self.assertEqual(data["diagnostics"]["stage"], "unobserved")
+            contract.sanitize_case(data)
+
+    def test_session_records_preflight_only_when_observed_and_timeout_as_unobserved(self):
+        for preflight_failure in (True, False):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); (root / "proof").mkdir()
+                (root / "context.json").write_text("{}")
+                for case in contract.CASES: (root / case / "out").mkdir(parents=True)
+                def wait(timeout):
+                    if timeout == 300: raise subprocess.TimeoutExpired("offline fixture", timeout)
+                    return 0
+                process = SimpleNamespace(pid=123456, wait=wait)
+                with patch.object(session, "preflight", side_effect=ValueError("bubblewrap-unavailable") if preflight_failure else None), patch.object(session.subprocess, "Popen", return_value=process) as spawn, patch.object(session.os, "killpg"):
+                    session.main(root)
+                    if preflight_failure: spawn.assert_not_called()
+                for case in contract.CASES:
+                    data = json.loads((root / case / "out/result.json").read_text())
+                    self.assertEqual(data["diagnostics"]["stage"], "preflight" if preflight_failure else "unobserved")
+                    self.assertEqual(data["reason"], "bubblewrap-unavailable" if preflight_failure else "timeout")
+                    contract.sanitize_case(data)
+
     def test_execute_cannot_send_keys_or_screenshot_before_readiness(self):
         controller = self.controller(Node(attrs=("id:splash",)))
         with tempfile.TemporaryDirectory() as directory:
@@ -303,6 +329,7 @@ class DiagnosticsTests(unittest.TestCase):
                 for image in output.iterdir(): image.unlink()
                 _, cases, _ = host.collect(root, os.getuid(), output)
                 self.assertTrue(all(item["reason"] == "evidence-invalid" for item in cases))
+                self.assertTrue(all(item["diagnostics"]["stage"] == "unobserved" for item in cases))
                 self.assertEqual(list(output.iterdir()), [])
 
 

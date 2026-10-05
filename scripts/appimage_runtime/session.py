@@ -51,7 +51,9 @@ def main(root):
     except Exception as error:
         reason = str(error) if str(error) in contract.REASONS else "isolation-unavailable"
         for case in contract.CASES:
-            (root / case / "out/result.json").write_text(json.dumps(blocked(case, reason)))
+            result = blocked(case, reason)
+            result["diagnostics"]["stage"] = "preflight"
+            (root / case / "out/result.json").write_text(json.dumps(result))
         return 1
     (root / "proof/preflight.json").write_text(json.dumps({"identity": True, "offline": True, "bubblewrap": True, "fuse_device": True}))
     for case in contract.CASES:

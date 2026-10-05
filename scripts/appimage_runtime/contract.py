@@ -19,7 +19,7 @@ REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
                      "fuse-unavailable", "accessibility-unavailable", "gui-unavailable",
                      "application-exited", "ui-assertion", "timeout", "cancelled",
                      "evidence-invalid", "artifact-mismatch", "harness-error"))
-STAGES = frozenset(("preflight", "launch", "open", "ready", "find-open-focus", "find-query",
+STAGES = frozenset(("unobserved", "preflight", "launch", "open", "ready", "find-open-focus", "find-query",
                     "find-selection", "find-count", "filter", "clear-filter", "tail", "exit",
                     "relaunch", "reopen", "final-image", "complete"))
 OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "rows_match",
@@ -28,7 +28,7 @@ OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "ro
 
 
 def diagnostics():
-    return dict(stage="preflight", elapsed_ms=0, observations={}, final_image="absent")
+    return dict(stage="unobserved", elapsed_ms=0, observations={}, final_image="absent")
 
 
 def sanitize_diagnostics(data):
