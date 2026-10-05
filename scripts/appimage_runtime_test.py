@@ -5,6 +5,7 @@ import os
 import io
 import unittest
 from pathlib import Path
+from appimage_runtime_diagnostics_test import DiagnosticsTests, SandboxDiagnosticsTests
 
 try:
     from appimage_runtime import contract
@@ -123,20 +124,22 @@ class ContractTests(unittest.TestCase):
 
     def test_collection_rejects_missing_preflight_and_pass_without_screenshots(self):
         from appimage_runtime.host import collect
+        from appimage_runtime import sandbox
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); output=root/"sanitized"; output.mkdir()
             (root/"proof").mkdir()
             for case in contract.CASES:
                 area=root/case/"out"; area.mkdir(parents=True)
-                (area/"result.json").write_text(json.dumps(dict(case=case,status="passed",reason="ok",checks=dict.fromkeys(contract.CHECKS,True),counts=[3,1,3,4,4])))
-            preflight,cases=collect(root,os.getuid(),output)
+                (area/"result.json").write_text(json.dumps(dict(case=case,status="passed",reason="ok",checks=dict.fromkeys(contract.CHECKS,True),counts=[3,1,3,4,4],diagnostics=dict(contract.diagnostics(),stage="complete",final_image="acceptance"))))
+            preflight,cases,_=collect(root,os.getuid(),output)
             self.assertEqual(preflight,{})
             self.assertTrue(all(case["reason"]=="evidence-invalid" for case in cases))
             (root/"proof/preflight.json").write_text(json.dumps(dict(identity=True,offline=True,bubblewrap=True,fuse_device=True)))
+            (root/"proof/sandbox.json").write_text(json.dumps(dict(returncode=0,signal=None,timed_out=False,stderr_truncated=False,error_class="ok",policy=sandbox.unknown_policy())))
             proof=dict(pid=1234,mount_id=53,filesystem="fuse.CMTrace",payload_root_0755=True)
             for case in contract.CASES:
                 (root/case/"out/fuse.json").write_text(json.dumps([proof,proof]))
-            preflight,cases=collect(root,os.getuid(),output)
+            preflight,cases,_=collect(root,os.getuid(),output)
             self.assertTrue(preflight["offline"])
             self.assertTrue(all(case["reason"]=="evidence-invalid" for case in cases))
 
@@ -267,7 +270,7 @@ class ContractTests(unittest.TestCase):
 
     def test_evidence_rejects_unknown_status_checks_and_freeform_app_text(self):
         clean=self.api("sanitize_case")
-        valid=dict(case="ordinary",status="passed",reason="ok",checks={"fuse":True,"open":True,"find":True,"filter":True,"tail":True,"reopen":True,"exited":True},counts=[3,1,3,4,4])
+        valid=dict(case="ordinary",status="passed",reason="ok",checks={"fuse":True,"open":True,"find":True,"filter":True,"tail":True,"reopen":True,"exited":True},counts=[3,1,3,4,4],diagnostics=dict(contract.diagnostics(),stage="complete",final_image="acceptance"))
         self.assertEqual(clean(valid),valid)
         for change in [dict(reason="secret raw log"),dict(status="maybe"),dict(raw_log="secret"),dict(checks={"fuse":True}),dict(counts=[3,1,3,3,4])]:
             with self.subTest(change=change), self.assertRaises(ValueError): clean({**valid,**change})
