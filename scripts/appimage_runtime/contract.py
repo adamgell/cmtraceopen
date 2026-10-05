@@ -24,7 +24,7 @@ STAGES = frozenset(("preflight", "launch", "open", "ready", "find-open-focus", "
                     "relaunch", "reopen", "final-image", "complete"))
 OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "rows_match",
                           "find_button_visible", "find_input_unique", "find_input_focused",
-                          "find_query_matches", "beta_selected", "match_name", "match_text"))
+                          "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict"))
 
 
 def diagnostics():

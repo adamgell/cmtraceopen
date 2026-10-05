@@ -85,15 +85,19 @@ class Controller:
             self.result["diagnostics"]["elapsed_ms"] = min(300000, max(0, int((time.monotonic() - started) * 1000)))
 
     def walk(self, root):
-        pending, seen = [root], 0
+        for node, _ in self.walk_paths(root):
+            yield node
+
+    def walk_paths(self, root):
+        pending, seen = [(root, ())], 0
         while pending:
-            node = pending.pop()
+            node, parents = pending.pop()
             seen += 1
             if seen > 4000:
                 raise Blocked("accessibility-unavailable")
-            yield node
+            yield node, parents
             try:
-                pending.extend(reversed(list(node)))
+                pending.extend((child, parents + (node,)) for child in reversed(list(node)))
             except Exception as error:
                 raise Blocked("accessibility-unavailable") from error
 
@@ -216,17 +220,64 @@ class Controller:
         self.observe(rows_match=rows_match, beta_selected=selected)
         return selected
 
+    def find_scope(self):
+        entries, closes = [], []
+        for node, parents in self.walk_paths(self.application):
+            if not self.showing(node):
+                continue
+            role = self.role(node)
+            if role == "entry" and "placeholder-text:Find..." in node.getAttributes():
+                entries.append(parents)
+            if role in ("push button", "button") and node.name == "Close find bar":
+                closes.append(parents)
+        if len(entries) != 1 or len(closes) != 1:
+            return []
+        common = None
+        for entry_parent, close_parent in zip(entries[0], closes[0]):
+            if entry_parent is not close_parent:
+                break
+            common = entry_parent
+        # The product's FindBar div maps to section. Refuse an application,
+        # document or broader container that happens to include both controls.
+        if common is None or self.role(common) != "section" or not self.showing(common):
+            return []
+        scoped = list(self.walk_paths(common))
+        buttons, inputs = [], 0
+        for node, _ in scoped:
+            role = self.role(node)
+            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button"):
+                return []
+            if role == "entry":
+                inputs += 1
+            if role in ("push button", "button"):
+                if not self.showing(node):
+                    return []
+                buttons.append(node.name)
+        expected = ["Match case", "Use regular expression", "Previous match", "Next match", "Close find bar"]
+        return scoped if inputs == 1 and sorted(buttons) == sorted(expected) else []
+
     def match_count(self):
         selected = self.beta_selected()
-        names, texts = False, False
-        for node in self.nodes():
-            # FindBar's count span is static text, which WebKit exposes through
-            # the Text interface even when its accessible name is empty.
-            if self.role(node) in ("static", "text") and self.showing(node):
-                names |= re.fullmatch(r"1\s+of\s+1", (node.name or "").strip()) is not None
-                texts |= re.fullmatch(r"1\s+of\s+1", self.direct_text(node).strip()) is not None
-        self.observe(match_name=names, match_text=texts)
-        return selected and (names or texts)
+        query = self.query_matches()
+        scoped = self.find_scope()
+        names, texts, conflict = False, False, False
+        for node, parents in scoped:
+            if any(self.role(parent) in ("entry", "push button", "button") for parent in parents):
+                continue
+            # WebKit ignores ordinary spans/StaticText objects and exposes their
+            # Text on a containing section. Embedded controls use U+FFFC; only
+            # boundary markers/whitespace may be removed, never literal text.
+            if self.role(node) in ("section", "static", "text") and self.showing(node):
+                name = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", node.name or "")
+                text = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", self.direct_text(node))
+                name_match = re.fullmatch(r"1\s+of\s+1", name) is not None
+                text_match = re.fullmatch(r"1\s+of\s+1", text) is not None
+                conflict |= (re.fullmatch(r"\d+\s+of\s+\d+", name) is not None and not name_match
+                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match)
+                names |= name_match
+                texts |= text_match
+        self.observe(find_scope_valid=bool(scoped), match_name=names, match_text=texts, match_conflict=conflict)
+        return selected and query and bool(scoped) and (names or texts) and not conflict
 
     def focused_editable(self):
         for node in self.nodes():

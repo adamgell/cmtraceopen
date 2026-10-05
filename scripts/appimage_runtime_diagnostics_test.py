@@ -57,6 +57,42 @@ class DiagnosticsTests(unittest.TestCase):
         return Node(**(dict(role="entry", attrs=("placeholder-text:Find...",),
                             states=("showing", "focused", "editable"), text=ui.TOKENS[1]) | overrides))
 
+    def bar(self, count=None, text=None):
+        controls = [Node(name, "push button") for name in
+                    ("Match case", "Use regular expression", "Previous match", "Next match", "Close find bar")]
+        return Node(role="section", text=text, children=[self.entry(), *controls] + ([count] if count else []))
+
+    def test_find_count_accepts_scoped_section_text_and_boundary_object_markers(self):
+        for bar in (self.bar(Node(role="section", text="1 of 1")),
+                    self.bar(text="\ufffc 1 of 1 \ufffc\ufffc\ufffc\ufffc\ufffc")):
+            self.assertTrue(self.controller(bar).match_count())
+
+    def test_find_count_rejects_global_decoy_when_local_count_is_wrong(self):
+        controller = self.controller(self.bar(text="0 of 1"), Node(text="1 of 1"))
+        self.assertFalse(controller.match_count())
+
+    def test_find_count_rejects_ambiguous_or_broad_scope_and_unexpected_literal_text(self):
+        for extra in (Node("Close find bar", "push button"), self.entry(), Node("unrelated", "push button"),
+                      Node("Filter", "dialog"), Node("Log entries", "list box")):
+            bar = self.bar(Node(text="1 of 1")); bar.children.append(extra)
+            self.assertFalse(self.controller(bar).match_count())
+        for value in ("0 of 1", "private 1 of 1", "1 of 1 .*", "1\ufffc of 1"):
+            self.assertFalse(self.controller(self.bar(text=value)).match_count())
+        bar = self.bar(Node(text="1 of 1")); bar.children[0].value = "wrong query"
+        self.assertFalse(self.controller(bar).match_count())
+        bar = self.bar(Node(text="1 of 1")); bar.states.clear()
+        self.assertFalse(self.controller(bar).match_count())
+        bar = self.bar(Node(name="1 of 1", text="0 of 1"))
+        self.assertFalse(self.controller(bar).match_count())
+        bar = self.bar(text="0 of 1")
+        bar.children[1].children.append(Node(text="1 of 1"))
+        self.assertFalse(self.controller(bar).match_count())
+        bar = self.bar(Node(text="1 of 1"))
+        self.assertFalse(self.controller(bar, self.entry()).match_count())
+        bar = self.bar(Node(text="1 of 1"))
+        close = bar.children.pop(5)
+        self.assertFalse(self.controller(Node(role="section", children=[bar, close, Node("Log entries", "list box")])).match_count())
+
     def test_ready_waits_for_splash_removal_even_with_visible_fixture_rows(self):
         for splash in (Node(role="section", attrs=("id:splash",), states=()),
                        Node("Log Viewer & Troubleshooting Tool", states=()),
@@ -109,7 +145,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_count_accepts_static_name_or_text_but_requires_beta_and_all_three_rows(self):
         for count in (Node("1 of 1"), Node(text="1 of 1"), Node(role="text", text="1 of 1")):
-            controller = self.controller(count)
+            controller = self.controller(self.bar(count))
             count_matches = self.api(controller, "match_count")
             self.assertTrue(count_matches())
             rows = controller.application.children[0].children
@@ -122,7 +158,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertFalse(count_matches())
         for count in (Node("1 of 1", "push button"), Node("1 of 1", states=()),
                       Node(text="0 of 1"), Node(text="private 1 of 1")):
-            self.assertFalse(self.controller(count).match_count())
+            self.assertFalse(self.controller(self.bar(count)).match_count())
 
     def test_wait_records_exact_stage_elapsed_and_only_boolean_observations(self):
         controller = self.controller(self.entry())
@@ -188,12 +224,13 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_execute_distinguishes_each_find_failure_without_marking_find_passed(self):
         for stage in ("find-open-focus", "find-query", "find-selection", "find-count"):
-            entry = self.entry()
-            controller = self.controller(entry, Node("Close find bar", "push button"), Node("1 of 1"))
+            bar = self.bar(Node("1 of 1"))
+            entry = bar.children[0]
+            controller = self.controller(bar)
             if stage == "find-open-focus": entry.states.discard("focused")
             if stage == "find-query": entry.value = "wrong"
             if stage == "find-selection": controller.application.children[0].children[1].states.discard("selected")
-            if stage == "find-count": controller.application.children[-1].name = "0 of 1"
+            if stage == "find-count": bar.children[-1].name = "0 of 1"
             with tempfile.TemporaryDirectory() as directory:
                 controller.fixture = Path(directory) / "fixture.log"
                 now = [0.0]
