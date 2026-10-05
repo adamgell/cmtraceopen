@@ -122,11 +122,12 @@ jobs:
         run: cargo test
 
       # Default full-feature checks/tests already cover the exporter. Also build
-      # and exercise the actual CLI with the release feature selection. The
-      # process-level tests cover exports and errors without relying on --help.
+      # and exercise the actual CLI with the release feature selection. Include
+      # library tests so Windows helpers gated by cfg(test) compile without Intune.
+      # The process-level tests cover exports and errors without relying on --help.
       - name: Build and smoke the headless event-log exporter
         working-directory: src-tauri
-        run: cargo test --locked --no-default-features --features event-log --test event_log_export_cli
+        run: cargo test --locked --no-default-features --features event-log --lib --test event_log_export_cli
 
       - name: Rust check (lite)
         working-directory: src-tauri
@@ -366,6 +367,18 @@ jobs:
             throw "Evidence collector tests ended with result $($result.Result)."
           }
 
+      - name: Test Windows release signature guard
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
+          $result = Invoke-Pester `
+            -Path "./scripts/verify-windows-release-signatures.Tests.ps1" `
+            -Output Detailed `
+            -PassThru
+          if ($result.Result -ne "Passed") {
+            throw "Signature guard tests ended with result $($result.Result)."
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
 
@@ -423,6 +436,11 @@ jobs:
 
       - name: Clippy Windows ESP paths
         run: cargo clippy --locked -p cmtrace-open --all-targets --all-features -- -D warnings
+
+      # The release exporter enables only event-log. Full-feature builds hide
+      # accidental dependencies on other workloads in Windows-only code.
+      - name: Build and smoke the headless event-log exporter
+        run: cargo test --locked -p cmtrace-open --no-default-features --features event-log --lib --test event_log_export_cli
   build:
     name: Build (${{ matrix.label }})
     needs: [check, frontend, windows-esp]

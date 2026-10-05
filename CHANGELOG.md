@@ -4,13 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [1.6.1]
+## [1.6.2]
 
-Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` and the #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`.
+This release carries forward all product changes from the unpublished 1.6.1 draft: every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` and the #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`. It also includes the exporter and Windows release-verification fixes below.
 
 ### Changed
 
-- **Parser and IPC source compatibility**: The parser source version advances from 0.1.1 at v1.6.0 through 0.2.0 to 0.3.0. Changes include the required `ErrorCodeSpan.outcome` field, caller-supplied DsRegCmd evaluation time, canonical Intune/CCM module paths, the removal of environment expansion from the parser crate and of the timeline error variant, new `ParseResult.modified_unix_ms` / `AggregateParseResult.child_errors` fields for Rust struct constructors, and expanded event/provenance data contracts. Downstream source consumers must update; desktop version 1.6.1 does not publish the parser crate.
+- **Parser and IPC source compatibility**: The parser source version advances from 0.1.1 at v1.6.0 through 0.2.0 to 0.3.0. Changes include the required `ErrorCodeSpan.outcome` field, caller-supplied DsRegCmd evaluation time, canonical Intune/CCM module paths, the removal of environment expansion from the parser crate and of the timeline error variant, new `ParseResult.modified_unix_ms` / `AggregateParseResult.child_errors` fields for Rust struct constructors, and expanded event/provenance data contracts. Downstream source consumers must update; desktop version 1.6.2 does not publish the parser crate.
 - **Observed BGB source contract (#775)**: Record sanitized client-notification evidence and the Simple-framed `BgbServer.log` format for the observed site version. The card remains capture guidance: its keys are unvalidated and the SCCM evidence admission path does not admit this Simple-framed source as supported diagnostic evidence.
 - **Redaction architecture decision (#589)**: Record accepted ADR-004 revision 2 for context-bound publication. The ADR defines later implementation work; this release does not claim that all Intune lanes implement its future contract.
 
@@ -28,6 +28,8 @@ Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168
 - **Configuration Manager and Intune error code coverage (#614)**: The embedded table now resolves every `0x87D…` code published with `Error source: Configuration Manager` and every `0x87D…` code in the Intune app installation error reference: 54 new codes, plus published wording replacing paraphrased text on 9 existing entries (792 codes total).
 
 ### Fixed
+
+- **Standalone Windows Event Log exporter**: Remove the live-query metadata limit's dependency on the separately gated Intune diagnostics module, preserving its 512 KiB bound. Linux and Windows CI now compile library tests and run the exporter CLI tests with only the release's `event-log` feature enabled, catching the feature combination that failed in the 1.6.1 draft build.
 
 - **Linux AppImage launcher permissions**: The npm build commands prepare Tauri's x86_64 AppRun launcher with mode 0755 before AppImage bundling and signing. Debian/RPM-only and executable-only builds leave the launcher cache and network untouched. This addresses the launcher permission denial reported by [AppImage catalog #8206](https://github.com/AppImage/appimage.github.io/pull/8206); Linux library compatibility remains a separate requirement.
 
@@ -49,7 +51,7 @@ Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168
 - **Updater manifest publisher**: The `publish-updater-manifest` job in both release workflows called its local action without checking the repository out first, so it died at load time with `Can't find 'action.yml'` and `latest.json` was never published by that path — the job had never once succeeded. Both callers now check out, and a workflow-contract test fails naming any job that runs a local action without doing so.
 - **The macOS diagnostics tab row is a real tab list**: The strip rendered raw buttons whose active state was a CSS class alone, so a screen reader heard buttons with no indication of which tab was current. It now uses the same tab component as the JAMF workspace, which supplies the tab list and tab roles, `aria-selected`, and arrow-key navigation ([#713](https://github.com/adamgell/cmtraceopen/issues/713)).
 - **Epoch-zero file modification times display as dates**: The source sidebar now distinguishes a genuine modification time of zero from an unavailable timestamp (`null`). This relies on the multi-file loader carrying real file metadata (#662).
-- **Package-manager manifests caught up to 1.6.0 (#625, #690)**: Updated the repository Scoop manifests and Homebrew cask to the existing 1.6.0 artifacts. The Homebrew DMG hash was verified from the downloaded artifact. The 1.6.1 manifest updates need hashes from the final release artifacts.
+- **Package-manager manifests caught up to 1.6.0 (#625, #690)**: Updated the repository Scoop manifests and Homebrew cask to the existing 1.6.0 artifacts. The Homebrew DMG hash was verified from the downloaded artifact. The 1.6.2 manifest updates need hashes from the final release artifacts.
 - **Deployment folder scan is bounded, and says when it was**: The recursive scan behind "analyze deployment folder" now stops at a depth bound, caps collected paths at 5,000 and enumerated entries at 50,000 across the tree, and does not descend a directory symlink, in a synchronous command that previously followed links and had no limit at all. A directory exceeding the remaining entry budget is skipped without selecting an arbitrary prefix; unreadable directories and failures to inspect traversal paths are reported as coverage gaps. Selected logs that cannot be read remain Unknown records. Limitation details retain at most 20 distinct messages and an omission notice, with bounded hash deduplication. Empty incomplete scans are labeled as incomplete in the status bar, counts describe discovered logs, and intake rejects outcome totals that contradict the file records. It also reports which bound it hit, so a partial scan is not presented as the folder's contents: the workspace states "Scan incomplete" with the bounds named, and the status bar marks the count ([#702](https://github.com/adamgell/cmtraceopen/issues/702)).
 - **DsRegCmd export boundary (#556)**: The analysis the workspace receives is now a redacted projection, so the JSON summary, rendered summary and copied status text use the parser's identity masking. This does not resolve the separately held short-identity narrative or raw live-capture bundle issues. The unprojected form is reachable only from `analyze_text_preserving_local_values`, which the rules evaluate against inside the crate.
 - **CBS.log and dism.log zoneless timestamps use the viewer's local zone (#657)**: The servicing prefix is the servicing host's local wall clock with no offset, and both parsers promoted it to UTC. Every epoch consumer — the Time Range header, sorting, and elapsed time — was therefore shifted from the Date/Time column by the machine's offset, and a merged CBS + DISM view could not claim a shared window. The prefix is now resolved through the viewing machine's local zone. A bounded spring-forward gap is clamped to the transition instant to preserve chronological order; a repeated fall-back clock or a gap that cannot be bounded keeps its text without an epoch. A zoneless source does not establish the original machine's timezone. Timezone stance recorded in `references/log-format-reference.md`.
@@ -75,6 +77,8 @@ Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168
 - **Evidence collection and shared text matching (#583, #632, #644)**: Make collection bundle timestamps and identifiers culture-independent. Consolidate caseless matching and group Autopilot distinct values using that shared normalization; retain the existing workload-specific masking rules.
 
 ### Build & CI
+
+- **Windows release signature verification**: Require successful native Windows signature and timestamp verification for each Full/Lite portable EXE, NSIS installer and MSI before attestation and upload. Check the expected publisher and timestamp authority, record source/run/target, SHA-256 and certificate evidence, and reject missing or changed files. Recheck receipt coverage and hashes before both artifact and release uploads. Certificate leaf and timestamp-device rotation remain supported.
 
 - **AppImage build baseline and evidence (#786)**: Build the Linux desktop packages on Ubuntu 22.04 and inspect the AppImage launcher modes, strong GLIBC imports and static versioned dependency closure. Record the final image hash and source/build inputs in an ABI report. Release builds archive the signed AppImage and report after the draft upload so runtime acceptance can use the same bytes; these static checks do not establish runtime compatibility. Native check jobs and the separate Linux exporter retain their existing runner baselines.
 
@@ -105,7 +109,11 @@ Product changes for 1.6.1 include every commit from `v1.6.0` through `beeace2168
 
 - Expected desktop artifacts remain Windows x64 and ARM64 Full/Lite portable EXEs, NSIS installers and MSIs; macOS Apple silicon DMG and app updater archive; and Linux x64 AppImage, DEB and RPM. The exporter adds Windows x64, macOS arm64 and Linux x64 CLI assets; there is no Windows ARM64 exporter asset in the configured matrix.
 - Linux desktop packages use an Ubuntu 22.04 build baseline. Static ABI checks alone do not establish runtime compatibility. Release acceptance requires testing the exact signed AppImage on Ubuntu 22.04 and 24.04.
-- The signed desktop updater requires all eight target entries in `latest.json`. Package-manager catalogs remain on their existing artifacts until verified 1.6.1 hashes are available.
+- The signed desktop updater requires all eight target entries in `latest.json`. Package-manager catalogs remain on their existing artifacts until verified 1.6.2 hashes are available.
+
+## [1.6.1] - Unpublished failed draft
+
+The Windows x64 Event Log exporter failed to compile, leaving the artifact set incomplete. The existing `v1.6.1` tag is retained and its release draft was not published. All planned product changes are included once in 1.6.2 above.
 
 ## [1.6.0] - 2026-09-14
 
