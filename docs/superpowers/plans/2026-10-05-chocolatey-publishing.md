@@ -34,4 +34,4 @@ Local commands: `pwsh -NoProfile -File scripts/chocolatey-package.test.ps1` and 
 
 ## Existing prepared artifact
 
-The separately reviewed `cmtraceopen.1.6.2.nupkg` is already in Adam's Library, 4,555 bytes, SHA256 `4b5fc6b7ddba68a132fd4b336383f64febe7ba3c13c09b854846bf7e586d32f2`. Native `choco pack` can change ZIP/core metadata and its package hash; the MSI digest remains `12166bd88a2e4f4c2faa216dcce950e1b4eedc33f64aed48e171d11e63bc32d2`. This workflow does not replace that Library artifact.
+The separately reviewed `cmtraceopen.1.6.2.nupkg`, with its icon URL corrected to return PNG bytes, is 4,570 bytes, SHA256 `0b1d3f007522ea503675c562978668b765426ac8a45162b6c2c32e0dae166f95`. It replaces the existing Library file without creating a duplicate. Native `choco pack` can change ZIP/core metadata and its package hash; the MSI digest remains `12166bd88a2e4f4c2faa216dcce950e1b4eedc33f64aed48e171d11e63bc32d2`. This workflow does not replace that Library artifact.

@@ -9,7 +9,7 @@
     <requireLicenseAcceptance>true</requireLicenseAcceptance>
     <licenseUrl>https://github.com/adamgell/cmtraceopen/blob/main/LICENSE</licenseUrl>
     <projectUrl>https://github.com/adamgell/cmtraceopen</projectUrl>
-    <iconUrl>https://github.com/adamgell/cmtraceopen/blob/main/logo.png</iconUrl>
+    <iconUrl>https://raw.githubusercontent.com/adamgell/cmtraceopen/main/logo.png</iconUrl>
     <description>A free, open-source log viewer and Windows troubleshooting tool. Drop in a log file and start reading — no install wizards, no prerequisites, no license keys.
 Built as a modern replacement for Microsoft's CMTrace.exe with added Intune diagnostics, DSRegCmd analysis, and real-time log tailing.
 
