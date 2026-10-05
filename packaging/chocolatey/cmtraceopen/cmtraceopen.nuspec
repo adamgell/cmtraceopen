@@ -1,0 +1,51 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>cmtraceopen</id>
+    <version>1.6.2</version>
+    <title>CMTrace Open (Install)</title>
+    <authors>Adam (adamgell)</authors>
+    <owners>Kipjr</owners>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <licenseUrl>https://github.com/adamgell/cmtraceopen/blob/main/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/adamgell/cmtraceopen</projectUrl>
+    <iconUrl>https://github.com/adamgell/cmtraceopen/blob/main/logo.png</iconUrl>
+    <description>A free, open-source log viewer and Windows troubleshooting tool. Drop in a log file and start reading — no install wizards, no prerequisites, no license keys.
+Built as a modern replacement for Microsoft's CMTrace.exe with added Intune diagnostics, DSRegCmd analysis, and real-time log tailing.
+
+# Features
+## Log Viewer
+- Auto-detection — automatically identifies CCM, CBS, DISM, Panther, simple, and plain text log formats
+- Real-time tailing — live file watching with pause/resume
+- Virtual scrolling — smooth performance with 100K+ line files
+- Severity color coding — Errors (red), Warnings (yellow), Info (default)
+- Find and Filter — Ctrl+F search with F3 navigation; filter by message, component, thread, or timestamp
+- Text highlighting — configurable keyword highlighting
+- Error code lookup — 120+ embedded Windows, SCCM, and Intune error codes
+- Flexible input — open files, folders, drag and drop, or use built-in source presets
+- File association — set as default .log file handler on Windows
+
+## Intune Diagnostics Workspace
+Analyze Intune Management Extension logs without reading raw text line by line.
+- Parse a single IME log or an entire IntuneManagementExtension\Logs folder
+- Color-coded event timeline for Win32 apps, WinGet apps, PowerShell scripts, remediations, ESP, and sync sessions
+- Download statistics with size, speed, and Delivery Optimization percentage
+- Summary dashboard with event counts, success/failure rates, and log time span
+- Automatic GUID extraction for app and policy identifiers
+- Issue clustering with suggested next steps
+
+## DSRegCmd Troubleshooting Workspace
+- Triage Entra join, hybrid join, PRT, MDM, and Windows Hello for Business issues.
+- Live capture, paste, text file, or evidence bundle input
+- Join posture, failure stage, and capture confidence at a glance
+- Issue cards with severity, evidence, and suggested fixes
+- Registry-backed Windows Hello for Business policy correlation
+- Export as JSON or summary for case handoff
+- See the DSRegCmd troubleshooting guide for a detailed walkthrough.</description>
+    <summary>An open-source log viewer inspired by Microsoft's CMTrace.exe.</summary>
+    <releaseNotes>https://github.com/adamgell/cmtraceopen/releases</releaseNotes>
+    <tags>cmtraceopen 1.6.2</tags>
+    <projectSourceUrl>https://github.com/adamgell/cmtraceopen</projectSourceUrl>
+    <packageSourceUrl>https://github.com/adamgell/cmtraceopen</packageSourceUrl>
+  </metadata>
+</package>
