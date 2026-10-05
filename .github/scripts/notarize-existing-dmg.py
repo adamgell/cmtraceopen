@@ -22,6 +22,8 @@ UPDATED = '2026-10-05T03:51:18Z'
 CDHASH = '941142b0dd718a98ee2d0e2bfd3bc67434bd6e2c'
 PRODUCER = 37260205745
 WORKFLOW = 'notarize-existing-dmg.yml'
+FAILED_RUN = 37337656143
+FAILED_COMMIT = 'fdfba6caff93d938dcac095b8f6b8c00b44e38e6'
 SECRETS = ('APPLE_ID', 'APPLE_PASSWORD', 'APPLE_TEAM_ID')
 
 
@@ -70,9 +72,12 @@ def command(args, timeout=45, apple=False):
         raise Stop('External operation failed or timed out; inspect retained checkpoints') from None
 
 
-def checked(args, timeout=45):
+def checked(args, timeout=45, operation='Read-only verification'):
     result = command(args, timeout)
-    require(result.returncode == 0, 'Read-only verification failed')
+    if result.returncode != 0:
+        status = re.search(r'\(HTTP ([0-9]{3})\)', result.stderr)
+        http = f', HTTP {status.group(1)}' if status else ''
+        raise Stop(f'{operation} failed (exit {result.returncode}{http})')
     return result.stdout
 
 
@@ -80,7 +85,7 @@ def api(path, paginate=False):
     args = ['gh', 'api']
     if paginate:
         args += ['--paginate', '--slurp']
-    return json.loads(checked(args + [f'repos/{REPO}/{path}']))
+    return json.loads(checked(args + [f'repos/{REPO}/{path}'], operation=f'GitHub API GET {path}'))
 
 
 def validate_release(release):
@@ -121,8 +126,27 @@ def validate_producer(run):
 
 def validate_history(pages, current):
     runs = [r for page in pages for r in page['workflow_runs']]
-    require(any(str(r['id']) == current for r in runs), 'Current workflow run missing')
-    require(all(str(r['id']) == current for r in runs), 'Earlier one-off run exists; inspect it, never resubmit automatically')
+    require(current != str(FAILED_RUN) and len(runs) == 2
+            and {str(r['id']) for r in runs} == {str(FAILED_RUN), current},
+            'Only the reviewed failed run and this one recovery dispatch are permitted')
+
+
+def validate_failed_attempt(run, jobs):
+    require((run['id'], run['workflow_id'], run['head_sha'], run['head_branch'], run['path'],
+             run['event'], run['run_attempt'], run['status'], run['conclusion']) ==
+            (FAILED_RUN, 375531990, FAILED_COMMIT, 'main', f'.github/workflows/{WORKFLOW}',
+             'workflow_dispatch', 1, 'completed', 'failure'), 'Earlier run identity or attempt changed')
+    require(jobs['total_count'] == len(jobs['jobs']) == 1, 'Earlier attempt job inventory changed')
+    job = jobs['jobs'][0]
+    require((job['id'], job['run_id'], job['run_attempt'], job['head_sha'], job['status'], job['conclusion']) ==
+            (111856413194, FAILED_RUN, 1, FAILED_COMMIT, 'completed', 'failure'), 'Earlier job identity changed')
+    for number, name, conclusion in [
+            (3, 'Verify frozen asset and original producer', 'failure'),
+            (4, 'Submit unchanged DMG once and record Apple result', 'skipped'),
+            (5, 'Assess unchanged DMG online', 'skipped')]:
+        steps = [s for s in job['steps'] if s['name'] == name or s['number'] == number]
+        require(len(steps) == 1 and (steps[0]['number'], steps[0]['name'], steps[0]['status'], steps[0]['conclusion']) ==
+                (number, name, 'completed', conclusion), 'Earlier Apple submission was not provably skipped')
 
 
 def validate_attestation(proof):
@@ -139,12 +163,17 @@ def prepare(root):
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     history = api(f'actions/workflows/{WORKFLOW}/runs?per_page=100', True)
     validate_history(history, ctx['run_id'])
+    failed = api(f'actions/runs/{FAILED_RUN}')
+    jobs = api(f'actions/runs/{FAILED_RUN}/attempts/1/jobs?per_page=100')
+    validate_failed_attempt(failed, jobs)
+    write_json(root / 'previous-failed-attempt.json', {'run': failed, 'jobs': jobs})
+    # This hosted-token read must succeed before prepared.json can permit Apple submission.
     release = frozen_remote()
     run = api(f'actions/runs/{PRODUCER}')
     validate_producer(run)
     write_json(root / 'original-producer.json', run)
     write_json(root / 'release-before.json', release)
-    # Bound the download and never run/mount it. The token has read permissions only.
+    # Bound the download and never run/mount it. All GitHub operations remain read-only.
     with (root / NAME).open('xb') as stream:
         result = subprocess.run(['gh', 'api', '-H', 'Accept: application/octet-stream',
                                  f'repos/{REPO}/releases/assets/{ASSET}'],
@@ -268,7 +297,8 @@ if __name__ == '__main__':
         require(len(sys.argv) == 3 and sys.argv[1] in ('prepare', 'submit', 'assess'), 'Expected phase and evidence directory')
         os.umask(0o077)
         {'prepare': prepare, 'submit': submit, 'assess': assess}[sys.argv[1]](Path(sys.argv[2]))
-    except (Stop, ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
+    except (Stop, ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
         # Never print exception repr/traceback: a subprocess exception may carry secrets.
-        print('Recovery stopped. Inspect retained checkpoints; never automatically resubmit.', file=sys.stderr)
+        reason = str(error) if isinstance(error, Stop) else type(error).__name__
+        print(f'Recovery stopped: {reason}. Inspect retained checkpoints; never automatically resubmit.', file=sys.stderr)
         sys.exit(1)
