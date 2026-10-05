@@ -1,12 +1,12 @@
 # Fixed-candidate AppImage runtime acceptance
 
-This manual harness is a separate review surface from product PR #786. It executes only the candidate below, using one standard Ubuntu 22.04 VM and one standard Ubuntu 24.04 VM. Each job has a 20-minute limit (40 runner-minutes total). The first workflow attempt is the only accepted attempt. A second dispatch or rerun requires new authorization.
+This manual harness executes only the signed v1.6.2 draft-release candidate below, using one standard Ubuntu 22.04 VM and one standard Ubuntu 24.04 VM. Each job has a 20-minute limit (40 runner-minutes total). The first workflow attempt is the only accepted attempt. A second dispatch or rerun requires new authorization.
 
 ## Dispatch gate
 
 **Do not dispatch from the draft PR.** The sole integration coordinator must first confirm that the reviewed workflow has reached `main`, that the implementation files are unchanged, and that the artifact below is still available. Review the final harness commit independently and record its full SHA/tree in the handoff. A squash merge is supported by checking exact file content against that reviewed commit, rather than assuming ancestry.
 
-After that explicit confirmation, the authorized operator runs this command **once**, replacing the placeholder with the final reviewed harness commit:
+After that explicit confirmation and the parent's separate instruction bound to the final candidate and harness, the authorized operator runs this command **once**, replacing the placeholder with the final reviewed harness commit:
 
 ```sh
 gh workflow run cmtrace-appimage-runtime.yml \
@@ -20,12 +20,26 @@ Monitor that run to a terminal state. Do not retry a blocked or failed job. Do n
 
 | Binding | Value |
 | --- | --- |
-| Artifact | `11311507149` |
-| Producer run / attempt | `37222916777` / `1` |
-| AppImage SHA256 | `fe80fa10c11b0dbd16198579169a08e4f2ed5ab5e72da876c3ec0197153b9873` |
-| Product source | `0a1bb21add1e7d331d4f4e2a00be8c317240bebf` |
-| Built merge | `9433d28d28db986c0a2204b22cf20a7643d7f3df` |
-| Built tree | `5481bee5fc7f503b075ed6501bc9556db65de76e` |
+| Product tag | `v1.6.2` |
+| Signed tag object | `7d7cb1bec8b372fbaf08845c2ac6bab6668ba6c0` |
+| Artifact / name | `11324800940` / `appimage-abi-Linux-x64` |
+| Producer run / attempt | `37260205745` / `1` |
+| Successful Linux job | `111605638405` |
+| Archive SHA256 | `b512e643397f886fb6bbdc6f52f1124d9b1457bb3fc58f9a757dbe3d6535e3a7` |
+| Inner AppImage path | `appimage/CMTrace Open_1.6.2_amd64.AppImage` |
+| AppImage bytes / SHA256 | `92326392` / `4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2` |
+| ABI report path | `provenance/appimage-abi.json` |
+| ABI report SHA256 | `8f0adfdb637dc41d86cdde426c2c19359738fd664da5517001fa6b0880e6ed59` |
+| Product source | `c142b2294b4d686ecba3286cd42812587ca0a334` |
+| Built commit | `c142b2294b4d686ecba3286cd42812587ca0a334` |
+| Workflow commit | `c142b2294b4d686ecba3286cd42812587ca0a334` |
+| Built tree | `ec6daf5654332ad3c31a08b49b4a9e487338b1c4` |
+| Draft release / AppImage asset | `403346505` / `611409081` |
+| Draft asset name | `CMTrace.Open_1.6.2_amd64.AppImage` |
+| Updater signature asset | `611409180` / `CMTrace.Open_1.6.2_amd64.AppImage.sig` |
+| Updater signature SHA256 | `a5a9a7119edf7861163ca8e875fd83cf004334b437cc29f18614275ebd1408c1` |
+
+The release owner's receipt verified identical AppImage bytes in the draft asset, archive and ABI report, the updater signature's trusted `version:1.6.2` comment, and provenance for producer attempt 1. The successful Linux job does not establish acceptance of the whole release: remaining producer/platform gates and draft publication belong to the release owner. The product tag and candidate bytes remain fixed; this harness does not rebuild or re-sign them. Recheck artifact availability before dispatch.
 
 The supervisor hashes a root-owned copy before execution and checks its producer provenance. It never rebuilds, modifies, extracts, or replaces the candidate.
 

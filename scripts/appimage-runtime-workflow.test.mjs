@@ -22,8 +22,9 @@ test("runtime uses only immutable actions and the fixed artifact with read permi
   const text = workflow();
   assert.match(text, /permissions:\n  contents: read\n  actions: read/);
   assert.doesNotMatch(text, /: write/);
-  assert.match(text, /artifact-ids: '11311507149'/);
-  assert.match(text, /run-id: '37222916777'/);
+  assert.match(text, /artifact-ids: '11324800940'/);
+  assert.match(text, /run-id: '37260205745'/);
+  assert.doesNotMatch(text, /11311507149|37222916777|11320025934|37247506529/);
   assert.match(text, /repository: adamgell\/cmtraceopen/);
   assert.match(text, /persist-credentials: false/);
   const uses = [...text.matchAll(/uses: ([^\n]+)/g)];

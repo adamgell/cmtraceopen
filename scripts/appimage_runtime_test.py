@@ -199,7 +199,9 @@ class ContractTests(unittest.TestCase):
 
     def test_exact_artifact_and_source_binding(self):
         validate = self.api("validate_binding")
-        report = dict(build=dict(source_commit="0a1bb21add1e7d331d4f4e2a00be8c317240bebf", built_commit="9433d28d28db986c0a2204b22cf20a7643d7f3df", built_tree="5481bee5fc7f503b075ed6501bc9556db65de76e", image=dict(GITHUB_RUN_ID="37222916777", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="fe80fa10c11b0dbd16198579169a08e4f2ed5ab5e72da876c3ec0197153b9873"))
+        self.assertEqual(contract.ARTIFACT_ID, 11324800940)
+        self.assertEqual(contract.ARTIFACT_NAME, "CMTrace Open_1.6.2_amd64.AppImage")
+        report = dict(build=dict(source_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_commit="c142b2294b4d686ecba3286cd42812587ca0a334", built_tree="ec6daf5654332ad3c31a08b49b4a9e487338b1c4", image=dict(GITHUB_RUN_ID="37260205745", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="4c0a67bdd369f65fa962b8ca91204c0037a0aee058de07d999007d6749fdb9e2"))
         digest=report["inspection"]["sha256"]
         validate(report, digest)
         for field in ["source_commit", "built_commit", "built_tree"]:
@@ -211,6 +213,16 @@ class ContractTests(unittest.TestCase):
         with self.assertRaises(ValueError): validate(report,"0"*64)
         bad=copy.deepcopy(report); bad["inspection"]["sha256"]="0"*64
         with self.assertRaises(ValueError): validate(bad,digest)
+
+    def test_old_160_candidate_tuple_is_rejected(self):
+        report = dict(build=dict(source_commit="0a1bb21add1e7d331d4f4e2a00be8c317240bebf", built_commit="9433d28d28db986c0a2204b22cf20a7643d7f3df", built_tree="5481bee5fc7f503b075ed6501bc9556db65de76e", image=dict(GITHUB_RUN_ID="37222916777", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="fe80fa10c11b0dbd16198579169a08e4f2ed5ab5e72da876c3ec0197153b9873"))
+        with self.assertRaisesRegex(ValueError, "artifact-mismatch"):
+            self.api("validate_binding")(report, report["inspection"]["sha256"])
+
+    def test_superseded_161_candidate_tuple_is_rejected(self):
+        report = dict(build=dict(source_commit="0f0f012c36b97cc957eb45c573f5eb4af90e20a7", built_commit="0f0f012c36b97cc957eb45c573f5eb4af90e20a7", built_tree="7da062d361b04cfbdd71ebe4824c7795a7319860", image=dict(GITHUB_RUN_ID="37247506529", GITHUB_RUN_ATTEMPT="1")), inspection=dict(sha256="74c3b6bd6b3949e35eb51934ed3ea8b22a3ab558ede106704e7240c4edfa6ecd"))
+        with self.assertRaisesRegex(ValueError, "artifact-mismatch"):
+            self.api("validate_binding")(report, report["inspection"]["sha256"])
 
     def test_network_only_namespace_and_unprivileged_identity(self):
         validate=self.api("validate_identity")
