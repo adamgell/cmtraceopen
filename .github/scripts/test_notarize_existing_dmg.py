@@ -2,10 +2,14 @@
 import copy
 import hashlib
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import runpy
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -131,10 +135,73 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(subprocess, 'run') as run, self.assertRaises(self.m.Stop): self.m.submit(self.root)
         run.assert_not_called()
 
-    def test_any_previous_dispatch_blocks_a_second_upload(self):
-        self.m.validate_history([{'workflow_runs': [{'id': 12345}]}], '12345')
-        for pages in [[], [{'workflow_runs': [{'id': 12345}]}, {'workflow_runs': [{'id': 12344}]}]]:
+    def test_only_the_exact_failed_dispatch_is_exempt_from_history(self):
+        self.m.validate_history([{'workflow_runs': [{'id': 37337656143}, {'id': 12345}]}], '12345')
+        for ids in [[], [12345], [37337656143], [12345, 12344], [37337656143, 12345, 12344],
+                    [37337656143, 12345, 12345]]:
+            pages = [{'workflow_runs': [{'id': value} for value in ids]}]
             with self.assertRaises(self.m.Stop): self.m.validate_history(pages, '12345')
+        with self.assertRaises(self.m.Stop):
+            self.m.validate_history([{'workflow_runs': [{'id': 37337656143}]}], '37337656143')
+
+    def failed_attempt(self):
+        run = {'id': 37337656143, 'workflow_id': 375531990,
+               'head_sha': 'fdfba6caff93d938dcac095b8f6b8c00b44e38e6', 'head_branch': 'main',
+               'path': '.github/workflows/notarize-existing-dmg.yml', 'event': 'workflow_dispatch',
+               'run_attempt': 1, 'status': 'completed', 'conclusion': 'failure'}
+        job = {'id': 111856413194, 'run_id': run['id'], 'run_attempt': 1,
+               'head_sha': run['head_sha'], 'status': 'completed', 'conclusion': 'failure',
+               'steps': [{'name': name, 'number': number, 'status': 'completed', 'conclusion': result}
+                         for number, name, result in [
+                             (3, 'Verify frozen asset and original producer', 'failure'),
+                             (4, 'Submit unchanged DMG once and record Apple result', 'skipped'),
+                             (5, 'Assess unchanged DMG online', 'skipped')]]}
+        return run, {'total_count': 1, 'jobs': [job]}
+
+    def test_failed_attempt_exception_requires_exact_identity_and_skipped_submit(self):
+        run, jobs = self.failed_attempt()
+        self.m.validate_failed_attempt(run, jobs)
+        for key, value in [('id', 1), ('workflow_id', 1), ('head_sha', 'b' * 40),
+                           ('path', 'other.yml'), ('head_branch', 'other'), ('event', 'push'),
+                           ('run_attempt', 2), ('status', 'in_progress'), ('conclusion', 'success')]:
+            with self.subTest(key=key), self.assertRaises(self.m.Stop):
+                self.m.validate_failed_attempt({**run, key: value}, jobs)
+        for key, value in [('id', 1), ('run_id', 1), ('run_attempt', 2), ('head_sha', 'b' * 40),
+                           ('status', 'in_progress'), ('conclusion', 'success')]:
+            bad = copy.deepcopy(jobs); bad['jobs'][0][key] = value
+            with self.subTest(job_key=key), self.assertRaises(self.m.Stop):
+                self.m.validate_failed_attempt(run, bad)
+        for status in ['success', 'failure', 'cancelled', None]:
+            bad = copy.deepcopy(jobs); bad['jobs'][0]['steps'][1]['conclusion'] = status
+            with self.subTest(submit=status), self.assertRaises(self.m.Stop):
+                self.m.validate_failed_attempt(run, bad)
+        for bad in [{'total_count': 0, 'jobs': []}, {'total_count': 2, 'jobs': jobs['jobs'] * 2}]:
+            with self.assertRaises(self.m.Stop): self.m.validate_failed_attempt(run, bad)
+        for steps in [jobs['jobs'][0]['steps'][:1], jobs['jobs'][0]['steps'] * 2]:
+            bad = copy.deepcopy(jobs); bad['jobs'][0]['steps'] = steps
+            with self.assertRaises(self.m.Stop): self.m.validate_failed_attempt(run, bad)
+
+    def test_failed_draft_read_blocks_prepare_and_submit(self):
+        run, jobs = self.failed_attempt()
+        calls = []
+        def github(path, paginate=False):
+            calls.append(path)
+            if path.startswith('actions/workflows/'):
+                return [{'workflow_runs': [{'id': 37337656143}, {'id': 12345}]}]
+            if path == 'actions/runs/37337656143': return run
+            if path == 'actions/runs/37337656143/attempts/1/jobs?per_page=100': return jobs
+            if path == 'git/ref/tags/v1.6.2': return {'object': {'sha': self.m.TAG_OBJECT}}
+            if path.startswith('git/tags/'): return {'object': {'sha': self.m.SOURCE}}
+            if path == 'releases/403346505': raise self.m.Stop('GitHub API GET releases/403346505 failed (exit 1, HTTP 404)')
+            self.fail('unexpected GitHub request: ' + path)
+        target = self.root / 'notarization'
+        with patch.object(self.m, 'api', side_effect=github), patch.object(subprocess, 'run') as external:
+            with self.assertRaisesRegex(self.m.Stop, 'HTTP 404'): self.m.prepare(target)
+            with self.assertRaises(FileNotFoundError): self.m.submit(target)
+            external.assert_not_called()
+        self.assertEqual(calls[-1], 'releases/403346505')
+        self.assertFalse((target / 'prepared.json').exists())
+        self.assertFalse((target / 'submission-intent.json').exists())
 
     def test_producer_requires_original_source_event_attempt_and_success(self):
         run = {'id': self.m.PRODUCER, 'head_sha': self.m.SOURCE, 'head_branch': self.m.TAG,
@@ -202,6 +269,34 @@ class RecoveryTests(unittest.TestCase):
             args = run.call_args.args[0]
             self.assertIn('--ignore-cache', args)
             self.assertIn('--no-cache', args)
+
+    def test_failed_api_identifies_request_exit_and_http_without_raw_stderr(self):
+        with patch.object(subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 1, '', 'gh: Not Found (HTTP 404) secret-do-not-retain')
+            with self.assertRaises(self.m.Stop) as caught:
+                self.m.api('releases/403346505')
+        self.assertEqual(str(caught.exception), 'GitHub API GET releases/403346505 failed (exit 1, HTTP 404)')
+        self.assertNotIn('secret-do-not-retain', str(caught.exception))
+
+    def test_prepare_cli_reports_safe_failure_reason_before_first_checkpoint(self):
+        cases = [(1, '', 'gh: Forbidden (HTTP 403) secret-do-not-retain',
+                  'GitHub API GET actions/workflows/notarize-existing-dmg.yml/runs?per_page=100 failed (exit 1, HTTP 403)'),
+                 (0, 'secret-do-not-retain', '', 'JSONDecodeError')]
+        for code, stdout, stderr, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / 'notarization'
+                capture = io.StringIO()
+                with patch.object(sys, 'argv', [str(SCRIPT), 'prepare', str(target)]), \
+                     patch.object(subprocess, 'run') as run, contextlib.redirect_stderr(capture):
+                    run.return_value = subprocess.CompletedProcess([], code, stdout, stderr)
+                    with self.assertRaises(SystemExit) as caught:
+                        runpy.run_path(str(SCRIPT), run_name='__main__')
+                self.assertEqual(caught.exception.code, 1)
+                self.assertIn(expected, capture.getvalue())
+                self.assertNotIn('secret-do-not-retain', capture.getvalue())
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.args[0][:2], ['gh', 'api'])
+                self.assertEqual(list(target.glob('*.json')), [])
 
 
 if __name__ == '__main__':
