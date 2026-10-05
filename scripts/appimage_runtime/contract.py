@@ -19,6 +19,29 @@ REASONS = frozenset(("ok", "isolation-unavailable", "bubblewrap-unavailable",
                      "fuse-unavailable", "accessibility-unavailable", "gui-unavailable",
                      "application-exited", "ui-assertion", "timeout", "cancelled",
                      "evidence-invalid", "artifact-mismatch", "harness-error"))
+STAGES = frozenset(("unobserved", "preflight", "launch", "open", "ready", "find-open-focus", "find-query",
+                    "find-selection", "find-count", "filter", "clear-filter", "tail", "exit",
+                    "relaunch", "reopen", "final-image", "complete"))
+OBSERVATIONS = frozenset(("splash_absent", "window_active", "window_stable", "rows_match",
+                          "find_button_visible", "find_input_unique", "find_input_focused",
+                          "find_query_matches", "beta_selected", "find_scope_valid", "match_name", "match_text", "match_conflict"))
+
+
+def diagnostics():
+    return dict(stage="unobserved", elapsed_ms=0, observations={}, final_image="absent")
+
+
+def sanitize_diagnostics(data):
+    if not isinstance(data, dict) or set(data) != {"stage", "elapsed_ms", "observations", "final_image"}:
+        raise ValueError("evidence-invalid")
+    if data["stage"] not in STAGES or type(data["elapsed_ms"]) is not int or not 0 <= data["elapsed_ms"] <= 300000:
+        raise ValueError("evidence-invalid")
+    observations = data["observations"]
+    if (not isinstance(observations, dict) or not set(observations) <= OBSERVATIONS
+            or any(type(value) is not bool for value in observations.values())
+            or data["final_image"] not in ("absent", "acceptance", "failure")):
+        raise ValueError("evidence-invalid")
+    return dict(data, observations=dict(observations))
 
 
 def namespace_command(uid, gid, root):
@@ -130,7 +153,7 @@ def validate_rows(rows, expected):
 
 
 def sanitize_case(data):
-    if set(data) != {"case", "status", "reason", "checks", "counts"}:
+    if set(data) != {"case", "status", "reason", "checks", "counts", "diagnostics"}:
         raise ValueError("evidence-invalid")
     if data["case"] not in CASES or data["status"] not in ("passed", "blocked", "failed") or data["reason"] not in REASONS:
         raise ValueError("evidence-invalid")
@@ -143,7 +166,12 @@ def sanitize_case(data):
         raise ValueError("evidence-invalid")
     if data["status"] != "passed" and data["reason"] == "ok":
         raise ValueError("evidence-invalid")
-    return {"case": data["case"], "status": data["status"], "reason": data["reason"], "checks": dict(checks), "counts": list(counts)}
+    diagnostic = sanitize_diagnostics(data["diagnostics"])
+    if data["status"] == "passed" and (diagnostic["stage"] != "complete" or diagnostic["final_image"] != "acceptance"):
+        raise ValueError("evidence-invalid")
+    if data["status"] != "passed" and diagnostic["final_image"] == "acceptance":
+        raise ValueError("evidence-invalid")
+    return dict(case=data["case"], status=data["status"], reason=data["reason"], checks=dict(checks), counts=list(counts), diagnostics=diagnostic)
 
 
 def validate_payload(payload):

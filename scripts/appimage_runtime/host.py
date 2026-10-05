@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-from . import contract, processes
+from . import contract, processes, sandbox
 from .session import blocked, namespaces, status
 
 ACCOUNT = "cmtrace-runtime-probe"
@@ -107,19 +107,30 @@ def collect(root, uid, output):
     expected = dict(identity=True, offline=True, bubblewrap=True, fuse_device=True)
     if preflight != expected:
         preflight = {}
+    try:
+        sandbox_proof = sandbox.sanitize(json.loads(contract.read_owned_file(root / "proof/sandbox.json", uid, 4096)))
+    except (OSError, ValueError, TypeError, KeyError):
+        sandbox_proof = None
     cases, images, size = [], {}, 65536  # Reserve space for the bounded summary.
     for case in contract.CASES:
         area = root / case / "out"
         try:
             data = contract.sanitize_case(json.loads(contract.read_owned_file(area / "result.json", uid, 4096)))
-            if data["checks"] and preflight != expected:
+            if data["checks"] and (preflight != expected or sandbox_proof is None or sandbox_proof["error_class"] != "ok"):
                 raise ValueError("evidence-invalid")
             passed = data["status"] == "passed"
             proofs = []
             if (area / "fuse.json").exists():
                 proofs = json.loads(contract.read_owned_file(area / "fuse.json", uid, 4096))
             data["fuse_observations"] = contract.sanitize_fuse(proofs, passed)
+            claimed_final = data["diagnostics"]["final_image"] != "absent"
+            if claimed_final and not (area / "final.png").exists():
+                raise ValueError("evidence-invalid")
             for phase in ("initial", "final"):
+                # Failed capture cleanup can leave stale or partial bytes. An
+                # unclaimed final image is never read or uploaded.
+                if phase == "final" and not claimed_final:
+                    continue
                 path = area / f"{phase}.png"
                 if not path.exists():
                     if passed:
@@ -136,7 +147,7 @@ def collect(root, uid, output):
         cases.append(data)
     for name, data in images.items():
         (output / name).write_bytes(data)
-    return preflight, cases
+    return preflight, cases, sandbox_proof
 
 
 def main(artifact_dir, output, harness_sha):
@@ -189,7 +200,7 @@ def main(artifact_dir, output, harness_sha):
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         process.wait(timeout=660)
         kill_owned(uid)
-        summary["preflight"], summary["cases"] = collect(root, uid, output)
+        summary["preflight"], summary["cases"], summary["sandbox"] = collect(root, uid, output)
     except (Exception, KeyboardInterrupt) as error:
         reason = str(error) if str(error) in contract.REASONS else ("timeout" if isinstance(error, subprocess.TimeoutExpired) else "harness-error")
         summary["cases"] = [blocked(case, reason) for case in contract.CASES]

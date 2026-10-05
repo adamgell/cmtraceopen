@@ -10,7 +10,7 @@ import time
 import uuid
 
 from . import contract
-from .session import status
+from .session import blocked, status
 
 TOKENS = ["JAMMY_OPEN_ALPHA", "JAMMY_FIND_BETA", "JAMMY_FILTER_GAMMA"]
 
@@ -64,21 +64,40 @@ class Controller:
         self.root, self.case, self.atspi = root, case, atspi
         self.area = root / case
         self.out = self.area / "out"
-        self.result = dict(case=case, status="blocked", reason="harness-error", checks={}, counts=[])
+        self.result = blocked(case, "harness-error")
         self.proofs = []
         self.app, self.application, self.window = None, None, None
         self.fixture = self.area / "data/runtime-fixture.log"
+        self._window_sample = None
+
+    def stage(self, name):
+        self.result["diagnostics"].update(stage=name, elapsed_ms=0, observations={})
+
+    def observe(self, **facts):
+        self.result["diagnostics"]["observations"].update(facts)
+
+    def wait(self, stage, predicate, seconds=30, **kwargs):
+        self.stage(stage)
+        started = time.monotonic()
+        try:
+            return poll(predicate, seconds, **kwargs)
+        finally:
+            self.result["diagnostics"]["elapsed_ms"] = min(300000, max(0, int((time.monotonic() - started) * 1000)))
 
     def walk(self, root):
-        pending, seen = [root], 0
+        for node, _ in self.walk_paths(root):
+            yield node
+
+    def walk_paths(self, root):
+        pending, seen = [(root, ())], 0
         while pending:
-            node = pending.pop()
+            node, parents = pending.pop()
             seen += 1
             if seen > 4000:
                 raise Blocked("accessibility-unavailable")
-            yield node
+            yield node, parents
             try:
-                pending.extend(reversed(list(node)))
+                pending.extend((child, parents + (node,)) for child in reversed(list(node)))
             except Exception as error:
                 raise Blocked("accessibility-unavailable") from error
 
@@ -126,6 +145,145 @@ class Controller:
         self.result["counts"].append(len(rows))
         return rows
 
+    def direct_text(self, node):
+        try:
+            text = node.queryText()
+            if text.characterCount > 10000:
+                raise Blocked("accessibility-unavailable")
+            return text.getText(0, -1)
+        except NotImplementedError:
+            return ""
+
+    def window_geometry(self):
+        active = subprocess.check_output(["xdotool", "getactivewindow"], text=True, timeout=5, stderr=subprocess.DEVNULL).strip()
+        if active != self.window:
+            return None
+        output = subprocess.check_output(["xdotool", "getwindowgeometry", "--shell", self.window], text=True, timeout=5, stderr=subprocess.DEVNULL)
+        fields = dict(line.split("=", 1) for line in output.splitlines())
+        window, x, y, width, height = (int(fields[key]) for key in ("WINDOW", "X", "Y", "WIDTH", "HEIGHT"))
+        if window != int(self.window) or (width, height) != (1100, 780) or x < 0 or y < 0 or x + width > 1280 or y + height > 900:
+            return None
+        return window, x, y, width, height
+
+    def ready(self, expected):
+        # index.html's overlay remains in the tree during the 500 ms fade.
+        # STATE_SHOWING alone does not prove that underlying rows are unobscured.
+        splash = any("id:splash" in node.getAttributes()
+                     or node.name == "Log Viewer & Troubleshooting Tool"
+                     or (self.role(node) in ("static", "text") and self.direct_text(node) == "Log Viewer & Troubleshooting Tool")
+                     or (self.role(node) == "image" and node.name == "CMTrace Open") for node in self.nodes())
+        geometry = self.window_geometry()
+        rows_match = True
+        if expected is not None:
+            try:
+                contract.validate_rows(self.rows(), expected)
+            except (ValueError, LookupError):
+                rows_match = False
+        stable = geometry is not None and geometry == self._window_sample
+        self.observe(splash_absent=not splash, window_active=geometry is not None,
+                     window_stable=stable, rows_match=rows_match)
+        self._window_sample = geometry if not splash and rows_match else None
+        return not splash and rows_match and stable
+
+    def find_input(self):
+        # WebKit exposes HTML input[type=text] as entry, with placeholder-text.
+        candidates = [node for node in self.nodes() if self.role(node) == "entry"
+                      and "placeholder-text:Find..." in node.getAttributes() and self.showing(node)]
+        unique = len(candidates) == 1
+        focused = unique and all(candidates[0].getState().contains(state)
+                                 for state in (self.atspi.STATE_FOCUSED, self.atspi.STATE_EDITABLE))
+        self.observe(find_input_unique=unique, find_input_focused=focused)
+        return candidates[0] if focused else None
+
+    def find_open(self):
+        visible = self.find("Close find bar", {"push button", "button"}) is not None
+        self.observe(find_button_visible=visible)
+        intended = self.find_input()
+        return visible and intended is not None
+
+    def query_matches(self):
+        node = self.find_input()
+        matches = node is not None and self.direct_text(node) == TOKENS[1]
+        self.observe(find_query_matches=matches)
+        return matches
+
+    def beta_selected(self):
+        rows_match, selected = False, False
+        try:
+            rows = self.rows()
+            contract.validate_rows(rows, TOKENS)
+            rows_match = True
+            contract.validate_rows([row for row in rows if row["selected"]], [TOKENS[1]])
+            selected = True
+        except (ValueError, LookupError):
+            pass
+        self.observe(rows_match=rows_match, beta_selected=selected)
+        return selected
+
+    def find_scope(self):
+        entries, closes = [], []
+        for node, parents in self.walk_paths(self.application):
+            if not self.showing(node):
+                continue
+            role = self.role(node)
+            if role == "entry" and "placeholder-text:Find..." in node.getAttributes():
+                entries.append(parents)
+            if role in ("push button", "button") and node.name == "Close find bar":
+                closes.append(parents)
+        if len(entries) != 1 or len(closes) != 1:
+            return []
+        common = None
+        for entry_parent, close_parent in zip(entries[0], closes[0]):
+            if entry_parent is not close_parent:
+                break
+            common = entry_parent
+        # The product's FindBar div maps to section. Refuse an application,
+        # document or broader container that happens to include both controls.
+        if common is None or self.role(common) != "section" or not self.showing(common):
+            return []
+        scoped = list(self.walk_paths(common))
+        buttons, inputs = [], 0
+        expected = {"Match case": {"toggle button"}, "Use regular expression": {"toggle button"},
+                    "Previous match": {"push button", "button"}, "Next match": {"push button", "button"},
+                    "Close find bar": {"push button", "button"}}
+        for node, _ in scoped:
+            role = self.role(node)
+            if role not in ("section", "static", "text", "image", "separator", "entry", "push button", "button", "toggle button"):
+                return []
+            if role == "entry":
+                inputs += 1
+            if role in ("push button", "button", "toggle button"):
+                if not self.showing(node) or role not in expected.get(node.name, set()):
+                    return []
+                buttons.append(node.name)
+        return scoped if inputs == 1 and sorted(buttons) == sorted(expected) else []
+
+    def match_count(self):
+        selected = self.beta_selected()
+        query = self.query_matches()
+        scoped = self.find_scope()
+        names, texts, conflict = False, False, False
+        for node, parents in scoped:
+            if any(self.role(parent) in ("entry", "push button", "button", "toggle button") for parent in parents):
+                continue
+            # WebKit ignores ordinary spans/StaticText objects and exposes their
+            # Text on a containing section. Embedded controls use U+FFFC; only
+            # boundary markers/whitespace may be removed, never literal text.
+            if self.role(node) in ("section", "static", "text") and self.showing(node):
+                name = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", node.name or "")
+                text = re.sub(r"^[\s\ufffc]+|[\s\ufffc]+$", "", self.direct_text(node))
+                name_match = re.fullmatch(r"1\s+of\s+1", name) is not None
+                text_match = re.fullmatch(r"1\s+of\s+1", text) is not None
+                conflict |= (re.fullmatch(r"\d+\s+of\s+\d+", name) is not None and not name_match
+                             or re.fullmatch(r"\d+\s+of\s+\d+", text) is not None and not text_match
+                             or name in ("No results", "Invalid regex") or text in ("No results", "Invalid regex")
+                             or name_match and bool(text) and not text_match)
+                # A name cannot override this object's nonempty Text value.
+                names |= name_match and not text
+                texts |= text_match
+        self.observe(find_scope_valid=bool(scoped), match_name=names, match_text=texts, match_conflict=conflict)
+        return selected and query and bool(scoped) and (names or texts) and not conflict
+
     def focused_editable(self):
         for node in self.nodes():
             state = node.getState()
@@ -163,6 +321,7 @@ class Controller:
 
     def launch(self, with_file):
         self.application = None
+        self._window_sample = None
         self.app = subprocess.Popen(["/usr/bin/python3", "-m", "appimage_runtime.processes",
                                      str(self.root / "candidate.AppImage")] + ([str(self.fixture)] if with_file else []),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -192,7 +351,22 @@ class Controller:
     def screenshot(self, phase):
         command(["import", "-window", self.window, str(self.out / f"{phase}.png")])
 
+    def capture_failure(self):
+        self.result["diagnostics"]["final_image"] = "absent"
+        try:
+            (self.out / "final.png").unlink(missing_ok=True)
+            if self.window is not None:
+                self.screenshot("final")
+                self.result["diagnostics"]["final_image"] = "failure"
+        except Exception:
+            # Best-effort evidence must not replace the original assertion.
+            try:
+                (self.out / "final.png").unlink(missing_ok=True)
+            except OSError:
+                pass
+
     def exit_app(self):
+        self.stage("exit")
         command(["xdotool", "windowactivate", "--sync", self.window])
         # IceWM sends the normal WM_DELETE_WINDOW request; no kill is accepted as exit evidence.
         key("alt+F4")
@@ -206,22 +380,24 @@ class Controller:
 
     def execute(self):
         self.fixture.write_text("".join(fixture_line(token, i) for i, token in enumerate(TOKENS, 1)))
+        self.stage("launch")
         self.launch(True)
+        self.stage("open")
         self.expect_rows(TOKENS)
         self.result["checks"]["open"] = True
+        self.wait("ready", lambda: self.ready(TOKENS))
         self.screenshot("initial")
+        self.stage("find-open-focus")
         key("ctrl+f")
-        poll(lambda: self.find("Close find bar", {"push button", "button"}) and self.focused_editable())
+        self.wait("find-open-focus", self.find_open)
+        self.stage("find-query")
         type_text(TOKENS[1])
+        self.wait("find-query", self.query_matches)
         key("Return")
-        def found_beta():
-            rows = self.rows()
-            contract.validate_rows(rows, TOKENS)
-            selected = [row for row in rows if row["selected"]]
-            contract.validate_rows(selected, [TOKENS[1]])
-            return any(re.fullmatch(r"1\s+of\s+1", (node.name or "").strip()) for node in self.nodes())
-        poll(found_beta)
+        self.wait("find-selection", self.beta_selected)
+        self.wait("find-count", self.match_count)
         self.result["checks"]["find"] = True
+        self.stage("filter")
         self.click("Close find bar")
         key("ctrl+shift+l")
         poll(lambda: self.find("Filter", {"dialog"}) and self.focused_editable())
@@ -229,10 +405,12 @@ class Controller:
         self.click("Apply")
         self.expect_rows([TOKENS[2]])
         self.result["checks"]["filter"] = True
+        self.stage("clear-filter")
         key("ctrl+shift+l")
         poll(lambda: self.find("Filter", {"dialog"}))
         self.click("Clear Filter")
         self.expect_rows(TOKENS)
+        self.stage("tail")
         delta = "JAMMY_TAIL_DELTA_" + uuid.uuid4().hex.upper()
         with self.fixture.open("a") as fixture:
             fixture.write(fixture_line(delta, 4))
@@ -242,7 +420,10 @@ class Controller:
         self.expect_rows(expected, 15)
         self.result["checks"]["tail"] = True
         self.exit_app()
+        self.stage("relaunch")
         self.launch(False)
+        self.wait("ready", lambda: self.ready(None))
+        self.stage("reopen")
         key("ctrl+o")
         poll(lambda: any(self.role(node) in ("file chooser", "dialog") and self.showing(node) for node in self.nodes()))
         key("ctrl+l")
@@ -251,10 +432,13 @@ class Controller:
         key("Return")
         self.expect_rows(expected)
         self.result["checks"]["reopen"] = True
+        self.stage("final-image")
         self.screenshot("final")
+        self.result["diagnostics"]["final_image"] = "acceptance"
         self.exit_app()
         self.result["checks"]["exited"] = True
         self.result.update(status="passed", reason="ok")
+        self.stage("complete")
 
 
 def main(root, case):
@@ -268,7 +452,7 @@ def main(root, case):
         controller.execute()
     except Exception as error:
         if controller is None:
-            result = dict(case=case, status="blocked", reason="accessibility-unavailable", checks={}, counts=[])
+            result = blocked(case, "accessibility-unavailable")
         else:
             result = controller.result
             if isinstance(error, Blocked):
@@ -277,6 +461,7 @@ def main(root, case):
                 result.update(status="failed", reason="ui-assertion")
             else:
                 result.update(status="blocked", reason="harness-error")
+            controller.capture_failure()
     else:
         result = controller.result
     area = root / case / "out"

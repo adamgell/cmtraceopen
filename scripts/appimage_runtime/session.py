@@ -8,7 +8,7 @@ import stat
 import subprocess
 import sys
 
-from . import contract
+from . import contract, sandbox
 
 
 def query(args):
@@ -24,10 +24,10 @@ def namespaces():
 
 
 def blocked(case, reason):
-    return dict(case=case, status="blocked", reason=reason, checks={}, counts=[])
+    return dict(case=case, status="blocked", reason=reason, checks={}, counts=[], diagnostics=contract.diagnostics())
 
 
-def preflight(context):
+def preflight(context, root):
     routes = json.loads(query(["ip", "-j", "route", "show", "table", "all"]))
     routes += json.loads(query(["ip", "-j", "-6", "route", "show", "table", "all"]))
     contract.validate_identity(status(), context["uid"], context["gid"], context["namespaces"],
@@ -36,8 +36,9 @@ def preflight(context):
         raise ValueError("isolation-unavailable")
     if os.access("/var/run/docker.sock", os.W_OK):
         raise ValueError("isolation-unavailable")
-    if subprocess.run(["/usr/bin/bwrap", "--ro-bind", "/", "/", "--", "/usr/bin/true"],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode:
+    proof = sandbox.probe()
+    (root / "proof/sandbox.json").write_text(json.dumps(proof))
+    if proof["error_class"] != "ok":
         raise ValueError("bubblewrap-unavailable")
     if not stat.S_ISCHR(os.stat("/dev/fuse").st_mode) or not os.access("/dev/fuse", os.R_OK | os.W_OK):
         raise ValueError("fuse-unavailable")
@@ -46,11 +47,13 @@ def preflight(context):
 def main(root):
     context = json.loads((root / "context.json").read_text())
     try:
-        preflight(context)
+        preflight(context, root)
     except Exception as error:
         reason = str(error) if str(error) in contract.REASONS else "isolation-unavailable"
         for case in contract.CASES:
-            (root / case / "out/result.json").write_text(json.dumps(blocked(case, reason)))
+            result = blocked(case, reason)
+            result["diagnostics"]["stage"] = "preflight"
+            (root / case / "out/result.json").write_text(json.dumps(result))
         return 1
     (root / "proof/preflight.json").write_text(json.dumps({"identity": True, "offline": True, "bubblewrap": True, "fuse_device": True}))
     for case in contract.CASES:
