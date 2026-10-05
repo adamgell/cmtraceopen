@@ -12,6 +12,10 @@ on:
         description: "Submit manifests to microsoft/winget-pkgs"
         type: boolean
         default: true
+      diagnostic_only:
+        description: "Read credential/fork metadata only; never generate or submit manifests"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -21,6 +25,7 @@ concurrency:
 
 jobs:
   winget:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
     name: Update winget package
     runs-on: windows-latest
     environment: release
@@ -132,3 +137,21 @@ jobs:
 
           komac submit $manifest.Directory.FullName --yes
           if ($LASTEXITCODE -ne 0) { throw "komac submit failed with exit code $LASTEXITCODE" }
+
+  diagnose-access:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_only }}
+    name: Diagnose winget access (read only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read authenticated identity and fork permissions
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
+        run: python3 .github/scripts/winget_access_diagnostic.py
