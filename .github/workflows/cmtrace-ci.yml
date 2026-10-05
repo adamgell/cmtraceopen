@@ -272,6 +272,13 @@ jobs:
           .github/scripts/source-quality-workflow.test.mjs
           .github/scripts/changed-range.test.mjs
 
+      - name: AppImage runtime harness contract tests
+        run: |
+          node --test scripts/appimage-runtime-workflow.test.mjs
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y python3-pil
+          /usr/bin/python3 scripts/appimage_runtime_test.py
+
       - name: QA tracker citation tests
         run: node --test scripts/ci-qa-citations.test.mjs
 
