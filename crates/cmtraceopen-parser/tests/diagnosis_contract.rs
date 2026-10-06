@@ -5,14 +5,16 @@ use cmtraceopen_parser::diagnosis::{
     CorrelationBasis, CorrelationEdge, CorrelationStatus, CoverageState, EventEvidenceRef,
     EvidenceRef, FindingClass, TextLogEvidenceRef,
 };
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::apps::windows::ime::models::{
+    EventLogChannel, EventLogEntry, EventLogSeverity,
+};
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspDiagnosticFinding, EspEvidenceRef, EspFindingConfidence, EspFindingSeverity,
 };
 use cmtraceopen_parser::intune::evidence::IntuneEvidenceRef;
 use cmtraceopen_parser::intune::evidence::{
     IntuneFinding, IntuneFindingConfidence, IntuneFindingSeverity,
 };
-use cmtraceopen_parser::intune::models::{EventLogChannel, EventLogEntry, EventLogSeverity};
 use cmtraceopen_parser::models::log_entry::{LogEntry, Severity};
 use cmtraceopen_parser::sccm::SccmEvidenceRef;
 

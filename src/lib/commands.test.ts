@@ -184,7 +184,7 @@ describe("event export session IPC response validation", () => {
 });
 
 describe("parse and folder IPC response validation", () => {
-  it("preserves valid parser and folder responses", async () => {
+  it.each([null, 0, 1_700_000_000_000])("preserves modified time %s in valid parser and folder responses", async (modifiedUnixMs) => {
     const parseResult = {
       entries: [
         {
@@ -217,6 +217,7 @@ describe("parse and folder IPC response validation", () => {
       parseErrors: 0,
       filePath: "C:\\Logs\\App.log",
       fileSize: 0,
+      modifiedUnixMs,
       byteOffset: 0,
     };
     const folderListing = {
@@ -244,6 +245,13 @@ describe("parse and folder IPC response validation", () => {
       completedOffset: 0,
     });
     await expect(listLogFolder("C:\\Logs")).resolves.toEqual(folderListing);
+
+    for (const invalidTime of [undefined, "unknown", NaN, Infinity]) {
+      vi.mocked(invoke).mockResolvedValueOnce({ ...parseResult, modifiedUnixMs: invalidTime });
+      await expect(openLogFile("C:\\Logs\\App.log")).rejects.toThrow(
+        "Command 'open_log_file' returned an invalid response.",
+      );
+    }
   });
 
   it("rejects malformed parser and folder responses", async () => {
@@ -569,6 +577,7 @@ describe("SCCM product-path IPC boundary", () => {
     const discovery = {
       supported: true,
       configmgrVersion: null,
+      siteVersion: "5.00.9141.1000",
       roles: [],
       sources: [],
       issues: [],
@@ -606,6 +615,28 @@ describe("SCCM product-path IPC boundary", () => {
     expect(invoke).toHaveBeenNthCalledWith(3, "reveal_in_file_manager", {
       path: capture.bundleRoot,
     });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["non-string", 9141],
+  ])("rejects a %s discovery siteVersion", async (_label, siteVersion) => {
+    const discovery: Record<string, unknown> = {
+      supported: true,
+      configmgrVersion: null,
+      roles: [],
+      sources: [],
+      issues: [],
+      advancedSources: [],
+    };
+    if (siteVersion !== undefined) {
+      discovery.siteVersion = siteVersion;
+    }
+    vi.mocked(invoke).mockResolvedValueOnce(discovery);
+
+    await expect(discoverSccmEnvironment()).rejects.toThrow(
+      "Command 'discover_sccm_environment' returned an invalid response.",
+    );
   });
 
   it("keeps advanced authorization closed and capability-only after authorize", async () => {
@@ -1273,6 +1304,25 @@ describe("event-log manifest commands", () => {
     rawXml: "",
     sourceLabel: "Application.evtx",
   };
+
+  it.each([42, "alpha", ["alpha", 3], {}].map(value => [value]))("rejects malformed insertionStrings %s", async (insertionStrings) => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      records: [{ ...validEventRecord, insertionStrings }],
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      totalRecords: 1, parseErrors: 0, errorMessages: [],
+    });
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).rejects.toThrow();
+  });
+
+  it.each([undefined, null, [], ["alpha", "", "gamma"]].map(value => [value]))("preserves insertionStrings availability and positions (%s)", async (insertionStrings) => {
+    const result = {
+      records: [{ ...validEventRecord, insertionStrings }],
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      totalRecords: 1, parseErrors: 0, errorMessages: [],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).resolves.toEqual(result);
+  });
 
   it.each([
     ["absent", {}],

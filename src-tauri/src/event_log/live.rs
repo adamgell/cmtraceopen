@@ -160,8 +160,10 @@ fn describe_query_status(status: u32) -> String {
 #[cfg(target_os = "windows")]
 const EVT_VARIANT_ARRAY_TYPE_MASK: u32 = EVT_VARIANT_TYPE_ARRAY;
 
+// Bound query metadata independently of the Intune event XML acquisition limit.
+// Event Log queries are also compiled without the intune-diagnostics feature.
 #[cfg(any(target_os = "windows", test))]
-const MAX_QUERY_INFO_VARIANT_BYTES: usize = crate::intune::eventlog_win32::MAX_LIVE_EVENT_XML_BYTES;
+const MAX_QUERY_INFO_VARIANT_BYTES: usize = 512 * 1024;
 
 #[cfg(any(target_os = "windows", test))]
 fn next_query_info_buffer_len(current_bytes: usize, required_bytes: u32) -> Result<usize, String> {
@@ -3452,6 +3454,7 @@ mod portable_tests {
             computer: "HOST".to_string(),
             message: message.to_string(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: "<Event/>".to_string(),
             source_label: "Live".to_string(),
             origin_kind: EvtxOriginKind::Event,
@@ -3696,6 +3699,7 @@ mod tests {
             computer: String::new(),
             message: String::new(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: raw_xml.to_string(),
             source_label: String::new(),
             origin_kind: super::super::models::EvtxOriginKind::Event,

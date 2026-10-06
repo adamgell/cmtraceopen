@@ -21,6 +21,7 @@ const record = (overrides: Partial<EvtxRecord> = {}): EvtxRecord => ({
   computer: "DESKTOP",
   message: "Boot completed",
   eventData: [{ name: "User", value: "Ada" }],
+  insertionStrings: ["Ada"],
   rawXml: "<Event />",
   sourceLabel: "Application",
   ...overrides,
@@ -127,6 +128,29 @@ describe("quick filter semantics", () => {
       visible(quick({ query: "Ada", scope: "allColumns" }))
     ).toHaveLength(1);
   });
+  it("does not search the presentation-only unavailable marker", () => {
+    expect(selectVisibleRecords({
+      records: [record({ insertionStrings: undefined })],
+      selectedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Information"]),
+      filterEventIds: "",
+      filterSearch: "",
+      quickFilter: quick({ query: "Unavailable", scope: "visibleColumns" }),
+      visibleColumns: ["string:3"],
+    })).toEqual([]);
+  });
+  it("discovers insertion-string candidates when visible columns are unset", () => {
+    const insertionOnly = record({ eventData: [] });
+    expect(selectVisibleRecords({
+      records: [insertionOnly],
+      selectedChannels: new Set(["Application"]),
+      filterLevels: new Set(["Information"]),
+      filterEventIds: "",
+      filterSearch: "",
+      quickFilter: quick({ query: "Ada", scope: "visibleColumns" }),
+    })).toEqual([insertionOnly]);
+  });
+
   it("discovers all-column fields once for a visible-record pass", () => {
     const records = [
       record({ id: 1, eventRecordId: 1 }),

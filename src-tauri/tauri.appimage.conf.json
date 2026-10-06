@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBundleCommand": "node scripts/prepare-appimage.mjs"
+  }
+}

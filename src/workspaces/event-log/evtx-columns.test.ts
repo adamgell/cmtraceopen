@@ -259,7 +259,6 @@ describe("map columns", () => {
 });
 
 describe("insertion-string columns", () => {
-  const field = (name: string, value: string) => ({ name, value });
 
   it("offers a column per value the records carry, after the map columns", () => {
     const columns = availableColumns(["PayloadData1"], 3).map((column) => column.id);
@@ -274,14 +273,14 @@ describe("insertion-string columns", () => {
 
   it("counts the widest record and stops at the cap", () => {
     expect(
-      discoverInsertionStrings([record({ eventData: [field("A", "1")] })])
+      discoverInsertionStrings([record({ insertionStrings: ["1"] })])
     ).toBe(1);
     expect(
       discoverInsertionStrings([
-        record({ eventData: [field("A", "1")] }),
+        record({ insertionStrings: ["1"] }),
         record({
-          eventData: Array.from({ length: 14 }, (_, index) =>
-            field(`F${index}`, `${index}`)
+          insertionStrings: Array.from({ length: 14 }, (_, index) =>
+            `${index}`
           ),
         }),
       ])
@@ -293,7 +292,7 @@ describe("insertion-string columns", () => {
 
   it("renders the value in that position and nothing for a shorter record", () => {
     const wide = record({
-      eventData: [field("Product", "Contoso"), field("Version", "2.1")],
+      insertionStrings: ["Contoso", "2.1"],
     });
     expect(columnValue(wide, "string:1")).toBe("Contoso");
     expect(columnValue(wide, "string:2")).toBe("2.1");
@@ -326,7 +325,7 @@ describe("insertion-string columns", () => {
     const arranged = sanitizeColumnConfig({ order: ["level", "string:3"] });
     expect(retainedInsertionStrings(arranged)).toBe(3);
 
-    const narrowerRecords = [record({ eventData: [field("A", "1")] })];
+    const narrowerRecords = [record({ insertionStrings: ["1"] })];
     const offered = availableColumns(
       [],
       Math.max(
@@ -341,7 +340,46 @@ describe("insertion-string columns", () => {
     expect(retainedInsertionStrings(config([], { "string:4": 90 }))).toBe(4);
   });
 
+  it("preserves observed empty positions without including derived display fields", () => {
+    // Existing native parser fixture: an_empty_field_still_holds_its_insertion_position.
+    const sparse = record({
+      eventData: [{ name: "First", value: "alpha" }, { name: "Third", value: "gamma" }, { name: "EventPayload", value: "derived" }],
+      insertionStrings: ["alpha", "", "gamma"],
+    });
+    expect(discoverInsertionStrings([sparse])).toBe(3);
+    expect(columnValue(sparse, "string:1")).toBe("alpha");
+    expect(columnValue(sparse, "string:2")).toBe("");
+    expect(columnValue(sparse, "string:3")).toBe("gamma");
+    expect(columnValue(sparse, "string:4")).toBe("");
+  });
+
+  it.each([undefined, null, []].map(value => [value]))("never infers insertion positions from display data (%s)", (insertionStrings) => {
+    const unknown = record({ eventData: [{ name: "Data3", value: "gamma" }], insertionStrings });
+    expect(discoverInsertionStrings([unknown])).toBe(0);
+    expect(columnValue(unknown, "string:3")).toBe("");
+    expect(columnValue(unknown, "string:1")).toBe("");
+  });
+
   it("is hidden until an operator asks for it", () => {
     expect(defaultColumnConfig().order).not.toContain("string:1");
+  });
+
+  it.each([undefined, 190])("keeps a toggled-off string column offerable after restoring its layout (width %s)", (width) => {
+    const shown = sanitizeColumnConfig(toggleColumn(defaultColumnConfig(), "string:3"));
+    if (width !== undefined) shown.widths["string:3"] = width;
+    const hidden = sanitizeColumnConfig(toggleColumn(shown, "string:3"));
+    const restored = sanitizeColumnConfig(JSON.parse(JSON.stringify(hidden)));
+    const narrowerRecords = [record({ insertionStrings: ["1"] })];
+    const offered = availableColumns([], Math.max(
+      discoverInsertionStrings(narrowerRecords),
+      retainedInsertionStrings(restored),
+    ));
+
+    expect(restored.order).not.toContain("string:3");
+    expect(offered.map((column) => column.id)).toContain("string:3");
+    const reshown = sanitizeColumnConfig(toggleColumn(restored, "string:3"));
+    const stringColumn = visibleColumns(reshown).find((column) => column.id === "string:3");
+    if (!stringColumn) throw new Error("String 3 was not restored");
+    expect(columnWidth(reshown, stringColumn)).toBe(width ?? 140);
   });
 });

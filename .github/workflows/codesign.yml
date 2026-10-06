@@ -274,18 +274,43 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      - name: Verify signed EXEs
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          FULL_EXE_PATH: ${{ steps.stage_artifacts.outputs.full_exe_path }}
+          LITE_EXE_PATH: ${{ steps.stage_artifacts.outputs.lite_exe_path }}
+          NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
+        run: |
+          . ./scripts/verify-windows-release-signatures.ps1
+          Write-WindowsReleaseSignatureReceipt `
+            -Paths @($env:FULL_EXE_PATH, $env:LITE_EXE_PATH, $env:NSIS_PATH) `
+            -ReceiptPath "release-verification/exes.json" `
+            -Target "${{ matrix.rust_target }}"
+
       - name: Attest signed EXEs
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            release-artifacts/*.exe
+            ${{ steps.stage_artifacts.outputs.full_exe_path }}
+            ${{ steps.stage_artifacts.outputs.lite_exe_path }}
+            ${{ steps.stage_artifacts.outputs.nsis_path }}
 
       # ── Build MSI via Master Packager Dev (bundles signed full + lite EXEs) ──
       - name: Install Master Packager Dev
         shell: pwsh
         run: |
           $installer = "$env:TEMP\mpdev.msi"
+          # The digest is pinned because this build of mpdev runs in a job that holds
+          # the update-signing key: which bytes are installed decides what that key
+          # signs. A re-tagged or substituted build fails here instead of being run.
+          $mpdevSha256 = "27605362406b9e24434d34064539c79706cbfb95c2c8cc5a2ec7924ca4abc0f0"
           Invoke-WebRequest -Uri "https://cdn.masterpackager.com/installer/dev/2.1.1/mpdev_self_contained_x64_2.1.1.msi" -OutFile $installer
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $mpdevSha256) {
+            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+            throw "Master Packager Dev 2.1.1 digest mismatch: expected $mpdevSha256, got $actual"
+          }
           Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
           "C:\Program Files\Master Packager Ltd\Master Packager Dev" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
@@ -308,14 +333,20 @@ jobs:
               "$.outputFileName=CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}" `
               "$.platform=${{ matrix.artifact_suffix }}"
 
-      - name: Verify MSI output
+      - name: Verify signed MSI
         id: verify_msi
         shell: pwsh
+        timeout-minutes: 5
         run: |
           $msiPath = Join-Path $PWD "release-artifacts\CMTrace-Open_$($env:VERSION)_${{ matrix.artifact_suffix }}.msi"
           if (-not (Test-Path $msiPath)) {
             throw "Expected MSI not found at $msiPath"
           }
+          . ./scripts/verify-windows-release-signatures.ps1
+          Write-WindowsReleaseSignatureReceipt `
+            -Paths @($msiPath) `
+            -ReceiptPath "release-verification/msi.json" `
+            -Target "${{ matrix.rust_target }}"
           "msi_path=$msiPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Attest MSI
@@ -339,6 +370,29 @@ jobs:
           }
           Write-Host "Generated updater signature: $sigPath"
 
+      - name: Verify signed bytes before artifact upload
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          FULL_EXE_PATH: ${{ steps.stage_artifacts.outputs.full_exe_path }}
+          LITE_EXE_PATH: ${{ steps.stage_artifacts.outputs.lite_exe_path }}
+          MSI_PATH: ${{ steps.verify_msi.outputs.msi_path }}
+          NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
+        run: |
+          . ./scripts/verify-windows-release-signatures.ps1
+          Assert-WindowsReleaseSignatureReceipts `
+            -ReceiptPaths @("release-verification/exes.json", "release-verification/msi.json") `
+            -Paths @($env:FULL_EXE_PATH, $env:LITE_EXE_PATH, $env:NSIS_PATH, $env:MSI_PATH) `
+            -Target "${{ matrix.rust_target }}"
+
+      - name: Upload Windows signature verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cmtrace-open-windows-signature-verification-${{ matrix.artifact_suffix }}-${{ env.VERSION }}
+          path: release-verification/
+          if-no-files-found: ignore
+
       # ── Upload artifacts ──
       - name: Upload signed workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -361,6 +415,11 @@ jobs:
           MSI_PATH: ${{ steps.verify_msi.outputs.msi_path }}
           NSIS_PATH: ${{ steps.stage_artifacts.outputs.nsis_path }}
         run: |
+          . ./scripts/verify-windows-release-signatures.ps1
+          Assert-WindowsReleaseSignatureReceipts `
+            -ReceiptPaths @("release-verification/exes.json", "release-verification/msi.json") `
+            -Paths @($env:FULL_EXE_PATH, $env:LITE_EXE_PATH, $env:NSIS_PATH, $env:MSI_PATH) `
+            -Target "${{ matrix.rust_target }}"
           # The NSIS updater signature ships as a release asset so the manifest
           # publisher can rebuild the Windows entries from the release itself
           # rather than from this run's workflow artifacts. macOS and Linux

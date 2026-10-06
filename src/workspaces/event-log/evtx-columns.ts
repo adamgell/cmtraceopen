@@ -123,7 +123,7 @@ function mappedColumnSpec(id: EvtxMappedColumnId): EvtxColumnSpec {
 export function discoverInsertionStrings(records: readonly EvtxRecord[]): number {
   let widest = 0;
   for (const record of records) {
-    if (record.eventData.length > widest) widest = record.eventData.length;
+    widest = Math.max(widest, record.insertionStrings?.length ?? 0);
   }
   return Math.min(widest, MAX_INSERTION_STRING_COLUMNS);
 }
@@ -330,7 +330,13 @@ export function toggleColumn(config: EvtxColumnConfig, id: EvtxColumnId): EvtxCo
   if (config.order.includes(id)) {
     const order = config.order.filter((existing) => existing !== id);
     // Refuse to hide the last column; an empty list has no affordance to recover from.
-    return order.length > 0 ? { ...config, order } : config;
+    if (order.length === 0) return config;
+    // Retain even the default width: after a narrower file loads, this may be the
+    // last reference that keeps an insertion-string column in the chooser.
+    const widths = stringColumnPosition(id) !== null
+      ? { ...config.widths, [id]: config.widths[id] ?? stringColumnSpec(id as EvtxStringColumnId).defaultWidth }
+      : config.widths;
+    return { ...config, order, widths };
   }
   return { ...config, order: [...config.order, id] };
 }
@@ -352,7 +358,7 @@ export function columnValue(
     // Positional: the value the event carried at that place, whatever the provider named it. A
     // record with fewer values renders empty rather than shifting later ones up, so column N means
     // the same thing on every row.
-    return record.eventData[stringPosition - 1]?.value ?? "";
+    return record.insertionStrings?.[stringPosition - 1] ?? "";
   }
   const mappedProperty = mappedColumnProperty(id);
   if (mappedProperty !== null) {

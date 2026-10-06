@@ -8,7 +8,9 @@ use serde_json::Value;
 use crate::constants::DEFAULT_BUNDLE_PRIMARY_ENTRY_POINTS;
 #[cfg(feature = "dsregcmd")]
 use crate::dsregcmd::registry::{inspect_registry_snapshot_file, RegistrySnapshotSummary};
-use crate::intune::models::{EvidenceBundleArtifactCounts, EvidenceBundleMetadata};
+use crate::intune::apps::windows::ime::models::{
+    EvidenceBundleArtifactCounts, EvidenceBundleMetadata,
+};
 use crate::models::log_entry::{
     ParseQuality, ParserKind, ParserSelectionInfo, ParserSpecialization, PathDiagnostic,
 };

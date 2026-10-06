@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     process_start_instant, EspEvidenceProvenance, EspEvidenceRef, EspObservationContext,
     EspParseState, EspProcessObservation, EspSensitivity, EspSourceAccessState, EspSourceKind,
     EspTimestamp, EspTimestampKind,
@@ -1538,7 +1538,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use cmtraceopen_parser::esp::{
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
         correlate_installer_processes, EspSourceAccessState, EspTimestampKind,
     };
 

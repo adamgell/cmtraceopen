@@ -7,7 +7,8 @@
 use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use crate::error_db::lookup::lookup_error_code;
 use crate::models::log_entry::{LogEntry, ParserKind, Severity};
@@ -82,6 +83,10 @@ pub struct DeploymentAnalysisResult {
     pub failed: usize,
     pub deferred: usize,
     pub unknown: usize,
+    /// Bounds the scan hit, so `total_files` is never read as the complete
+    /// contents of the folder. Empty means the walk covered everything it could
+    /// see. A capped or skipped path is a coverage state, not a clean result.
+    pub limitations: Vec<String>,
 }
 
 // ── Regex patterns ───────────────────────────────────────────────────────
@@ -616,22 +621,153 @@ fn analyze_single_file(file_path: &str) -> DeploymentLogFile {
 
 // ── Recursive file enumeration ──────────────────────────────────────────
 
-fn collect_log_files(dir: &Path, out: &mut Vec<String>) {
+/// Deepest directory nesting the scan will descend.
+///
+/// This is the guard that terminates a Windows junction loop: a junction is
+/// reported as a directory and `file_type().is_symlink()` does not flag it, so
+/// only the depth bound stops it. Do not remove this in favour of the symlink
+/// check below.
+const MAX_DEPLOYMENT_SCAN_DEPTH: usize = 32;
+
+/// Upper bound on collected paths, so a wide tree cannot accumulate without limit.
+const MAX_DEPLOYMENT_LOG_FILES: usize = 5_000;
+
+/// Counts all directory entries, including non-logs, across the entire walk.
+const MAX_DEPLOYMENT_SCAN_ENTRIES: usize = 50_000;
+
+/// Maximum distinct details retained, plus one notice when more are omitted.
+const MAX_DEPLOYMENT_LIMITATION_DETAILS: usize = 20;
+
+/// What the bounded walk found, and which bound stopped it.
+#[derive(Default)]
+struct DeploymentScan {
+    files: Vec<String>,
+    limitations: Vec<String>,
+    retained_limitations: HashSet<String>,
+    entries_seen: usize,
+}
+
+impl DeploymentScan {
+    /// Keep a deterministic first-seen sample with bounded storage and hash
+    /// membership checks. Do not retain omitted paths in the deduplication set.
+    fn record_limitation(&mut self, detail: String) {
+        if self.retained_limitations.contains(&detail) {
+            return;
+        }
+        if self.retained_limitations.len() >= MAX_DEPLOYMENT_LIMITATION_DETAILS {
+            if self.limitations.len() == MAX_DEPLOYMENT_LIMITATION_DETAILS {
+                self.limitations
+                    .push("Additional scan limitations were omitted.".to_string());
+            }
+            return;
+        }
+        self.retained_limitations.insert(detail.clone());
+        self.limitations.push(detail);
+    }
+
+    fn push_log(&mut self, path: &Path) {
+        if let Some(ext) = path.extension() {
+            if ext.eq_ignore_ascii_case("log") {
+                self.files.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+}
+
+fn collect_log_files(dir: &Path, scan: &mut DeploymentScan, depth: usize) {
+    if depth >= MAX_DEPLOYMENT_SCAN_DEPTH {
+        scan.record_limitation(format!(
+            "Directory depth budget of {MAX_DEPLOYMENT_SCAN_DEPTH} was exhausted."
+        ));
+        return;
+    }
+    if scan.files.len() >= MAX_DEPLOYMENT_LOG_FILES {
+        scan.record_limitation(format!(
+            "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+        ));
+        return;
+    }
+    if scan.entries_seen >= MAX_DEPLOYMENT_SCAN_ENTRIES {
+        scan.record_limitation(format!(
+            "Directory entry budget of {MAX_DEPLOYMENT_SCAN_ENTRIES} was exhausted."
+        ));
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => {
+            scan.record_limitation(format!("Directory could not be read: {}", dir.display()));
+            return;
+        }
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_log_files(&path, out);
-        } else if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext.to_string_lossy().to_ascii_lowercase() == "log" {
-                    out.push(path.to_string_lossy().to_string());
-                }
+    // `read_dir` yields entries in an unspecified order, which would make the set
+    // that survives the file budget vary between runs on the same folder. Buffer
+    // only within the shared entry budget. One extra entry detects overflow; an
+    // overflowing directory contributes no arbitrary prefix of its contents.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        if scan.entries_seen >= MAX_DEPLOYMENT_SCAN_ENTRIES {
+            scan.record_limitation(format!(
+                "Directory entry budget of {MAX_DEPLOYMENT_SCAN_ENTRIES} was exhausted."
+            ));
+            return;
+        }
+        scan.entries_seen += 1;
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(_) => scan.record_limitation(format!(
+                "Directory entry could not be read: {}",
+                dir.display()
+            )),
+        }
+    }
+    paths.sort();
+
+    for path in paths {
+        if scan.files.len() >= MAX_DEPLOYMENT_LOG_FILES {
+            scan.record_limitation(format!(
+                "File budget of {MAX_DEPLOYMENT_LOG_FILES} was exhausted."
+            ));
+            return;
+        }
+        // `symlink_metadata` reports the link itself rather than following it, so
+        // a link pointing at an ancestor cannot be entered as a cycle. `is_dir()`
+        // would follow it, which is how the recursion previously had no floor.
+        //
+        // On Unix this is the whole of the symlink handling: a link's file type is
+        // neither directory nor file. The branch below decides what a link means
+        // rather than letting it fall through.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            scan.record_limitation(format!("Path could not be inspected: {}", path.display()));
+            continue;
+        };
+        let file_type = metadata.file_type();
+
+        if file_type.is_symlink() {
+            // A link to a file is read like any other file, which is what this scan
+            // did before it was bounded. A link to a directory is not descended:
+            // that is what ends a cycle, and not following it is the point.
+            match std::fs::metadata(&path) {
+                Ok(target) if target.is_file() => scan.push_log(&path),
+                Ok(target) if target.is_dir() => scan.record_limitation(format!(
+                    "Symlinked directory was not scanned: {}",
+                    path.display()
+                )),
+                Ok(_) => {}
+                Err(_) => scan.record_limitation(format!(
+                    "Symlink target could not be inspected: {}",
+                    path.display()
+                )),
             }
+            continue;
+        }
+
+        if file_type.is_dir() {
+            collect_log_files(&path, scan, depth + 1);
+        } else if file_type.is_file() {
+            scan.push_log(&path);
         }
     }
 }
@@ -650,10 +786,10 @@ pub fn analyze_deployment_folder(
         )));
     }
 
-    let mut log_files = Vec::new();
-    collect_log_files(dir, &mut log_files);
+    let mut scan = DeploymentScan::default();
+    collect_log_files(dir, &mut scan, 0);
 
-    if log_files.is_empty() {
+    if scan.files.is_empty() {
         return Ok(DeploymentAnalysisResult {
             folder_path,
             files: Vec::new(),
@@ -662,11 +798,13 @@ pub fn analyze_deployment_folder(
             failed: 0,
             deferred: 0,
             unknown: 0,
+            limitations: scan.limitations,
         });
     }
 
     // Parse all files in parallel
-    let files: Vec<DeploymentLogFile> = log_files
+    let files: Vec<DeploymentLogFile> = scan
+        .files
         .par_iter()
         .map(|p| analyze_single_file(p))
         .collect();
@@ -695,6 +833,7 @@ pub fn analyze_deployment_folder(
         failed,
         deferred,
         unknown,
+        limitations: scan.limitations,
     })
 }
 
@@ -1025,5 +1164,358 @@ mod tests {
         let (start, end) = extract_timestamps(&[e1, e2]);
         assert_eq!(start.as_deref(), Some("2025-11-25 01:55:42.000"));
         assert_eq!(end.as_deref(), Some("2025-11-25 02:10:00.000"));
+    }
+}
+
+#[cfg(test)]
+mod collect_log_files_tests {
+    use super::{
+        collect_log_files, DeploymentScan, MAX_DEPLOYMENT_LOG_FILES, MAX_DEPLOYMENT_SCAN_DEPTH,
+        MAX_DEPLOYMENT_SCAN_ENTRIES,
+    };
+
+    fn scan(root: &std::path::Path) -> DeploymentScan {
+        let mut scan = DeploymentScan::default();
+        collect_log_files(root, &mut scan, 0);
+        scan
+    }
+
+    #[test]
+    fn limitation_details_are_bounded_and_keep_first_seen_order() {
+        let mut found = DeploymentScan::default();
+        // Exercise more unique path warnings than can be shown, without a large
+        // filesystem fixture or a timing-dependent performance assertion.
+        for index in 0..1_000 {
+            let detail = format!("Path could not be inspected: path-{index}");
+            found.record_limitation(detail.clone());
+            found.record_limitation(detail);
+        }
+        assert_eq!(found.limitations.len(), 21);
+        assert_eq!(found.retained_limitations.len(), 20);
+        for index in 0..20 {
+            assert_eq!(
+                found.limitations[index],
+                format!("Path could not be inspected: path-{index}")
+            );
+        }
+        assert_eq!(
+            found.limitations[20],
+            "Additional scan limitations were omitted."
+        );
+    }
+
+    #[test]
+    fn repeated_limitations_do_not_consume_the_detail_budget() {
+        let mut found = DeploymentScan::default();
+        for _ in 0..1_000 {
+            found.record_limitation("Directory depth budget of 32 was exhausted.".to_string());
+        }
+        assert_eq!(
+            found.limitations,
+            ["Directory depth budget of 32 was exhausted."]
+        );
+    }
+
+    #[test]
+    fn exactly_filling_the_detail_budget_does_not_claim_omission() {
+        let mut found = DeploymentScan::default();
+        for index in 0..20 {
+            found.record_limitation(format!("Path could not be inspected: path-{index}"));
+        }
+        for _ in 0..100 {
+            found.record_limitation("Path could not be inspected: path-19".to_string());
+        }
+        assert_eq!(found.limitations.len(), 20);
+        assert!(found
+            .limitations
+            .iter()
+            .all(|detail| !detail.contains("omitted")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn many_directory_links_keep_a_bounded_deterministic_sample_and_continue_scanning() {
+        let dir = tempfile::tempdir().unwrap();
+        // A small number above the presentation cap is sufficient; no 50K tree.
+        for index in 0..25 {
+            std::os::unix::fs::symlink(dir.path(), dir.path().join(format!("link-{index:02}")))
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("visible.log"), b"").unwrap();
+        let first = scan(dir.path());
+        let second = scan(dir.path());
+        assert_eq!(first.files, second.files);
+        assert_eq!(
+            first.files,
+            [dir.path().join("visible.log").to_string_lossy()]
+        );
+        assert_eq!(first.limitations, second.limitations);
+        assert_eq!(first.limitations.len(), 21);
+        assert!(first.limitations[0].ends_with("link-00"));
+        assert!(first.limitations[19].ends_with("link-19"));
+        assert_eq!(
+            first.limitations[20],
+            "Additional scan limitations were omitted."
+        );
+    }
+
+    #[test]
+    fn collects_logs_at_any_nesting_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("deep.log"), b"x\n").unwrap();
+        std::fs::write(dir.path().join("shallow.log"), b"x\n").unwrap();
+        std::fs::write(dir.path().join("ignored.txt"), b"x\n").unwrap();
+
+        let found = scan(dir.path());
+        assert_eq!(
+            found.files.len(),
+            2,
+            "expected both .log files: {:?}",
+            found.files
+        );
+    }
+
+    #[test]
+    fn a_complete_scan_reports_no_limitations() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("one.log"), b"x\n").unwrap();
+        std::fs::write(dir.path().join("two.log"), b"x\n").unwrap();
+
+        let found = scan(dir.path());
+        // A folder that was fully covered must not claim a coverage gap, or the
+        // limitation stops meaning anything.
+        assert_eq!(found.limitations, Vec::<String>::new());
+    }
+
+    // Proves the walk terminates rather than recursing: with the pre-fix code this
+    // dies on stack exhaustion.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_cycle_terminates_instead_of_recursing() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("real.log"), b"x\n").unwrap();
+        // inner/loop -> the parent, which previously had no floor
+        std::os::unix::fs::symlink(dir.path(), inner.join("loop")).unwrap();
+
+        let found = scan(dir.path());
+        assert_eq!(
+            found.files.len(),
+            1,
+            "the link must not be entered: {:?}",
+            found.files
+        );
+        assert!(
+            found
+                .limitations
+                .iter()
+                .any(|l| l.contains("Symlinked directory")),
+            "a directory link that was not scanned is a coverage gap: {:?}",
+            found.limitations
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_log_file_is_still_collected() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("outside.log"), b"x\n").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("outside.log"),
+            dir.path().join("link.log"),
+        )
+        .unwrap();
+
+        let found = scan(dir.path());
+        // Before the scan was bounded, `path.is_file()` followed a file link and the
+        // log was read. Only directory links are refused, so that behaviour stands.
+        assert_eq!(found.files.len(), 1, "{:?}", found.files);
+        assert_eq!(found.limitations, Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_reports_target_inspection_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken.log"))
+            .unwrap();
+
+        let found = scan(dir.path());
+        assert!(found.files.is_empty());
+        assert_eq!(found.limitations.len(), 1);
+        assert!(found.limitations[0].contains("Symlink target could not be inspected"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_socket_is_not_reported_as_a_skipped_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::os::unix::fs::symlink(&socket, dir.path().join("socket.log")).unwrap();
+
+        let found = scan(dir.path());
+        assert!(found.files.is_empty());
+        assert!(found.limitations.is_empty());
+    }
+
+    #[test]
+    fn stops_at_the_depth_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().to_path_buf();
+        for _ in 0..(MAX_DEPLOYMENT_SCAN_DEPTH + 5) {
+            path = path.join("d");
+            std::fs::create_dir_all(&path).unwrap();
+        }
+        std::fs::write(path.join("too-deep.log"), b"x\n").unwrap();
+
+        let found = scan(dir.path());
+        assert!(
+            found.files.is_empty(),
+            "a file past the depth bound must not be collected: {:?}",
+            found.files
+        );
+        assert!(
+            found.limitations.iter().any(|l| l.contains("depth budget")),
+            "hitting the bound must be reported: {:?}",
+            found.limitations
+        );
+    }
+
+    #[test]
+    fn a_flat_directory_cannot_exceed_the_file_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..=MAX_DEPLOYMENT_LOG_FILES {
+            std::fs::write(dir.path().join(format!("{index:05}.log")), b"").unwrap();
+        }
+
+        let found = scan(dir.path());
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert!(found.limitations.iter().any(|l| l.contains("File budget")));
+        assert!(found.files.first().unwrap().ends_with("00000.log"));
+        assert!(found.files.last().unwrap().ends_with("04999.log"));
+    }
+
+    #[test]
+    fn the_file_budget_is_reported_when_it_is_already_spent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("visible.log"), b"x\n").unwrap();
+
+        // Spend the budget up front rather than creating 5000 files: the guard is a
+        // precondition on the scan, so a full scan is equivalent to a spent one.
+        let mut spent = DeploymentScan {
+            files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES],
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut spent, 0);
+
+        assert_eq!(
+            spent.files.len(),
+            MAX_DEPLOYMENT_LOG_FILES,
+            "the budget must not be exceeded"
+        );
+        assert!(
+            spent.limitations.iter().any(|l| l.contains("File budget")),
+            "spending the budget must be reported: {:?}",
+            spent.limitations
+        );
+    }
+
+    #[test]
+    fn the_file_budget_is_shared_across_nested_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b", "c"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("one.log"), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES - 2],
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert_eq!(
+            found.files[MAX_DEPLOYMENT_LOG_FILES - 2],
+            dir.path().join("a").join("one.log").to_string_lossy()
+        );
+        assert_eq!(
+            found.files.last().unwrap(),
+            &dir.path().join("b").join("one.log").to_string_lossy()
+        );
+        assert!(found.limitations.iter().any(|l| l.contains("File budget")));
+    }
+
+    #[test]
+    fn exactly_filling_the_budgets_does_not_claim_missing_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("last.log"), b"").unwrap();
+        let mut found = DeploymentScan {
+            files: vec![String::new(); MAX_DEPLOYMENT_LOG_FILES - 1],
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 1,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.files.len(), MAX_DEPLOYMENT_LOG_FILES);
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert!(found.limitations.is_empty());
+    }
+
+    #[test]
+    fn non_log_entries_exhaust_the_budget_without_selecting_an_arbitrary_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["first.log", "ignored.txt", "last.log"] {
+            std::fs::write(dir.path().join(name), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 2,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert!(found.files.is_empty());
+        assert!(found.limitations.iter().any(|l| l.contains("entry budget")));
+    }
+
+    #[test]
+    fn the_entry_budget_is_shared_across_directories_and_preserves_completed_work() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("one.log"), b"").unwrap();
+        }
+        let mut found = DeploymentScan {
+            // The root's two directories and a/one.log use the remaining entries.
+            entries_seen: MAX_DEPLOYMENT_SCAN_ENTRIES - 3,
+            ..DeploymentScan::default()
+        };
+        collect_log_files(dir.path(), &mut found, 0);
+
+        assert_eq!(found.entries_seen, MAX_DEPLOYMENT_SCAN_ENTRIES);
+        assert_eq!(found.files.len(), 1);
+        assert_eq!(
+            found.files[0],
+            dir.path().join("a").join("one.log").to_string_lossy()
+        );
+        assert!(found.limitations.iter().any(|l| l.contains("entry budget")));
+    }
+
+    #[test]
+    fn an_unreadable_directory_is_a_coverage_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let found = scan(&dir.path().join("missing"));
+        assert!(found.files.is_empty());
+        assert!(found
+            .limitations
+            .iter()
+            .any(|l| l.contains("could not be read")));
     }
 }

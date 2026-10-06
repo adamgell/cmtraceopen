@@ -12,6 +12,10 @@ on:
         description: "Submit manifests to microsoft/winget-pkgs"
         type: boolean
         default: true
+      diagnostic_only:
+        description: "Read credential/fork metadata only; never generate or submit manifests"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -21,6 +25,7 @@ concurrency:
 
 jobs:
   winget:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
     name: Update winget package
     runs-on: windows-latest
     environment: release
@@ -35,11 +40,19 @@ jobs:
       - name: Install komac
         shell: pwsh
         run: |
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/russellbanks/Komac/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "^komac-\d.*x86_64.*windows.*\.exe$" -and $_.name -notlike "*setup*" } | Select-Object -First 1
-          if (-not $asset) { throw "Could not find Komac portable exe in latest release" }
-          Write-Host "Downloading $($asset.name) from $($release.tag_name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile komac.exe
+          # Pinned rather than following `latest`, which let the publisher choose the
+          # tool version at run time. The digest is the one that release publishes.
+          $komacVersion = "2.16.0"
+          $komacAsset = "komac-$komacVersion-x86_64-pc-windows-msvc.exe"
+          $komacSha256 = "bdc45baf028f750da7519cc8a5f2eab5dfef46dfe88650eeb0d0a9bf51446e4f"
+          $komacUrl = "https://github.com/russellbanks/Komac/releases/download/v$komacVersion/$komacAsset"
+          Write-Host "Downloading $komacAsset"
+          Invoke-WebRequest -Uri $komacUrl -OutFile komac.exe
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath komac.exe).Hash.ToLowerInvariant()
+          if ($actual -ne $komacSha256) {
+            Remove-Item -LiteralPath komac.exe -Force -ErrorAction SilentlyContinue
+            throw "Komac $komacVersion digest mismatch: expected $komacSha256, got $actual"
+          }
           $komacDir = "$env:RUNNER_TEMP\komac"
           New-Item -ItemType Directory -Path $komacDir -Force | Out-Null
           Move-Item -Path .\komac.exe -Destination "$komacDir\komac.exe"
@@ -124,3 +137,21 @@ jobs:
 
           komac submit $manifest.Directory.FullName --yes
           if ($LASTEXITCODE -ne 0) { throw "komac submit failed with exit code $LASTEXITCODE" }
+
+  diagnose-access:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_only }}
+    name: Diagnose winget access (read only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read authenticated identity and fork permissions
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
+        run: python3 .github/scripts/winget_access_diagnostic.py

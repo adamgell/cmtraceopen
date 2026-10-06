@@ -90,11 +90,10 @@ pub fn record_from_parts(
     let timestamp_epoch = parse_timestamp_to_epoch_ms(&timestamp);
     let event_record_id = system.event_record_id.unwrap_or(0);
 
-    // The live path renders its message with `EvtFormatMessage`, which does its own substitution
-    // inside the service, so the positional insertion list has no consumer here.
+    // Preserve positions independently of the display fields, which omit empty values.
     let EventFields {
         fields: mut event_data,
-        insertions: _,
+        insertions,
     } = event_fields;
     let identity = extract_event_identity(&event_data);
     // Derived conflict markers are useful in the detail surface, but they are not event data and
@@ -150,6 +149,7 @@ pub fn record_from_parts(
         computer,
         message,
         event_data,
+        insertion_strings: Some(insertions),
         raw_xml: xml.to_string(),
         source_label: "Live".to_string(),
         origin_kind: super::models::EvtxOriginKind::Event,
@@ -230,6 +230,62 @@ mod tests {
 </Event>"#;
 
     #[test]
+    fn insertion_strings_preserve_empty_positions_on_the_wire() {
+        let record = record_for(
+            "<Event><EventData><Data>alpha</Data><Data></Data><Data>gamma</Data></EventData></Event>",
+            "Application",
+        );
+        let wire = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            wire["insertionStrings"],
+            serde_json::json!(["alpha", "", "gamma"])
+        );
+        assert_eq!(
+            record.event_data.len(),
+            2,
+            "display fields omit empty values"
+        );
+        let empty = record_for("<Event><System/></Event>", "Application");
+        assert_eq!(
+            serde_json::to_value(empty).unwrap()["insertionStrings"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn insertion_strings_availability_round_trips_and_rejects_malformed_values() {
+        let base = serde_json::to_value(record_for("<Event/>", "Application")).unwrap();
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!(["", "alpha", ""]),
+        ] {
+            let mut wire = base.clone();
+            wire["insertionStrings"] = value.clone();
+            let record: EvtxRecord = serde_json::from_value(wire).unwrap();
+            let encoded = serde_json::to_value(record).unwrap();
+            if value.is_null() {
+                assert!(encoded.get("insertionStrings").is_none());
+            } else {
+                assert_eq!(encoded["insertionStrings"], value);
+            }
+        }
+        let mut omitted = base.clone();
+        omitted.as_object_mut().unwrap().remove("insertionStrings");
+        let record: EvtxRecord = serde_json::from_value(omitted).unwrap();
+        assert!(record.insertion_strings.is_none());
+        for value in [
+            serde_json::json!(42),
+            serde_json::json!("alpha"),
+            serde_json::json!(["alpha", 3]),
+        ] {
+            let mut wire = base.clone();
+            wire["insertionStrings"] = value;
+            assert!(serde_json::from_value::<EvtxRecord>(wire).is_err());
+        }
+    }
+
+    #[test]
     fn a_manifest_provider_is_read_from_name() {
         let record = record_for(MANIFEST, "Security");
         assert_eq!(record.provider, "Microsoft-Windows-Security-Auditing");
@@ -284,6 +340,10 @@ mod tests {
 </Event>"#;
         let record = record_for(xml, "Application");
         assert!(!record.message.contains("IdentityConflict"));
+        assert_eq!(
+            record.insertion_strings,
+            Some(vec!["activity-a".into(), "activity-b".into()])
+        );
 
         assert_eq!(record.activity_id, None);
         assert_eq!(

@@ -884,6 +884,7 @@ mod tests {
             computer: "TESTHOST-01".to_string(),
             message: message.to_string(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: String::new(),
             source_label: "Live".to_string(),
             origin_kind: EvtxOriginKind::Event,

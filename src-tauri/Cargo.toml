@@ -2,7 +2,7 @@
 # Cargo.toml); the single Cargo.lock lives at the workspace root.
 [package]
 name = "cmtrace-open"
-version = "1.6.0"
+version = "1.6.2"
 default-run = "cmtrace-open"
 description = "Free, open-source CMTrace replacement: Windows log viewer with ConfigMgr/SCCM, Intune, and Autopilot ESP diagnostics, DSRegCmd triage, and real-time tailing."
 authors = ["Adam Gell"]
@@ -55,7 +55,7 @@ secureboot = ["dep:tempfile"]
 sccm-diagnostics = []
 
 [dependencies]
-cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.2" }
+cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.3" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -81,11 +81,8 @@ font-kit = "0.14"
 # evtx 0.12 uses Cargo's 2024 edition, which Cargo 1.77.2 could not parse.
 # The MSRV is now 1.88, so this exact pin is no longer MSRV-mandated; it is
 # retained deliberately and can be revisited separately.
-evtx = { version = "=0.12.2", optional = true }
-# Pinned: quick-xml 0.42 changed the event API this crate was written against
-# (BytesText::into_inner, GeneralRef::decode, deprecated attribute decoding),
-# and the call sites are not adapted to it. Revisit as a deliberate migration.
-quick-xml = { version = "=0.41.0", optional = true }
+evtx = { version = "=0.12.3", optional = true }
+quick-xml = { version = "=0.42.0", optional = true }
 glob = "0.3"
 sha2 = "0.11"
 getrandom = "0.4"
@@ -121,6 +118,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_Security_Authorization",
     "Win32_System_EventLog",
     "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_Storage_FileSystem",
     "Win32_Security",
     "Win32_System_Com",

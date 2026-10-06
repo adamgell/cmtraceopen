@@ -977,9 +977,10 @@ pub(crate) fn validate_diagnosis_record(
         MAX_DIAGNOSIS_RAW_XML_BYTES,
         total_bytes,
     )?;
-    if record.event_data.len() > MAX_DIAGNOSIS_EVENT_DATA_FIELDS {
+    let insertions = record.insertion_strings.as_deref().unwrap_or_default();
+    if record.event_data.len().saturating_add(insertions.len()) > MAX_DIAGNOSIS_EVENT_DATA_FIELDS {
         return Err(format!(
-            "eventData exceeds the {MAX_DIAGNOSIS_EVENT_DATA_FIELDS}-field diagnosis limit"
+            "eventData and insertionStrings exceed the {MAX_DIAGNOSIS_EVENT_DATA_FIELDS}-field diagnosis limit"
         ));
     }
     let mut event_data_bytes = 0usize;
@@ -997,9 +998,17 @@ pub(crate) fn validate_diagnosis_record(
             &mut event_data_bytes,
         )?;
     }
+    for value in insertions {
+        bounded_diagnosis_string(
+            value,
+            "insertionStrings value",
+            MAX_DIAGNOSIS_STRING_BYTES,
+            &mut event_data_bytes,
+        )?;
+    }
     if event_data_bytes > MAX_DIAGNOSIS_EVENT_DATA_BYTES {
         return Err(format!(
-            "eventData exceeds the {MAX_DIAGNOSIS_EVENT_DATA_BYTES}-byte diagnosis limit"
+            "eventData and insertionStrings exceed the {MAX_DIAGNOSIS_EVENT_DATA_BYTES}-byte diagnosis limit"
         ));
     }
     *total_bytes = total_bytes.saturating_add(event_data_bytes);
@@ -1256,7 +1265,7 @@ pub(crate) fn validate_diagnosis_coverage_gaps(
 
 /// Normalized diagnosis input extracted from one validated native event record.
 pub(crate) struct DiagnosisEventInput {
-    pub(crate) entry: cmtraceopen_parser::intune::models::EventLogEntry,
+    pub(crate) entry: cmtraceopen_parser::intune::apps::windows::ime::models::EventLogEntry,
     pub(crate) event_data: Vec<String>,
     pub(crate) raw_xml: String,
     pub(crate) record_id_text: Option<String>,
@@ -1275,24 +1284,24 @@ pub(crate) fn diagnosis_event_input(
     };
     let severity = match record.level {
         super::models::EvtxLevel::Critical => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Critical
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Critical
         }
         super::models::EvtxLevel::Error => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Error
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Error
         }
         super::models::EvtxLevel::Warning => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Warning
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Warning
         }
         super::models::EvtxLevel::Information => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Information
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Information
         }
         super::models::EvtxLevel::Verbose => {
-            cmtraceopen_parser::intune::models::EventLogSeverity::Verbose
+            cmtraceopen_parser::intune::apps::windows::ime::models::EventLogSeverity::Verbose
         }
     };
     let channel =
-        cmtraceopen_parser::intune::models::EventLogChannel::from_channel_string(&record.channel);
-    let entry = cmtraceopen_parser::intune::models::EventLogEntry {
+        cmtraceopen_parser::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(&record.channel);
+    let entry = cmtraceopen_parser::intune::apps::windows::ime::models::EventLogEntry {
         id: event_record_id,
         channel,
         channel_display: record.channel,
@@ -1620,6 +1629,7 @@ mod tests {
             computer: "WIN-TEST".into(),
             message: message.into(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: String::new(),
             source_label: "Application.evtx".into(),
             origin_kind,
@@ -1637,6 +1647,41 @@ mod tests {
             keywords: None,
             mapped: Vec::new(),
         }
+    }
+
+    #[test]
+    fn insertion_strings_obey_diagnosis_budgets() {
+        let base = diagnosis_record(super::super::models::EvtxOriginKind::Event, "ordinary");
+        for insertions in [
+            vec![String::new(); super::MAX_DIAGNOSIS_EVENT_DATA_FIELDS + 1],
+            vec!["x".repeat(super::MAX_DIAGNOSIS_STRING_BYTES + 1)],
+            vec!["x".repeat(super::MAX_DIAGNOSIS_STRING_BYTES); 17],
+        ] {
+            let mut wire = serde_json::to_value(&base).unwrap();
+            wire["insertionStrings"] = serde_json::json!(insertions);
+            let record = serde_json::from_value(wire).unwrap();
+            assert!(super::validate_diagnosis_record(&record, &mut 0).is_err());
+        }
+        let mut combined = base.clone();
+        combined.insertion_strings =
+            Some(vec![String::new(); super::MAX_DIAGNOSIS_EVENT_DATA_FIELDS]);
+        combined.event_data.push(super::super::models::EvtxField {
+            name: "Field".into(),
+            value: "x".into(),
+        });
+        assert!(super::validate_diagnosis_record(&combined, &mut 0).is_err());
+        combined.insertion_strings = Some(vec!["x".repeat(super::MAX_DIAGNOSIS_STRING_BYTES); 16]);
+        assert!(super::validate_diagnosis_record(&combined, &mut 0).is_err());
+        let mut base_bytes = 0;
+        super::validate_diagnosis_record(&base, &mut base_bytes).unwrap();
+        let mut wire = serde_json::to_value(&base).unwrap();
+        wire["insertionStrings"] = serde_json::json!(["alpha", "", "gamma"]);
+        let record = serde_json::from_value(wire).unwrap();
+        let mut bytes = 0;
+        super::validate_diagnosis_record(&record, &mut bytes).unwrap();
+        assert_eq!(bytes, base_bytes + 10);
+        let mut nearly_full = super::MAX_DIAGNOSIS_TOTAL_INPUT_BYTES - base_bytes;
+        assert!(super::validate_diagnosis_record(&record, &mut nearly_full).is_err());
     }
 
     #[test]

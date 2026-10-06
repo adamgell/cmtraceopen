@@ -264,3 +264,22 @@ describe("EvtxTimelineRow triage state", () => {
     expect(screen.queryByLabelText("Quick-filter match")).not.toBeInTheDocument();
   });
 });
+
+describe("insertion-string availability", () => {
+  it.each([undefined, null])("labels unknown positions without inventing values (%s)", (insertionStrings) => {
+    const columnConfig = { order: ["string:3"] as const, widths: {} };
+    const mutableConfig = { ...columnConfig, order: [...columnConfig.order] };
+    renderRow({ record: { ...record(), insertionStrings }, columnConfig: mutableConfig, columns: visibleColumns(mutableConfig) });
+    expect(screen.getByRole("gridcell", { name: "String 3: Unavailable" })).toHaveTextContent("Unavailable");
+    expect(screen.getByTitle("Insertion-string positions are unavailable for this record.")).toHaveAttribute(
+      "aria-description", "Insertion-string positions are unavailable for this record.",
+    );
+  });
+
+  it("keeps observed short records blank", () => {
+    const columnConfig = { order: ["string:3" as const], widths: {} };
+    renderRow({ record: { ...record(), insertionStrings: ["alpha"] }, columnConfig, columns: visibleColumns(columnConfig) });
+    expect(screen.getByRole("gridcell", { name: "String 3: Empty" })).toBeEmptyDOMElement();
+    expect(screen.queryByText("Unavailable")).toBeNull();
+  });
+});

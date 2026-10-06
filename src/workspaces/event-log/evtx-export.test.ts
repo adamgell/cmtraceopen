@@ -31,6 +31,14 @@ function decodeChunks(chunks: Array<{ payloadBase64: string }>): string {
 }
 
 describe("event export invocation", () => {
+  it.each(EVTX_EXPORT_FORMATS)("omits unlabelled insertion copies from $value transport", ({ value }) => {
+    const source = record({ insertionStrings: ["positional-only-secret", "", "gamma"] });
+    const payload = decodeChunks([...exportPayloadChunks(value, [source])]);
+    expect(payload).not.toContain("insertionStrings");
+    expect(payload).not.toContain("positional-only-secret");
+    expect(source.insertionStrings).toEqual(["positional-only-secret", "", "gamma"]);
+  });
+
   it("offers every backend format, including HTML and raw XML", () => {
     expect(EVTX_EXPORT_FORMATS.map((format) => format.value)).toEqual([
       "csv",

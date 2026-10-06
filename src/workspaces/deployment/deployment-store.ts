@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { analyzeDeploymentFolder } from "../../lib/commands";
 
 export interface DeploymentLogFile {
   path: string;
@@ -37,6 +37,11 @@ export interface DeploymentAnalysisResult {
   failed: number;
   deferred: number;
   unknown: number;
+  /**
+   * Bounds the folder scan hit, so `totalFiles` is never read as the complete
+   * contents of the folder. Empty means the walk covered everything it could see.
+   */
+  limitations: string[];
 }
 
 export type DeploymentPhase =
@@ -66,10 +71,7 @@ export const useDeploymentStore = create<DeploymentState>((set, get) => ({
   analyzeFolder: async (folderPath: string) => {
     set({ phase: "analyzing", errorMessage: null, expandedErrorIndex: null });
     try {
-      const result = await invoke<DeploymentAnalysisResult>(
-        "analyze_deployment_folder",
-        { folderPath }
-      );
+      const result = await analyzeDeploymentFolder(folderPath);
       if (result.totalFiles === 0) {
         set({ phase: "empty", result });
       } else {

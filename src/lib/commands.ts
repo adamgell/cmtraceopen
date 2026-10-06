@@ -58,18 +58,22 @@ import type {
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
 import type {
+  DeploymentAnalysisResult,
+  DeploymentLogFile,
+} from "../workspaces/deployment/deployment-store";
+import type {
   DsregcmdAnalysisResult,
   DsregcmdCaptureResult,
   DsregcmdResolvedSource,
 } from "../workspaces/dsregcmd/types";
 import type {
+  EspAcquisitionCapability,
   EspAppFlipBackup,
   EspAppFlipResult,
   EspDiagnosticsSnapshot,
   EspElevationState,
   EspGraphOverlay,
   EspGraphRequest,
-  EspRelaunchResult,
   EspSessionEnvelope,
 } from "../workspaces/esp-diagnostics/types";
 import type { EspSessionCaptureMeta } from "../workspaces/esp-diagnostics/esp-session-capture";
@@ -383,6 +387,12 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     typeof value.message !== "string" ||
     !Array.isArray(value.eventData) ||
     !value.eventData.every(isEvtxFieldResponse) ||
+    !(
+      value.insertionStrings === undefined ||
+      value.insertionStrings === null ||
+      (Array.isArray(value.insertionStrings) &&
+        value.insertionStrings.every((item: unknown) => typeof item === "string"))
+    ) ||
     typeof value.rawXml !== "string" ||
     typeof value.sourceLabel !== "string"
   ) {
@@ -494,6 +504,86 @@ function isNullableCommandString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+const DEPLOYMENT_FORMAT_MEMBERS: Record<DeploymentLogFile["format"], true> = {
+  "psadt-cmtrace": true,
+  "psadt-legacy": true,
+  "msi-verbose": true,
+  "psadt-wrapper": true,
+  burn: true,
+  patchmypc: true,
+  unknown: true,
+};
+
+const DEPLOYMENT_OUTCOME_MEMBERS: Record<DeploymentLogFile["outcome"], true> = {
+  success: true,
+  failure: true,
+  deferred: true,
+  unknown: true,
+};
+
+function isDeploymentErrorLine(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    isNonNegativeCommandCount(value.lineNumber) &&
+    value.lineNumber <= 4_294_967_295 &&
+    typeof value.message === "string" &&
+    (value.severity === "Error" || value.severity === "Warning")
+  );
+}
+
+function isDeploymentLogFile(value: unknown): boolean {
+  return (
+    isCommandRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.fileName === "string" &&
+    typeof value.format === "string" &&
+    Object.prototype.hasOwnProperty.call(DEPLOYMENT_FORMAT_MEMBERS, value.format) &&
+    typeof value.outcome === "string" &&
+    Object.prototype.hasOwnProperty.call(DEPLOYMENT_OUTCOME_MEMBERS, value.outcome) &&
+    (value.exitCode === null ||
+      (typeof value.exitCode === "number" &&
+        Number.isInteger(value.exitCode) &&
+        value.exitCode >= -2_147_483_648 &&
+        value.exitCode <= 2_147_483_647)) &&
+    isNullableCommandString(value.errorSummary) &&
+    Array.isArray(value.errorLines) &&
+    value.errorLines.every(isDeploymentErrorLine) &&
+    isNullableCommandString(value.appName) &&
+    isNullableCommandString(value.appVersion) &&
+    isNullableCommandString(value.deployType) &&
+    isNullableCommandString(value.startTime) &&
+    isNullableCommandString(value.endTime)
+  );
+}
+
+function decodeDeploymentAnalysisResult(
+  value: unknown,
+  commandName: string,
+): DeploymentAnalysisResult {
+  const result = decodeRecordResponse<DeploymentAnalysisResult>(value, commandName, {
+    folderPath: (field) => typeof field === "string",
+    files: (field) => Array.isArray(field) && field.every(isDeploymentLogFile),
+    totalFiles: isNonNegativeCommandCount,
+    succeeded: isNonNegativeCommandCount,
+    failed: isNonNegativeCommandCount,
+    deferred: isNonNegativeCommandCount,
+    unknown: isNonNegativeCommandCount,
+    limitations: isStringArray,
+  });
+  const outcomes = { success: 0, failure: 0, deferred: 0, unknown: 0 };
+  for (const file of result.files) outcomes[file.outcome] += 1;
+  if (
+    result.totalFiles !== result.files.length ||
+    result.succeeded !== outcomes.success ||
+    result.failed !== outcomes.failure ||
+    result.deferred !== outcomes.deferred ||
+    result.unknown !== outcomes.unknown
+  ) {
+    return invalidCommandResponse(commandName);
+  }
+  return result;
+}
+
 function isParserSelectionResponse(value: unknown): boolean {
   return (
     isCommandRecord(value) &&
@@ -538,6 +628,7 @@ function isParseResultResponse(value: unknown): value is ParseResult {
     isFiniteCommandNumber(value.parseErrors) &&
     typeof value.filePath === "string" &&
     isFiniteCommandNumber(value.fileSize) &&
+    isNullableCommandNumber(value.modifiedUnixMs) &&
     isFiniteCommandNumber(value.byteOffset)
   );
 }
@@ -2237,6 +2328,12 @@ export async function analyzeSysmonLogs(
   });
 }
 
+export async function analyzeDeploymentFolder(
+  folderPath: string,
+): Promise<DeploymentAnalysisResult> {
+  return invokeCommand("analyze_deployment_folder", { folderPath });
+}
+
 export async function analyzeDsregcmd(
   input: string,
   bundlePath?: string | null,
@@ -2486,6 +2583,10 @@ export async function getEspElevationState(): Promise<EspElevationState> {
   return invokeCommand("get_esp_elevation_state");
 }
 
+export async function getEspDiagnosticsCapability(): Promise<EspAcquisitionCapability> {
+  return invokeCommand("get_esp_diagnostics_capability");
+}
+
 export async function analyzeEspEvidence(
   path: string,
   requestId: string,
@@ -2536,10 +2637,6 @@ export async function stopEspDiagnosticsSession(
   sessionId: string,
 ): Promise<void> {
   return invokeCommand("stop_esp_diagnostics_session", { sessionId });
-}
-
-export async function restartEspAsAdministrator(): Promise<EspRelaunchResult> {
-  return invokeCommand("restart_esp_as_administrator");
 }
 
 export async function graphFetchEspDiagnostics(
@@ -2954,6 +3051,7 @@ const decodeEspSessionEnvelope: CommandDecoder<EspSessionEnvelope> = (
     snapshot: isCommandRecord,
   });
 const COMMAND_DECODERS = {
+  analyze_deployment_folder: decodeDeploymentAnalysisResult,
   open_log_file: decodeParseResult,
   parse_files_batch: decodeParseResults,
   list_log_folder: decodeFolderListingResult,
@@ -3093,6 +3191,7 @@ const COMMAND_DECODERS = {
     decodeRecordResponse<SccmEnvironmentDiscovery>(value, commandName, {
       supported: (field) => typeof field === "boolean",
       configmgrVersion: isNullableCommandString,
+      siteVersion: isNullableCommandString,
       roles: isCommandRecordArray,
       sources: isCommandRecordArray,
       issues: isCommandRecordArray,
@@ -3156,6 +3255,13 @@ const COMMAND_DECODERS = {
       durationMs: isFiniteCommandNumber,
       gaps: isCommandRecordArray,
     }),
+  get_esp_diagnostics_capability: (value, commandName) =>
+    decodeRecordResponse<EspAcquisitionCapability>(value, commandName, {
+      offlineAnalysisSupported: (field) => typeof field === "boolean",
+      liveAcquisitionSupported: (field) => typeof field === "boolean",
+      liveAcquisitionDetail: (field) =>
+        field === null || typeof field === "string",
+    }),
   get_esp_elevation_state: (value, commandName) =>
     decodeRecordResponse<EspElevationState>(value, commandName, {
       isElevated: (field) => typeof field === "boolean",
@@ -3189,11 +3295,6 @@ const COMMAND_DECODERS = {
   start_esp_diagnostics_session: decodeEspSessionEnvelope,
   get_esp_diagnostics_session: decodeEspSessionEnvelope,
   stop_esp_diagnostics_session: decodeUnitResponse,
-  restart_esp_as_administrator: (value, commandName) =>
-    decodeRecordResponse<EspRelaunchResult>(value, commandName, {
-      launched: (field) => typeof field === "boolean",
-      reason: (field) => typeof field === "string",
-    }),
   graph_fetch_esp_diagnostics: (value, commandName) =>
     decodeRecordResponse<EspGraphOverlay>(value, commandName, {
       requestId: (field) => typeof field === "string",

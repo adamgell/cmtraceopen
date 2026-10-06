@@ -25,7 +25,7 @@ export interface EvtxExportChunk {
   completedRecords: number;
 }
 
-type EvtxReducedRecord = Omit<EvtxRecord, "rawXml" | "eventData">;
+type EvtxReducedRecord = Omit<EvtxRecord, "rawXml" | "eventData" | "insertionStrings">;
 const REDUCED_EXPORT_FORMATS = new Set<EvtxExportFormatValue>([
   "csv",
   "tsv",
@@ -36,8 +36,10 @@ function projectRecord(
   format: EvtxExportFormatValue,
   record: EvtxRecord,
 ): EvtxRecord | EvtxReducedRecord {
-  if (!REDUCED_EXPORT_FORMATS.has(format)) return record;
-  const { rawXml: _rawXml, eventData: _eventData, ...projected } = record;
+  // Unlabelled positional copies must not bypass the native label-aware redaction boundary.
+  const { insertionStrings: _insertionStrings, ...exportable } = record;
+  if (!REDUCED_EXPORT_FORMATS.has(format)) return exportable;
+  const { rawXml: _rawXml, eventData: _eventData, ...projected } = exportable;
   return projected;
 }
 

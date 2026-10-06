@@ -127,6 +127,7 @@ describe("buildEventLogAnalysisSession", () => {
       computer: "TEST-PC",
       message: oversizedMessage,
       eventData,
+      insertionStrings: ["alpha", "", "gamma"],
       rawXml: "<Event><System><EventID>42</EventID></System></Event>",
       sourceLabel: "sample.evtx",
       originKind: "event",
@@ -170,6 +171,8 @@ describe("buildEventLogAnalysisSession", () => {
     expect(projected.eventRecordId).toBe(record.eventRecordId);
     expect(projected.rawXml).toBe("");
     expect(projected.eventData).toEqual([]);
+    expect(projected).not.toHaveProperty("insertionStrings");
+    expect(record.insertionStrings).toEqual(["alpha", "", "gamma"]);
     expect(Object.prototype.hasOwnProperty.call(projected, "mapped")).toBe(
       false,
     );

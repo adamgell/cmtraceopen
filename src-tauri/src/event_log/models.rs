@@ -134,6 +134,9 @@ pub struct EvtxRecord {
     pub message: String,
     #[serde(default)]
     pub event_data: Vec<EvtxField>,
+    /// Observed insertion positions, including empty slots; None means unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insertion_strings: Option<Vec<String>>,
     /// The provider's own XML.
     ///
     /// Defaulted so a caller can omit it. The export command receives records over IPC, and this

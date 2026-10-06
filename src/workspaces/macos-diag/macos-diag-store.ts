@@ -45,6 +45,7 @@ interface MacosDiagState {
   // Unified Log tab
   unifiedLogResult: MacosUnifiedLogResult | null;
   unifiedLogLoading: boolean;
+  unifiedLogError: string | null;
   unifiedLogPresetId: string;
 
   // Actions
@@ -70,8 +71,9 @@ interface MacosDiagState {
   setSelectedPackageFiles: (files: MacosPackageFiles | null) => void;
   setPackageDrillLoading: (loading: boolean) => void;
 
-  setUnifiedLogResult: (result: MacosUnifiedLogResult) => void;
+  setUnifiedLogResult: (result: MacosUnifiedLogResult | null) => void;
   setUnifiedLogLoading: (loading: boolean) => void;
+  setUnifiedLogError: (error: string | null) => void;
   setUnifiedLogPresetId: (presetId: string) => void;
 
   clear: () => void;
@@ -102,6 +104,7 @@ export const useMacosDiagStore = create<MacosDiagState>((set) => ({
 
   unifiedLogResult: null,
   unifiedLogLoading: false,
+  unifiedLogError: null,
   unifiedLogPresetId: "managed-client",
 
   beginEnvironmentScan: () =>
@@ -147,8 +150,10 @@ export const useMacosDiagStore = create<MacosDiagState>((set) => ({
   setSelectedPackageFiles: (files) => set({ selectedPackageFiles: files }),
   setPackageDrillLoading: (loading) => set({ packageDrillLoading: loading }),
 
-  setUnifiedLogResult: (result) => set({ unifiedLogResult: result, unifiedLogLoading: false }),
+  setUnifiedLogResult: (result) =>
+    set({ unifiedLogResult: result, unifiedLogLoading: false, unifiedLogError: null }),
   setUnifiedLogLoading: (loading) => set({ unifiedLogLoading: loading }),
+  setUnifiedLogError: (error) => set({ unifiedLogError: error }),
   setUnifiedLogPresetId: (presetId) => set({ unifiedLogPresetId: presetId }),
 
   clear: () =>
@@ -171,6 +176,7 @@ export const useMacosDiagStore = create<MacosDiagState>((set) => ({
       packageDrillLoading: false,
       unifiedLogResult: null,
       unifiedLogLoading: false,
+      unifiedLogError: null,
       unifiedLogPresetId: "managed-client",
     }),
 }));

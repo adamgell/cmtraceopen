@@ -8,7 +8,6 @@ import {
   getEspElevationState,
   graphCancelEspDiagnostics,
   graphFetchEspDiagnostics,
-  restartEspAsAdministrator,
   startEspDiagnosticsSession,
   stopEspDiagnosticsSession,
 } from "../../lib/commands";
@@ -301,7 +300,6 @@ describe("ESP typed command wrappers", () => {
       .mockResolvedValueOnce(envelope)
       .mockResolvedValueOnce(envelope)
       .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ launched: true, reason: "launched" })
       .mockResolvedValueOnce(overlay)
       .mockResolvedValueOnce(undefined);
 
@@ -318,10 +316,6 @@ describe("ESP typed command wrappers", () => {
     await expect(
       stopEspDiagnosticsSession("session-a"),
     ).resolves.toBeUndefined();
-    await expect(restartEspAsAdministrator()).resolves.toEqual({
-      launched: true,
-      reason: "launched",
-    });
     const request: EspGraphRequest = {
       requestId: "graph-a",
       identity: snapshot.identity,
@@ -343,7 +337,6 @@ describe("ESP typed command wrappers", () => {
       ["start_esp_diagnostics_session", { requestId: "live-a" }],
       ["get_esp_diagnostics_session", { sessionId: "session-a" }],
       ["stop_esp_diagnostics_session", { sessionId: "session-a" }],
-      ["restart_esp_as_administrator", undefined],
       ["graph_fetch_esp_diagnostics", { request }],
       ["graph_cancel_esp_diagnostics", { requestId: "graph-a" }],
     ]);

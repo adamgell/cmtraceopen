@@ -12,6 +12,8 @@ export interface EvtxRecord {
   computer: string;
   message: string;
   eventData: EvtxField[];
+  /** Native positional values, including empty slots; absent/null means unavailable. */
+  insertionStrings?: string[] | null;
   rawXml: string;
   sourceLabel: string;
   /** Distinguishes archived text records from Windows event records. */

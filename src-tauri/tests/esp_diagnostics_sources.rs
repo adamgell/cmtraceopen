@@ -15,7 +15,6 @@ use app_lib::esp::archive::{
 };
 use app_lib::esp::bundle::{
     analyze_captured_evidence_at, BundleError, MAX_BUNDLE_TOTAL_RECORDS, MAX_JSON_SCALAR_RECORDS,
-    MAX_LEGACY_BUNDLE_DEPTH, MAX_LEGACY_BUNDLE_ENTRIES,
 };
 #[cfg(target_os = "windows")]
 use app_lib::esp::discovery::default_known_source_specs;
@@ -58,7 +57,7 @@ use app_lib::intune::evtx_parser::{
     parse_esp_event_xml, EventLogProperty, ParsedEspEventRecord, MAX_ESP_EVTX_RECORD_BYTES,
 };
 use chrono::DateTime;
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspElevationState, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
     EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspImeObservation,
@@ -7846,80 +7845,25 @@ fn bundle_malformed_manifest_is_coverage_not_an_implicit_legacy_scan() {
     }));
 }
 
+// Derived from the former manifest-less Autopilot configuration exemplar. Without
+// a manifest, its presence must never be promoted into declared bundle evidence.
 #[test]
-fn bundle_legacy_fallback_is_depth_extension_and_basename_allowlisted() {
+fn bundle_missing_manifest_reports_missing_without_discovering_evidence() {
     let bundle = tempfile::tempdir().expect("bundle tempdir");
-    let accepted = bundle.path().join("one").join("two");
-    let too_deep = accepted.join("three");
-    std::fs::create_dir_all(&too_deep).expect("create legacy fixture folders");
     std::fs::write(
-        accepted.join("AutoPilotConfigurationFile.json"),
+        bundle.path().join("AutoPilotConfigurationFile.json"),
         r#"{"DeploymentProfileName":"Legacy Profile"}"#,
     )
-    .expect("write accepted legacy JSON");
-    std::fs::write(
-        too_deep.join("AutoPilotConfigurationFile.json"),
-        r#"{"DeploymentProfileName":"Too Deep"}"#,
-    )
-    .expect("write too-deep legacy JSON");
-    std::fs::write(
-        bundle.path().join("arbitrary.json"),
-        r#"{"secret":"ignored"}"#,
-    )
-    .expect("write unknown JSON");
-    std::fs::write(bundle.path().join("ignored.exe"), b"ignored")
-        .expect("write unsupported extension");
+    .expect("write undeclared exemplar");
 
     let snapshot =
         analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
-            .expect("analyze legacy bundle");
+            .expect("missing manifest returns a coverage snapshot");
 
-    assert_eq!(MAX_LEGACY_BUNDLE_DEPTH, 3);
-    assert_eq!(
-        snapshot
-            .profile
-            .as_ref()
-            .and_then(|profile| profile.profile_name.as_deref()),
-        Some("Legacy Profile")
-    );
-    assert!(snapshot.raw_evidence.iter().all(|record| {
-        record
-            .provenance
-            .file_path
-            .as_deref()
-            .is_none_or(|path| !path.ends_with("arbitrary.json") && !path.ends_with("ignored.exe"))
-    }));
-}
-
-#[test]
-fn bundle_legacy_fallback_stops_after_256_directory_entries() {
-    let bundle = tempfile::tempdir().expect("bundle tempdir");
-    for index in (0..(MAX_LEGACY_BUNDLE_ENTRIES + 8)).rev() {
-        std::fs::write(
-            bundle.path().join(format!("evidence-{index:03}.log")),
-            format!("evidence {index}"),
-        )
-        .expect("write bounded legacy fixture");
-    }
-
-    let snapshot =
-        analyze_captured_evidence_at(bundle.path(), BUNDLE_REQUEST_ID, BUNDLE_OBSERVED_AT)
-            .expect("analyze bounded legacy bundle");
-
-    assert_eq!(MAX_LEGACY_BUNDLE_ENTRIES, 256);
-    assert!(snapshot.raw_evidence.len() <= MAX_LEGACY_BUNDLE_ENTRIES);
-    let retained_paths = snapshot
-        .raw_evidence
-        .iter()
-        .filter_map(|record| record.provenance.file_path.as_deref())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(retained_paths.contains("evidence-000.log"));
-    assert!(retained_paths.contains("evidence-255.log"));
-    assert!(!retained_paths.contains("evidence-256.log"));
-    assert!(!retained_paths.contains("evidence-263.log"));
+    assert!(snapshot.raw_evidence.is_empty());
+    assert!(snapshot.profile.is_none());
     assert!(snapshot.coverage.iter().any(|coverage| {
-        coverage.artifact_id == "bundle.legacy-limit"
-            && coverage.status == EspArtifactStatus::ParseFailed
+        coverage.artifact_id == "bundle.manifest" && coverage.status == EspArtifactStatus::Missing
     }));
 }
 

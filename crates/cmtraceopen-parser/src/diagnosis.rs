@@ -6,12 +6,14 @@
 //! source-specific evidence that produced a conclusion.
 
 use crate::error_db::lookup::{detect_error_code_spans, lookup_error_code, ErrorLookupResult};
-use crate::esp::{EspDiagnosticFinding, EspEvidenceRef, EspFindingConfidence, EspFindingSeverity};
 use crate::intune::apps::windows::common::redact_text;
+use crate::intune::apps::windows::ime::models::{EventLogChannel, EventLogEntry, EventLogSeverity};
+use crate::intune::enrollment::windows::esp::{
+    EspDiagnosticFinding, EspEvidenceRef, EspFindingConfidence, EspFindingSeverity,
+};
 use crate::intune::evidence::{
     IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence, IntuneFindingSeverity,
 };
-use crate::intune::models::{EventLogChannel, EventLogEntry, EventLogSeverity};
 use crate::models::log_entry::{LogEntry, Severity};
 use crate::sccm::{SccmConfidence, SccmEvidenceRef, SccmFinding, SccmFindingClass};
 use regex::Regex;
@@ -497,10 +499,10 @@ fn family_from_text(value: &str) -> Option<EventFamily> {
 /// without creating a coverage gap.
 pub fn event_family(entry: &EventLogEntry) -> EventFamily {
     match &entry.channel {
-        crate::intune::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
-        crate::intune::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
-        crate::intune::models::EventLogChannel::DeviceManagementAdmin
-        | crate::intune::models::EventLogChannel::DeviceManagementOperational => {
+        crate::intune::apps::windows::ime::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
+        crate::intune::apps::windows::ime::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
+        crate::intune::apps::windows::ime::models::EventLogChannel::DeviceManagementAdmin
+        | crate::intune::apps::windows::ime::models::EventLogChannel::DeviceManagementOperational => {
             EventFamily::MdmEnrollment
         }
         _ => {
@@ -514,12 +516,13 @@ pub fn event_family(entry: &EventLogEntry) -> EventFamily {
 
 /// Classifies native event source fields without first cloning them into an owned entry.
 pub fn event_family_from_source(channel: &str, provider: &str, message: &str) -> EventFamily {
-    let normalized_channel = crate::intune::models::EventLogChannel::from_channel_string(channel);
+    let normalized_channel =
+        crate::intune::apps::windows::ime::models::EventLogChannel::from_channel_string(channel);
     match normalized_channel {
-        crate::intune::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
-        crate::intune::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
-        crate::intune::models::EventLogChannel::DeviceManagementAdmin
-        | crate::intune::models::EventLogChannel::DeviceManagementOperational => {
+        crate::intune::apps::windows::ime::models::EventLogChannel::Autopilot => EventFamily::Autopilot,
+        crate::intune::apps::windows::ime::models::EventLogChannel::ProvisioningDiagnosticsAdmin => EventFamily::Esp,
+        crate::intune::apps::windows::ime::models::EventLogChannel::DeviceManagementAdmin
+        | crate::intune::apps::windows::ime::models::EventLogChannel::DeviceManagementOperational => {
             EventFamily::MdmEnrollment
         }
         _ => family_from_text(channel)
@@ -1826,9 +1829,15 @@ pub fn adapt_dsregcmd_insight(
         finding_id: value.id.clone(),
         class: FindingClass::LikelyContributor,
         severity: match value.severity.clone() {
-            crate::intune::models::IntuneDiagnosticSeverity::Info => FindingSeverity::Info,
-            crate::intune::models::IntuneDiagnosticSeverity::Warning => FindingSeverity::Warning,
-            crate::intune::models::IntuneDiagnosticSeverity::Error => FindingSeverity::Error,
+            crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity::Info => {
+                FindingSeverity::Info
+            }
+            crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity::Warning => {
+                FindingSeverity::Warning
+            }
+            crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity::Error => {
+                FindingSeverity::Error
+            }
         },
         confidence: FindingConfidence::Medium,
         title: value.title.clone(),
@@ -2281,7 +2290,10 @@ pub fn summarize_cross_source(
             "Evidence contains symptoms or contributing signals but no confirmed failure.",
         )
     } else if !coverage_gaps.is_empty() {
-        ("insufficientEvidence", "No issues detected.")
+        (
+            "insufficientEvidence",
+            "Evidence is insufficient to determine whether issues are present.",
+        )
     } else {
         ("noFindings", "No issues detected.")
     };
@@ -2378,13 +2390,39 @@ mod tests {
     }
 
     #[test]
-    fn coverage_only_overview_uses_the_human_neutral_headline() {
+    fn coverage_only_overview_reports_insufficient_evidence() {
         let finding =
             super::finding_for_coverage("event", CoverageState::Skipped, "not available".into());
         let summary = super::summarize_cross_source(Vec::new(), vec![finding], Vec::new());
 
         assert_eq!(summary.overview.outcome, "insufficientEvidence");
-        assert_eq!(summary.overview.headline, "No issues detected.");
+        assert!(summary.overview.headline.contains("insufficient"));
+        assert!(!summary
+            .overview
+            .headline
+            .to_lowercase()
+            .contains("no issues"));
+    }
+
+    #[test]
+    fn neutral_summaries_match_the_rendered_contract() {
+        let finding =
+            super::finding_for_coverage("event", CoverageState::Skipped, "not available".into());
+        let incomplete = super::summarize_cross_source(Vec::new(), vec![finding], Vec::new());
+        let complete = super::summarize_cross_source(Vec::new(), Vec::new(), Vec::new());
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/diagnosis/neutral-summaries.json"
+        ))
+        .expect("the frontend diagnosis fixture is valid JSON");
+
+        assert_eq!(
+            serde_json::json!({
+                "insufficientEvidence": incomplete,
+                "noFindings": complete,
+            }),
+            expected,
+            "the rendered fixtures must carry the producer's actual headlines"
+        );
     }
 
     #[test]

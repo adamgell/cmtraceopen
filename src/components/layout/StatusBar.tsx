@@ -374,9 +374,7 @@ export function StatusBar() {
     );
 
     leftParts = [
-      activeView === "new-intune"
-        ? "New Intune Workspace"
-        : "Intune Diagnostics",
+      getWorkspace(activeView).label,
       intuneAnalysisState.phase === "analyzing"
         ? "Analyzing"
         : intuneAnalysisState.phase === "error"
@@ -458,11 +456,17 @@ export function StatusBar() {
       deploymentPhase === "analyzing"
         ? "Analyzing"
         : deploymentPhase === "ready" && deploymentResult
-          ? `${deploymentResult.totalFiles} files`
+          ? `${deploymentResult.totalFiles} files${
+              deploymentResult.limitations.length > 0
+                ? " (scan incomplete)"
+                : ""
+            }`
           : deploymentPhase === "error"
             ? "Analysis failed"
             : deploymentPhase === "empty"
-              ? "No deployment logs found"
+              ? deploymentResult && deploymentResult.limitations.length > 0
+                ? "Scan incomplete"
+                : "No deployment logs found"
               : "Ready",
     ];
     if (deploymentResult) {
@@ -596,7 +600,7 @@ export function StatusBar() {
       : activeView === "intune"
         ? "Intune"
         : activeView === "new-intune"
-          ? "New Intune"
+          ? getWorkspace(activeView).label
           : activeView === "sysmon"
             ? "Sysmon Analysis"
             : activeView === "event-log"
