@@ -659,13 +659,9 @@ fn stage_live_capture_bundle(stdout: &str) -> Result<LiveCaptureBundle, crate::e
     })
 }
 
-/// Serialize one evidence value and write it, failing the capture rather than
-/// leaving the bundle quietly short of what its manifest lists.
-///
-/// The manifest write above already reports its own failure. An evidence file
-/// that could not be written is the same class of problem - the bundle would
-/// describe evidence it does not contain - so it is reported too, instead of
-/// discarding the error and returning a successful capture.
+/// Serialize and write one evidence value, propagating either failure so an
+/// incomplete capture is not reported as successful. The manifest write above
+/// already propagates its own failure.
 #[cfg(target_os = "windows")]
 fn write_evidence_json<T: serde::Serialize>(
     path: &std::path::Path,
