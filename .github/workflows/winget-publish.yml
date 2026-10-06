@@ -2,7 +2,7 @@ name: "CMTrace Open: Publish to winget"
 
 on:
   release:
-    types: [published, edited]
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -37,7 +37,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # Rehearsals still generate manifests. Publication skips versions already
+      # merged upstream, including versions submitted by another contributor.
+      - name: Check existing winget version
+        if: github.event_name == 'release' || inputs.submit
+        id: publication
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python .github/scripts/winget_publication_guard.py
+
       - name: Install komac
+        if: steps.publication.outputs.already_published != 'true'
         shell: pwsh
         run: |
           # Pinned rather than following `latest`, which let the publisher choose the
@@ -59,6 +71,7 @@ jobs:
           $komacDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Derive version and URLs
+        if: steps.publication.outputs.already_published != 'true'
         id: release
         shell: pwsh
         env:
@@ -77,6 +90,7 @@ jobs:
       # komac cannot manage (see .github/winget/locale-metadata.yaml) can be
       # applied before the pull request is opened.
       - name: Generate manifests
+        if: steps.publication.outputs.already_published != 'true'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
@@ -101,6 +115,7 @@ jobs:
         id: generate
 
       - name: Apply locale metadata
+        if: steps.publication.outputs.already_published != 'true'
         shell: pwsh
         run: |
           ./.github/scripts/Set-WingetLocaleMetadata.ps1 `
@@ -111,6 +126,7 @@ jobs:
       # rehearsal: it proves komac's --output-directory layout, the patch script,
       # and the resulting manifest are all correct without touching winget-pkgs.
       - name: Show patched manifest
+        if: steps.publication.outputs.already_published != 'true'
         shell: pwsh
         run: |
           $manifest = Get-ChildItem -Path "${{ steps.generate.outputs.output_dir }}" -Recurse -Filter '*.locale.en-US.yaml' -File |
@@ -124,7 +140,7 @@ jobs:
       # Release events submit automatically. Manual runs submit by default and
       # can opt into a rehearsal with submit=false.
       - name: Submit to winget-pkgs
-        if: github.event_name == 'release' || inputs.submit
+        if: (github.event_name == 'release' || inputs.submit) && steps.publication.outputs.already_published != 'true'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.WINGET_PAT }}
