@@ -16,6 +16,7 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use std::ptr::{null, null_mut};
+#[cfg(any(target_os = "windows", debug_assertions, test))]
 use std::time::Duration;
 #[cfg(target_os = "windows")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,7 +85,7 @@ fn analyze_dsregcmd_blocking(
     // (issue #627).
     let evidence = bundle_path.map(load_bundle_evidence).unwrap_or_default();
 
-    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence)?;
+    let result = crate::dsregcmd::analyze_text_with_evidence(input, evidence, chrono::Utc::now())?;
 
     log::info!(
         "event=dsregcmd_analysis_complete diagnostics_count={} join_type={:?}",
@@ -143,7 +144,39 @@ pub fn redact_dsregcmd_status_text(input: String) -> String {
     crate::dsregcmd::redacted_status_text(&input)
 }
 
-#[cfg(debug_assertions)]
+/// How many simulated I/O stages have started.
+///
+/// A count is what makes a responsiveness assertion about *the moment*: a task
+/// created during one stage has to complete before the next begins, which a thread
+/// asleep inside a stage cannot allow.
+#[cfg(test)]
+static SIMULATED_BUNDLE_IO_STAGES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// A gate a test can hold the next simulated stage open with.
+///
+/// A sleep models slow storage but not *observable* slow storage: a test inside the
+/// same runtime cannot ask anything while the thread is asleep in it. A gate lets the
+/// assertion happen while the stage is still running.
+#[cfg(test)]
+static SIMULATED_BUNDLE_IO_GATE: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>> =
+    std::sync::Mutex::new(None);
+
+/// Read by the responsiveness test, so they exist for tests only.
+#[cfg(test)]
+fn simulated_bundle_io_stages_entered() -> usize {
+    SIMULATED_BUNDLE_IO_STAGES.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Hold the next simulated stage until the returned sender fires.
+#[cfg(test)]
+fn hold_next_simulated_bundle_io_stage() -> std::sync::mpsc::Sender<()> {
+    let (release, hold) = std::sync::mpsc::channel();
+    *SIMULATED_BUNDLE_IO_GATE.lock().expect("lock the gate") = Some(hold);
+    release
+}
+
+#[cfg(any(debug_assertions, test))]
 fn simulate_bundle_io_delay(stage: &str) {
     let delay_ms = std::env::var("CMTRACE_SIMULATE_BUNDLE_IO_MS")
         .ok()
@@ -154,6 +187,26 @@ fn simulate_bundle_io_delay(stage: &str) {
         return;
     }
 
+    // A test synchronization point: a stage being *in progress* is the moment the
+    // assertion about responsiveness is about, and a counter is the smallest way to
+    // observe it from outside.
+    #[cfg(test)]
+    {
+        SIMULATED_BUNDLE_IO_STAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        // A held stage waits for the test rather than for the clock. Taken under the
+        // env guard, which every bundle analysis in this module holds, so the stage a
+        // test gates is the stage its own analysis entered.
+        let held = SIMULATED_BUNDLE_IO_GATE
+            .lock()
+            .ok()
+            .and_then(|mut gate| gate.take());
+        if let Some(hold) = held {
+            hold.recv_timeout(Duration::from_secs(30))
+                .expect("release the simulated I/O stage within 30s");
+        }
+    }
+
     log::debug!(
         "event=dsregcmd_simulated_bundle_io stage={} delay_ms={}",
         stage,
@@ -162,8 +215,7 @@ fn simulate_bundle_io_delay(stage: &str) {
     std::thread::sleep(Duration::from_millis(delay_ms));
 }
 
-#[cfg(not(debug_assertions))]
-#[inline(always)]
+#[cfg(not(any(debug_assertions, test)))]
 fn simulate_bundle_io_delay(_stage: &str) {}
 
 fn load_active_evidence_from_bundle(
@@ -218,7 +270,7 @@ fn load_active_evidence_from_bundle(
 
 fn load_event_log_from_bundle(
     bundle_path: &Path,
-) -> Option<crate::intune::models::EventLogAnalysis> {
+) -> Option<crate::intune::apps::windows::ime::models::EventLogAnalysis> {
     let path = bundle_path
         .join("evidence")
         .join("event-logs")
@@ -1500,10 +1552,77 @@ mod tests {
         );
         write_bundle_json(
             &event_logs_dir.join("dsregcmd-events.json"),
-            &crate::intune::models::EventLogAnalysis::default(),
+            &crate::intune::apps::windows::ime::models::EventLogAnalysis::default(),
         );
 
         temp_dir
+    }
+
+    fn wait_for_test_condition(
+        timeout: Duration,
+        ready: impl Fn() -> bool,
+        worker_finished: impl Fn() -> bool,
+    ) -> Result<(), &'static str> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if ready() {
+                return Ok(());
+            }
+            if worker_finished() {
+                return Err("worker finished before the simulated I/O stage started");
+            }
+            if Instant::now() >= deadline {
+                return Err("test condition was not reached before the deadline");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn simulated_bundle_io_hook_signals_in_test_builds() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
+        let _simulated_io = SimulatedBundleIoEnvGuard::set(1);
+        super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
+        let release = super::hold_next_simulated_bundle_io_stage();
+        release.send(()).expect("release test stage");
+        super::simulate_bundle_io_delay("test-build");
+        assert_eq!(super::simulated_bundle_io_stages_entered(), 1);
+    }
+
+    #[test]
+    fn simulated_stage_wait_fails_when_worker_exits_or_panics_before_entry() {
+        for panics in [false, true] {
+            let worker = std::thread::spawn(move || {
+                assert!(!panics, "simulated analysis failure before stage entry");
+            });
+            let observed =
+                wait_for_test_condition(Duration::from_secs(2), || false, || worker.is_finished());
+            assert_eq!(
+                observed,
+                Err("worker finished before the simulated I/O stage started")
+            );
+            assert_eq!(worker.join().is_err(), panics);
+        }
+    }
+
+    #[test]
+    fn simulated_stage_wait_times_out_and_releases_worker_before_join() {
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            hold.recv_timeout(Duration::from_secs(2))
+                .expect("release missing-stage worker");
+        });
+        let observed = wait_for_test_condition(Duration::ZERO, || false, || worker.is_finished());
+        let _ = release.send(());
+        wait_for_test_condition(Duration::from_secs(2), || worker.is_finished(), || false)
+            .expect("worker exits after release");
+        worker.join().expect("join missing-stage worker");
+        assert_eq!(
+            observed,
+            Err("test condition was not reached before the deadline")
+        );
     }
 
     #[test]
@@ -1511,59 +1630,81 @@ mod tests {
         let _env_guard = dsregcmd_test_env_lock()
             .lock()
             .expect("lock dsregcmd env guard");
-        let _simulated_io = SimulatedBundleIoEnvGuard::set(150);
+        let _simulated_io = SimulatedBundleIoEnvGuard::set(20);
         let bundle = build_dsregcmd_bundle_fixture();
 
-        // A current-thread runtime models Tauri's serialized command dispatch:
-        // one worker runs everything. Before the seam moved the analysis to
-        // the blocking pool, a synchronous command stalled every other queued
-        // task for the full analysis duration.
+        // The runtime runs on its own OS thread so that the assertions happen
+        // *outside* it. That is the whole point: a test inside a current-thread
+        // runtime cannot observe anything while a synchronous analysis blocks that
+        // thread, which is why three earlier versions of this assertion passed with
+        // the blocking-pool seam reverted.
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build current-thread runtime");
-        runtime.block_on(async move {
-            let spawned_at = Instant::now();
-            let unrelated_task = tokio::spawn(async move { spawned_at.elapsed() });
+        let handle = runtime.handle().clone();
+        let (unrelated_ran, unrelated_wait) = std::sync::mpsc::channel::<()>();
+        // The next simulated stage waits for this test rather than for the clock.
+        let release = super::hold_next_simulated_bundle_io_stage();
 
-            let analysis_started = Instant::now();
-            let result = analyze_dsregcmd(
-                DSREGCMD_SAMPLE.to_string(),
-                Some(bundle.path().to_string_lossy().to_string()),
-            )
-            .await
-            .expect("analyze dsregcmd bundle fixture");
-            let total_analysis_duration = analysis_started.elapsed();
-            let unrelated_latency = unrelated_task.await.expect("join unrelated latency task");
-
-            assert!(result.active_evidence.is_some(), "expected active evidence");
-            assert!(
-                result.scheduled_task_evidence.is_some(),
-                "expected scheduled task evidence"
-            );
-            assert!(
-                result.event_log_analysis.is_some(),
-                "expected event log analysis"
-            );
-
-            println!(
-                "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} unrelated_task_latency_ms={}",
-                total_analysis_duration.as_millis(),
-                unrelated_latency.as_millis()
-            );
-
-            assert!(
-                total_analysis_duration >= Duration::from_millis(7 * 140),
-                "expected simulated bundle analysis to take at least 980ms, saw {:?}",
-                total_analysis_duration
-            );
-            assert!(
-                unrelated_latency < Duration::from_millis(100),
-                "expected the command thread to stay responsive while the analysis runs off-thread; total={:?} unrelated={:?}",
-                total_analysis_duration,
-                unrelated_latency
-            );
+        super::SIMULATED_BUNDLE_IO_STAGES.store(0, std::sync::atomic::Ordering::SeqCst);
+        let analysis_started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                analyze_dsregcmd(
+                    DSREGCMD_SAMPLE.to_string(),
+                    Some(bundle.path().to_string_lossy().to_string()),
+                )
+                .await
+                .expect("analyze dsregcmd bundle fixture")
+            })
         });
+
+        // Wait until a stage is held, then ask whether the runtime scheduled the
+        // unrelated task while it was held. A runtime blocked *inside* the stage
+        // cannot; one whose slow work sits on the blocking pool can.
+        let stage_started = wait_for_test_condition(
+            Duration::from_secs(30),
+            || super::simulated_bundle_io_stages_entered() != 0,
+            || worker.is_finished(),
+        );
+        let observed = stage_started.and_then(|()| {
+            handle.spawn(async move {
+                let _ = unrelated_ran.send(());
+            });
+            unrelated_wait
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| {
+                    "the runtime did not schedule the unrelated task while the stage was held"
+                })
+        });
+        // Release on both success and failure, before waiting for worker completion.
+        let _ = release.send(());
+        wait_for_test_condition(Duration::from_secs(30), || worker.is_finished(), || false)
+            .expect("runtime thread exits after the simulated I/O stage is released");
+        let result = worker.join().expect("join the runtime thread");
+        let total_analysis_duration = analysis_started.elapsed();
+
+        println!(
+            "bundle_analysis_no_longer_blocks_the_command_thread_on_slow_storage total_analysis_ms={} stages={}",
+            total_analysis_duration.as_millis(),
+            super::simulated_bundle_io_stages_entered()
+        );
+
+        assert!(
+            observed.is_ok(),
+            "the runtime did not schedule the unrelated task while a simulated I/O stage \
+             was held: {observed:?}"
+        );
+        assert!(result.active_evidence.is_some(), "expected active evidence");
+        assert!(
+            result.scheduled_task_evidence.is_some(),
+            "expected scheduled task evidence"
+        );
+        assert!(
+            result.event_log_analysis.is_some(),
+            "expected event log analysis"
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1575,6 +1716,9 @@ mod tests {
     }
     #[test]
     fn network_issue_and_endpoint_unreachable_both_fire() {
+        let _env_guard = dsregcmd_test_env_lock()
+            .lock()
+            .expect("lock dsregcmd env guard");
         use super::analyze_dsregcmd;
 
         let temp_dir = tempfile::tempdir().expect("create temp dir");

@@ -194,8 +194,7 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
         "analyze_esp_evidence"
         | "start_esp_diagnostics_session"
         | "get_esp_diagnostics_session"
-        | "stop_esp_diagnostics_session"
-        | "restart_esp_as_administrator" => err_json(
+        | "stop_esp_diagnostics_session" => err_json(
             "ESP native commands require the Tauri runtime and are unavailable through the debug IPC bridge",
         ),
 
@@ -255,6 +254,15 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
                 None => return err_json("missing `code` argument"),
             };
             let result = crate::commands::error_lookup::lookup_error_code(code);
+            ok_json(&result)
+        }
+
+        "resolve_error_codes_in_text" => {
+            let text = match req.args.get("text").and_then(|v| v.as_str()) {
+                Some(t) => t.to_string(),
+                None => return err_json("missing `text` argument"),
+            };
+            let result = crate::commands::error_lookup::resolve_error_codes_in_text(text);
             ok_json(&result)
         }
 

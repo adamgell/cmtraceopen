@@ -1061,7 +1061,9 @@ mod windows_impl {
 
     #[cfg(feature = "esp-diagnostics")]
     impl PreparedEspGraphRequest {
-        pub fn execute(self) -> cmtraceopen_parser::esp::EspGraphOverlay {
+        pub fn execute(
+            self,
+        ) -> cmtraceopen_parser::intune::enrollment::windows::esp::EspGraphOverlay {
             let requested_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             super::esp::fetch_esp_graph_overlay(
@@ -2229,7 +2231,7 @@ mod windows_impl {
     #[cfg(all(test, feature = "esp-diagnostics"))]
     mod esp_tests {
         use super::*;
-        use cmtraceopen_parser::esp::EspIdentityEvidence;
+        use cmtraceopen_parser::intune::enrollment::windows::esp::EspIdentityEvidence;
 
         fn request(request_id: &str) -> EspGraphRequest {
             EspGraphRequest {

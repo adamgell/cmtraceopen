@@ -206,7 +206,6 @@ const espDefinition = {
   component: TestWorkspace,
   capabilities: {
     sidebar: false,
-    liveAcquisition: true,
   },
   toolbarAction: TestWorkspace,
   statusBarContent: TestWorkspace,
@@ -230,8 +229,7 @@ describe("workspace definition contract", () => {
     expect(hasSidebar(espDefinition)).toBe(false);
   });
 
-  it("supports generic live-acquisition metadata and lazy chrome slots", () => {
-    expect(espDefinition.capabilities.liveAcquisition).toBe(true);
+  it("supports lazy toolbar, status, and dock slots", () => {
     expect(espDefinition.toolbarAction).toBe(TestWorkspace);
     expect(espDefinition.statusBarContent).toBe(TestWorkspace);
     expect(espDefinition.dock).toBe(TestWorkspace);
@@ -347,7 +345,6 @@ describe("ESP workspace registration", () => {
     expect(espDiagnosticsWorkspace.platforms).toBe("all");
     expect(espDiagnosticsWorkspace.capabilities).toMatchObject({
       sidebar: false,
-      liveAcquisition: true,
       tabStrip: false,
     });
     expect(
@@ -600,7 +597,6 @@ describe("SCCM workspace registration", () => {
     expect(sccmWorkspace.platforms).toEqual(["windows"]);
     expect(sccmWorkspace.capabilities).toMatchObject({
       sidebar: false,
-      liveAcquisition: true,
       tabStrip: false,
       knownSources: false,
     });

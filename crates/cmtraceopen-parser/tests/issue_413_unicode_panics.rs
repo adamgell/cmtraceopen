@@ -6,8 +6,9 @@
 //! promoted to a fabricated structured timestamp.
 
 use cmtraceopen_parser::{
-    intune::{event_tracker, guid_registry::GuidRegistry, ime_parser},
+    intune::apps::windows::ime::{event_tracker, guid_registry::GuidRegistry},
     models::log_entry::{LogFormat, ParseResult, ParserImplementation},
+    parser::ccm::logical as ime_parser,
     parser::{self, ResolvedParser},
 };
 

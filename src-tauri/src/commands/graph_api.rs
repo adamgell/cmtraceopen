@@ -12,7 +12,7 @@ use crate::graph_api::{
     GraphResolutionResult,
 };
 #[cfg(feature = "esp-diagnostics")]
-use cmtraceopen_parser::esp::EspGraphOverlay;
+use cmtraceopen_parser::intune::enrollment::windows::esp::EspGraphOverlay;
 
 /// Owns the main window for the duration of an interactive WAM sign-in.
 ///

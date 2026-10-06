@@ -83,6 +83,7 @@ const parseResult: ParseResult = {
   parseErrors: 0,
   filePath: folderEntries[0].path,
   fileSize: 1,
+  modifiedUnixMs: null,
   byteOffset: 0,
 };
 
@@ -366,6 +367,19 @@ describe("switchToTab", () => {
     expect(useLogStore.getState().activeSource).toEqual(cbsSource);
     expect(useLogStore.getState().openFilePath).toBe(cbsSource.defaultPath);
     expect(commands.listLogSourceFolder).not.toHaveBeenCalled();
+  });
+
+  it("reports cached file metadata as unknown without replacing the source listing", async () => {
+    setCachedTabSnapshot(fileB, snapshotFor(fileB, "CIAgent line"));
+    const listed = [{ ...folderEntries[0], path: fileB, modifiedUnixMs: 1_700_000_000_000 }];
+    useLogStore.setState({ activeSource: folderSource, sourceEntries: listed });
+
+    const result = await loadSelectedLogFile(fileB, folderSource);
+
+    expect(result?.modifiedUnixMs).toBeNull();
+    expect(result?.entries).toEqual(snapshotFor(fileB, "CIAgent line").entries);
+    expect(useLogStore.getState().sourceEntries).toEqual(listed);
+    expect(commands.openLogFile).not.toHaveBeenCalled();
   });
 
   it("restores a cached migrated tab as a standalone file", async () => {
@@ -1016,6 +1030,33 @@ describe("source loading progress ownership", () => {
 
     expect(result?.source).toEqual(folderSource);
     expect(commands.listLogSourceFolder).toHaveBeenCalledWith(folderSource);
+  });
+
+  it("carries each file's modified time into the source entries", async () => {
+    const rows: ParseResult[] = [
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/AppEnforce.log",
+        modifiedUnixMs: 1_700_000_000_000,
+      },
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/CIAgent.log",
+        modifiedUnixMs: null,
+      },
+      {
+        ...parseResult,
+        filePath: "C:/Windows/CCM/Logs/Epoch.log",
+        modifiedUnixMs: 0,
+      },
+    ];
+    commands.parseFilesBatch.mockResolvedValueOnce(rows);
+
+    await loadFilesAsLogSource(rows.map((row) => row.filePath));
+
+    expect(
+      useLogStore.getState().sourceEntries.map((entry) => entry.modifiedUnixMs),
+    ).toEqual([1_700_000_000_000, null, 0]);
   });
 
   it("clears prior progress before starting a multi-file load", async () => {

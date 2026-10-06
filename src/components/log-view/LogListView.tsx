@@ -714,10 +714,19 @@ export function LogListView({ dataSource }: { dataSource?: LogListDataSource } =
     [displayEntries, selectedId, selectEntry]
   );
 
-  const activeRowDomId =
-    selectedEntryIndex >= 0
-      ? `log-list-row-${displayEntries[selectedEntryIndex].id}`
-      : undefined;
+  // Only name a row that is actually mounted. Rows come from the virtualizer, so
+  // scrolling the selection out of the window unmounts its element - and
+  // aria-activedescendant pointing at a nonexistent id leaves a screen reader
+  // with no reliable indication of the active row. KeyTree guards the same way.
+  const activeRowMounted =
+    selectedEntryIndex >= 0 &&
+    virtualizer
+      .getVirtualItems()
+      .some((virtualRow) => virtualRow.index === selectedEntryIndex);
+
+  const activeRowDomId = activeRowMounted
+    ? `log-list-row-${displayEntries[selectedEntryIndex].id}`
+    : undefined;
 
   return (
     <div

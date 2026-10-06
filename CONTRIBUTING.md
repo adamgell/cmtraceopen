@@ -41,6 +41,55 @@ npm run app:build:exe-only      # Executable only, no bundler
 npm run frontend:build          # tsc + vite build
 ```
 
+On Linux x86_64, the npm build commands prepare Tauri's AppRun launcher before
+AppImage bundling and signing. The first AppImage build downloads a pinned,
+SHA-256-verified launcher; later builds repair the cached launcher's permissions.
+If `bundle.useLocalToolsDir` is enabled, preparation uses Cargo metadata's target
+directory and its `.tauri` cache, matching the bundler.
+Debian/RPM-only and executable-only builds do not access that launcher or its cache:
+
+```bash
+npm run app:build:release -- --bundles deb
+npm run tauri -- bundle --bundles rpm
+npm run tauri -- build --config src-tauri/tauri.lite.conf.json --bundles deb -- --no-default-features
+```
+
+The wrapper preserves CLI arguments and config precedence. It adds the AppImage
+profile before user config overrides; an explicit user `beforeBundleCommand`
+therefore replaces the preparation hook. Config-only `bundle.targets` overrides
+also select which bundles need preparation. Flags after `--` belong to Cargo;
+`app:build:lite` already includes that delimiter, so use the generic command above
+to select its bundle formats.
+
+Direct `npx tauri` or `cargo tauri` calls bypass the npm wrapper. To prepare an
+AppImage through those entry points, explicitly opt into
+`--config src-tauri/tauri.appimage.conf.json`. Use the npm commands for automatic
+format selection; a raw invocation with that profile always prepares AppRun on
+Linux x86_64. Launcher permissions do not establish Linux library compatibility.
+
+The Linux application packaging jobs use Ubuntu 22.04 with current Jammy
+packages. Their compiled caches include the OS baseline. An opt-in workflow
+context makes the npm wrapper inspect the completed AppImage before returning
+success to the pinned Tauri action, including its release uploader. Inspection
+reads the archive and ELF metadata without running the AppImage: root-owned
+0755 launchers, the pinned launcher hash, every nested ELF's strong GLIBC imports
+through 2.35, and versioned dependency resolution against bundled libraries and
+official Jammy providers. Missing tools, incomplete inspection and cancellation
+fail the Linux build. Signing happens before this read-only inspection.
+The workflows install hash-pinned pure-Python inspection libraries from
+`scripts/appimage-abi-requirements.txt` into an isolated environment; auditwheel
+is used only for static dependency reading, never repair or artifact execution.
+Conflicting providers in the launcher's `LD_LIBRARY_PATH` and ELF search paths
+are rejected conservatively because auditwheel's search precedence differs from
+glibc's. Symlink aliases to the same provider are accepted.
+
+The `provenance/appimage-abi.json` CI artifact records the source/build commits,
+runner image, package origins, lockfile hashes, resolved bundling-tool hashes and
+artifact hash. Some Tauri tools come from mutable upstream URLs; recording their
+hashes does not make those inputs reproducible. Static inspection does not prove
+FUSE mounting, WebKit rendering or log workflows. Those require separate runtime
+validation of the same artifact on Ubuntu 22.04 and newer systems.
+
 ### Rust Commands
 
 Run from `src-tauri/`:
@@ -60,11 +109,44 @@ npx tsc --noEmit
 
 ### CI Checks
 
-Pull requests must pass:
+Six required status checks, on the `Protect` ruleset over `main`:
 
-1. `cargo check` + `cargo test` + `cargo clippy -- -D warnings` (Ubuntu)
-2. `npx tsc --noEmit` (Node 20)
-3. Tauri build on macOS-arm64, Windows-x64, Linux-x64
+1. **Check & Test (Rust)** — `cargo check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, then the same with `--no-default-features` for the Lite edition, then the parser crate's tests and clippy, then `cargo deny check` and `cargo audit`.
+2. **TypeScript Check** — the `frontend` job, which is more than its name: `npm ci`, `npx tsc --noEmit`, `npm run test` (the vitest suite), `TZ=UTC npm run test -- src/lib/date-time-format.test.ts`, `TZ=Europe/London npm run test -- src/lib/date-time-format.test.ts`, the bundle-output contract tests under `scripts/` and release-script contract tests under `.github/scripts/` via `node --test`, and `npm audit --audit-level=high` (the audit is advisory).
+3. **E2E (Playwright)** — `npm run test:e2e`.
+4. **Build** — macOS-arm64, Windows-x64 and Linux-x64, three separate required contexts.
+
+Three more jobs run on every PR but are not required to merge:
+
+- **Source Quality** — `cargo fmt --all -- --check`, changed-range whitespace, and `cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown`. The wasm check is a purity constraint: the parser crate must stay wasm32-compatible.
+- **Rust MSRV (1.88)** — on Ubuntu and Windows. Anything added has to build on 1.88, not only on the pinned toolchain.
+- **ESP Diagnostics (Windows)** — installer file-association cleanup, parser tests and Clippy, native and Graph ESP diagnostics, and the full application's all-features build, tests, manifest verification and Clippy on Windows.
+
+Native `cargo check` and `cargo test` on Linux or macOS skip `#[cfg(target_os = "windows")]` code, tests included. Contributors on those hosts need the Windows CI jobs or a separate Windows run to verify that code; contributors developing on Windows can compile and test it locally. State which checks actually ran in the pull request. Two compile errors in one pull request reached CI from a non-Windows workstation that way — one an unqualified path, one a missing import for a Windows-gated test — which is what #763 records.
+
+## Before you push
+
+Run this focused local checklist from the repository root before pushing. It covers formatting, the default Rust configuration, parser tests and the frontend; it does not replace the remaining CI checks listed above, including Lite, audits, E2E and platform builds:
+
+```bash
+cargo fmt --all -- --check                                  # Source Quality, the formatting half
+(cd src-tauri && cargo check && cargo test)                 # default Rust configuration
+(cd src-tauri && cargo clippy --all-targets -- -D warnings)
+cargo test -p cmtraceopen-parser                            # the parser crate's own suite
+npx tsc --noEmit                                            # TypeScript Check
+npm run test                                                # the vitest suite
+```
+
+`cargo fmt --all -- --check` is the one most easily missed. A hand-wrapped expression that compiles and passes every test it touches still fails `Source Quality`, and the fix is a single `cargo fmt --all`.
+
+## Changelog
+
+Every user-visible change gets an entry in `CHANGELOG.md` under `## [Unreleased]`, added in the
+pull request that makes the change. The section documents fixes as well as features, including
+internal ones — the updater-manifest job and the supply-chain bump are both in it — so the test
+is whether a reader of the changelog would otherwise not know it happened.
+
+Keep entries to what changed and why it mattered; the diff is the record of how.
 
 ## MCP Servers (optional)
 
@@ -155,6 +237,6 @@ cd src-tauri && cargo bench
 ## Project Links
 
 - [Changelog](CHANGELOG.md)
-- [Feature Roadmap](FEATURE_IMPROVEMENTS.md)
-- [DSRegCmd Troubleshooting Guide](DSREGCMD_TROUBLESHOOTING.md)
+- [Wiki](https://github.com/adamgell/CMTraceOpen/wiki)
+- [DSRegCmd Workspace Guide](https://github.com/adamgell/CMTraceOpen/wiki/DSRegCmd-Workspace)
 - [Disclaimer](DISCLAIMER.md)

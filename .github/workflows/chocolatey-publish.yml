@@ -1,0 +1,142 @@
+name: 'CMTrace Open: Publish to Chocolatey'
+
+on:
+  release:
+    types: [published]
+  # Backfill only: v1.6.2 predates this workflow. Future releases use published.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release to backfill through the normal publishing jobs'
+        type: choice
+        options: [v1.6.2]
+        default: v1.6.2
+        required: true
+      publish:
+        description: 'Submit the backfill after validation (false checks Windows packing only)'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chocolatey-publish-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: >-
+      github.repository == 'adamgell/cmtraceopen' &&
+      ((github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.tag == 'v1.6.2'))
+    runs-on: windows-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test package validation
+        shell: pwsh
+        run: |
+          ./scripts/chocolatey-package.test.ps1
+          ./scripts/chocolatey-publish.test.ps1
+      - name: Fetch published installer and metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$') { throw 'Expected stable release tag' }
+          $version = $env:RELEASE_TAG.Substring(1)
+          gh api "repos/adamgell/cmtraceopen/releases/tags/$env:RELEASE_TAG" > "$env:RUNNER_TEMP/release.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Release metadata fetch failed' }
+          $release = Get-Content "$env:RUNNER_TEMP/release.json" -Raw | ConvertFrom-Json
+          if ($release.tag_name -cne $env:RELEASE_TAG -or $release.draft -ne $false -or $release.prerelease -ne $false) { throw 'Release must be published and stable' }
+          if ($env:RELEASE_ID -and [string]$release.id -cne $env:RELEASE_ID) { throw 'Release identity changed' }
+          gh release download $env:RELEASE_TAG --repo adamgell/cmtraceopen --pattern "CMTrace-Open_${version}_x64.msi" --dir "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset download failed' }
+      - name: Verify release bytes and pack
+        id: pack
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_TAG.Substring(1)
+          $root = "$env:RUNNER_TEMP/chocolatey-source"
+          $validated = ./scripts/prepare-chocolatey-package.ps1 -Tag $env:RELEASE_TAG -OutputDirectory $root -ReleaseMetadataPath "$env:RUNNER_TEMP/release.json" -InstallerPath "$env:RUNNER_TEMP/CMTrace-Open_${version}_x64.msi"
+          $output = "$env:RUNNER_TEMP/chocolatey-package"
+          New-Item -ItemType Directory -Path $output | Out-Null
+          choco pack "$root/cmtraceopen.nuspec" --output-directory $output
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey pack failed' }
+          $package = "$output/cmtraceopen.$($validated.Version).nupkg"
+          $hash = (Get-FileHash $package -Algorithm SHA256).Hash.ToLowerInvariant()
+          "version=$($validated.Version)" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "Package: cmtraceopen.$($validated.Version).nupkg; SHA256: $hash" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chocolatey-package
+          path: ${{ runner.temp }}/chocolatey-package/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: package
+    if: >-
+      github.repository == 'adamgell/cmtraceopen' &&
+      ((github.event_name == 'release' && !github.event.release.draft && !github.event.release.prerelease) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.tag == 'v1.6.2' && inputs.publish))
+    environment: release
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: chocolatey-package
+          path: package
+      - name: Verify package and check existing version
+        id: existing
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+          PACKAGE_SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+$' -or $env:PACKAGE_SHA256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid package identity' }
+          $file = "package/cmtraceopen.$env:PACKAGE_VERSION.nupkg"
+          if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'Package hash changed after validation' }
+          # BEGIN existing-version guard (exercised by the focused test script)
+          $response = Invoke-WebRequest -Uri "https://community.chocolatey.org/api/v2/package/cmtraceopen/$env:PACKAGE_VERSION" -OutFile existing.nupkg -PassThru -SkipHttpErrorCheck -TimeoutSec 60
+          if ($response.StatusCode -eq 404) {
+            'needs_push=true' >> $env:GITHUB_OUTPUT
+          } elseif ($response.StatusCode -eq 200) {
+            if ((Get-FileHash existing.nupkg -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'This version already exists with different package bytes; refusing to replace it' }
+            'needs_push=false' >> $env:GITHUB_OUTPUT
+            'Identical package version already exists; no upload needed.' >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            throw "Cannot determine existing package state (HTTP $($response.StatusCode)); refusing to publish"
+          }
+          # END existing-version guard
+      - name: Submit to Chocolatey Community Repository
+        if: steps.existing.outputs.needs_push == 'true'
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+          PACKAGE_SHA256: ${{ needs.package.outputs.sha256 }}
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CHOCOLATEY_API_KEY)) { throw 'Chocolatey publishing credential is not configured' }
+          $file = "package/cmtraceopen.$env:PACKAGE_VERSION.nupkg"
+          if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PACKAGE_SHA256) { throw 'Package changed before upload' }
+          choco push $file --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY --limit-output
+          if ($LASTEXITCODE -ne 0) { throw 'Chocolatey submission failed' }
+          'Package submitted; Chocolatey moderation and public availability must be checked separately.' >> $env:GITHUB_STEP_SUMMARY
