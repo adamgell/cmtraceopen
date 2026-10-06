@@ -36,7 +36,7 @@ fn synthetic_intune_benchmark_fixture_matches_pipeline_counts() {
     let bench_file = common::build_intune_bench_file(1_024);
     let path = bench_file.path_string();
     let content = fs::read_to_string(bench_file.path()).unwrap();
-    let lines = app_lib::intune::ime_parser::parse_ime_content(&content);
+    let lines = cmtraceopen_parser::parser::ccm::logical::parse_ime_content(&content);
     assert_eq!(
         content.len(),
         bench_file.file_size_bytes,
@@ -48,22 +48,26 @@ fn synthetic_intune_benchmark_fixture_matches_pipeline_counts() {
         "Expected all IME logical records parsed"
     );
 
-    let registry = app_lib::intune::guid_registry::GuidRegistry::new();
-    let events = app_lib::intune::event_tracker::extract_events(&lines, &path, &registry);
+    let registry = app_lib::intune::apps::windows::ime::guid_registry::GuidRegistry::new();
+    let events = app_lib::intune::apps::windows::ime::event_tracker::extract_events(
+        &lines, &path, &registry,
+    );
     assert_eq!(
         events.len(),
         bench_file.expected_event_count,
         "Expected one paired content-download event per app"
     );
 
-    let timeline = app_lib::intune::timeline::build_timeline(events);
+    let timeline = app_lib::intune::apps::windows::ime::timeline::build_timeline(events);
     assert_eq!(
         timeline.len(),
         bench_file.expected_timeline_count,
         "Expected timeline deduplication to preserve one event per app"
     );
 
-    let downloads = app_lib::intune::download_stats::extract_downloads(&lines, &path, &registry);
+    let downloads = app_lib::intune::apps::windows::ime::download_stats::extract_downloads(
+        &lines, &path, &registry,
+    );
     assert_eq!(
         downloads.len(),
         bench_file.expected_download_count,

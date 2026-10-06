@@ -16,14 +16,11 @@ export interface WorkspaceActionLabels {
 export interface WorkspaceCapabilities {
   /** Whether the application sidebar is visible. Defaults to true if omitted. */
   sidebar?: boolean;
-  /** Whether the workspace can acquire live evidence on the current backend. */
-  liveAcquisition?: boolean;
   tabStrip?: boolean;
   findBar?: boolean;
   detailsPane?: boolean;
   infoPane?: boolean;
   footerBar?: boolean;
-  multiFileDrop?: boolean;
   fontSizing?: boolean;
   /** Whether the toolbar's known-source presets menu is available. Defaults to true if omitted. */
   knownSources?: boolean;

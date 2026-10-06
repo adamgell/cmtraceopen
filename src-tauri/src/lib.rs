@@ -5,12 +5,16 @@ mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
 pub mod elevation;
+#[cfg(any(feature = "collector", feature = "esp-diagnostics"))]
+mod env_expand;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "esp-diagnostics")]
 pub mod esp;
 #[cfg(feature = "event-log")]
 pub mod event_log;
+pub mod fs_identity;
+
 pub mod graph_api;
 pub mod intune;
 #[cfg(debug_assertions)]
@@ -348,8 +352,6 @@ pub fn run() {
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::stop_esp_diagnostics_session,
             #[cfg(feature = "esp-diagnostics")]
-            commands::esp_diagnostics::restart_esp_as_administrator,
-            #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::esp_flip_app_installed,
             #[cfg(feature = "esp-diagnostics")]
             commands::esp_diagnostics::esp_restore_app_state,
@@ -383,6 +385,7 @@ pub fn run() {
             commands::filter::apply_filter,
             commands::error_lookup::lookup_error_code,
             commands::error_lookup::search_error_codes,
+            commands::error_lookup::resolve_error_codes_in_text,
             #[cfg(feature = "intune-diagnostics")]
             commands::intune::analyze_intune_logs,
             #[cfg(feature = "deployment")]
@@ -723,7 +726,7 @@ mod tests {
     }
 
     #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
-    use cmtraceopen_parser::esp::EspIdentityEvidence;
+    use cmtraceopen_parser::intune::enrollment::windows::esp::EspIdentityEvidence;
     #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]
     use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 

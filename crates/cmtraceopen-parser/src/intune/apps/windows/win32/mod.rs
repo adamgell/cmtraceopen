@@ -6,7 +6,7 @@
 //!
 //! A **semantic analyzer over supplied IME and installer evidence**, not a log
 //! format. Raw records are framed into complete logical records by the shared
-//! CCM parser first ([`crate::intune::ime_parser`]); only then are signals
+//! CCM parser first ([`crate::parser::ccm::logical`]); only then are signals
 //! classified, keyed, and reduced. The module performs no I/O of any kind: no
 //! filesystem, registry, event log, Graph, or process execution. The caller
 //! reads and decodes each artifact and hands over the text.
@@ -43,7 +43,7 @@
 //!
 //! # Relationship to the older IME modules
 //!
-//! `intune::event_tracker`, `intune::download_stats`, and `intune::timeline`
+//! `intune::apps::windows::ime::event_tracker`, `intune::apps::windows::ime::download_stats`, and `intune::apps::windows::ime::timeline`
 //! keep their public APIs and their current behavior; nothing here changes what
 //! they return, and existing consumers are unaffected. This module is the
 //! canonical *transaction* view and owns that behavior alone. It adds no second

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::intune::models::IntuneEvent;
+use crate::intune::apps::windows::ime::models::IntuneEvent;
 use crate::models::log_entry::Severity;
 use crate::timeline::models::*;
 

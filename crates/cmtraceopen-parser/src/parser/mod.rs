@@ -66,6 +66,31 @@ pub(crate) fn local_wall_clock_millis(naive: NaiveDateTime) -> Option<i64> {
     }
 }
 
+/// The local offset at a zoneless wall clock, in minutes to add to UTC to
+/// obtain local time (negative west of Greenwich).
+///
+/// Native single mappings supply an offset; gaps and repeated clocks return
+/// `None`. The browser backend also returns `None` because it cannot report
+/// uniqueness, preserving the caller's existing fallback for every local clock.
+/// The gap-clamped epoch from [`local_wall_clock_millis`] cannot supply an offset.
+pub(crate) fn local_minus_utc_minutes_at(naive: NaiveDateTime) -> Option<i32> {
+    // This crate enables Chrono's default `wasmbind` feature. Match its browser
+    // backend, which reports Single even for gaps and folds. Other WASM targets
+    // use their native/UTC backend and retain its existing mapping behavior.
+    if cfg!(all(
+        target_arch = "wasm32",
+        not(any(
+            target_os = "emscripten",
+            target_os = "wasi",
+            target_os = "linux"
+        ))
+    )) {
+        return None;
+    }
+    let local = naive.and_local_timezone(Local).single()?;
+    Some(local.offset().local_minus_utc() / 60)
+}
+
 /// The first instant the local zone can represent at or after `naive`, for a
 /// wall clock that falls inside a DST gap.
 ///
@@ -131,6 +156,8 @@ pub fn parse_content(
         parse_errors: parsed_chunk.parse_errors,
         file_path: path_obj.to_string_lossy().to_string(),
         file_size,
+        // No file was read here, so there is no modified time to report.
+        modified_unix_ms: None,
         byte_offset: file_size,
     };
 
@@ -602,6 +629,53 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         assert!(!parsed.entries[0].error_code_spans.is_empty());
         assert_eq!(parsed.entries[0].error_code_spans[0].code_hex, "0x80070005");
+    }
+
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi", target_os = "linux"))
+    ))]
+    #[test]
+    fn test_browser_offset_defers_every_clock_to_existing_fallback() {
+        for clock in [
+            "2026-01-15 12:34:56",
+            "2026-07-15 12:34:56",
+            "2026-03-29 01:30:00",
+            "2026-03-29 01:45:00",
+            "2026-10-25 01:30:00",
+        ] {
+            let naive = NaiveDateTime::parse_from_str(clock, "%Y-%m-%d %H:%M:%S").unwrap();
+            assert_eq!(local_minus_utc_minutes_at(naive), None, "{clock}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_local_offset_rejects_gap_and_fold() {
+        const CHILD: &str = "CMTRACE_LOCAL_OFFSET_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "parser::tests::test_local_offset_rejects_gap_and_fold",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("TZ", "Europe/London")
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            return;
+        }
+        for clock in [
+            "2026-03-29 01:30:00",
+            "2026-03-29 01:45:00",
+            "2026-10-25 01:30:00",
+        ] {
+            let naive = NaiveDateTime::parse_from_str(clock, "%Y-%m-%d %H:%M:%S").unwrap();
+            assert_eq!(local_minus_utc_minutes_at(naive), None, "{clock}");
+        }
     }
 
     #[test]

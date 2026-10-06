@@ -1,6 +1,6 @@
 //! Conservative findings derived from an immutable Store analysis snapshot.
 //!
-//! Structure follows `crate::esp::rules`: one public entry point composed of one
+//! Structure follows `crate::intune::enrollment::windows::esp::rules`: one public entry point composed of one
 //! private `push_*` per rule, each of which emits only when its triggering
 //! evidence is actually present. Every finding therefore satisfies
 //! [`IntuneFinding::is_evidence_backed`].

@@ -2137,7 +2137,7 @@ fn resolver_caller_falls_back_for_malformed_batches_and_preserves_results() {
 #[cfg(feature = "esp-diagnostics")]
 mod esp_correlation_tests {
     use app_lib::graph_api::correlation::correlate_managed_device;
-    use cmtraceopen_parser::esp::{
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
         EspClassifiedString, EspCorrelationConfidence, EspEvidenceRef, EspGraphManagedDevice,
         EspIdentityEvidence, EspSensitivity,
     };
@@ -2396,7 +2396,7 @@ mod esp_orchestration_tests {
         EspGraphScriptReference, APPS_SCOPE, CONFIGURATION_SCOPE, MANAGED_DEVICES_SCOPE,
     };
     use app_lib::graph_api::models::{GraphTransportRequest, GraphTransportResponse};
-    use cmtraceopen_parser::esp::{
+    use cmtraceopen_parser::intune::enrollment::windows::esp::{
         EspClassifiedString, EspCorrelationConfidence, EspGraphPolicyKind,
         EspGraphPolicyStatusDetailKind, EspGraphScriptKind, EspGraphTargeting, EspIdentityEvidence,
         EspJoinMode, EspSensitivity, GraphApiVersion, GraphSectionStatus,

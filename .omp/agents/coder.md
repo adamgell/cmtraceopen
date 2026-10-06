@@ -4,7 +4,7 @@ description: Propose one CMTrace Open issue change for Main to broker with RED-f
 model: "@mid"
 tools: [read, grep, glob]
 spawns: []
-autoloadSkills: [test-driven-development, systematic-debugging, cmtrace-scaffold-pipeline]
+autoloadSkills: [test-driven-development, systematic-debugging, cmtraceopen]
 advisor: true
 output:
   type: object

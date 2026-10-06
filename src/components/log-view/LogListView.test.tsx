@@ -10,6 +10,11 @@ import type { LogEntry, LogSource } from "../../types/log";
 
 const calcAutoFitWidthMock = vi.fn();
 
+// Null means "every row is mounted", which is what the other tests assume. A
+// number restricts the window to the first N rows, so a test can scroll the
+// selection out of it.
+const virtualWindow = vi.hoisted(() => ({ limit: null as number | null }));
+
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({
     count,
@@ -20,11 +25,14 @@ vi.mock("@tanstack/react-virtual", () => ({
   }) => ({
     getTotalSize: () => count * estimateSize(),
     getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        size: estimateSize(),
-        start: index * estimateSize(),
-      })),
+      Array.from(
+        { length: virtualWindow.limit === null ? count : Math.min(count, virtualWindow.limit) },
+        (_, index) => ({
+          index,
+          size: estimateSize(),
+          start: index * estimateSize(),
+        }),
+      ),
     scrollToIndex: vi.fn(),
   }),
 }));
@@ -149,6 +157,7 @@ describe("LogListView", () => {
   });
 
   afterEach(() => {
+    virtualWindow.limit = null;
     cleanup();
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
@@ -277,4 +286,31 @@ describe("LogListView", () => {
     expect(saveMarkers).toHaveBeenNthCalledWith(1, firstPath);
     expect(saveMarkers).toHaveBeenNthCalledWith(2, secondPath);
   });
+  it("names the active row when it is inside the virtual window", () => {
+    virtualWindow.limit = null;
+    const entries = [1, 2, 3, 4, 5].map((n) => makeEntry(n, "/logs/alpha.log"));
+    setLogViewState({ kind: "file", path: "/logs/alpha.log" }, entries, "single-file");
+    useLogStore.setState({ selectedId: entries[4].id });
+
+    const { container } = render(<LogListView />);
+
+    const active = container.querySelector("[aria-activedescendant]");
+    expect(active?.getAttribute("aria-activedescendant")).toBe(
+      `log-list-row-${entries[4].id}`,
+    );
+  });
+
+  it("omits aria-activedescendant when the selected row is outside the virtual window", () => {
+    // Only rows 0 and 1 are mounted, so row 4's element does not exist. Naming it
+    // would leave a screen reader with a reference to nothing.
+    virtualWindow.limit = 2;
+    const entries = [1, 2, 3, 4, 5].map((n) => makeEntry(n, "/logs/alpha.log"));
+    setLogViewState({ kind: "file", path: "/logs/alpha.log" }, entries, "single-file");
+    useLogStore.setState({ selectedId: entries[4].id });
+
+    const { container } = render(<LogListView />);
+
+    expect(container.querySelector("[aria-activedescendant]")).toBeNull();
+  });
+
 });

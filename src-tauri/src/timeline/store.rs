@@ -1,4 +1,4 @@
-use crate::intune::models::IntuneEvent;
+use crate::intune::apps::windows::ime::models::IntuneEvent;
 use crate::timeline::models::*;
 use std::collections::HashMap;
 

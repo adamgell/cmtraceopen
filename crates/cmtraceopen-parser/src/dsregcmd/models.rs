@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::intune::models::{EventLogAnalysis, IntuneDiagnosticSeverity};
+use crate::intune::apps::windows::ime::models::{EventLogAnalysis, IntuneDiagnosticSeverity};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum DsregcmdJoinType {
