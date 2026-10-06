@@ -82,7 +82,7 @@
 
 use crate::intune::apps::windows::common::{
     caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
-    FoldedChar,
+    redact_text_with_spans, FoldedChar,
 };
 use crate::intune::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
@@ -161,65 +161,6 @@ struct IdentityLiterals {
     values: Vec<(String, String)>,
 }
 
-/// The spans of replacement tokens already present in a value.
-///
-/// A token is `[kind:16 hex]` -- what [`identity_token`] mints -- and the literal
-/// scrub must not edit inside one. A classified value can be a kind word: `host`
-/// and `user` are four bytes, which the identifier floor admits, and matching one
-/// of those inside `[host:0123456789abcdef]` would leave a nested token where the
-/// projection promised a stable one.
-fn replacement_token_spans(value: &str) -> Vec<(usize, usize)> {
-    // Every step here is bounded, and the walk only moves forward: a field full
-    // of `[` and no colon must not cost a scan to the end of the text for each
-    // one. The kind is short by construction and the body is exactly sixteen hex
-    // characters, so both searches are constant-length.
-    const MAX_KIND_BYTES: usize = 24;
-    const TOKEN_BODY_BYTES: usize = 16;
-    let bytes = value.as_bytes();
-    let mut spans = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'[' {
-            index += 1;
-            continue;
-        }
-        let window_end = (index + 1 + MAX_KIND_BYTES).min(bytes.len());
-        let mut colon = None;
-        for (offset, byte) in bytes[index + 1..window_end].iter().enumerate() {
-            match *byte {
-                b':' => {
-                    colon = Some(index + 1 + offset);
-                    break;
-                }
-                byte if byte.is_ascii_lowercase() => {}
-                _ => break,
-            }
-        }
-        let Some(colon) = colon else {
-            index += 1;
-            continue;
-        };
-        let body_start = colon + 1;
-        let body_end = body_start + TOKEN_BODY_BYTES;
-        // The shared grammar mints a nonempty lowercase-letter kind, and this
-        // scanner has to agree exactly: a wider spelling let `[_:deadbeef…]`
-        // shield a classified identifier from the scrub.
-        let is_token = colon > index + 1
-            && body_end < bytes.len()
-            && bytes[body_end] == b']'
-            && bytes[body_start..body_end]
-                .iter()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
-        if is_token {
-            spans.push((index, body_end + 1));
-            index = body_end + 1;
-            continue;
-        }
-        index += 1;
-    }
-    spans
-}
-
 impl IdentityLiterals {
     /// Classify one identifier: a domain, tenant id, device id, thumbprint,
     /// UPN or host name.
@@ -288,7 +229,8 @@ impl IdentityLiterals {
 
     /// Replace every occurrence of a classified literal, whatever its case.
     ///
-    /// Runs after the shared grammar in every free-text pipeline: the shaped
+    /// Runs on source gaps after the shared grammar in each free-text pipeline:
+    /// generated spans are copied by the projection. The shaped
     /// rules must see the original text, or scrubbing a tenant domain on its
     /// own would break the mail-address match on a principal name that contains
     /// it and leak the local part.
@@ -300,16 +242,10 @@ impl IdentityLiterals {
         // One folded view of the text, shared by every literal. The fold is the
         // grammar's, not this lane's.
         let folded = fold_with_offsets(value);
-        // A token this pass mints is not text to scrub: a classified value
-        // that happens to be a token's kind word (`host`, `user`) would
-        // otherwise rewrite the token from the inside.
-        let tokens = replacement_token_spans(value);
         let mut scrubbed = String::with_capacity(value.len());
         let mut cursor = 0;
 
-        while let Some((start, end, token)) =
-            self.leftmost_longest_match(value, &folded, cursor, &tokens)
-        {
+        while let Some((start, end, token)) = self.leftmost_longest_match(value, &folded, cursor) {
             scrubbed.push_str(&value[cursor..start]);
             scrubbed.push_str(token);
             cursor = end;
@@ -330,26 +266,10 @@ impl IdentityLiterals {
         haystack: &str,
         folded: &[FoldedChar],
         cursor: usize,
-        tokens: &[(usize, usize)],
     ) -> Option<(usize, usize, &'a str)> {
         let mut best: Option<(usize, usize, &'a str)> = None;
         for (literal, token) in &self.values {
-            // A candidate inside an already-minted token is not a mention of the
-            // identity; the next one after that token may be.
-            let mut search = cursor;
-            let found = loop {
-                let Some(candidate) = find_ignore_case(haystack, literal, folded, search) else {
-                    break None;
-                };
-                match tokens
-                    .iter()
-                    .find(|(start, end)| candidate.0 >= *start && candidate.0 < *end)
-                {
-                    Some((_, end)) => search = *end,
-                    None => break Some(candidate),
-                }
-            };
-            let Some((start, end)) = found else {
+            let Some((start, end)) = find_ignore_case(haystack, literal, folded, cursor) else {
                 continue;
             };
             let replaces = best.is_none_or(|(best_start, best_end, _)| {
@@ -407,7 +327,7 @@ impl Projection {
     /// A free-text field: the shared grammar first, then this lane's literal
     /// scrub.
     fn text(&self, value: &str) -> String {
-        self.literals.scrub(&redact_text(value))
+        redact_text_with_spans(value).map_source_text(|source| self.literals.scrub(source))
     }
 
     fn text_opt(&self, value: &Option<String>) -> Option<String> {
@@ -1240,13 +1160,7 @@ mod tests {
         assert_eq!(literals.token_for("ad"), None);
     }
 
-    /// A classified value that is also a token's kind word cannot edit a token.
-    ///
-    /// A span whose body is not the hex the grammar writes is not a token.
-    ///
-    /// The grammar mints lowercase hex, so a span spelled with capitals can never
-    /// be one of its tokens -- treating it as a token is the same hole as
-    /// accepting a wider kind, one field to the right.
+    /// Token-shaped input is source, including uppercase hash spellings.
     #[test]
     fn a_span_with_uppercase_hex_is_not_a_token() {
         let mut literals = IdentityLiterals::default();
@@ -1263,12 +1177,7 @@ mod tests {
         );
     }
 
-    /// A bracketed span the shared grammar would not mint is not a token.
-    ///
-    /// The grammar mints `[kind:hex]` with a nonempty lowercase-letter kind, and
-    /// this scanner has to agree exactly: accepting a wider spelling let text
-    /// such as `[_:deadbeefdeadbeef]` shield a classified identifier from the
-    /// scrub, which is a leak rather than a formatting question.
+    /// Malformed token-shaped source has no exemption either.
     #[test]
     fn a_span_the_grammar_would_not_mint_is_scrubbed() {
         let mut literals = IdentityLiterals::default();
@@ -1282,39 +1191,56 @@ mod tests {
         );
     }
 
-    /// Many `[` characters with no colon are walked once, not rescanned.
-    ///
-    /// The scan is bounded and only moves forward, so a field of brackets costs a
-    /// single pass; this pins the behaviour, not a timing.
     #[test]
-    fn a_field_of_brackets_is_walked_without_minting_a_token() {
+    fn raw_token_spelling_never_grants_an_exemption() {
         let mut literals = IdentityLiterals::default();
-        literals.push_identifier("host", KIND_HOST);
-
-        let text = format!("{}host [host:0123456789abcdef]", "[".repeat(64));
-        let scrubbed = literals.scrub(&text);
-
-        assert!(scrubbed.contains("[host:0123456789abcdef]"), "{scrubbed}");
-        assert!(!scrubbed.contains("[ host"), "{scrubbed}");
+        literals.push_identifier("deadbeef", KIND_HOST);
+        let token = literals.token_for("deadbeef").unwrap();
+        for kind in ["host", "unknown", "", "_", "HOST"] {
+            for body in ["deadbeefdeadbeef", "DEADBEEFDEADBEEF"] {
+                assert_eq!(
+                    literals.scrub(&format!("é [{kind}:{body}] deadbeef τέλος")),
+                    format!("é [{kind}:{token}{token}] {token} τέλος"),
+                );
+            }
+        }
     }
 
-    /// Four-byte identifiers are admitted now, and `host` is one: without this,
-    /// a grammar-produced `[host:…]` token in the same text would be scrubbed
-    /// from the inside and come out malformed.
+    /// A token-kind word is scrubbed in raw source, while an actual emission
+    /// from the shared grammar survives the same invocation.
     #[test]
     fn a_short_identifier_does_not_rewrite_a_replacement_token() {
         let mut literals = IdentityLiterals::default();
         literals.push_identifier("host", KIND_HOST);
-
-        let scrubbed = literals.scrub("The host left; [host:0123456789abcdef] names it.");
-
-        assert!(
-            scrubbed.contains("[host:0123456789abcdef]"),
-            "the minted token survives: {scrubbed}"
+        let token = literals.token_for("host").unwrap().to_owned();
+        let generated = super::redact_text("DeviceName=fixture-device");
+        let raw = generated.strip_prefix("DeviceName=").unwrap();
+        let text = format!(
+            "{}host {raw}; DeviceName=fixture-device; host",
+            "[".repeat(64)
         );
-        assert!(
-            !scrubbed.contains("The host left"),
-            "the mention is still scrubbed: {scrubbed}"
+        let expected = format!(
+            "{}{token} {}; {generated}; {token}",
+            "[".repeat(64),
+            raw.replacen("host", &token, 1),
+        );
+        assert_eq!(super::Projection { literals }.text(&text), expected);
+    }
+
+    #[test]
+    fn raw_token_lookalike_reaches_the_parser_before_projection() {
+        let capture = format!(
+            "{}\n Server Message : seen at [host:deadbeefdeadbeef] here\n",
+            IDENTITY_CAPTURE.replace("corp.contoso.com", "deadbeef"),
+        );
+        let raw = analyze_text_preserving_local_values(&capture).expect("capture parses");
+        assert_eq!(
+            raw.facts.tenant_details.domain_name.as_deref(),
+            Some("deadbeef")
+        );
+        assert_eq!(
+            raw.facts.registration.server_message.as_deref(),
+            Some("seen at [host:deadbeefdeadbeef] here")
         );
     }
 
