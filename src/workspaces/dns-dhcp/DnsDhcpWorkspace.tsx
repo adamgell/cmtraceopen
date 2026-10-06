@@ -1,4 +1,4 @@
-import { useState, useEffect, startTransition } from "react";
+import { useState, useEffect, useRef, startTransition } from "react";
 import { Button, Spinner, ProgressBar, tokens } from "@fluentui/react-components";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
@@ -47,6 +47,7 @@ export function DnsDhcpWorkspace() {
   const setLoadError = useDnsDhcpStore((s) => s.setLoadError);
   const [localError, setLocalError] = useState<string | null>(null);
   const [loggingStatus, setLoggingStatus] = useState<DnsLoggingStatus | null>(null);
+  const loggingRequest = useRef(0);
   const [enabling, setEnabling] = useState(false);
   const [enableResult, setEnableResult] = useState<string | null>(null);
   const [collecting, setCollecting] = useState(false);
@@ -192,6 +193,7 @@ export function DnsDhcpWorkspace() {
   };
 
   const handleScanServer = async () => {
+    const request = ++loggingRequest.current;
     setLocalError(null);
     setEnableResult(null);
     setLoading(true);
@@ -201,9 +203,12 @@ export function DnsDhcpWorkspace() {
     let status: DnsLoggingStatus | null = null;
     try {
       status = await checkDnsLoggingStatus();
-      setLoggingStatus(status);
+      if (request === loggingRequest.current) setLoggingStatus(status);
     } catch {
-      // Non-Windows or command failed — proceed with file scan
+      if (request === loggingRequest.current) {
+        setLoggingStatus(null);
+        setEnableResult("Failed: DNS logging status could not be refreshed. Scan this server before changing logging.");
+      }
     }
 
     const discovered: string[] = [];
@@ -294,37 +299,28 @@ export function DnsDhcpWorkspace() {
     setLoading(false);
   };
 
-  const handleEnableDnsLogging = async () => {
+  const handleChangeDnsLogging = async (enable: boolean) => {
+    const request = ++loggingRequest.current;
     setEnabling(true);
     setEnableResult(null);
     try {
-      const result = await enableDnsDebugLogging();
-      setEnableResult(result);
-      // Refresh status
-      const status = await checkDnsLoggingStatus();
-      setLoggingStatus(status);
+      setEnableResult(await (enable ? enableDnsDebugLogging() : disableDnsDebugLogging()));
     } catch (err) {
-      setEnableResult(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
-      );
+      setEnableResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      // A failed process may already have saved or applied settings. Always
+      // refresh ownership; a failed refresh must not leave actionable stale state.
+      try {
+        const status = await checkDnsLoggingStatus();
+        if (request === loggingRequest.current) setLoggingStatus(status);
+      } catch {
+        if (request === loggingRequest.current) {
+          setLoggingStatus(null);
+          setEnableResult("Failed: DNS logging status could not be refreshed. Scan this server before changing logging.");
+        }
+      }
+      setEnabling(false);
     }
-    setEnabling(false);
-  };
-
-  const handleDisableDnsLogging = async () => {
-    setEnabling(true);
-    setEnableResult(null);
-    try {
-      const result = await disableDnsDebugLogging();
-      setEnableResult(result);
-      const status = await checkDnsLoggingStatus();
-      setLoggingStatus(status);
-    } catch (err) {
-      setEnableResult(
-        `Failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    setEnabling(false);
   };
 
   const handleOpenFiles = async () => {
@@ -367,6 +363,45 @@ export function DnsDhcpWorkspace() {
     }
   };
 
+  // Shared by empty and loaded views so opening a log cannot hide recovery.
+  const serverStatusPanel = (loggingStatus || enableResult) && (
+    <div style={{
+      maxWidth: 500, width: "100%", padding: "12px 16px",
+      background: tokens.colorNeutralBackground3, borderRadius: 6,
+      fontSize: 13, lineHeight: 1.6, color: tokens.colorNeutralForeground2,
+    }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>Server Status</div>
+      {loggingStatus && <>
+        <StatusRow label="DNS Server" installed={loggingStatus.dnsServerInstalled} />
+        {loggingStatus.dnsServerInstalled && <>
+          <StatusRow label="Debug logging" installed={loggingStatus.debugLoggingEnabled} notInstalledLabel="Not enabled" />
+          {loggingStatus.logFilePath && <div>Log path: {loggingStatus.logFilePath}</div>}
+        </>}
+        {loggingStatus.restoreError && (
+          <div role="alert" style={{ color: tokens.colorPaletteRedForeground2 }}>{loggingStatus.restoreError}</div>
+        )}
+        {loggingStatus.canRestoreLogging && !loggingStatus.restoreError && <>
+          <p>Disable restores the settings saved before this app enabled logging. Earlier logging may remain enabled.</p>
+          <Button size="small" disabled={enabling || isLoading} onClick={() => void handleChangeDnsLogging(false)}>
+            {enabling ? "Working..." : "Disable DNS debug logging"}
+          </Button>
+        </>}
+        {loggingStatus.dnsServerInstalled && !loggingStatus.canRestoreLogging && !loggingStatus.restoreError && (
+          loggingStatus.debugLoggingEnabled
+            ? <p>Logging is configured outside this app; there are no saved settings to restore.</p>
+            : <>
+              <p>Enabling writes DNS diagnostics to {loggingStatus.logFilePath ?? "the DNS log file"} and can increase disk usage with traffic. Review the server's file size and rollover settings before enabling.</p>
+              <Button size="small" appearance="primary" disabled={enabling || isLoading} onClick={() => void handleChangeDnsLogging(true)}>
+                {enabling ? "Enabling..." : "Enable DNS debug logging"}
+              </Button>
+            </>
+        )}
+        <StatusRow label="DHCP Server" installed={loggingStatus.dhcpServerInstalled} />
+      </>}
+      {enableResult && <div role="status" style={{ marginTop: 8 }}>{enableResult}</div>}
+    </div>
+  );
+
   // Loading state
   if (isLoading && sources.length === 0) {
     return (
@@ -401,13 +436,13 @@ export function DnsDhcpWorkspace() {
         </div>
 
         <div style={{ display: "flex", gap: 12 }}>
-          <Button appearance="primary" onClick={() => void handleScanServer()} disabled={collecting}>
+          <Button appearance="primary" onClick={() => void handleScanServer()} disabled={collecting || enabling || isLoading}>
             Scan this server
           </Button>
-          <Button appearance="primary" onClick={() => void handleCollectFromDomain()} disabled={collecting}>
+          <Button appearance="primary" onClick={() => void handleCollectFromDomain()} disabled={collecting || enabling || isLoading}>
             Collect from domain
           </Button>
-          <Button appearance="secondary" onClick={() => void handleOpenFiles()} disabled={collecting}>
+          <Button appearance="secondary" onClick={() => void handleOpenFiles()} disabled={collecting || enabling || isLoading}>
             Open files...
           </Button>
         </div>
@@ -482,103 +517,7 @@ export function DnsDhcpWorkspace() {
           </div>
         )}
 
-        {/* Server logging status panel */}
-        {loggingStatus && (
-          <div style={{
-            maxWidth: 500, width: "100%", padding: "12px 16px",
-            background: tokens.colorNeutralBackground3,
-            borderRadius: 6, fontSize: 13, lineHeight: 1.6,
-            color: tokens.colorNeutralForeground2,
-          }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, color: tokens.colorNeutralForeground1 }}>
-              Server Status
-            </div>
-
-            <StatusRow
-              label="DNS Server"
-              installed={loggingStatus.dnsServerInstalled}
-            />
-            {loggingStatus.dnsServerInstalled && (
-              <div style={{ marginLeft: 16 }}>
-                <StatusRow
-                  label="Debug logging"
-                  installed={loggingStatus.debugLoggingEnabled}
-                  notInstalledLabel="Not enabled"
-                />
-                {!loggingStatus.debugLoggingEnabled && (
-                  <div style={{ marginTop: 4, marginBottom: 4 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: tokens.colorNeutralForeground3,
-                        marginBottom: 6,
-                        maxWidth: 420,
-                      }}
-                    >
-                      Enabling writes a line to{" "}
-                      {loggingStatus.logFilePath ?? "the DNS log file"} for every
-                      query this server answers, so the file grows with traffic.
-                      The DNS service does not rotate it: decide how long to keep
-                      it before you enable this on a busy resolver.
-                    </div>
-                    <Button
-                      size="small"
-                      appearance="primary"
-                      onClick={() => void handleEnableDnsLogging()}
-                      disabled={enabling}
-                    >
-                      {enabling ? "Enabling..." : "Enable DNS debug logging"}
-                    </Button>
-                  </div>
-                )}
-                {loggingStatus.debugLoggingEnabled && (
-                  <div style={{ marginTop: 4, marginBottom: 4 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: tokens.colorNeutralForeground3,
-                        marginBottom: 6,
-                        maxWidth: 420,
-                      }}
-                    >
-                      This file grows with query volume and the DNS service does
-                      not rotate it. Turning it off clears only the switches this
-                      app set, so anything the server was already logging stays on.
-                    </div>
-                    <Button
-                      size="small"
-                      onClick={() => void handleDisableDnsLogging()}
-                      disabled={enabling}
-                    >
-                      {enabling ? "Working..." : "Disable DNS debug logging"}
-                    </Button>
-                  </div>
-                )}
-                {loggingStatus.logFilePath && (
-                  <div style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
-                    Log path: {loggingStatus.logFilePath}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <StatusRow
-              label="DHCP Server"
-              installed={loggingStatus.dhcpServerInstalled}
-            />
-
-            {enableResult && (
-              <div style={{
-                marginTop: 8, fontSize: 12,
-                color: enableResult.startsWith("Failed")
-                  ? tokens.colorPaletteRedForeground2
-                  : tokens.colorPaletteGreenForeground1,
-              }}>
-                {enableResult}
-              </div>
-            )}
-          </div>
-        )}
+        {serverStatusPanel}
 
         {(localError || loadError) && (
           <div style={{
@@ -594,9 +533,15 @@ export function DnsDhcpWorkspace() {
 
   // Active state — two-panel layout
   return (
-    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
-      <DeviceList />
-      <DeviceDetail />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{ padding: 8, maxHeight: "50%", overflow: "auto", flexShrink: 0 }}>
+        <Button disabled={enabling || isLoading} onClick={() => void handleScanServer()}>Scan this server</Button>
+        {serverStatusPanel}
+      </div>
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <DeviceList />
+        <DeviceDetail />
+      </div>
     </div>
   );
 }

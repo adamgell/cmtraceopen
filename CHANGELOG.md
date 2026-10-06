@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **DNS logging restoration (#731)**: Disable restores the five diagnostic settings saved before CMTrace Open enabled logging, including settings that were already enabled. Recovery survives restart, remains available after opening logs, and refuses automatic changes when the saved state is invalid or the server configuration conflicts. Logging configured outside the app has no Disable action.
+
 ## [1.6.2]
 
 This release carries forward all product changes from the unpublished 1.6.1 draft: every commit from `v1.6.0` through `beeace2168fd9f6b00d654f5a892045a694d5e67` and the #786 product changes at `d0045359705a25ae1b7c1c903e857610f447b09e`. It also includes the exporter and Windows release-verification fixes below.

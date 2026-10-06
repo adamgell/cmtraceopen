@@ -66,6 +66,9 @@ function entry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
 describe("DnsDhcpWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    checkDnsLoggingStatus.mockReset();
+    enableDnsDebugLogging.mockReset();
+    disableDnsDebugLogging.mockReset();
     useDnsDhcpStore.getState().clear();
     inspectPathKind.mockRejectedValue(new Error("missing"));
     listLogFolder.mockRejectedValue(new Error("missing"));
@@ -74,6 +77,44 @@ describe("DnsDhcpWorkspace", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("does not offer Disable for logging configured outside this app", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({
+      dnsServerInstalled: true, dhcpServerInstalled: false,
+      debugLoggingEnabled: true, logFilePath: null,
+      canRestoreLogging: false, restoreError: null,
+    });
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    await screen.findByText("Server Status");
+    expect(screen.queryByRole("button", { name: "Disable DNS debug logging" })).toBeNull();
+  });
+
+  it("offers saved-state recovery when an interrupted enable left logging off", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({
+      dnsServerInstalled: true, dhcpServerInstalled: false,
+      debugLoggingEnabled: false, logFilePath: null,
+      canRestoreLogging: true, restoreError: null,
+    });
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    await screen.findByText("Server Status");
+    expect(screen.getByRole("button", { name: "Disable DNS debug logging" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Enable DNS debug logging" })).toBeNull();
+  });
+
+  it("shows an ownership error and suppresses changes even without DNS discovery", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({
+      dnsServerInstalled: false, dhcpServerInstalled: false,
+      debugLoggingEnabled: false, logFilePath: null,
+      canRestoreLogging: false, restoreError: "Saved DNS settings need manual reconciliation.",
+    });
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    await screen.findByText("Server Status");
+    expect(screen.getByText("Saved DNS settings need manual reconciliation.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Enable DNS debug logging" })).toBeNull();
   });
 
   it("shows Scan this server, Collect from domain, and Open files on the empty state (DNS-001/002/003)", () => {
@@ -88,6 +129,7 @@ describe("DnsDhcpWorkspace", () => {
       dnsServerInstalled: true,
       dhcpServerInstalled: false,
       debugLoggingEnabled: false,
+      canRestoreLogging: false, restoreError: null,
       logFilePath: null,
     });
 
@@ -107,6 +149,7 @@ describe("DnsDhcpWorkspace", () => {
       dnsServerInstalled: true,
       dhcpServerInstalled: false,
       debugLoggingEnabled: false,
+      canRestoreLogging: false, restoreError: null,
       logFilePath: "C:\\Windows\\System32\\dns\\dns.log",
     });
 
@@ -116,7 +159,7 @@ describe("DnsDhcpWorkspace", () => {
     await screen.findByText("Server Status");
     // The warning belongs before the click, and it has to name the file and the
     // growth rather than warn in the abstract.
-    const warning = screen.getByText(/The DNS service does not rotate it/);
+    const warning = screen.getByText(/Review the server's file size and rollover settings/);
     expect(warning).toBeVisible();
     expect(warning.textContent).toContain("C:\\Windows\\System32\\dns\\dns.log");
     expect(
@@ -124,11 +167,12 @@ describe("DnsDhcpWorkspace", () => {
     ).toBeEnabled();
   });
 
-  it("turns logging back off from the place it was turned on (DNS-005)", async () => {
+  it("offers restoration for logging enabled by this app (DNS-005)", async () => {
     checkDnsLoggingStatus.mockResolvedValue({
       dnsServerInstalled: true,
       dhcpServerInstalled: false,
       debugLoggingEnabled: true,
+      canRestoreLogging: true, restoreError: null,
       logFilePath: "C:\\Windows\\System32\\dns\\dns.log",
     });
     disableDnsDebugLogging.mockResolvedValue("DNS debug logging disabled.");
@@ -146,6 +190,74 @@ describe("DnsDhcpWorkspace", () => {
     expect(
       screen.queryByRole("button", { name: "Enable DNS debug logging" }),
     ).toBeNull();
+  });
+
+
+  it("refreshes ownership after an enable fails after saving the baseline", async () => {
+    checkDnsLoggingStatus
+      .mockResolvedValueOnce({ dnsServerInstalled: true, dhcpServerInstalled: false,
+        debugLoggingEnabled: false, logFilePath: null, canRestoreLogging: false, restoreError: null })
+      .mockResolvedValueOnce({ dnsServerInstalled: true, dhcpServerInstalled: false,
+        debugLoggingEnabled: false, logFilePath: null, canRestoreLogging: true, restoreError: null });
+    enableDnsDebugLogging.mockRejectedValue(new Error("Change could not be verified."));
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable DNS debug logging" }));
+    expect(await screen.findByRole("button", { name: "Disable DNS debug logging" })).toBeEnabled();
+    expect(screen.getByText("Failed: Change could not be verified.")).toBeVisible();
+    expect(checkDnsLoggingStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes stale actionable status when refresh fails", async () => {
+    checkDnsLoggingStatus
+      .mockResolvedValueOnce({ dnsServerInstalled: true, dhcpServerInstalled: false,
+        debugLoggingEnabled: true, logFilePath: null, canRestoreLogging: true, restoreError: null })
+      .mockRejectedValueOnce(new Error("offline"));
+    disableDnsDebugLogging.mockRejectedValue(new Error("restore failed"));
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Disable DNS debug logging" }));
+    expect(await screen.findByText(/status could not be refreshed/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Disable DNS debug logging" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Enable DNS debug logging" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Scan this server" })).toBeEnabled();
+  });
+
+  it("keeps recovery accessible after scan loads a log and after remount", async () => {
+    checkDnsLoggingStatus.mockResolvedValue({ dnsServerInstalled: true, dhcpServerInstalled: false,
+      debugLoggingEnabled: true, logFilePath: "C:\\Logs\\dns.log", canRestoreLogging: true, restoreError: null });
+    inspectPathKind.mockResolvedValue("file");
+    openLogFile.mockResolvedValue({ formatDetected: "DnsDebug", entries: [entry({ id: 1, format: "DnsDebug" })] });
+    const view = render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    expect(await screen.findByRole("button", { name: "Disable DNS debug logging" })).toBeEnabled();
+    expect(useDnsDhcpStore.getState().sources.length).toBeGreaterThan(0);
+    view.unmount();
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    expect(await screen.findByRole("button", { name: "Disable DNS debug logging" })).toBeEnabled();
+  });
+
+  it("refreshes a full enable/restore round trip and prevents overlapping actions", async () => {
+    const off = { dnsServerInstalled: true, dhcpServerInstalled: false,
+      debugLoggingEnabled: false, logFilePath: null, canRestoreLogging: false, restoreError: null };
+    checkDnsLoggingStatus.mockResolvedValueOnce(off)
+      .mockResolvedValueOnce({ ...off, debugLoggingEnabled: true, canRestoreLogging: true })
+      .mockResolvedValueOnce(off);
+    let finishEnable!: (value: string) => void;
+    enableDnsDebugLogging.mockReturnValue(new Promise<string>((resolve) => { finishEnable = resolve; }));
+    disableDnsDebugLogging.mockResolvedValue("Prior settings restored.");
+    render(<DnsDhcpWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Scan this server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable DNS debug logging" }));
+    expect(screen.getByRole("button", { name: "Scan this server" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enabling..." })).toBeDisabled();
+    finishEnable("Enabled with saved settings.");
+    fireEvent.click(await screen.findByRole("button", { name: "Disable DNS debug logging" }));
+    expect(await screen.findByRole("button", { name: "Enable DNS debug logging" })).toBeEnabled();
+    expect(screen.getByText("Prior settings restored.")).toBeVisible();
+    expect(enableDnsDebugLogging).toHaveBeenCalledTimes(1);
+    expect(disableDnsDebugLogging).toHaveBeenCalledTimes(1);
   });
 
   it("prompts before collecting from domain DCs (DNS-002)", async () => {
