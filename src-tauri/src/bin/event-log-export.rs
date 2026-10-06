@@ -1115,6 +1115,17 @@ fn record_values(
             .filter(|column| column.complete && include_mapped(&column.property))
             .map(|column| column.text.clone()),
     );
+    if let Some(insertions) = &record.insertion_strings {
+        // Match the UI's String 1-10 columns without compacting empty positions.
+        values.extend(
+            insertions
+                .iter()
+                .take(10)
+                .enumerate()
+                .filter(|(index, _)| include(&format!("string:{}", index + 1)))
+                .map(|(_, value)| value.clone()),
+        );
+    }
     if include_event_data {
         values.extend(record.event_data.iter().map(|field| field.value.clone()));
     }
@@ -2043,6 +2054,191 @@ mod tests {
         )
         .expect("incomplete mapped-column filter succeeds");
         assert!(incomplete_mapped.is_empty());
+    }
+
+    #[test]
+    fn insertion_strings_manifest_filter_uses_canonical_visible_positions() {
+        let mut record = make_record();
+        let mut insertions = vec![String::new(); 11];
+        insertions[0] = "alpha".into();
+        insertions[2] = "gamma".into();
+        insertions[9] = "tenth".into();
+        insertions[10] = "beyond-cap".into();
+        record.insertion_strings = Some(insertions);
+
+        for (column, query, matches) in [
+            ("string:1", "alpha", true),
+            ("string:3", "gamma", true),
+            ("string:2", "gamma", false),
+            ("string:1", "gamma", false),
+            ("string:10", "tenth", true),
+            ("string:11", "beyond-cap", false),
+            ("string:0", "alpha", false),
+            ("string:01", "alpha", false),
+            ("string:1.0", "alpha", false),
+            ("string:1e0", "alpha", false),
+            ("string: 1", "alpha", false),
+        ] {
+            for action in ["show", "hide"] {
+                let cli = Cli::from_manifest_json(
+                    &serde_json::json!({
+                        "records": [record.clone()],
+                        "filter": {
+                            "visibleColumns": [column],
+                            "quickFilter": {
+                                "mode": "oneString", "query": query,
+                                "scope": "visibleColumns", "action": action
+                            }
+                        }
+                    })
+                    .to_string(),
+                )
+                .expect("insertion-column manifest");
+                let selected = filtered_records(cli.records, &cli.filter).expect("filter");
+                assert_eq!(
+                    !selected.is_empty(),
+                    matches != (action == "hide"),
+                    "{action} {query:?} in {column}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn insertion_strings_all_columns_ignores_visibility_but_keeps_the_ui_cap() {
+        let mut record = make_record();
+        record.insertion_strings = Some(
+            (1..=11)
+                .map(|position| format!("position-{position}-only"))
+                .collect(),
+        );
+        // The UI discovers String 1-10 for allColumns and for an omitted
+        // visible-column list. An explicit empty list searches no columns.
+        for (scope, columns, query, matches) in [
+            (
+                "allColumns",
+                Some(vec!["string:1"]),
+                "position-10-only",
+                true,
+            ),
+            ("allColumns", Some(vec![]), "position-10-only", true),
+            ("allColumns", None, "position-11-only", false),
+            ("visibleColumns", None, "position-10-only", true),
+            ("visibleColumns", Some(vec![]), "position-10-only", false),
+        ] {
+            let cli = Cli::from_manifest_json(
+                &serde_json::json!({
+                    "records": [record.clone()],
+                    "filter": {
+                        "visibleColumns": columns,
+                        "quickFilter": {
+                            "mode": "oneString", "query": query,
+                            "scope": scope, "action": "show"
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .expect("scope manifest");
+            let selected = filtered_records(cli.records, &cli.filter).expect("filter");
+            assert_eq!(!selected.is_empty(), matches, "{scope} {columns:?} {query}");
+        }
+    }
+
+    #[test]
+    fn insertion_strings_short_or_missing_records_do_not_invent_filter_values() {
+        let mut sparse = make_record();
+        sparse.insertion_strings = Some(vec!["alpha".into(), "".into(), "gamma".into()]);
+        let mut short = make_record();
+        short.id = 2;
+        short.insertion_strings = Some(vec!["alpha".into()]);
+        // Display fields are not authoritative insertion positions.
+        short.event_data = vec![EvtxField {
+            name: "third".into(),
+            value: "gamma".into(),
+        }];
+        let mut empty = make_record();
+        empty.id = 3;
+        empty.insertion_strings = Some(vec![]);
+        let mut missing = make_record();
+        missing.id = 4;
+        for (column, query, action, expected) in [
+            ("string:3", "gamma", "show", vec![1]),
+            ("string:3", "gamma", "hide", vec![2, 3, 4]),
+            ("string:2", "gamma", "show", vec![]),
+            ("string:3", "Unavailable", "show", vec![]),
+        ] {
+            let cli = Cli::from_manifest_json(
+                &serde_json::json!({
+                    "records": [sparse.clone(), short.clone(), empty.clone(), missing.clone()],
+                    "filter": {
+                        "visibleColumns": [column],
+                        "quickFilter": {
+                            "mode": "oneString", "query": query,
+                            "scope": "visibleColumns", "action": action
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .expect("mixed insertion coverage manifest");
+            let selected = filtered_records(cli.records, &cli.filter).expect("filter");
+            assert_eq!(
+                selected.iter().map(|record| record.id).collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn insertion_strings_cli_filters_before_authoritative_export_omission() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let manifest_path = directory.path().join("manifest.json");
+        let mut keep = make_record();
+        keep.insertion_strings = Some(vec!["alpha".into(), "insertion-only-secret".into()]);
+        let mut drop = make_record();
+        drop.id = 2;
+        drop.insertion_strings = Some(vec!["alpha".into(), "different".into()]);
+        std::fs::write(
+            &manifest_path,
+            serde_json::json!({
+                "records": [keep, drop],
+                "filter": {
+                    "visibleColumns": ["string:2"],
+                    "quickFilter": {
+                        "mode": "oneString", "query": "insertion-only-secret",
+                        "scope": "visibleColumns", "action": "show"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+        let mut stdout = Vec::new();
+        run_with_args(
+            [
+                "event-log-export",
+                "--manifest",
+                manifest_path.to_str().expect("path"),
+                "--format",
+                "json",
+                "--output",
+                "-",
+            ],
+            &mut stdout,
+        )
+        .expect("CLI export");
+        let output: Vec<serde_json::Value> = serde_json::from_slice(&stdout).expect("JSON");
+        assert_eq!(
+            output.len(),
+            1,
+            "the matching record must survive filtering"
+        );
+        assert_eq!(output[0]["id"], 1);
+        assert!(output[0].get("insertionStrings").is_none());
+        assert!(!String::from_utf8(stdout)
+            .expect("UTF-8")
+            .contains("insertion-only-secret"));
     }
 
     #[test]
