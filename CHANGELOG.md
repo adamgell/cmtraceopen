@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.
 - **DNS logging restoration (#731)**: Disable restores the five diagnostic settings saved before CMTrace Open enabled logging, including settings that were already enabled. Recovery survives restart, remains available after opening logs, and refuses automatic changes when the saved state is invalid or the server configuration conflicts. Logging configured outside the app has no Disable action.
 
 ## [1.6.2]
