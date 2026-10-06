@@ -1,0 +1,53 @@
+name: Feedback or question
+description: Share feedback, ask a question, or start a discussion in a GitHub issue.
+title: "[Feedback] "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Please keep this issue free of sensitive information. Do not attach raw
+        logs or include customer names, tenant details, device identifiers,
+        credentials, or personal data. Redact screenshots and any excerpts you
+        share.
+  - type: dropdown
+    id: topic
+    attributes:
+      label: What would you like to share?
+      options:
+        - General feedback
+        - Feature idea
+        - Question
+        - Discussion
+        - Usability
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: Tell us about it
+      description: Include the context and what you would like to see or discuss.
+      placeholder: What were you trying to do, or what would you like to discuss?
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: CMTrace Open version (optional)
+      description: Include this when your feedback relates to a specific app version.
+      placeholder: For example, 1.2.3
+    validations:
+      required: false
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform (optional)
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Not applicable
+        - Not sure
+    validations:
+      required: false

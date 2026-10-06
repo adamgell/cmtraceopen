@@ -244,6 +244,12 @@ export interface ParseResult {
   parseErrors: number;
   filePath: string;
   fileSize: number;
+  /**
+   * When the source file was last modified, in epoch milliseconds, or `null`
+   * when no file metadata is available or the platform cannot report one.
+   * Zero is a real epoch timestamp, not a missing value.
+   */
+  modifiedUnixMs: number | null;
   byteOffset: number;
 }
 

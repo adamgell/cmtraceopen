@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     normalize_timestamp, EspEventLogObservation, EspEventProvenance, EspEvidenceProvenance,
     EspEvidenceRef, EspNamedValue, EspObservationContext, EspParseState, EspSensitivity,
     EspSourceAccessState, EspSourceKind,

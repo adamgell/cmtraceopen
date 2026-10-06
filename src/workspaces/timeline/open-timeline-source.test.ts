@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "../../test-utils/deferred";
 import { listLogFolder } from "../../lib/commands";
-import { buildTimelineFromSources } from "../../components/timeline/hooks/useTimelineBundle";
+import { buildTimelineFromSources } from "../../components/timeline/hooks/buildTimelineFromSources";
 import { useTimelineStore } from "../../stores/timeline-store";
 import type { TimelineBundle } from "../../types/timeline";
 import {
@@ -13,7 +13,7 @@ vi.mock("../../lib/commands", () => ({
   listLogFolder: vi.fn(),
 }));
 
-vi.mock("../../components/timeline/hooks/useTimelineBundle", () => ({
+vi.mock("../../components/timeline/hooks/buildTimelineFromSources", () => ({
   buildTimelineFromSources: vi.fn(async () => ({ sources: [] })),
 }));
 

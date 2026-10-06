@@ -7,7 +7,7 @@
 //! *unsupported*, and *malformed* evidence from a successful workload, instead of
 //! silently collapsing all six into "no data".
 //!
-//! The shape deliberately mirrors `crate::esp` so that the two trees stay legible
+//! The shape deliberately mirrors `crate::intune::enrollment::windows::esp` so that the two trees stay legible
 //! side by side, but the types are separate: ESP's schema is stable and versioned
 //! on its own cadence, and coupling the families would make either one hard to
 //! evolve.

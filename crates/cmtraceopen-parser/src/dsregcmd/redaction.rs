@@ -84,7 +84,7 @@ use crate::intune::apps::windows::common::{
     caseless_equal, find_ignore_case, fold_with_offsets, redact_field_value, redact_text,
     redact_text_with_spans, FoldedChar,
 };
-use crate::intune::models::{
+use crate::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogChannelSummary, EventLogCorrelationLink, EventLogEntry,
     EventLogLiveQueryChannelResult, EventLogLiveQueryMetadata, IntuneTimestampBounds,
 };
@@ -929,9 +929,10 @@ mod tests {
         },
         redacted_status_text, IdentityLiterals, KIND_HOST, KIND_TENANT,
     };
-    use crate::intune::models::{
+    use crate::intune::apps::windows::ime::models::{
         EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
     };
+    use chrono::Utc;
 
     /// A capture carrying one identifier of every class this projection masks.
     const IDENTITY_CAPTURE: &str = r#"
@@ -975,8 +976,10 @@ mod tests {
     /// carrying it — can only be asserted from inside.
     #[test]
     fn the_unprojected_analysis_carries_every_identity_the_projection_masks() {
-        let local = json(&analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses"));
-        let published = json(&analyze_text(IDENTITY_CAPTURE).expect("parses"));
+        let local = json(
+            &analyze_text_preserving_local_values(IDENTITY_CAPTURE, Utc::now()).expect("parses"),
+        );
+        let published = json(&analyze_text(IDENTITY_CAPTURE, Utc::now()).expect("parses"));
 
         for (label, marker) in PLANTED_IDENTIFIERS {
             assert!(
@@ -995,8 +998,8 @@ mod tests {
     /// produced. This is why the assembly lives here instead of in a caller.
     #[test]
     fn a_sid_user_identity_is_masked_without_losing_the_diagnosis_it_produced() {
-        let local = analyze_text_preserving_local_values(SID_CAPTURE).expect("parses");
-        let published = analyze_text(SID_CAPTURE).expect("parses");
+        let local = analyze_text_preserving_local_values(SID_CAPTURE, Utc::now()).expect("parses");
+        let published = analyze_text(SID_CAPTURE, Utc::now()).expect("parses");
 
         assert!(
             local
@@ -1020,8 +1023,9 @@ mod tests {
 
     #[test]
     fn projecting_does_not_drop_or_rename_a_diagnostic() {
-        let local = analyze_text_preserving_local_values(IDENTITY_CAPTURE).expect("parses");
-        let published = analyze_text(IDENTITY_CAPTURE).expect("parses");
+        let local =
+            analyze_text_preserving_local_values(IDENTITY_CAPTURE, Utc::now()).expect("parses");
+        let published = analyze_text(IDENTITY_CAPTURE, Utc::now()).expect("parses");
 
         let local_ids = diagnostic_ids(&local);
         let published_ids = diagnostic_ids(&published);
@@ -1082,7 +1086,7 @@ mod tests {
         let capture = " TenantName : ÉLODIE.Example\n \
                        DomainName : élodie.example\n \
                        Server Message : retry against ÉLODIE.Example failed\n";
-        let published = json(&analyze_text(capture).expect("parses"));
+        let published = json(&analyze_text(capture, Utc::now()).expect("parses"));
 
         let tokens = tokens_of_kind(&published, "tenant");
         assert_eq!(
@@ -1105,7 +1109,7 @@ mod tests {
     /// never presented.
     #[test]
     fn a_missing_value_is_evidence_of_absence_not_a_masked_identity() {
-        let published = analyze_text(" AzureAdJoined : NO\n DomainJoined : NO\n")
+        let published = analyze_text(" AzureAdJoined : NO\n DomainJoined : NO\n", Utc::now())
             .expect("a capture with no tenant or device id analyzes");
 
         let missing_tenant = published
@@ -1233,7 +1237,8 @@ mod tests {
             "{}\n Server Message : seen at [host:deadbeefdeadbeef] here\n",
             IDENTITY_CAPTURE.replace("corp.contoso.com", "deadbeef"),
         );
-        let raw = analyze_text_preserving_local_values(&capture).expect("capture parses");
+        let raw =
+            analyze_text_preserving_local_values(&capture, Utc::now()).expect("capture parses");
         assert_eq!(
             raw.facts.tenant_details.domain_name.as_deref(),
             Some("deadbeef")
@@ -1367,7 +1372,7 @@ mod tests {
             ..DsregcmdBundleEvidence::default()
         };
         let published = {
-            let analysis = analyze_text_with_evidence(IDENTITY_CAPTURE, evidence)
+            let analysis = analyze_text_with_evidence(IDENTITY_CAPTURE, evidence, Utc::now())
                 .expect("the dsregcmd capture analyzes");
             serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
         };

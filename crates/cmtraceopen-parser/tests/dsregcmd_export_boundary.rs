@@ -26,11 +26,12 @@
 //! every free-text field too; the fixture plants them in fields *and* in
 //! narrative so guard 1 proves both paths.
 
+use chrono::Utc;
 use cmtraceopen_parser::dsregcmd::{
     analyze_text, analyze_text_with_evidence, redacted_status_text, DsregcmdActiveEvidence,
     DsregcmdBundleEvidence, DsregcmdConnectivityResult, DsregcmdScpQueryResult,
 };
-use cmtraceopen_parser::intune::models::{
+use cmtraceopen_parser::intune::apps::windows::ime::models::{
     EventLogAnalysis, EventLogAnalysisSource, EventLogChannel, EventLogEntry, EventLogSeverity,
 };
 use regex::Regex;
@@ -116,7 +117,7 @@ const SID_CAPTURE: &str = r#"
 
 /// The JSON a caller of the published crate receives.
 fn published_analysis_json(capture: &str) -> String {
-    let analysis = analyze_text(capture).expect("the dsregcmd capture parses");
+    let analysis = analyze_text(capture, Utc::now()).expect("the dsregcmd capture parses");
     serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
 }
 
@@ -311,7 +312,7 @@ fn evidence_attached_from_a_bundle_is_projected_too() {
             event_log_analysis: Some(events),
             ..DsregcmdBundleEvidence::default()
         };
-        let analysis = analyze_text_with_evidence(STATUS_CAPTURE, evidence)
+        let analysis = analyze_text_with_evidence(STATUS_CAPTURE, evidence, Utc::now())
             .expect("the dsregcmd capture analyzes");
         serde_json::to_string(&analysis).expect("a dsregcmd analysis serializes")
     };
@@ -346,7 +347,7 @@ fn evidence_attached_from_a_bundle_is_projected_too() {
 /// than reaching a second token.
 #[test]
 fn projecting_an_already_projected_analysis_changes_nothing() {
-    let once = analyze_text(STATUS_CAPTURE).expect("capture parses");
+    let once = analyze_text(STATUS_CAPTURE, Utc::now()).expect("capture parses");
     let twice = cmtraceopen_parser::dsregcmd::redacted_analysis(&once);
 
     assert_eq!(
@@ -383,8 +384,8 @@ fn raw_token_lookalikes_are_scrubbed_through_every_public_export() {
     assert!(capture.contains("DomainName : deadbeef"));
     assert!(capture.contains(&format!("Server Message : {raw_message}")));
     let analyses = [
-        analyze_text(&capture).expect("capture parses"),
-        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default())
+        analyze_text(&capture, Utc::now()).expect("capture parses"),
+        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default(), Utc::now())
             .expect("capture with evidence parses"),
     ];
     for analysis in analyses {
@@ -434,8 +435,8 @@ fn generated_tokens_survive_beside_identical_raw_lookalikes() {
         &message,
     );
     for analysis in [
-        analyze_text(&capture).expect("capture parses"),
-        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default())
+        analyze_text(&capture, Utc::now()).expect("capture parses"),
+        analyze_text_with_evidence(&capture, DsregcmdBundleEvidence::default(), Utc::now())
             .expect("capture with evidence parses"),
     ] {
         let domain = analysis

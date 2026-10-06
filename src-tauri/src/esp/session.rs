@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use cmtraceopen_parser::esp::{
+use cmtraceopen_parser::intune::enrollment::windows::esp::{
     EspArtifactCoverage, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspEvidenceIdentityAllocator, EspEvidenceIdentityRejectionCounts, EspEvidenceRecord,
     EspIdentifiedEvidenceRecord,
@@ -1272,7 +1272,7 @@ fn record_identity_key(record: &EspEvidenceRecord) -> (String, String) {
 }
 
 fn observation_identity_key(
-    context: &cmtraceopen_parser::esp::EspObservationContext,
+    context: &cmtraceopen_parser::intune::enrollment::windows::esp::EspObservationContext,
 ) -> (String, String) {
     (
         context.provenance.source_artifact_id.clone(),
@@ -1280,7 +1280,9 @@ fn observation_identity_key(
     )
 }
 
-fn evidence_identity_key(evidence: &cmtraceopen_parser::esp::EspEvidenceRef) -> (String, String) {
+fn evidence_identity_key(
+    evidence: &cmtraceopen_parser::intune::enrollment::windows::esp::EspEvidenceRef,
+) -> (String, String) {
     (
         evidence.source_artifact_id.clone(),
         evidence.evidence_id.clone(),

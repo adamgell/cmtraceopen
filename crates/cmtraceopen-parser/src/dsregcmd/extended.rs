@@ -1,7 +1,7 @@
 use crate::dsregcmd::models::{
     DsregcmdAnalysisResult, DsregcmdDiagnosticInsight, DsregcmdJoinType,
 };
-use crate::intune::models::IntuneDiagnosticSeverity;
+use crate::intune::apps::windows::ime::models::IntuneDiagnosticSeverity;
 
 use super::derive::issue;
 
@@ -462,7 +462,10 @@ pub fn build_event_log_diagnostics(
             let channel_display = e.channel_display.to_ascii_lowercase();
             channel_display.contains("aad")
                 && e.severity.is_error_or_warning()
-                && !matches!(e.severity, crate::intune::models::EventLogSeverity::Warning)
+                && !matches!(
+                    e.severity,
+                    crate::intune::apps::windows::ime::models::EventLogSeverity::Warning
+                )
         })
         .count();
 

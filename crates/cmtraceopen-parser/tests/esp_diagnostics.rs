@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use cmtraceopen_parser::esp::*;
+use cmtraceopen_parser::intune::enrollment::windows::esp::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

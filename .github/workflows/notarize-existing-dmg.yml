@@ -1,0 +1,66 @@
+name: "CMTrace Open: Notarize unchanged 1.6.2 DMG"
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_workflow_sha:
+        description: Exact reviewed main commit containing this recovery workflow
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: cmtrace-open-notarize-unchanged-1.6.2-dmg
+  cancel-in-progress: false
+
+jobs:
+  notarize:
+    name: Notarize the frozen DMG once
+    runs-on: macos-latest
+    timeout-minutes: 20
+    environment: codesigning
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    env:
+      REVIEWED_WORKFLOW_SHA: ${{ inputs.reviewed_workflow_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Verify frozen asset and original producer
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B .github/scripts/notarize-existing-dmg.py prepare "$RUNNER_TEMP/notarization"
+
+      # This is the sole Apple-authenticated step. Submission ID is durably
+      # recorded and printed before at most eight minutes of polling. A timeout
+      # requires later read-only lookup of that ID, never a rerun/submission.
+      - name: Submit unchanged DMG once and record Apple result
+        timeout-minutes: 12
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 -B .github/scripts/notarize-existing-dmg.py submit "$RUNNER_TEMP/notarization"
+
+      - name: Assess unchanged DMG online
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B .github/scripts/notarize-existing-dmg.py assess "$RUNNER_TEMP/notarization"
+
+      - name: Retain sanitized checkpoints even on failure
+        if: always()
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unchanged-dmg-notarization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notarization/*.json
+          if-no-files-found: warn
+          retention-days: 90
