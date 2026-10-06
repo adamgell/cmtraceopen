@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Insertion-string columns (#664)**: Show native insertion values as optional String 1–10 columns. Empty insertion positions and shorter records remain blank; records without positional data show “Unavailable”. Arranged columns remain available to hide and re-enable after loading narrower records or restoring a column configuration.
+
 ### Fixed
 
 - **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.

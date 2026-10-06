@@ -673,6 +673,7 @@ mod tests {
             level: EvtxLevel::Information,
             computer: "TESTHOST".to_string(),
             message: message.to_string(),
+            insertion_strings: None,
             event_data: vec![EvtxField {
                 name: "Detail".to_string(),
                 value: "Value".to_string(),

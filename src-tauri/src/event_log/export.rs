@@ -360,6 +360,8 @@ pub(crate) fn redact_record(record: &EvtxRecord) -> EvtxRecord {
         level: record.level,
         computer: redact_labeled_value("ComputerName", &record.computer),
         message: redact_export_text(&record.message),
+        // These unlabelled copies cannot be safely redacted using field-name semantics.
+        insertion_strings: None,
         event_data: record
             .event_data
             .iter()
@@ -990,6 +992,7 @@ mod tests {
             computer: "TESTHOST-01".into(),
             message: message.into(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: "<Event><System /></Event>".into(),
             source_label: "Live".into(),
             origin_kind: crate::event_log::models::EvtxOriginKind::Event,
@@ -1012,6 +1015,36 @@ mod tests {
     fn csv_body(message: &str) -> String {
         let out = export_records(&[record(message)], ExportFormat::Csv).expect("exports");
         out.lines().nth(1).expect("data row").to_string()
+    }
+
+    #[test]
+    fn insertion_strings_are_omitted_at_the_native_export_boundary() {
+        let mut event = record("ordinary");
+        event.insertion_strings = Some(vec![
+            "positional-only-secret".into(),
+            "".into(),
+            "gamma".into(),
+        ]);
+        for format in [
+            ExportFormat::Csv,
+            ExportFormat::Tsv,
+            ExportFormat::Json,
+            ExportFormat::Xml,
+            ExportFormat::Html,
+            ExportFormat::RawXml,
+        ] {
+            let output = export_records(std::slice::from_ref(&event), format).unwrap();
+            assert!(!output.contains("insertionStrings"));
+            assert!(!output.contains("positional-only-secret"));
+        }
+        assert_eq!(
+            event.insertion_strings.as_ref().unwrap()[0],
+            "positional-only-secret"
+        );
+        assert!(serde_json::to_value(redact_record(&event))
+            .unwrap()
+            .get("insertionStrings")
+            .is_none());
     }
 
     #[test]

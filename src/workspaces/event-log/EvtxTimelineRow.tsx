@@ -15,6 +15,7 @@ import type { EvtxQuickFilter } from "./evtx-filter";
 import {
   columnValue,
   columnWidth,
+  stringColumnPosition,
   type EvtxColumnConfig,
   type EvtxColumnSpec,
 } from "./evtx-columns";
@@ -420,6 +421,12 @@ export const EvtxTimelineRow = memo(
             );
           }
 
+          const unavailable =
+            stringColumnPosition(column.id) !== null && record.insertionStrings == null;
+          const displayedValue = unavailable ? "Unavailable" : value;
+          const unavailableDescription = unavailable
+            ? "Insertion-string positions are unavailable for this record."
+            : undefined;
           const isDescription = column.id === "message";
           const isMono = column.id === "timestamp" || column.id === "keywords";
 
@@ -428,7 +435,8 @@ export const EvtxTimelineRow = memo(
               key={column.id}
               role="gridcell"
               aria-colindex={columnIndex + 2}
-              aria-label={`${column.label}: ${value || "Empty"}`}
+              aria-label={`${column.label}: ${displayedValue || "Empty"}`}
+              aria-description={unavailableDescription}
               style={
                 isDescription
                   ? {
@@ -460,11 +468,11 @@ export const EvtxTimelineRow = memo(
                       boxSizing: "border-box",
                     }
               }
-              title={value}
+              title={unavailableDescription ?? value}
             >
-              {highlightEnabled
+              {highlightEnabled && !unavailable
                 ? highlightValue(value, highlightTerms, quickFilter?.caseSensitive ?? false)
-                : value}
+                : displayedValue}
             </div>
           );
         })}

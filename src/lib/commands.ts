@@ -387,6 +387,12 @@ function isEvtxRecordResponse(value: unknown): value is EvtxRecord {
     typeof value.message !== "string" ||
     !Array.isArray(value.eventData) ||
     !value.eventData.every(isEvtxFieldResponse) ||
+    !(
+      value.insertionStrings === undefined ||
+      value.insertionStrings === null ||
+      (Array.isArray(value.insertionStrings) &&
+        value.insertionStrings.every((item: unknown) => typeof item === "string"))
+    ) ||
     typeof value.rawXml !== "string" ||
     typeof value.sourceLabel !== "string"
   ) {

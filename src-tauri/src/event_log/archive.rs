@@ -838,6 +838,7 @@ fn text_entry_to_record(entry: LogEntry, source_label: &str) -> EvtxRecord {
         level: text_level(entry.severity),
         computer: String::new(),
         message: entry.message,
+        insertion_strings: None,
         event_data: vec![EvtxField {
             name: "Line".to_string(),
             value: entry.line_number.to_string(),
@@ -1144,6 +1145,20 @@ mod tests {
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::RwLock;
+
+    #[test]
+    fn insertion_strings_are_unavailable_for_archive_text_records() {
+        let entry = super::LogEntry {
+            message: "ordinary text record".into(),
+            ..Default::default()
+        };
+        let record = super::text_entry_to_record(entry, "archive.txt");
+        assert!(record.insertion_strings.is_none());
+        assert!(serde_json::to_value(record)
+            .unwrap()
+            .get("insertionStrings")
+            .is_none());
+    }
 
     fn collect_archive(
         path: &std::path::Path,

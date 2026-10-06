@@ -1385,6 +1385,7 @@ mod tests {
             computer: "TESTHOST".to_string(),
             message: message.to_string(),
             event_data: Vec::new(),
+            insertion_strings: None,
             raw_xml: String::new(),
             source_label: "Live/Application".to_string(),
             origin_kind: EvtxOriginKind::Event,
@@ -1855,6 +1856,17 @@ mod tests {
         );
         assert_eq!(seen_ids.len(), RECORD_COUNT);
         assert_eq!(seen_ids, (1..=RECORD_COUNT as u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn insertion_strings_count_toward_analysis_envelope_budget() {
+        let mut wire = serde_json::to_value(record(1, 1, "ordinary")).unwrap();
+        wire["insertionStrings"] = serde_json::json!(["x".repeat(MAX_ANALYSIS_APPEND_BYTES)]);
+        let event = serde_json::from_value(wire).unwrap();
+        let input = EventLogAnalysisRecordInput::complete(event);
+        assert!(validate_analysis_chunk(&[input], &[])
+            .unwrap_err()
+            .contains("envelope limit"));
     }
 
     #[test]

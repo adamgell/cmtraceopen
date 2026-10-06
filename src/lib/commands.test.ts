@@ -1305,6 +1305,25 @@ describe("event-log manifest commands", () => {
     sourceLabel: "Application.evtx",
   };
 
+  it.each([42, "alpha", ["alpha", 3], {}].map(value => [value]))("rejects malformed insertionStrings %s", async (insertionStrings) => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      records: [{ ...validEventRecord, insertionStrings }],
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      totalRecords: 1, parseErrors: 0, errorMessages: [],
+    });
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).rejects.toThrow();
+  });
+
+  it.each([undefined, null, [], ["alpha", "", "gamma"]].map(value => [value]))("preserves insertionStrings availability and positions (%s)", async (insertionStrings) => {
+    const result = {
+      records: [{ ...validEventRecord, insertionStrings }],
+      channels: [{ name: "Application", eventCount: 1, sourceType: "live" }],
+      totalRecords: 1, parseErrors: 0, errorMessages: [],
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result);
+    await expect(parseEventLogManifest({ entries: [], coverage: [] })).resolves.toEqual(result);
+  });
+
   it.each([
     ["absent", {}],
     ["null", { eventRecordIdText: null }],

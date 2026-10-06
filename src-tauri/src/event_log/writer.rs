@@ -949,6 +949,7 @@ fn record(message: &str) -> EvtxRecord {
         computer: "HOST".into(),
         message: message.into(),
         event_data: vec![],
+        insertion_strings: None,
         raw_xml: "<?xml version=\"1.0\"?><Event><Data>message</Data></Event>".into(),
         source_label: "source.evtx".into(),
         origin_kind: super::models::EvtxOriginKind::Event,
