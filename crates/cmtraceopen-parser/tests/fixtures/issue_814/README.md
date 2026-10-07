@@ -47,3 +47,11 @@ requirements as the approved implementation proceeds.
 
 Pure parser and adapter tests are not native UI acceptance. Any Windows-native
 acceptance report must name the exact code run there. No private capture is used.
+
+The browser regression `e2e/firewall-log.spec.ts` uses invented TypeScript payloads
+and the Tauri test shim. It exercises source loading, Local wall-clock display,
+ordered fields/raw copy, coverage, idempotent full-row replacement, empty reset,
+and timeline exclusion/changed-source notices. `CMTRACE_E2E_MOCK_ONLY=1` blocks
+the optional native IPC bridge for the entire browser suite. Browser success is
+not native Windows UI acceptance. NUL coverage counts decoded characters, not
+raw UTF-16 bytes; undecoded suffix coverage counts actual retained bytes.

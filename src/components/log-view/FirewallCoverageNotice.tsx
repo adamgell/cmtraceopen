@@ -5,7 +5,7 @@ import type { FirewallSourceState } from "../../stores/firewall-state";
 function coverageText(source: FirewallSourceState): string {
   const c = source.coverage, parts: string[] = [];
   const add = (count: string, label: string) => { if (count !== "0") parts.push(`${count} ${label}`); };
-  add(c.padding.count, "padding bytes skipped");
+  add(c.padding.count, "NUL padding characters skipped");
   add(c.malformed.count, "malformed rows");
   add(c.oversized.count, "oversized rows (raw text truncated)");
   add(c.lossEvents.count, "loss events");

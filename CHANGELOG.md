@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Windows Firewall logs (#814)**: Recognize firewall records separately from IIS, preserve all fields and Local wall-clock timestamps, report padding/loss coverage, and retain encoding and source identity through tailing and timeline queries.
+
 - **DsRegCmd live capture reports evidence-write failures (#760)**: Connectivity, event-log, and scheduled-task evidence now report directory creation, serialization, and file-write errors instead of returning a successful capture with missing evidence.
 
 ## [1.6.2]

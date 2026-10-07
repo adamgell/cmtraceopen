@@ -10,7 +10,7 @@ it("shows one cumulative source notice for coverage and decoding", () => {
   useLogStore.getState().clear(); useLogStore.getState().registerFirewallSource(snapshot); useLogStore.setState({ openFilePath: snapshot.filePath, sourceOpenMode: "single-file" });
   const { rerender } = render(<FirewallCoverageNotice />);
   expect(screen.getAllByRole("status")).toHaveLength(1);
-  for (const text of ["2048 padding", "2 malformed", "1 oversized", "12 known lost", "1 loss event with unknown count", "3 without absolute time", "2 undecoded bytes"]) expect(screen.getByRole("status")).toHaveTextContent(text);
+  for (const text of ["2048 NUL padding characters skipped", "2 malformed", "1 oversized", "12 known lost", "1 loss event with unknown count", "3 without absolute time", "2 undecoded bytes"]) expect(screen.getByRole("status")).toHaveTextContent(text);
   useLogStore.getState().registerFirewallSource({ ...snapshot, firewallSessionId: "gap-session", firewallDecoding: { kind: "gap", pendingBytes: 0, reason: "invalidEncoding" } });
   rerender(<FirewallCoverageNotice />);
   expect(screen.getByRole("status")).toHaveTextContent("Decoding gap: invalid encoding");

@@ -10,6 +10,9 @@ import { TAURI_SHIM_SCRIPT } from "./tauri-shim";
  */
 const test = base.extend({
   page: async ({ page }, use) => {
+    if (process.env.CMTRACE_E2E_MOCK_ONLY === "1") {
+      await page.route("http://127.0.0.1:1422/**", route => route.abort());
+    }
     await page.addInitScript(TAURI_SHIM_SCRIPT);
     await use(page);
   },
